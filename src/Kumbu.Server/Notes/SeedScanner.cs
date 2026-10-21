@@ -18,7 +18,16 @@ public static class SeedScanner
         var warnings = new List<string>();
         var utf8 = new UTF8Encoding(false);
 
-        foreach (var full in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        // Hidden entries are filtered below by their dot segments; AttributesToSkip = 0 keeps the enumerator
+        // from making a second, platform-specific decision. Unreadable directories are skipped, not fatal.
+        var enumeration = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = 0,
+        };
+
+        foreach (var full in Directory.EnumerateFiles(root, "*", enumeration).Order(StringComparer.Ordinal))
         {
             var relative = Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/');
             var segments = relative.Split('/');
@@ -39,14 +48,25 @@ public static class SeedScanner
                 continue;
             }
 
-            if (new FileInfo(full).Length > MaxBytes)
+            byte[] bytes;
+            try
             {
-                warnings.Add($"Skipped {relative}: larger than {MaxBytes} bytes");
+                if (new FileInfo(full).Length > MaxBytes)
+                {
+                    warnings.Add($"Skipped {relative}: larger than {MaxBytes} bytes");
+                    continue;
+                }
+
+                bytes = File.ReadAllBytes(full);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add($"Skipped {relative}: {ex.Message}");
                 continue;
             }
 
-            var text = utf8.GetString(File.ReadAllBytes(full));
-            if (text.StartsWith('﻿'))
+            var text = utf8.GetString(bytes);
+            if (text.StartsWith('\uFEFF'))
             {
                 text = text[1..];
             }

@@ -13,6 +13,13 @@ public sealed class Seeder(IOptions<KumbuOptions> options, MongoNoteStore store,
             return;
         }
 
+        // A typo in the mount should not take the server down: it runs, just without seeded notes.
+        if (!Directory.Exists(seedPath))
+        {
+            log.LogError("Kumbu:Seed:Path does not exist: {Path}", seedPath);
+            return;
+        }
+
         await store.EnsureIndexesAsync(cancellationToken);
         var scan = SeedScanner.Scan(seedPath);
         foreach (var file in scan.Files)

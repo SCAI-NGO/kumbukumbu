@@ -71,7 +71,7 @@ public sealed class SeedScannerTests : IDisposable
         Write("Demo/a.md", [0xEF, 0xBB, 0xBF, .. "# Title"u8.ToArray()]);
         var content = Assert.Single(SeedScanner.Scan(_root).Files).Content;
         Assert.Equal("# Title", content);
-        Assert.False(content.StartsWith('﻿'));
+        Assert.False(content.StartsWith('\uFEFF'));
     }
 
     [Fact]
@@ -91,5 +91,54 @@ public sealed class SeedScannerTests : IDisposable
         var scan = SeedScanner.Scan(_root);
         Assert.Empty(scan.Files);
         Assert.Contains("big.md", Assert.Single(scan.Warnings));
+    }
+
+    [Fact]
+    public void Skips_unreadable_files_with_a_warning()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix file modes only.");
+            return;
+        }
+
+        var full = Write("Demo/secret.md", "s");
+        Write("Demo/ok.md", "ok");
+        File.SetUnixFileMode(full, UnixFileMode.None);
+        if (CanRead(full))
+        {
+            Assert.Skip("Running with privileges that read a mode-000 file anyway (root); see the dangling-symlink test.");
+        }
+
+        var scan = SeedScanner.Scan(_root);
+
+        Assert.Equal("/Demo/ok.md", Assert.Single(scan.Files).Path.Value);
+        Assert.StartsWith("Skipped Demo/secret.md: ", Assert.Single(scan.Warnings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Skips_files_that_fail_to_open_with_a_warning()
+    {
+        // A dangling symlink fails to open for every user, root included: the same IOException path.
+        Write("Demo/ok.md", "ok");
+        File.CreateSymbolicLink(Path.Combine(_root, "Demo", "gone.md"), Path.Combine(_root, "nowhere.md"));
+
+        var scan = SeedScanner.Scan(_root);
+
+        Assert.Equal("/Demo/ok.md", Assert.Single(scan.Files).Path.Value);
+        Assert.StartsWith("Skipped Demo/gone.md: ", Assert.Single(scan.Warnings), StringComparison.Ordinal);
+    }
+
+    private static bool CanRead(string path)
+    {
+        try
+        {
+            File.ReadAllBytes(path);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 }
