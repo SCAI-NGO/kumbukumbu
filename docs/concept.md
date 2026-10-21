@@ -38,7 +38,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - **Every top-level directory is a vault** = a cryptographic boundary with its own vault key.
 - On user creation, one vault is created (the user names it).
 - Permissions exist **only at vault level** (read / write). No per-subdirectory rights.
-- Paths always include the vault name (`/Work/notes/x.md`) — consistent addressing across keys. Convenience via `cd`.
+- Paths always include the vault name (`/Work/notes/x.md`) — consistent addressing across keys. No `cd` — paths are always absolute.
 
 ### Notes
 - Notes **must** end in `.md`.
@@ -76,7 +76,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 
 | Tool | Purpose | Payload |
 |---|---|---|
-| `sh` | Structure + reading: `ls`, `cd`, `pwd`, `cat`, `rg`, `outline`, `semsearch`, `backlinks`, `tags`, `history`, `restore`, `mkdir`, `mv`, `rm`, `help` | Paths only — **never Markdown content** |
+| `sh` | Structure + reading: `ls`, `cat`, `rg`, `outline`, `semsearch`, `backlinks`, `tags`, `history`, `restore`, `mkdir`, `mv`, `rm`, `help` | Paths only — **never Markdown content** |
 | `edit` | `str_replace`, replace/append/insert section — with version token | Content (JSON params) |
 | `write` | Create note or fully overwrite — with version token | Content (JSON params) |
 
@@ -87,9 +87,9 @@ Rationale: models speak Unix fluently → reading in their native language. Writ
 - **Only operator: `|`.** No `$()`, `>`, `&&`, subshells.
 - Right of a pipe: filters only (`head`, `tail`, `wc`, `sort`, `rg`).
 - Each command is a function `string[] → string[]`; a pipe is a chain.
-- Errors look like real Unix errors (`command not found: grepp — try 'help'`) so models self-correct; include `pwd` in errors.
+- Errors look like real Unix errors (`command not found: grepp — try 'help'`) so models self-correct.
 - Per-command permission checks (a read-only key may `ls` but not `rm`).
-- `cd` state lives per MCP session; models usually use absolute paths anyway.
+- **No working directory — all paths are absolute.** MCP 2026-07-28 removed sessions, and tying `cwd` to a key breaks parallel agent sessions using the same key. The man page states it. (Decided Oct 21, 2026.)
 - **Output limit ~8,000 tokens per `sh` call.** Oversized output is truncated with a hint: `[truncated — use 'outline' or 'cat file.md#Section']`. This teaches agents section addressing.
 
 ### Discoverability
@@ -172,7 +172,7 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 
 - **Backend:** C# / .NET current LTS, official MCP C# SDK (evaluate first)
 - **Persistence:** MongoDB (notes, versions, slots, vectors, link graph — all vault data encrypted)
-- **Transient:** Redis (sessions, rate limits, `cwd`, invite tokens — no plaintext, no keys)
+- **Transient:** Redis (sessions, rate limits, invite tokens — no plaintext, no keys)
 - **Embeddings:** ONNX Runtime in-process
 - **Frontend:** TypeScript + Vite + React + Tailwind, pnpm — admin (users, invites, keys, vaults) + Markdown reader
 - **Deployment:** `compose.yaml`, later integrated into Komodo
