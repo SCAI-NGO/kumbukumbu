@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Kumbu.Core/Kumbu.Core.csproj" />
+    <Project Path="src/Kumbu.Server/Kumbu.Server.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Kumbu.Core.Tests/Kumbu.Core.Tests.csproj" />
+    <Project Path="tests/Kumbu.Server.Tests/Kumbu.Server.Tests.csproj" />
   </Folder>
 </Solution>
