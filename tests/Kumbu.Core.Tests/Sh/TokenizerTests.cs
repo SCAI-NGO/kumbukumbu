@@ -16,6 +16,11 @@ public class TokenizerTests
     [InlineData("cat \"/a \\\"q\\\".md\"", new[] { "cat", "/a \"q\".md" })]
     [InlineData("cat /Work/Meeting\\ Notes.md", new[] { "cat", "/Work/Meeting Notes.md" })]
     [InlineData("cat \"\"", new[] { "cat", "" })]
+    [InlineData("ls /Work\n", new[] { "ls", "/Work" })]
+    [InlineData("ls /Work\r\n", new[] { "ls", "/Work" })]
+    [InlineData("\r\n  ls /Work \n\n", new[] { "ls", "/Work" })]
+    [InlineData("cat \"/Work/a\nb.md\"", new[] { "cat", "/Work/a\nb.md" })]
+    [InlineData("cat '/Work/a\r\nb.md'", new[] { "cat", "/Work/a\r\nb.md" })]
     public void Tokenizes(string input, string[] expected)
     {
         Assert.True(Tokenizer.TryTokenize(input, out var tokens, out var error));
@@ -30,6 +35,18 @@ public class TokenizerTests
     {
         Assert.False(Tokenizer.TryTokenize(input, out var tokens, out var error));
         Assert.Equal("sh: unterminated quote", error);
+        Assert.Empty(tokens);
+    }
+
+    [Theory]
+    [InlineData("ls /Work\nls /Ideas")]
+    [InlineData("ls /Work\r\ncat /Ideas/a.md")]
+    [InlineData("ls /Work\rls /Ideas")]
+    [InlineData("ls \\\n/Work")]
+    public void MultipleLinesFail(string input)
+    {
+        Assert.False(Tokenizer.TryTokenize(input, out var tokens, out var error));
+        Assert.Equal("sh: one command per call", error);
         Assert.Empty(tokens);
     }
 }

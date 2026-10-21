@@ -12,6 +12,8 @@ public static class Tokenizer
     public static bool TryTokenize(
         string input, out IReadOnlyList<string> tokens, [NotNullWhen(false)] out string? error)
     {
+        // Trailing newlines are what a model's "ls /Work\n" usually carries; strip them before tokenizing.
+        input = input.Trim();
         var result = new List<string>();
         var current = new StringBuilder();
         var inToken = false;
@@ -23,6 +25,14 @@ public static class Tokenizer
             switch (state)
             {
                 case State.Normal:
+                    // An unquoted line break would start a second command; we run exactly one per call.
+                    if (c is '\n' or '\r' || (c == '\\' && i + 1 < input.Length && input[i + 1] is '\n' or '\r'))
+                    {
+                        tokens = [];
+                        error = "sh: one command per call";
+                        return false;
+                    }
+
                     if (c is ' ' or '\t')
                     {
                         if (inToken)
