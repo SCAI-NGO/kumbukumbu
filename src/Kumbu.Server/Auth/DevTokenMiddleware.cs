@@ -6,8 +6,10 @@ using Microsoft.Extensions.Options;
 namespace Kumbu.Server.Auth;
 
 /// <summary>
-/// Guards <c>/mcp</c> with the static dev bearer token (<c>Kumbu:DevToken</c>). Replaced by API keys later.
-/// Runs before the MCP SDK sees the request; never logs the token.
+/// Fails closed: every request needs the static dev bearer token (<c>Kumbu:DevToken</c>), except
+/// <c>/healthz</c> (matched case-insensitively). Guarding only <c>/mcp</c> would be bypassable, because
+/// endpoint routing matches literal segments case-insensitively (<c>/MCP</c> reaches <c>MapMcp("/mcp")</c>).
+/// Runs before the MCP SDK sees the request; never logs the token. Replaced by API keys later.
 /// </summary>
 public sealed class DevTokenMiddleware(RequestDelegate next, IOptions<KumbuOptions> options)
 {
@@ -17,7 +19,7 @@ public sealed class DevTokenMiddleware(RequestDelegate next, IOptions<KumbuOptio
 
     public Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/mcp", StringComparison.Ordinal) || IsAuthorized(context.Request))
+        if (context.Request.Path.Equals("/healthz", StringComparison.OrdinalIgnoreCase) || IsAuthorized(context.Request))
         {
             return next(context);
         }
