@@ -12,7 +12,9 @@ services:
   kumbu:
     build: .
     ports:
-      - "8080:8080"
+      # Localhost only. To reach it from other machines, change this to "8080:8080" on purpose:
+      # traffic is plain HTTP and the only guard is the dev token.
+      - "127.0.0.1:8080:8080"
     depends_on:
       mongo:
         condition: service_healthy
@@ -21,7 +23,8 @@ services:
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
       Kumbu__Seed__Path: /seed
     volumes:
-      - ./vaults:/seed:ro
+      # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
+      - ${KUMBU_VAULTS:-./vaults}:/seed:ro
 
 volumes:
   mongo-data:

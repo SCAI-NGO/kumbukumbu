@@ -40,7 +40,7 @@ Pipes, `help`, any command other than `ls` / `cat`, `edit` / `write`, versions, 
 Claude Code ──HTTP POST /mcp──▶ Kumbu.Server (ASP.NET Core, .NET 10)
   Authorization: Bearer <dev token>     │
                                         ├─ DevTokenAuth middleware ── 401 if missing/wrong
-                                        ├─ MCP SDK (Streamable HTTP, sessions)
+                                        ├─ MCP SDK (Streamable HTTP, stateless)
                                         │     tools/list  → [sh]
                                         │     tools/call sh {"command":"ls /Work"}
                                         ▼
@@ -115,7 +115,7 @@ MongoDB collection `notes` (plaintext for now):
 ## 7. Commands
 
 ### Tokenizer
-Whitespace split, single quotes (literal), double quotes, backslash escape. Unterminated quotes → error result `sh: unterminated quote`. No `|`, no flags parsing beyond what each command does itself.
+Whitespace split, single quotes (literal), double quotes, backslash escape. Unterminated quotes → error result `sh: unterminated quote`. Leading/trailing whitespace (including `\r`, `\n`) is trimmed; an unquoted line break left inside → `sh: one command per call` (inside quotes it stays literal). No `|`, no flags parsing beyond what each command does itself.
 
 ### `ls [path]`
 - No argument → `/` → lists vaults.
