@@ -1,0 +1,27 @@
+services:
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kumbu:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      Kumbu__Mongo__ConnectionString: mongodb://mongo:27017
+      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
+      Kumbu__Seed__Path: /seed
+    volumes:
+      - ./vaults:/seed:ro
+
+volumes:
+  mongo-data:
