@@ -34,6 +34,20 @@ public class VaultPathTests
     }
 
     [Fact]
+    public void TryParse_rejects_lone_surrogates_without_throwing()
+    {
+        // Built in the body: xunit's theory data serialization would replace lone surrogates with U+FFFD.
+        foreach (var input in new[] { "/a\uD800", "/a\uDC00b", "/\uD800\uD800" })
+        {
+            Assert.False(VaultPath.TryParse(input, out var path));
+            Assert.Null(path);
+        }
+
+        Assert.True(VaultPath.TryParse("/a\uD83D\uDE00", out var emoji));
+        Assert.Equal("/a\uD83D\uDE00", emoji.Value);
+    }
+
+    [Fact]
     public void Root_has_expected_shape()
     {
         var root = VaultPath.Root;

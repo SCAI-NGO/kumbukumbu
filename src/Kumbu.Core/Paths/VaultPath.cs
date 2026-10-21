@@ -30,7 +30,8 @@ public sealed record VaultPath
 
     public bool IsNote => !IsRoot && Name.EndsWith(".md", StringComparison.Ordinal);
 
-    /// <summary>Parses an absolute path. Returns false only for relative or blank input.</summary>
+    /// <summary>Parses an absolute path. Returns false only for relative or blank input,
+    /// or input containing invalid UTF-16 (lone surrogates). Never throws.</summary>
     public static bool TryParse(string input, [NotNullWhen(true)] out VaultPath? path)
     {
         path = null;
@@ -39,8 +40,15 @@ public sealed record VaultPath
             return false;
         }
 
+        if (!IsWellFormedUtf16(input))
+        {
+            return false;
+        }
+
+        var normalized = input.Normalize(NormalizationForm.FormC);
+
         var segments = new List<string>();
-        foreach (var part in input.Normalize(NormalizationForm.FormC).Split('/'))
+        foreach (var part in normalized.Split('/'))
         {
             if (part.Length == 0 || part == ".")
             {
@@ -61,6 +69,23 @@ public sealed record VaultPath
         }
 
         path = segments.Count == 0 ? Root : new VaultPath(segments);
+        return true;
+    }
+
+    private static bool IsWellFormedUtf16(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(value[i]))
+            {
+                return false;
+            }
+        }
+
         return true;
     }
 
