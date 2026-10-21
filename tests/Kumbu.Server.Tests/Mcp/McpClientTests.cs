@@ -61,4 +61,27 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.True(result.IsError);
         Assert.Equal("cat: /Demo/nope.md: No such file or directory", Text(result));
     }
+
+    // The sample's file name is committed in NFC; the command is typed in NFC too, as a model would.
+    [Fact]
+    public async Task Ls_of_a_vault_lists_a_note_with_umlauts()
+    {
+        var result = await ShAsync("ls /Ideas");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal("retrofuturism.md\n\u00DCberlegungen.md", Text(result));
+    }
+
+    [Fact]
+    public async Task Cat_of_a_note_with_umlauts_returns_its_exact_content()
+    {
+        var expected = (await File.ReadAllTextAsync(Path.Combine(KumbuAppFactory.SamplesPath, "Ideas", "\u00DCberlegungen.md"), Ct))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains("\u00E4", expected, StringComparison.Ordinal);
+
+        var result = await ShAsync("cat \"/Ideas/\u00DCberlegungen.md\"");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal(expected, Text(result));
+    }
 }
