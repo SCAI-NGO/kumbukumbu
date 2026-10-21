@@ -12,7 +12,7 @@ namespace Kumbu.Server.Tests;
 /// </summary>
 public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    public const string Token = "test-token";
+    public const string Token = "test-token-0123456789abcdef";
 
     private readonly MongoDbContainer _mongo = new MongoDbBuilder("mongo:8").Build();
 

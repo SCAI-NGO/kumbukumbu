@@ -20,7 +20,7 @@ Older revisions started with a handshake. The client sent `initialize`, the serv
 
 The 2026-07-28 revision removes sessions and `initialize` (SEP-2567 and SEP-2575). Each request is self-contained and stateless. What the handshake used to negotiate, the protocol version and the client's capabilities, now travels in `_meta` on every request. Three headers repeat the essentials so proxies can route without reading the body: `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name`. Because the request describes itself, any server instance can answer it.
 
-Kumbu² is stateless (the SDK default; we did not enable sessions). Real exchanges against our server follow. The dev token is redacted. `serverInfo.name` reads `Kumbu.Server.Tests` because the SDK uses the entry assembly's name and these were captured under the test host.
+Kumbu² is stateless (the SDK default; we did not enable sessions). Real exchanges against our server follow. The dev token is redacted. These were captured under the test host (`dotnet test tests/Kumbu.Server.Tests --output Detailed` prints them). `serverInfo` reads `kumbu` and the server's version because `Program.cs` sets it; left unset, the SDK falls back to the entry assembly's name, which under the test host is `Kumbu.Server.Tests`.
 
 **Old form (2025-06-18): `initialize`.** Our server still answers it, but without an `Mcp-Session-Id`.
 
@@ -54,7 +54,7 @@ Content-Type: text/event-stream
 Content-Encoding: identity
 
 event: message
-data: {"result":{"protocolVersion":"2025-06-18","capabilities":{"logging":{},"tools":{}},"serverInfo":{"name":"Kumbu.Server.Tests","version":"1.0.0.0"}},"id":1,"jsonrpc":"2.0"}
+data: {"result":{"protocolVersion":"2025-06-18","capabilities":{"logging":{},"tools":{}},"serverInfo":{"name":"kumbu","version":"0.1.0"}},"id":1,"jsonrpc":"2.0"}
 ```
 
 The same message, pretty-printed:
@@ -64,7 +64,7 @@ The same message, pretty-printed:
   "result": {
     "protocolVersion": "2025-06-18",
     "capabilities": { "logging": {}, "tools": {} },
-    "serverInfo": { "name": "Kumbu.Server.Tests", "version": "1.0.0.0" }
+    "serverInfo": { "name": "kumbu", "version": "0.1.0" }
   },
   "id": 1,
   "jsonrpc": "2.0"
@@ -109,7 +109,7 @@ Content-Type: text/event-stream
 Content-Encoding: identity
 
 event: message
-data: {"result":{"content":[{"type":"text","text":"Demo/\nIdeas/"}],"isError":false,"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"Kumbu.Server.Tests","version":"1.0.0.0"}}},"id":2,"jsonrpc":"2.0"}
+data: {"result":{"content":[{"type":"text","text":"Demo/\nIdeas/"}],"isError":false,"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"kumbu","version":"0.1.0"}}},"id":2,"jsonrpc":"2.0"}
 ```
 
 The same message, pretty-printed:
@@ -121,7 +121,7 @@ The same message, pretty-printed:
     "isError": false,
     "resultType": "complete",
     "_meta": {
-      "io.modelcontextprotocol/serverInfo": { "name": "Kumbu.Server.Tests", "version": "1.0.0.0" }
+      "io.modelcontextprotocol/serverInfo": { "name": "kumbu", "version": "0.1.0" }
     }
   },
   "id": 2,

@@ -3,6 +3,17 @@ namespace Kumbu.Server;
 
 public sealed class KumbuOptions
 {
+    public const int MinDevTokenLength = 16;
+
+    public const string DevTokenMessage =
+        "Kumbu:DevToken must be at least 16 characters (generate one with: openssl rand -hex 32)";
+
+    /// <summary>Rejects empty, short and the old placeholder token: the one shared secret must be a real one.</summary>
+    public static bool IsUsableDevToken(KumbuOptions o) =>
+        !string.IsNullOrWhiteSpace(o.DevToken)
+        && o.DevToken.Trim().Length >= MinDevTokenLength
+        && o.DevToken != "change-me";
+
     public string DevToken { get; set; } = "";
 
     public MongoOptions Mongo { get; set; } = new();

@@ -43,6 +43,8 @@ public sealed class RawWireTests(KumbuAppFactory app)
         var result = json["result"]!;
         Assert.NotNull(result["protocolVersion"]);
         Assert.NotNull(result["capabilities"]?["tools"]);
+        Assert.Equal("kumbu", result["serverInfo"]?["name"]?.GetValue<string>());
+        Assert.False(string.IsNullOrEmpty(result["serverInfo"]?["version"]?.GetValue<string>()));
     }
 
     [Fact]
