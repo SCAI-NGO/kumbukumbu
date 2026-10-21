@@ -14,9 +14,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
-    .Validate(KumbuOptions.IsUsableDevToken, KumbuOptions.DevTokenMessage)
-    .Validate(o => !string.IsNullOrWhiteSpace(o.Mongo.ConnectionString), "Kumbu:Mongo:ConnectionString must be set")
     .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
 
 builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ConnectionString));
