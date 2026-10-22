@@ -20,7 +20,8 @@ public sealed partial class Sort(INoteReader notes) : ICommand
 
     public string Help => """
         sort [-r] [-u] [-n] [-f] [path]
-          Sort the lines of a note, or of the piped input, by code point (like LC_ALL=C).
+          Sort the lines of a note, or of the piped input, in human order: Ü sorts next to U,
+          lowercase before uppercase of the same letter. ls and rg list in the same order.
           -r, --reverse        reverse the order
           -u, --unique         drop lines that compare equal to the one before
           -n, --numeric-sort   by the number a line starts with (no number counts as 0)
@@ -39,12 +40,12 @@ public sealed partial class Sort(INoteReader notes) : ICommand
         var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct);
         if (text.IsError) return text;
 
-        IComparer<string> keyComparer = options.Has("numeric-sort")
+        var keyComparer = options.Has("numeric-sort")
             ? Comparer<string>.Create((a, b) => LeadingNumber(a).CompareTo(LeadingNumber(b)))
-            : options.Has("ignore-case") ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        // Lines that compare equal by key fall back to code point order, so the result is deterministic.
+            : TextOrder.Key(options.Has("ignore-case"));
+        // Lines that compare equal by key fall back to the full text order, so the result is deterministic.
         var comparer = Comparer<string>.Create((a, b) =>
-            keyComparer.Compare(a, b) is var c && c != 0 ? c : StringComparer.Ordinal.Compare(a, b));
+            keyComparer.Compare(a, b) is var c && c != 0 ? c : TextOrder.Default.Compare(a, b));
 
         var sorted = Lines.Split(text.Output).Order(comparer).ToList();
         if (options.Has("unique"))

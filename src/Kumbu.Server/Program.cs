@@ -36,6 +36,12 @@ builder.Services.AddMcpServer(o => o.ServerInfo = new Implementation { Name = "k
 
 var app = builder.Build();
 
+// Without ICU (globalization-invariant mode, or an image without libicu) .NET compares by code point.
+if (!TextOrder.IsCultureAware)
+{
+    app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
+}
+
 app.UseMiddleware<DevTokenMiddleware>();
 app.MapGet("/healthz", () => "ok");
 app.MapMcp("/mcp");

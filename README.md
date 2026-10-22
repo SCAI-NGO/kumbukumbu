@@ -12,7 +12,7 @@ The server offers one MCP tool, `sh`, a read-only shell over your notes:
 - `cat <path>` prints a note
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
-- `head`, `tail`, `wc`, `sort` work on a note or on piped input
+- `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
 - `help [command]` lists the commands or explains one; `<command> --help` does the same
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
@@ -48,6 +48,8 @@ Connect Claude Code:
 ```sh
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer <token>"
 ```
+
+MCP clients read the tool descriptions when a session starts. After upgrading the server, start a new client session, or the agent keeps working from the old command list.
 
 Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE` and `KUMBU_PORT` (host port, default 8080) in `.env`.
 
