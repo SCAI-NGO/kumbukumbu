@@ -4,26 +4,30 @@
 
 Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes are plain Markdown, kept in MongoDB, and agents reach them through an MCP server. It is your memory; the AI gets a key.
 
-## Status: read-only shell with search
+## Status: reading, searching and writing
 
-The server offers one MCP tool, `sh`, a read-only shell over your notes:
+The server offers three MCP tools. `sh` is a shell over your notes:
 
 - `ls [path]` lists a directory (no path lists the vaults)
-- `cat <path>` prints a note
+- `cat <path>` prints a note, with its **version token** in a separate block
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
+- `history <path>` lists a note's versions, `restore <path> <version>` goes back to one
+- `rm <path>` moves a note to the trash (kept 30 days), `trash` lists it, `restore <path>` brings it back
 - `help [command]` lists the commands or explains one; `<command> --help` does the same
+
+`write` creates a note or replaces its content, and `edit` replaces one unique passage or appends to the end. Both take the version token from `cat`; if the note changed in the meantime, the write fails instead of overwriting someone else's change. The last 10 versions of each note are kept (writes by the same writer within 10 minutes count as one), so the state before an agent session can always be restored. New notes can only go into existing vaults.
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
-Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Notes are loaded into MongoDB from `./vaults` (or `KUMBU_VAULTS`) when the server starts. There is no writing, no link resolution, no web UI and no user management yet.
+Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. There is no moving (`mv`), no link resolution, no web UI and no user management yet.
 
 ## Security
 
 Be clear about what this is. There is **no encryption yet**: notes are stored as plaintext in MongoDB. Access is guarded by a **single shared dev token**, sent as `Authorization: Bearer <token>`. Every path requires it except `GET /healthz`. Traffic is plain HTTP. Do not put real secrets in it and do not expose it to an untrusted network.
 
-The server refuses to start unless the token is at least 16 characters (`openssl rand -hex 32` gives 64). Compose publishes port 8080 (or `KUMBU_PORT`) on **localhost only** (`127.0.0.1:${KUMBU_PORT:-8080}:8080` in `compose.yaml`). To reach it from other machines, remove the `127.0.0.1:` prefix deliberately, knowing that anyone on the network who learns the token can read every note.
+The server refuses to start unless the token is at least 16 characters (`openssl rand -hex 32` gives 64). Compose publishes port 8080 (or `KUMBU_PORT`) on **localhost only** (`127.0.0.1:${KUMBU_PORT:-8080}:8080` in `compose.yaml`). To reach it from other machines, remove the `127.0.0.1:` prefix deliberately, knowing that anyone on the network who learns the token can read and change every note.
 
 ## Quickstart
 
@@ -37,8 +41,9 @@ curl localhost:8080/healthz       # ok
 
 Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know:
 
-- Notes are read **at startup only**. After changing files, run `docker compose restart kumbu` to load them again.
-- Seeding adds and updates, it never deletes. A note you deleted or renamed on disk stays in the database until you wipe it with `docker compose down -v` (this removes the Mongo volume; the next start seeds from scratch).
+- **MongoDB is the source of truth.** Agents' changes live there; Kumbu² never writes back to `./vaults`.
+- Files are read **at startup only**. After changing files, run `docker compose restart kumbu`. A new file creates a note. A changed file updates its note only if nobody changed that note through MCP since the last start; if both changed, the note keeps the agents' version and the log says `Kept <path>`. Notes removed with `rm` are not brought back from disk.
+- Seeding never deletes. A note you deleted or renamed on disk stays in the database. `docker compose down -v` wipes the Mongo volume, **including every change agents made**; the next start seeds from scratch.
 - Symlinked vault folders inside `./vaults` do not resolve inside the container. Point `KUMBU_VAULTS` in `.env` at the real folder instead, for example `KUMBU_VAULTS=/home/me/Notes`.
 - The container runs as an unprivileged user (UID 1654). Your files must be readable by it; unreadable files are skipped with a warning in the log.
 - If the `mongo` container exits with "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility", your kernel is in the range 6.19–7.0.13, where MongoDB 8.x refuses to start ([SERVER-125742](https://jira.mongodb.org/browse/SERVER-125742)). Set `KUMBU_MONGO_IMAGE=mongo:7.0` in `.env`. The tests use `mongo:7.0` for the same reason.
