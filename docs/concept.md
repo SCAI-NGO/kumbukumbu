@@ -46,7 +46,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - Max note size: generous (~1 MB), purely as abuse protection. The limit that matters is **tool output** (see §5).
 - Sizes computed internally in characters; messages show approximate tokens (German ≈ 1:3, English ≈ 1:4 — no client-independent tokenizer exists).
 - **No attachments.** Text only.
-- Filenames: accepted as they come; Kumbu² itself never *creates* Windows-incompatible names.
+- Filenames: accepted as they come on import (seeding, sync); Kumbu² itself never *creates* Windows-incompatible names. `write` checks new notes, `mv` checks its target; `mv` may rename a badly named note to a good name, so such notes can be repaired.
 - Frontmatter, Dataview blocks, inline fields etc. are preserved **as is**.
 
 ### Sections
@@ -61,8 +61,9 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 ### Links & backlinks
 - `[[wikilinks]]` parsed on write; edges (source → target) stored per vault, encrypted.
 - `backlinks X` = all edges with target X, **filtered to vaults the caller can see** (no existence leaks across vaults).
-- **Writing:** always maximally specific link form.
-- **Import:** lenient; normalized mechanically (deterministic code, never an LLM) into the strict form.
+- **Content is never rewritten automatically** (decided Oct 22, 2026): not on import, not on `write`/`edit`. Writes are stored verbatim; the Obsidian sync plugin depends on it, as any rewrite would come back to Obsidian as a remote edit.
+- Links **resolve at read time**, leniently, by Obsidian's rules (shortest unique name; a path where the name is ambiguous).
+- Kumbu² writes links only where it must, in `mv`, and then in the most specific form. An explicit normalize command may come later.
 - Links inside code blocks / inline code are never touched.
 - `mv` rewrites all links pointing to the moved note.
 
