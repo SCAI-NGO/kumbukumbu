@@ -26,7 +26,7 @@ public static partial class Outline
             if (fence is not null) continue;
             if (HeadingRegex().Match(line) is { Success: true } h)
             {
-                found.Add((h.Groups[1].Length, h.Groups[2].Value.Trim(), i));
+                found.Add((h.Groups[1].Length, Rendered(h.Groups[2].Value.Trim()), i));
             }
         }
 
@@ -58,6 +58,10 @@ public static partial class Outline
 
         return NumberDuplicates(headings);
     }
+
+    /// <summary>A heading's text as Obsidian shows it: Markdown backslash escapes removed ("Q\#A" is "Q#A"),
+    /// so an address uses the same text a person sees.</summary>
+    public static string Rendered(string source) => BackslashEscapeRegex().Replace(source, "$1");
 
     /// <summary>The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0.</summary>
     public static int FrontmatterEnd(IReadOnlyList<string> lines)
@@ -112,6 +116,10 @@ public static partial class Outline
     // Up to three spaces, 1-6 hashes, then a space and the text, or nothing; a closing hash run is dropped.
     [GeneratedRegex(@"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")]
     private static partial Regex HeadingRegex();
+
+    // CommonMark: a backslash before ASCII punctuation makes it literal.
+    [GeneratedRegex(@"\\([!-/:-@\[-`{-~])")]
+    private static partial Regex BackslashEscapeRegex();
 
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})(.*)$")]
     private static partial Regex FenceRegex();

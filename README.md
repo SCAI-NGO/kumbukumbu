@@ -55,7 +55,14 @@ Connect Claude Code:
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer <token>"
 ```
 
-MCP clients read the tool descriptions when a session starts. After upgrading the server, start a new client session, or the agent keeps working from the old command list.
+MCP clients read the tool descriptions when a session starts. To upgrade, keep this order:
+
+```sh
+git pull
+docker compose up --build -d     # rebuild the image; a plain restart keeps running the old server
+```
+
+Then start a new client session. Without the rebuild, a restarted client loads the old server's tool descriptions; without the new session, the agent keeps working from the old command list.
 
 Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE` and `KUMBU_PORT` (host port, default 8080) in `.env`.
 

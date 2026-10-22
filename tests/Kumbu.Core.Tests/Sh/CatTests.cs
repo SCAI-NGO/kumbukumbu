@@ -28,7 +28,7 @@ public class CatTests
 
     [Fact]
     public async Task TooManyArguments() =>
-        Assert.Equal(ShellResult.Error("cat: too many arguments"), await Run("/Work/a.md", "/Work/a.md"));
+        Assert.Equal(ShellResult.Error("cat: too many arguments (quote paths and sections that contain spaces: cat \"/Work/My Note.md#Next steps\")"), await Run("/Work/a.md", "/Work/a.md"));
 
     [Fact]
     public async Task NotFound() =>

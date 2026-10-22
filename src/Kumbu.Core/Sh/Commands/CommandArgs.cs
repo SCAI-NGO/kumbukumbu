@@ -7,6 +7,9 @@ namespace Kumbu.Core.Sh.Commands;
 
 internal static class CommandArgs
 {
+    /// <summary>The usual cause of an extra argument: a path or section with a space, unquoted.</summary>
+    public const string QuoteHint = " (quote paths and sections that contain spaces: cat \"/Work/My Note.md#Next steps\")";
+
     /// <summary>Returns an error for the first option-like argument, or null if there is none.</summary>
     public static ShellResult? CheckOptions(string command, IReadOnlyList<string> args)
     {
@@ -80,7 +83,7 @@ internal static class CommandArgs
         }
 
         if (operands.Count == 0) return ShellResult.Error($"{command}: missing operand (give a path, or pipe into it)");
-        if (operands.Count > 1) return ShellResult.Error($"{command}: too many arguments");
+        if (operands.Count > 1) return ShellResult.Error($"{command}: too many arguments{QuoteHint}");
         return await ReadAddressAsync(command, notes, operands[0], ct);
     }
 }

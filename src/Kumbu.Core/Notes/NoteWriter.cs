@@ -127,7 +127,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (replaceSection)
         {
             content = Splice(current, scopeStart, scopeEnd, newText);
-            message = $"replaced {where} (now {Lines.Count(content)} in the note)";
+            message = newText.Length == 0
+                ? $"removed {where} (now {Lines.Count(content)} in the note)"
+                : $"replaced {where} (now {Lines.Count(content)} in the note)" + HeadinglessNote(newText, content, scopeStart);
         }
         else if (oldText is null)
         {
@@ -167,6 +169,21 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (content == current) return Written($"{path.Value} is unchanged", existing);
 
         return await ReplaceAsync(tool, existing, content, writer, message, ct);
+    }
+
+    /// <summary>
+    /// Says where a replacement without a heading of its own ended up: it joins the section before it,
+    /// and the old address is gone. Wanted when merging sections, a mistake when the heading was forgotten.
+    /// </summary>
+    private static string HeadinglessNote(string newText, string content, int start)
+    {
+        if (Outline.Parse(Lines.Split(newText)).Count > 0) return "";
+
+        var line = content.AsSpan(0, Math.Min(start + 1, content.Length)).Count('\n');
+        var owner = Outline.Parse(Lines.Split(content)).LastOrDefault(h => h.Line < line && h.End > line);
+        return owner is null
+            ? "; the new text has no heading, so it now belongs to the text before the first heading"
+            : $"; the new text has no heading, so it now belongs to {owner.Address}";
     }
 
     /// <summary>

@@ -74,6 +74,7 @@ public sealed class Shell
             result = args.TakeWhile(a => a != "--").Contains("--help")
                 ? ShellResult.Ok(command.Help)
                 : await command.RunAsync(args, input, ct);
+            if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
             if (result.IsError) break;

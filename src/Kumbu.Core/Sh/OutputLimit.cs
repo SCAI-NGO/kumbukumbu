@@ -7,15 +7,18 @@ public static class OutputLimit
     public const int MaxChars = 24_000;
     public const int CharsPerToken = 3;
 
-    public static ShellResult Apply(ShellResult result)
+    public static ShellResult Apply(ShellResult result) => Apply(result, MaxChars);
+
+    /// <summary>Cuts to <paramref name="maxChars"/> (plus the footer), for output that gets more text appended.</summary>
+    public static ShellResult Apply(ShellResult result, int maxChars)
     {
         var output = result.Output;
-        if (output.Length <= MaxChars) return result;
+        if (output.Length <= maxChars) return result;
 
         // Cut after the last whole line: a cut line could pass for a complete one. Only a first line
         // longer than the limit is cut inside, and the footer says so.
-        var lastBreak = output.LastIndexOf('\n', MaxChars);
-        var keep = lastBreak > 0 ? lastBreak : MaxChars;
+        var lastBreak = output.LastIndexOf('\n', maxChars);
+        var keep = lastBreak > 0 ? lastBreak : maxChars;
         // Never cut between the halves of a surrogate pair.
         if (lastBreak <= 0 && char.IsHighSurrogate(output[keep - 1])) keep--;
 

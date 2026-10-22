@@ -19,6 +19,7 @@ public class SectionAddressTests
         c
         # C# basics
         # Array[2]
+        # Q\#A
         """;
 
     private static readonly IReadOnlyList<Heading> Headings = Outline.Parse(Lines.Split(Note));
@@ -46,6 +47,7 @@ public class SectionAddressTests
     [InlineData("Notes[2]", "#Architecture#Notes[2]")]
     [InlineData(@"C\# basics", @"#C\# basics")]
     [InlineData(@"Array\[2]", @"#Array\[2]")]
+    [InlineData(@"Q\#A", @"#Q\#A")]
     [InlineData("Plan#Notes[1]", "#Plan#Notes")]
     public void ResolvesToOneHeading(string fragment, string address) => Assert.Equal([address], Resolve(fragment));
 
