@@ -240,3 +240,34 @@ Until now, the folder on disk was the source and the database a copy. Now agents
 | changed | changed | edited on both sides | keep the note, warn in the log |
 
 This is the same idea as a **three-way merge** in Git: with only two versions you can see that they differ, but not which side changed. The common ancestor tells you. Notes removed with `rm` stay removed, even though their file is still on disk.
+
+## 4. Sections: the heading as the unit
+
+### Why sections
+
+A note can be long, and the output of one `sh` call is capped at about 8,000 tokens. Reading a whole note to change one line wastes the model's context, and a truncated note hides the part the model needed. Markdown already has a structure people use: headings. So the heading is the unit for reading, for addressing, and later for chunking and embeddings (concept §6).
+
+### Finding the headings
+
+A heading is a line starting with one to six `#` and a space (an **ATX heading**, in CommonMark's terms). Two places look like headings but aren't: inside a **fenced code block** (between ```` ``` ```` or `~~~` lines), where `# comment` is shell or Python, and inside the **YAML frontmatter** at the top of a note, between `---` lines. The parser walks the lines once, keeps track of whether it is inside a fence, and skips both. `#tag` without a space is a tag, not a heading.
+
+A **section** is a heading plus everything up to the next heading of the same or a higher level. So `## Gates` under `# Architecture` belongs to the Architecture section, and the next `#` heading ends both. Blank lines at the end of a section are left out of what `cat` shows and what an edit replaces, so the spacing before the next heading survives an edit.
+
+`outline` prints this tree with line ranges and sizes, so a model can choose what to read without reading it.
+
+### Addressing a section
+
+The address format follows Obsidian's links: `note.md#Architecture#Gates`. Everything after the first `#` that follows `.md` is the address, each further `#` goes one level down. Two rules make it practical:
+
+- **Short addresses work.** An address matches the *end* of a heading's chain, so `#Gates` finds `## Gates` wherever it is, as long as it is the only one. Models start with the short form; the long form is only needed when the short one is ambiguous.
+- **Ambiguity fails loudly.** If an address matches more than one heading, nothing is picked; the error lists the full addresses to choose from. Two headings with the same text under the same parent get an index, `#Notes[1]` and `#Notes[2]`. Indexes shift when someone inserts a heading, but every edit carries the note's version token, so a stale index can only lead to a refused edit, never to editing the wrong section.
+
+A literal `#` in a heading is written `\#` (`#C\# basics`), and a heading that itself ends in something like `[2]` escapes the bracket.
+
+### Editing a section
+
+`edit` takes the section in its `path`. Then `old_text` only needs to be unique within that section, which is often the easiest way out of "old_text occurs 3 times". Without `old_text`, `new_text` is appended at the end of the section, before its trailing blank lines; appending a new `##` heading there is how a section is inserted after another one. With `replace_section`, the whole section, heading included, is replaced. The version token is always the whole note's: the section is just a way to point into it.
+
+### One more kind of error message
+
+Tool parameters have a JSON schema, and most clients check it before calling. A model that ignores it, though, used to get the SDK's generic "An error occurred invoking 'edit'", which teaches nothing. A **call-tool filter** now runs before the SDK binds the arguments: it reads the tool's own schema, finds the missing required parameter and answers like every other error, with the next step (`edit: version is required; get it from 'cat <path>'`). A filter here works like ASP.NET middleware: a function that wraps the next handler and may answer on its own instead of calling it.

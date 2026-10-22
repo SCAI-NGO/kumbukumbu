@@ -9,15 +9,16 @@ Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes
 The server offers three MCP tools. `sh` is a shell over your notes:
 
 - `ls [path]` lists a directory (no path lists the vaults)
-- `cat <path>` prints a note, with its **version token** in a separate block
+- `cat <path>` prints a note, with its **version token** in a separate block; `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`)
+- `outline <path>` lists a note's headings with line ranges and sizes
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
 - `history <path>` lists a note's versions, `restore <path> <version>` goes back to one
-- `rm <path>` moves a note to the trash (kept 30 days), `trash` lists it, `restore <path>` brings it back
+- `rm <path>` moves a note to the trash (kept 30 days), `trash` lists it with its version, `restore <path> [version]` brings it back
 - `help [command]` lists the commands or explains one; `<command> --help` does the same
 
-`write` creates a note or replaces its content, and `edit` replaces one unique passage or appends to the end. Both take the version token from `cat`; if the note changed in the meantime, the write fails instead of overwriting someone else's change. The last 10 versions of each note are kept (writes by the same writer within 10 minutes count as one), so the state before an agent session can always be restored. New notes can only go into existing vaults.
+`write` creates a note or replaces its content, and `edit` replaces one unique passage or appends to the end, of the whole note or of one section (`path` = `/Work/plan.md#Goals`; `replace_section` replaces the section). Both take the version token from `cat`; if the note changed in the meantime, the write fails instead of overwriting someone else's change. The last 10 versions of each note are kept (writes by the same writer within 10 minutes count as one), so the state before an agent session can always be restored. New notes can only go into existing vaults.
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
