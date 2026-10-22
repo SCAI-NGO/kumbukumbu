@@ -8,7 +8,23 @@ public sealed class Ls(INoteReader notes) : ICommand
 {
     public string Name => "ls";
 
-    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
+    public string Usage => "ls [path]";
+
+    public string Summary => "list a directory; no path lists the vaults";
+
+    public string Help => """
+        ls [path]
+          List a directory. Directories end with '/'. Without a path, list the vaults.
+          A note's path lists just that path.
+
+          ls
+          ls /Demo/projects
+          ls /Demo | wc -l
+        """;
+
+    public bool ReadsInput => false;
+
+    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count > 1) return ShellResult.Error("ls: too many arguments");

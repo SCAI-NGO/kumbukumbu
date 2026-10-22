@@ -13,7 +13,7 @@ public static class ShTool
     [McpServerTool(Name = "sh", ReadOnly = true, Idempotent = true, OpenWorld = false), Description(Manual.ToolDescription)]
     public static async Task<CallToolResult> Sh(
         Shell shell,
-        [Description("A command line, e.g. ls /  or  cat \"/Work/Meeting Notes.md\"")] string command,
+        [Description("A command line, e.g. ls /  or  rg -i kumbu | head -5  or  cat \"/Work/Meeting Notes.md\"")] string command,
         CancellationToken ct)
     {
         // Errors are tool results (isError: true), not JSON-RPC errors: a wrong path is a normal answer.

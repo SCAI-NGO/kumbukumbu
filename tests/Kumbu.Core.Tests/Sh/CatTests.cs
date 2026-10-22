@@ -12,7 +12,7 @@ public class CatTests
     private static readonly InMemoryNoteReader Reader = new(("/Work/a.md", Content), ("/Work/projects/x.md", "X"));
 
     private static Task<ShellResult> Run(params string[] args) =>
-        new Cat(Reader).RunAsync(args, CancellationToken.None);
+        new Cat(Reader).RunAsync(args, null, CancellationToken.None);
 
     [Fact]
     public void NameIsCat() => Assert.Equal("cat", new Cat(Reader).Name);

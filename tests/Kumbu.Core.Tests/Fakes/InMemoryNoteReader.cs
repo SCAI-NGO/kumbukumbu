@@ -22,9 +22,18 @@ public sealed class InMemoryNoteReader : INoteReader
 
     public Task<IReadOnlyList<VaultPath>> ListNotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
-        var prefix = dir.IsRoot ? "/" : dir.Value + "/";
-        IReadOnlyList<VaultPath> result =
-            [.. _notes.Keys.Where(p => p.Value.StartsWith(prefix, StringComparison.Ordinal))];
+        IReadOnlyList<VaultPath> result = [.. _notes.Keys.Where(p => IsBelow(p, dir))];
         return Task.FromResult(result);
     }
+
+    // Reversed on purpose: callers must not rely on the store's order.
+    public Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct)
+    {
+        IReadOnlyList<Note> result =
+            [.. _notes.Where(n => IsBelow(n.Key, dir)).Select(n => new Note(n.Key, n.Value)).Reverse()];
+        return Task.FromResult(result);
+    }
+
+    private static bool IsBelow(VaultPath path, VaultPath dir) =>
+        path.Value.StartsWith(dir.IsRoot ? "/" : dir.Value + "/", StringComparison.Ordinal);
 }

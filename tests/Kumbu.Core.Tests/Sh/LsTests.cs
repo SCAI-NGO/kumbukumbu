@@ -12,7 +12,7 @@ public class LsTests
         ("/Workshop/w.md", "W"), ("/Ideas/Meeting Notes.md", "M"));
 
     private static Task<ShellResult> Run(params string[] args) =>
-        new Ls(Reader).RunAsync(args, CancellationToken.None);
+        new Ls(Reader).RunAsync(args, null, CancellationToken.None);
 
     [Fact]
     public void NameIsLs() => Assert.Equal("ls", new Ls(Reader).Name);
@@ -47,7 +47,7 @@ public class LsTests
 
     [Fact]
     public async Task EmptyReaderListsNothing() =>
-        Assert.Equal(ShellResult.Ok(""), await new Ls(new InMemoryNoteReader()).RunAsync([], CancellationToken.None));
+        Assert.Equal(ShellResult.Ok(""), await new Ls(new InMemoryNoteReader()).RunAsync([], null, CancellationToken.None));
 
     [Fact]
     public async Task RelativePath() =>

@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Sh;
+using Kumbu.Core.Tests.Fakes;
+
+namespace Kumbu.Core.Tests.Sh;
+
+public class HelpTests
+{
+    private static readonly string[] Commands = ["ls", "cat", "rg", "head", "tail", "wc", "sort", "help"];
+
+    private static Task<ShellResult> Run(string line) => new Shell(new InMemoryNoteReader()).RunAsync(line, CancellationToken.None);
+
+    [Fact]
+    public async Task ListsEveryCommandInOrder()
+    {
+        var result = await Run("help");
+        Assert.False(result.IsError);
+        var positions = Commands.Select(c => result.Output.IndexOf("\n  " + c + " ", StringComparison.Ordinal)).ToList();
+        Assert.DoesNotContain(-1, positions);
+        Assert.Equal(positions.Order(), positions);
+        Assert.Contains("right of a pipe only rg, head, tail, wc, sort work", result.Output);
+    }
+
+    [Theory]
+    [InlineData("help rg")]
+    [InlineData("rg --help")]
+    [InlineData("rg -i --help")]
+    [InlineData("ls / | rg --help")]
+    public async Task DetailsOfOneCommand(string line)
+    {
+        var result = await Run(line);
+        Assert.False(result.IsError);
+        Assert.StartsWith("rg [options] <regex> [path...]", result.Output);
+        Assert.Contains("--files-with-matches", result.Output);
+    }
+
+    [Fact]
+    public async Task EveryCommandHasHelpThatStartsWithItsName()
+    {
+        foreach (var command in Commands)
+        {
+            var result = await Run($"help {command}");
+            Assert.False(result.IsError);
+            Assert.StartsWith(command, result.Output);
+        }
+    }
+
+    [Fact]
+    public async Task HelpAfterDoubleDashIsAnOperand()
+    {
+        var shell = new Shell(new InMemoryNoteReader(("/W/a.md", "use --help\n")));
+        Assert.Equal(ShellResult.Ok("/W/a.md:1:use --help"), await shell.RunAsync("rg -- --help /W", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UnknownTopic() =>
+        Assert.Equal(ShellResult.Error("help: no such command: rm — try 'help'"), await Run("help rm"));
+
+    [Fact]
+    public async Task TooManyArguments() => Assert.Equal(ShellResult.Error("help: too many arguments"), await Run("help ls cat"));
+
+    [Fact]
+    public void ToolDescriptionMentionsEveryCommand()
+    {
+        foreach (var command in Commands)
+        {
+            Assert.Contains("\n  " + command + " ", Manual.ToolDescription);
+        }
+    }
+}

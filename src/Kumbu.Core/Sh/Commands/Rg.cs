@@ -1,0 +1,267 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics.CodeAnalysis;
+using System.Text.RegularExpressions;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
+
+namespace Kumbu.Core.Sh.Commands;
+
+/// <summary>
+/// Plain, unranked regex search in the style of ripgrep: over notes when it starts the pipeline,
+/// over the piped lines when it stands right of a pipe.
+/// </summary>
+public sealed class Rg(INoteReader notes) : ICommand
+{
+    // The engine is linear in the input, so the timeout is a backstop, not the protection.
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
+
+    private static readonly Option[] Spec =
+    [
+        new('i', "ignore-case"), new('F', "fixed-strings"), new('w', "word-regexp"), new('v', "invert-match"),
+        new('l', "files-with-matches"), new('c', "count"), new('n', "line-number"), new('N', "no-line-number"),
+        new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
+        new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
+        new('C', "context", TakesValue: true), new(null, "files"),
+    ];
+
+    public string Name => "rg";
+
+    public string Usage => "rg [options] <regex> [path...]";
+
+    public string Summary => "search notes (prints path:line:text); --files lists note paths";
+
+    public string Help => """
+        rg [options] <regex> [path...]
+          Search the notes below each path (a directory or a note) for lines matching a regex.
+          Without a path, search every vault. Prints path:line:text, sorted by path; context lines
+          print as path-line-text, and '--' separates groups that are not adjacent.
+          Right of a pipe, rg filters the piped lines instead and prints them without a prefix.
+        rg --files [path...]
+          List the paths of all notes below each path; with no path, of every note.
+
+          -i, --ignore-case          case-insensitive
+          -F, --fixed-strings        the pattern is a literal string, not a regex
+          -w, --word-regexp          match whole words only
+          -v, --invert-match         select lines that do not match
+          -l, --files-with-matches   print only the paths of notes with a match
+          -c, --count                print path:count per note (piped: one total)
+          -n, --line-number          show line numbers (default for notes; piped: off)
+          -N, --no-line-number       hide line numbers
+          -m, --max-count N          at most N matching lines per note
+          -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
+          -A N, -B N, -C N           N lines of context after, before, or around each match
+
+        The syntax is that of ripgrep: no look-around and no backreferences, so a search
+        never backtracks. Quote patterns that contain spaces or | ( ) < > & ; $.
+
+          rg -i hecate
+          rg -n -C 2 'TODO|FIXME' /Work/projects
+          rg --files | rg -i kumbu          find a note by name (e.g. for a [[wikilink]])
+          rg -l '\[\[kumbu\]\]'              which notes link to kumbu
+          cat /Demo/welcome.md | rg -n '^#'
+        """;
+
+    public bool ReadsInput => true;
+
+    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
+    {
+        if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
+        if (options.Has("files")) return await ListFilesAsync(options.Operands, input, ct);
+
+        List<string> patterns = [.. options.Values("regexp")];
+        var operands = options.Operands;
+        if (patterns.Count == 0)
+        {
+            if (operands.Count == 0) return ShellResult.Error("rg: missing pattern (try 'help rg')");
+            patterns.Add(operands[0]);
+            operands = [.. operands.Skip(1)];
+        }
+
+        if (!TryCount(options, "max-count", null, out var max, out error)
+            || !TryCount(options, "context", 0, out var context, out error)
+            || !TryCount(options, "before-context", context, out var before, out error)
+            || !TryCount(options, "after-context", context, out var after, out error))
+        {
+            return error;
+        }
+
+        if (!TryBuildRegex(patterns, options, out var regex, out error)) return error;
+        var search = new Search(regex, options.Has("invert-match"), max, before!.Value, after!.Value);
+
+        try
+        {
+            return input is null
+                ? await SearchNotesAsync(search, options, operands, ct)
+                : SearchInput(search, options, operands, input);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return ShellResult.Error("rg: the search took too long; narrow the path or simplify the pattern");
+        }
+    }
+
+    private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, CancellationToken ct)
+    {
+        var found = new Dictionary<VaultPath, Note>();
+        foreach (var operand in operands.Count == 0 ? ["/"] : operands)
+        {
+            if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
+
+            var below = await notes.ReadNotesUnderAsync(path, ct);
+            if (below.Count == 0 && !path.IsRoot)
+            {
+                var content = await notes.ReadAsync(path, ct);
+                if (content is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
+                below = [new Note(path, content)];
+            }
+
+            foreach (var note in below) found.TryAdd(note.Path, note);
+        }
+
+        var lineNumbers = !options.Has("no-line-number");
+        var output = new List<string>();
+        foreach (var note in found.Values.OrderBy(n => n.Path.Value, StringComparer.Ordinal))
+        {
+            var lines = Lines.Split(note.Content);
+            var matches = search.Matches(lines);
+            if (matches.Count == 0) continue;
+
+            var path = note.Path.Value;
+            if (options.Has("files-with-matches")) output.Add(path);
+            else if (options.Has("count")) output.Add($"{path}:{matches.Count}");
+            else
+            {
+                if (search.HasContext && output.Count > 0) output.Add("--");
+                output.AddRange(search.Render(lines, matches, (n, sep, text) =>
+                    lineNumbers ? $"{path}{sep}{n}{sep}{text}" : $"{path}{sep}{text}"));
+            }
+        }
+
+        return ShellResult.Ok(Lines.Join(output));
+    }
+
+    private static ShellResult SearchInput(Search search, Options options, IReadOnlyList<string> operands, string input)
+    {
+        if (operands.Count > 0)
+        {
+            return ShellResult.Error($"rg: reads from the pipe, so it takes no path (got '{operands[0]}')");
+        }
+
+        if (options.Has("files-with-matches")) return ShellResult.Error("rg: -l lists notes, so it needs paths, not piped input");
+
+        var lines = Lines.Split(input);
+        var matches = search.Matches(lines);
+        if (options.Has("count")) return ShellResult.Ok(matches.Count.ToString());
+
+        var lineNumbers = options.Has("line-number") && !options.Has("no-line-number");
+        return ShellResult.Ok(Lines.Join(search.Render(lines, matches, (n, sep, text) =>
+            lineNumbers ? $"{n}{sep}{text}" : text)));
+    }
+
+    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, string? input, CancellationToken ct)
+    {
+        if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
+
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var operand in operands.Count == 0 ? ["/"] : operands)
+        {
+            if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
+
+            var below = await notes.ListNotesUnderAsync(path, ct);
+            if (below.Count == 0 && !path.IsRoot)
+            {
+                if (await notes.ReadAsync(path, ct) is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
+                below = [path];
+            }
+
+            found.UnionWith(below.Select(p => p.Value));
+        }
+
+        return ShellResult.Ok(Lines.Join(found.Order(StringComparer.Ordinal)));
+    }
+
+    private static bool TryCount(
+        Options options, string name, int? fallback, out int? value, [NotNullWhen(false)] out ShellResult? error)
+    {
+        value = fallback;
+        error = null;
+        if (options.Value(name) is not { } text) return true;
+        if (int.TryParse(text, out var parsed) && parsed >= 0)
+        {
+            value = parsed;
+            return true;
+        }
+
+        error = ShellResult.Error($"rg: invalid number for --{name}: '{text}'");
+        return false;
+    }
+
+    private static bool TryBuildRegex(
+        IReadOnlyList<string> patterns, Options options,
+        [NotNullWhen(true)] out Regex? regex, [NotNullWhen(false)] out ShellResult? error)
+    {
+        var parts = patterns.Select(p => options.Has("fixed-strings") ? Regex.Escape(p) : p).ToList();
+        var pattern = parts.Count == 1 ? parts[0] : string.Join('|', parts.Select(p => $"(?:{p})"));
+        if (options.Has("word-regexp")) pattern = $@"\b(?:{pattern})\b";
+
+        var regexOptions = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
+        if (options.Has("ignore-case")) regexOptions |= RegexOptions.IgnoreCase;
+
+        regex = null;
+        error = null;
+        try
+        {
+            regex = new Regex(pattern, regexOptions, MatchTimeout);
+            return true;
+        }
+        catch (NotSupportedException)
+        {
+            error = ShellResult.Error(
+                "rg: regex not supported: look-around, backreferences and atomic groups need backtracking, which rg never does");
+        }
+        catch (ArgumentException e)
+        {
+            error = ShellResult.Error($"rg: regex parse error: {e.Message}");
+        }
+
+        return false;
+    }
+
+    /// <summary>Selects matching lines with their context and renders them in ripgrep's layout.</summary>
+    private sealed class Search(Regex regex, bool invert, int? max, int before, int after)
+    {
+        public bool HasContext => before > 0 || after > 0;
+
+        /// <summary>Indexes of the selected lines, at most <c>max</c> of them.</summary>
+        public List<int> Matches(IReadOnlyList<string> lines)
+        {
+            var result = new List<int>();
+            for (var i = 0; i < lines.Count && (max is null || result.Count < max); i++)
+            {
+                if (regex.IsMatch(lines[i]) != invert) result.Add(i);
+            }
+
+            return result;
+        }
+
+        /// <param name="format">Line number (1-based), ':' for a match or '-' for context, and the text.</param>
+        public IEnumerable<string> Render(IReadOnlyList<string> lines, List<int> matches, Func<int, char, string, string> format)
+        {
+            var isMatch = matches.ToHashSet();
+            var next = 0;
+            foreach (var m in matches)
+            {
+                var first = Math.Max(m - before, next);
+                if (HasContext && next > 0 && first > next) yield return "--";
+
+                var last = Math.Min(m + after, lines.Count - 1);
+                for (var i = first; i <= last; i++)
+                {
+                    yield return format(i + 1, isMatch.Contains(i) ? ':' : '-', lines[i]);
+                }
+
+                next = Math.Max(next, last + 1);
+            }
+        }
+    }
+}

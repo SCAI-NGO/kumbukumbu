@@ -7,19 +7,27 @@ public sealed class Cat(INoteReader notes) : ICommand
 {
     public string Name => "cat";
 
-    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
+    public string Usage => "cat <path>";
+
+    public string Summary => "print a note";
+
+    public string Help => """
+        cat <path>
+          Print a note.
+
+          cat /Demo/welcome.md
+          cat "/Demo/Meeting Notes.md" | head -n 20
+        """;
+
+    public bool ReadsInput => false;
+
+    public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("cat: missing operand");
         if (args.Count > 1) return ShellResult.Error("cat: too many arguments");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        var content = await notes.ReadAsync(path, ct);
-        if (content is not null) return ShellResult.Ok(content);
-
-        var below = await notes.ListNotesUnderAsync(path, ct);
-        return below.Count > 0 || path.IsRoot
-            ? ShellResult.Error($"cat: {path.Value}: Is a directory")
-            : ShellResult.Error($"cat: {path.Value}: No such file or directory");
+        return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
     }
 }

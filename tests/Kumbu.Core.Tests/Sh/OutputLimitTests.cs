@@ -18,7 +18,7 @@ public class OutputLimitTests
     {
         var result = OutputLimit.Apply(ShellResult.Ok(new string('a', 61_200)));
         Assert.Equal(
-            new string('a', 24_000) + "\n[truncated — showing 24000 of 61200 chars (~20400 tokens)]",
+            new string('a', 24_000) + "\n[truncated — showing 24000 of 61200 chars (~20400 tokens); narrow it with rg, head or tail]",
             result.Output);
     }
 
