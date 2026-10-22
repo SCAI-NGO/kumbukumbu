@@ -72,7 +72,12 @@ The section model is easy to pick up: `outline` once, then `cat` or `edit` with 
 3. **Section address with a space but no quotes**: `cat /Demo/long.md#Part 799` gives `cat: too many arguments`, as before for paths. When an argument after the first starts like the rest of a heading, a hint `(quote paths and sections with spaces)` would save a round trip. Nice to have.
 4. **Upgrade order in the README.** Line 58 should spell out the order: `git pull`, `docker compose up --build -d`, then a new client session. Without the rebuild a restarted client loads the old server's tool descriptions, which looks like the new version but isn't.
 
-5. **The first `cat` of a long note is mostly wasted** (see the agent behaviour test below). An agent can't know a note's length before reading it, so it `cat`s the whole note and gets about 8,000 tokens of its beginning. Proposal for discussion: when a note exceeds the limit, `cat` returns a short beginning (for example 40 lines) followed by the note's top-level outline with line ranges, and the usual footer. The agent can jump straight to the right section, and the call costs a fraction of the tokens. Trade-off: in newest-first logs the beginning itself is often what was wanted, so the beginning should stay, just shorter. Needs a decision from Chris. The tested session itself suggested the stronger variant (outline only, no beginning).
+5. **The first `cat` of a long note is mostly wasted** (see the agent behaviour test below). An agent can't know a note's length before reading it, so it `cat`s the whole note and gets about 8,000 tokens of its beginning. **Decided (Chris, 2026-10-22), by the "what would Thompson and Ritchie do" rule: the simpler variant, and no new flag.**
+   - When a note is too long for one call, `cat` without a section returns **only the note's outline** (as `outline` prints it) instead of a truncated beginning, plus a footer such as `note too long for one call (~14k tokens); its outline is above. Read a part: cat "note.md#Section", head -n 40 note.md, rg -n … note.md`. The version block comes as usual.
+   - **No `cat` option** for "beginning plus outline": `head -n 40` and `outline` already compose to exactly that, and an agent can call both in parallel. The footer names `head` explicitly, so newest-first logs still get their top in one call.
+   - **Only when `cat` stands alone.** In a pipeline (`cat note.md | rg -n TODO`, `cat note.md | tail -n 50`) `cat` passes the full content on, as now; only the final output of a pipeline is limited, as before.
+   - A section that is itself too long keeps today's behaviour (cut at a line end with the footer), since the agent asked for exactly that part.
+   - Update `help cat` and the `sh` description accordingly (together with observation 6).
 6. **Say it up front in the tool description.** The truncation footer teaches `outline` only after the tokens are spent. One line in the `sh` description, next to the output limit, would teach it before: `Long notes: 'wc -c' or 'outline' first, then cat "note.md#Section" or rg -n.` Cheap, independent of observation 5, and suggested by the tested session itself.
 
 ## Agent behaviour test
@@ -118,4 +123,4 @@ Its proposals: (a) above a certain size, `cat` without a section returns the out
 
 ## Suggested next step
 
-Observations 1 to 4 and 6 are small; 2, 4 and 6 are the useful ones. Observation 5 needs a decision first. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
+Observations 1 to 4 and 6 are small; 2, 4 and 6 are the useful ones. Observation 5 is decided and ready to build. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
