@@ -142,3 +142,52 @@ The model knows nothing about `sh` except what the tool description says. That t
 ### Why paths are absolute
 
 A shell with a working directory needs state: `cd` changes something between calls. Stateless requests have nowhere to keep that, and the model could lose track of where it is. With absolute paths, such as `/Work/projects/plan.md`, every command means the same thing on its own. Top-level directories are the vaults, and `ls` with no path lists them.
+
+## 2. A shell as the agent's interface
+
+### Why a shell at all
+
+Models have read an enormous amount of Unix. `ls`, `cat`, `head` and `rg`, joined by `|`, need no explanation: a model reaches for them first. So instead of inventing ten tools with their own JSON arguments, Kumbu² offers one tool, `sh`, and speaks that language. The price is that we have to behave enough like a real shell that the model's expectations hold, and fail loudly where they don't.
+
+### From a command line to a pipeline
+
+A command line passes through two small steps before anything runs:
+
+1. **Tokenizer (lexer).** It walks the characters once and produces words and the pipe operator. Quoting decides which is which: in `rg 'a|b'` the `|` is part of the word `a|b`, in `rg a | head` it is an operator. Only the tokenizer knows about quotes, so only it can tell the two apart.
+2. **Pipeline (parser).** It splits the tokens at each pipe into stages. Each stage is a command name and its arguments. A pipe at the start, at the end or twice in a row is a syntax error.
+
+Then the shell runs the stages left to right. The output of one stage becomes the input of the next. The concept describes each command as a function `string[] → string[]` (lines in, lines out), and a pipe as a chain of them. In the code the text travels as one string and filters split it into lines (`Lines.Split`): a trailing newline ends the last line instead of starting an empty one.
+
+### Sources and filters
+
+Not every command makes sense right of a pipe. `ls`, `cat` and `help` produce text from the vault (**sources**); `head`, `tail`, `wc`, `sort` and `rg` transform text (**filters**). `ls /Work | cat` is rejected with a message that lists the filters, because the model almost certainly meant something else.
+
+A filter at the start of a pipeline reads the note it is given (`head -n 5 /Work/plan.md`). Behind a pipe it takes no path. Unix would silently let the file win over the input; here that is an error, because a model that writes both has misunderstood something, and saying so costs one call instead of a wrong answer.
+
+When a stage fails, the pipeline stops and that stage's error is the result (bash calls this `set -o pipefail`). Otherwise `cat /Work/nope.md | wc -l` would answer `0`, and the model would believe the note is empty.
+
+### Only one operator
+
+Real shells have many operators: `&&`, `;`, `>`, `$( )` and more. Kumbu² supports only `|`. The others are not passed through as text but rejected, with the operator named and a hint to quote it. The reason: a model that writes `ls /A && ls /B` expects two listings. Treating `&&` as an argument would produce a confusing error from `ls` at best, and at worst a plausible but wrong answer. Rejecting it clearly lets the model split the work into two calls.
+
+Two characters stay ordinary on purpose. `*` is not a glob, because globs need a working directory to make sense. `#` does not start a comment, because `note.md#Heading` will address a section (concept §4).
+
+### Searching with `rg`
+
+`rg` is ripgrep's command name, and models know its output: `path:line:text` for a match, `path-line-text` for context lines, and `--` between groups that are not adjacent. Kumbu² copies that layout, so a model can read it without instructions. Without a path it searches every vault (there is no working directory to default to). Right of a pipe it filters lines instead and prints them bare, as ripgrep does with standard input.
+
+`rg --files` lists note paths. Together with a filter it answers a question the first test raised: where does `[[kumbu]]` live? `rg --files | rg -i kumbu` prints `/Demo/projects/kumbu.md`. Proper link resolution comes in step 4; until then this is enough.
+
+### Regular expressions that cannot hang the server
+
+A regex comes from the model and runs on the server. That is a classic attack surface called **ReDoS** (regular expression denial of service). Most regex engines, .NET's default included, work by **backtracking**: they try one way to match, and when it fails they step back and try another. For some patterns the number of ways explodes. `^(a+)+$` against `aaaa…a!` tries every way of splitting the a's into groups before giving up: 2ⁿ attempts for n characters. A few dozen characters are enough to keep a CPU busy for a very long time.
+
+The alternative is to compile the regex into an **automaton** (a state machine) and walk the input once, tracking every possible state at the same time. Time is then linear in the input, whatever the pattern. Rust's `regex` crate, which ripgrep uses, works this way. So does .NET with `RegexOptions.NonBacktracking`, which Kumbu² uses (plus a timeout as a backstop).
+
+The cost: features that need to remember and revisit, such as look-around (`(?=…)`) and backreferences (`\1`), are impossible. ripgrep doesn't have them by default either, so models rarely expect them. If one is used anyway, the error says why it is missing.
+
+### Errors and `help` as teaching
+
+The tool description is sent to the model every time it connects, so every line of it costs tokens in every conversation. It therefore stays a short man page: the commands, one line each, plus the rules that matter on every call. The details (every option of `rg`, examples) live in `help <command>`, which the model only fetches when it needs them. This is called **progressive disclosure**. `rg --help` works too, because models try that first.
+
+Error messages do the same job. `command not found: rm — try 'help'` names the next step. For the commands models reach for most often, the hint is specific: `grep` points to `rg`, `find` to `rg --files`, `cd` to "there is no working directory". Every error should let the model fix its next call without guessing; the phase 1 test showed that this works.

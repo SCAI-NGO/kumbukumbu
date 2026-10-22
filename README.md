@@ -4,14 +4,20 @@
 
 Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes are plain Markdown, kept in MongoDB, and agents reach them through an MCP server. It is your memory; the AI gets a key.
 
-## Status: walking skeleton
+## Status: read-only shell with search
 
-The thinnest end-to-end slice that works. The server offers one MCP tool, `sh`, a read-only shell over your notes:
+The server offers one MCP tool, `sh`, a read-only shell over your notes:
 
 - `ls [path]` lists a directory (no path lists the vaults)
 - `cat <path>` prints a note
+- `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
+- `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
+- `head`, `tail`, `wc`, `sort` work on a note or on piped input
+- `help [command]` lists the commands or explains one; `<command> --help` does the same
 
-Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Notes are loaded into MongoDB from `./vaults` (or `KUMBU_VAULTS`) when the server starts. There is no search, no writing, no web UI and no user management yet.
+Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
+
+Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Notes are loaded into MongoDB from `./vaults` (or `KUMBU_VAULTS`) when the server starts. There is no writing, no link resolution, no web UI and no user management yet.
 
 ## Security
 
