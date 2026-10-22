@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Notes;
 using MongoDB.Bson;
@@ -103,5 +104,143 @@ public sealed class MongoNoteStoreTests(MongoFixture fixture)
         var notes = await store.ReadNotesUnderAsync(VaultPath.Root, CancellationToken.None);
 
         Assert.Equal(["/(draft)/y.md", "/Work/a.md"], notes.Select(n => n.Path.Value).Order(StringComparer.Ordinal));
+    }
+
+    private static readonly DateTime T0 = new(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc);
+
+    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, []);
+
+    [Fact]
+    public async Task Create_then_get_round_trips_every_field()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var note = New("/Work/a.md", "a") with
+        {
+            History = [new HistoryEntry("older", Writers.Seed, T0.AddDays(-1))],
+            SeedContent = "older",
+        };
+
+        Assert.True(await store.TryCreateAsync(note, CancellationToken.None));
+        var read = await store.GetAsync(P("/Work/a.md"), CancellationToken.None);
+
+        Assert.NotNull(read);
+        Assert.Equal(note with { History = [] }, read with { History = [] });
+        Assert.Equal(note.History, read.History);
+    }
+
+    [Fact]
+    public async Task Create_fails_if_the_note_exists()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        Assert.True(await store.TryCreateAsync(New("/Work/a.md", "a"), CancellationToken.None));
+        Assert.False(await store.TryCreateAsync(New("/Work/a.md", "b"), CancellationToken.None));
+        Assert.Equal("a", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Replace_is_a_compare_and_swap_on_the_revision()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var v1 = New("/Work/a.md", "one");
+        await store.TryCreateAsync(v1, CancellationToken.None);
+        var v2 = NoteWriter.Next(v1, "two", Writers.Dev, T0.AddHours(1));
+        var rival = NoteWriter.Next(v1, "rival", "other", T0.AddHours(1));
+
+        Assert.True(await store.TryReplaceAsync(v1, v2, CancellationToken.None));
+        Assert.False(await store.TryReplaceAsync(v1, rival, CancellationToken.None));
+
+        var read = (await store.GetAsync(P("/Work/a.md"), CancellationToken.None))!;
+        Assert.Equal("two", read.Content);
+        Assert.Equal(2, read.Revision);
+        Assert.Equal(["one"], read.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task Replace_works_on_a_document_from_before_step_3()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        await store.UpsertAsync(P("/Work/a.md"), "legacy", CancellationToken.None);
+        var legacy = (await store.GetAsync(P("/Work/a.md"), CancellationToken.None))!;
+        Assert.Equal(0, legacy.Revision);
+        Assert.Equal(Writers.Seed, legacy.LastWriter);
+        Assert.Empty(legacy.History);
+        Assert.Null(legacy.SeedContent);
+
+        Assert.True(await store.TryReplaceAsync(legacy, NoteWriter.Next(legacy, "new", Writers.Dev, T0), CancellationToken.None));
+        Assert.Equal("new", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Trash_moves_the_note_with_its_history_and_restore_brings_it_back()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var v1 = New("/Work/a.md", "one");
+        await store.TryCreateAsync(v1, CancellationToken.None);
+        var v2 = NoteWriter.Next(v1, "two", "other", T0.AddHours(1));
+        await store.TryReplaceAsync(v1, v2, CancellationToken.None);
+
+        Assert.True(await store.TryTrashAsync(v2, Writers.Dev, T0.AddHours(2), CancellationToken.None));
+        Assert.Null(await store.GetAsync(P("/Work/a.md"), CancellationToken.None));
+        var trashed = Assert.Single(await store.ListTrashAsync(P("/Work"), CancellationToken.None));
+        Assert.Equal(T0.AddHours(2), trashed.DeletedAt);
+        Assert.Equal(Writers.Dev, trashed.DeletedBy);
+
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0.AddHours(3), CancellationToken.None);
+
+        Assert.NotNull(restored);
+        Assert.Equal("two", restored.Content);
+        Assert.Equal(["one"], restored.History.Select(h => h.Content));
+        Assert.Equal(restored with { History = [] }, (await store.GetAsync(P("/Work/a.md"), CancellationToken.None))! with { History = [] });
+        Assert.Empty(await store.ListTrashAsync(P("/Work"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Trash_fails_and_leaves_no_copy_if_the_note_changed()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var v1 = New("/Work/a.md", "one");
+        await store.TryCreateAsync(v1, CancellationToken.None);
+        await store.TryReplaceAsync(v1, NoteWriter.Next(v1, "two", Writers.Dev, T0), CancellationToken.None);
+
+        Assert.False(await store.TryTrashAsync(v1, Writers.Dev, T0, CancellationToken.None));
+        Assert.Empty(await store.ListTrashAsync(VaultPath.Root, CancellationToken.None));
+        Assert.Equal("two", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Restore_from_trash_takes_the_latest_and_never_overwrites()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        foreach (var (content, hour) in new[] { ("first", 1), ("second", 2) })
+        {
+            var note = New("/Work/a.md", content);
+            await store.TryCreateAsync(note, CancellationToken.None);
+            await store.TryTrashAsync(note, Writers.Dev, T0.AddHours(hour), CancellationToken.None);
+        }
+
+        await store.TryCreateAsync(New("/Work/a.md", "occupied"), CancellationToken.None);
+        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0, CancellationToken.None));
+        Assert.Equal(2, (await store.ListTrashAsync(P("/Work/a.md"), CancellationToken.None)).Count);
+
+        await store.TryTrashAsync((await store.GetAsync(P("/Work/a.md"), CancellationToken.None))!, Writers.Dev, T0.AddHours(3), CancellationToken.None);
+        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0.AddHours(4), CancellationToken.None);
+        Assert.Equal("occupied", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
+        Assert.Equal(
+            ["second", "first"],
+            (await store.ListTrashAsync(P("/Work/a.md"), CancellationToken.None)).Select(t => t.Note.Content));
+    }
+
+    [Fact]
+    public async Task Trash_documents_expire_after_thirty_days()
+    {
+        var db = fixture.NewDatabase();
+        await NewStoreAsync(db);
+
+        var indexes = await (await db.GetCollection<BsonDocument>("trash").Indexes.ListAsync(TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        var ttl = Assert.Single(indexes, i => i.Contains("expireAfterSeconds"));
+        Assert.Equal(new BsonDocument("deletedAt", 1), ttl["key"].AsBsonDocument);
+        Assert.Equal(30 * 24 * 3600, ttl["expireAfterSeconds"].ToInt64());
     }
 }

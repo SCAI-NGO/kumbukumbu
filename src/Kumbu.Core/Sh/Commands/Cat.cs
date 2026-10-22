@@ -13,7 +13,7 @@ public sealed class Cat(INoteReader notes) : ICommand
 
     public string Help => """
         cat <path>
-          Print a note.
+          Print a note. Its version token comes separately; pass it to 'edit' or 'write' to change the note.
 
           cat /Demo/welcome.md
           cat "/Demo/Meeting Notes.md" | head -n 20

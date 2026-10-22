@@ -18,18 +18,110 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     private static string Text(CallToolResult result) =>
-        Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        Assert.IsType<TextContentBlock>(result.Content[0]).Text;
+
+    /// <summary>The second content block: "version of &lt;path&gt;: &lt;token&gt;".</summary>
+    private static string Token(CallToolResult result)
+    {
+        Assert.Equal(2, result.Content.Count);
+        var text = Assert.IsType<TextContentBlock>(result.Content[1]).Text;
+        Assert.StartsWith("version of ", text, StringComparison.Ordinal);
+        return text[(text.LastIndexOf(' ') + 1)..];
+    }
+
+    private async Task<CallToolResult> CallAsync(string tool, Dictionary<string, object?> args)
+    {
+        await using var client = await app.ConnectAsync();
+        return await client.CallToolAsync(tool, args, cancellationToken: Ct);
+    }
 
     [Fact]
-    public async Task Lists_exactly_the_sh_tool_with_the_manual_as_description()
+    public async Task Lists_sh_write_and_edit_with_their_manuals()
     {
         await using var client = await app.ConnectAsync();
 
         var tools = await client.ListToolsAsync(cancellationToken: Ct);
 
-        var tool = Assert.Single(tools);
-        Assert.Equal("sh", tool.Name);
-        Assert.Contains("ls [path]", tool.Description, StringComparison.Ordinal);
+        Assert.Equal(["edit", "sh", "write"], tools.Select(t => t.Name).Order());
+        Assert.Contains("ls [path]", tools.Single(t => t.Name == "sh").Description, StringComparison.Ordinal);
+        Assert.StartsWith("Create a note", tools.Single(t => t.Name == "write").Description, StringComparison.Ordinal);
+        Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Write_and_edit_take_their_parameters_by_these_names()
+    {
+        await using var client = await app.ConnectAsync();
+        var tools = (await client.ListToolsAsync(cancellationToken: Ct)).ToDictionary(t => t.Name);
+
+        static string[] Properties(McpClientTool tool) =>
+            [.. tool.ProtocolTool.InputSchema.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order()];
+        static string[] Required(McpClientTool tool) =>
+            [.. tool.ProtocolTool.InputSchema.GetProperty("required").EnumerateArray().Select(p => p.GetString()!).Order()];
+
+        Assert.Equal(["content", "path", "version"], Properties(tools["write"]));
+        Assert.Equal(["content", "path"], Required(tools["write"]));
+        Assert.Equal(["new_text", "old_text", "path", "version"], Properties(tools["edit"]));
+        Assert.Equal(["new_text", "path", "version"], Required(tools["edit"]));
+    }
+
+    [Fact]
+    public async Task Cat_then_edit_then_conflict_then_history_and_restore()
+    {
+        var path = "/Demo/scratch-edit.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "# Scratch\n\n- one\n" });
+        Assert.NotEqual(true, created.IsError);
+        Assert.Equal($"created {path} (3 lines)", Text(created));
+
+        var read = await ShAsync($"cat {path}");
+        var v1 = Token(read);
+        Assert.Equal(Token(created), v1);
+
+        var edited = await CallAsync("edit", new() { ["path"] = path, ["version"] = v1, ["old_text"] = "- one", ["new_text"] = "- eins" });
+        Assert.NotEqual(true, edited.IsError);
+        Assert.Equal($"edited {path} at line 3", Text(edited));
+
+        var stale = await CallAsync("edit", new() { ["path"] = path, ["version"] = v1, ["new_text"] = "- two" });
+        Assert.True(stale.IsError);
+        Assert.StartsWith($"edit: {path} has changed since version {v1}", Text(stale), StringComparison.Ordinal);
+
+        var appended = await CallAsync("edit", new() { ["path"] = path, ["version"] = Token(edited), ["new_text"] = "- two\n" });
+        Assert.Equal("# Scratch\n\n- eins\n- two\n", Text(await ShAsync($"cat {path}")));
+        Assert.Equal($"appended to {path} (now 4 lines)", Text(appended));
+
+        // Creating and both edits came from the same writer within ten minutes: one session, one version.
+        var history = Text(await ShAsync($"history {path}"));
+        Assert.Single(history.Split('\n'));
+
+        var restored = await ShAsync($"restore {path} {v1}");
+        Assert.True(restored.IsError);
+        Assert.StartsWith($"restore: {path} has no version {v1}", Text(restored), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Rm_trash_and_restore_over_mcp()
+    {
+        var path = "/Demo/scratch-rm.md";
+        await CallAsync("write", new() { ["path"] = path, ["content"] = "bye\n" });
+
+        var removed = await ShAsync($"rm {path}");
+        Assert.NotEqual(true, removed.IsError);
+        Assert.Contains(path, Text(await ShAsync("trash /Demo")), StringComparison.Ordinal);
+        Assert.True((await ShAsync($"cat {path}")).IsError);
+
+        var restored = await ShAsync($"restore {path}");
+        Assert.Equal($"restored {path} from the trash", Text(restored));
+        Assert.Equal("bye\n", Text(await ShAsync($"cat {path}")));
+    }
+
+    [Fact]
+    public async Task Write_refuses_to_create_a_vault()
+    {
+        var result = await CallAsync("write", new() { ["path"] = "/demo/typo.md", ["content"] = "x" });
+
+        Assert.True(result.IsError);
+        Assert.Equal("write: there is no vault 'demo' (ls lists the vaults; writing does not create new ones)", Text(result));
+        Assert.Single(result.Content);
     }
 
     [Fact]
@@ -125,9 +217,9 @@ public sealed class McpClientTests(KumbuAppFactory app)
     [Fact]
     public async Task Unknown_command_points_to_help()
     {
-        var result = await ShAsync("rm /Demo/welcome.md");
+        var result = await ShAsync("frobnicate /Demo/welcome.md");
 
         Assert.True(result.IsError);
-        Assert.Equal("command not found: rm \u2014 try 'help'", Text(result));
+        Assert.Equal("command not found: frobnicate \u2014 try 'help'", Text(result));
     }
 }

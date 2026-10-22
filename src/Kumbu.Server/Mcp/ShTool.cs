@@ -6,22 +6,15 @@ using ModelContextProtocol.Server;
 
 namespace Kumbu.Server.Mcp;
 
-/// <summary>The single MCP tool: a thin adapter from a command line to <see cref="Shell"/>.</summary>
+/// <summary>The shell: a thin adapter from a command line to <see cref="Shell"/>.</summary>
 [McpServerToolType]
 public static class ShTool
 {
-    [McpServerTool(Name = "sh", ReadOnly = true, Idempotent = true, OpenWorld = false), Description(Manual.ToolDescription)]
+    // Not read-only since rm and restore; not destructive, because both can be undone.
+    [McpServerTool(Name = "sh", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.ToolDescription)]
     public static async Task<CallToolResult> Sh(
         Shell shell,
         [Description("A command line, e.g. ls /  or  rg -i kumbu | head -5  or  cat \"/Work/Meeting Notes.md\"")] string command,
-        CancellationToken ct)
-    {
-        // Errors are tool results (isError: true), not JSON-RPC errors: a wrong path is a normal answer.
-        var result = await shell.RunAsync(command, ct);
-        return new CallToolResult
-        {
-            IsError = result.IsError,
-            Content = [new TextContentBlock { Text = result.Output }],
-        };
-    }
+        CancellationToken ct) =>
+        ToolResult.From(await shell.RunAsync(command, ct));
 }

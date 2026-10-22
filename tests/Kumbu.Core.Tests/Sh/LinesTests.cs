@@ -14,6 +14,12 @@ public class LinesTests
     [InlineData("a\n\nb\n\n", new[] { "a", "", "b", "" })]
     public void Split(string text, string[] expected) => Assert.Equal(expected, Lines.Split(text));
 
+    [Theory]
+    [InlineData("", "0 lines")]
+    [InlineData("a\n", "1 line")]
+    [InlineData("a\nb", "2 lines")]
+    public void Count(string text, string expected) => Assert.Equal(expected, Lines.Count(text));
+
     [Fact]
     public void JoinHasNoTrailingNewline() => Assert.Equal("a\nb", Lines.Join(["a", "b"]));
 }

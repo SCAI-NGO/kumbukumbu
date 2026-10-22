@@ -38,7 +38,10 @@ internal static class CommandArgs
     public static async Task<ShellResult> ReadNoteAsync(string command, INoteReader notes, VaultPath path, CancellationToken ct)
     {
         var content = await notes.ReadAsync(path, ct);
-        if (content is not null) return ShellResult.Ok(content);
+        if (content is not null)
+        {
+            return ShellResult.Ok(content) with { Version = new NoteVersion(path.Value, VersionToken.Of(content)) };
+        }
 
         var below = await notes.ListNotesUnderAsync(path, ct);
         return below.Count > 0 || path.IsRoot

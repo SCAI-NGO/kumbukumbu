@@ -10,6 +10,10 @@ public sealed class Shell
     // What models reach for first, and what to use here instead.
     private static readonly Dictionary<string, string> Hints = new(StringComparer.Ordinal)
     {
+        ["mv"] = "not yet: moving a note must also rewrite the links to it",
+        ["mkdir"] = "not needed: directories exist through the notes in them; 'write' creates a note at any path in a vault",
+        ["touch"] = "use the write tool to create a note",
+        ["echo"] = "use the write or edit tool to change a note",
         ["grep"] = "use rg (try 'help rg')",
         ["egrep"] = "use rg (try 'help rg')",
         ["find"] = "use rg --files, e.g. rg --files /Work | rg -i plan",
@@ -23,12 +27,13 @@ public sealed class Shell
     // Insertion order is the order of the help list.
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
 
-    public Shell(INoteReader notes)
+    public Shell(INoteStore notes, NoteWriter writer)
     {
         ICommand[] commands =
         [
             new Ls(notes), new Cat(notes), new Rg(notes),
             new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
+            new History(notes), new Restore(writer), new Rm(writer), new Trash(notes),
             new Help(_commands),
         ];
         foreach (var command in commands)
@@ -47,6 +52,7 @@ public sealed class Shell
         if (stages.Count == 0) return ShellResult.Error("sh: empty command");
 
         string? input = null;
+        NoteVersion? version = null;
         var result = ShellResult.Ok("");
         foreach (var stage in stages)
         {
@@ -72,8 +78,10 @@ public sealed class Shell
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
             if (result.IsError) break;
             input = result.Output;
+            // The note a pipeline started from keeps its token, so 'cat x | head' can still lead to an edit.
+            version ??= result.Version;
         }
 
-        return OutputLimit.Apply(result);
+        return OutputLimit.Apply(result.IsError ? result : result with { Version = version });
     }
 }

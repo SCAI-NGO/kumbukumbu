@@ -6,9 +6,9 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "rg", "head", "tail", "wc", "sort", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "rg", "head", "tail", "wc", "sort", "history", "restore", "rm", "trash", "help"];
 
-    private static Task<ShellResult> Run(string line) => new Shell(new InMemoryNoteReader()).RunAsync(line, CancellationToken.None);
+    private static Task<ShellResult> Run(string line) => TestShell.Of().RunAsync(line, CancellationToken.None);
 
     [Fact]
     public async Task ListsEveryCommandInOrder()
@@ -48,13 +48,13 @@ public class HelpTests
     [Fact]
     public async Task HelpAfterDoubleDashIsAnOperand()
     {
-        var shell = new Shell(new InMemoryNoteReader(("/W/a.md", "use --help\n")));
+        var shell = TestShell.Of(("/W/a.md", "use --help\n"));
         Assert.Equal(ShellResult.Ok("/W/a.md:1:use --help"), await shell.RunAsync("rg -- --help /W", CancellationToken.None));
     }
 
     [Fact]
     public async Task UnknownTopic() =>
-        Assert.Equal(ShellResult.Error("help: no such command: rm — try 'help'"), await Run("help rm"));
+        Assert.Equal(ShellResult.Error("help: no such command: grep — try 'help'"), await Run("help grep"));
 
     [Fact]
     public async Task TooManyArguments() => Assert.Equal(ShellResult.Error("help: too many arguments"), await Run("help ls cat"));

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Tests.Fakes;
 
@@ -6,14 +7,16 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class ShellTests
 {
-    private static Shell Make() => new(new InMemoryNoteReader(
-        ("/Ideas/Meeting Notes.md", "meeting"), ("/Work/big.md", new string('x', 30_000))));
+    private static Shell Make() => TestShell.Of(
+        ("/Ideas/Meeting Notes.md", "meeting"), ("/Work/big.md", new string('x', 30_000)));
 
     private static Task<ShellResult> Run(string line) => Make().RunAsync(line, CancellationToken.None);
 
     [Fact]
     public async Task CatsQuotedPath() =>
-        Assert.Equal(ShellResult.Ok("meeting"), await Run("cat \"/Ideas/Meeting Notes.md\""));
+        Assert.Equal(
+            ShellResult.Ok("meeting") with { Version = new NoteVersion("/Ideas/Meeting Notes.md", VersionToken.Of("meeting")) },
+            await Run("cat \"/Ideas/Meeting Notes.md\""));
 
     [Fact]
     public async Task LongOutputIsTruncated()
@@ -24,7 +27,7 @@ public class ShellTests
 
     [Fact]
     public async Task UnknownCommand() =>
-        Assert.Equal(ShellResult.Error("command not found: rm — try 'help'"), await Run("rm /Work/big.md"));
+        Assert.Equal(ShellResult.Error("command not found: frobnicate — try 'help'"), await Run("frobnicate /Work/big.md"));
 
     [Theory]
     [InlineData("grep x /Work", "command not found: grep — use rg (try 'help rg')")]
@@ -53,7 +56,20 @@ public class ShellTests
         Assert.Equal(ShellResult.Error("cat: /Work/nope.md: No such file or directory"), await Run("cat /Work/nope.md | wc -l"));
 
     [Fact]
-    public async Task OnlyTheFinalOutputIsTruncated() => Assert.Equal(ShellResult.Ok("30000"), await Run("cat /Work/big.md | wc -m"));
+    public async Task OnlyTheFinalOutputIsTruncated() => Assert.Equal("30000", (await Run("cat /Work/big.md | wc -m")).Output);
+
+    [Fact]
+    public async Task CatCarriesTheVersionTokenThroughAPipe()
+    {
+        var result = await Run("cat \"/Ideas/Meeting Notes.md\" | wc -l");
+        Assert.Equal(new NoteVersion("/Ideas/Meeting Notes.md", VersionToken.Of("meeting")), result.Version);
+    }
+
+    [Fact]
+    public async Task CommandsWithoutANoteCarryNoToken() => Assert.Null((await Run("ls /Work")).Version);
+
+    [Fact]
+    public async Task ErrorsCarryNoToken() => Assert.Null((await Run("cat /Work/big.md | head -x")).Version);
 
     [Fact]
     public async Task OperatorErrorReachesTheModel() => Assert.Equal(

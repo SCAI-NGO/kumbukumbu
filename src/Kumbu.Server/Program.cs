@@ -22,7 +22,9 @@ builder.Services.AddSingleton<IMongoClient>(sp =>
 builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton<MongoNoteStore>();
-builder.Services.AddSingleton<INoteReader>(sp => sp.GetRequiredService<MongoNoteStore>());
+builder.Services.AddSingleton<INoteStore>(sp => sp.GetRequiredService<MongoNoteStore>());
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<NoteWriter>();
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddSingleton<Shell>();
 
@@ -32,7 +34,7 @@ builder.Services.AddSingleton<Shell>();
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
 builder.Services.AddMcpServer(o => o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() })
     .WithHttpTransport()
-    .WithTools([typeof(ShTool)]);
+    .WithTools([typeof(ShTool), typeof(WriteTools)]);
 
 var app = builder.Build();
 
