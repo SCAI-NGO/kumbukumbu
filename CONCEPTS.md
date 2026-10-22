@@ -191,3 +191,52 @@ The cost: features that need to remember and revisit, such as look-around (`(?=�
 The tool description is sent to the model every time it connects, so every line of it costs tokens in every conversation. It therefore stays a short man page: the commands, one line each, plus the rules that matter on every call. The details (every option of `rg`, examples) live in `help <command>`, which the model only fetches when it needs them. This is called **progressive disclosure**. `rg --help` works too, because models try that first.
 
 Error messages do the same job. `command not found: rm — try 'help'` names the next step. For the commands models reach for most often, the hint is specific: `grep` points to `rg`, `find` to `rg --files`, `cd` to "there is no working directory". Every error should let the model fix its next call without guessing; the phase 1 test showed that this works.
+
+## 3. Writing safely: versions, history and trash
+
+### Why writing needs more than "save"
+
+Reading can't break anything. Writing can, in two ways that matter for agents. First, **lost updates**: two writers (two agent sessions, or an agent and you) read the same note, both change it, and the second save silently throws away the first one's change. Second, **mistakes**: an agent misunderstands a request and rewrites a note wrongly. Step 3 answers the first with version tokens and the second with history and a trash.
+
+### Content goes through JSON, not the shell
+
+`sh` stays the language for reading and for operations that only need a path (`rm`, `restore`). Content travels through two separate tools, `write` and `edit`, as JSON parameters. A Markdown note has quotes, backticks, `$`, `|` and line breaks; pushing that through a shell command line would mean escaping all of it correctly, which models get wrong exactly when it matters. In a JSON string the client does the escaping.
+
+### Version tokens and optimistic concurrency
+
+Every `cat` returns a **version token** next to the content, for example `version of /Demo/welcome.md: 3f9a2c1b7d0e`. It comes as a separate content block of the MCP result, so a pipe like `cat x | head` never mixes it into the text. `write` and `edit` want the token back. The server compares it with the note's current token: if they match, nobody changed the note since the agent read it, and the write goes through. If not, it fails with "has changed since version …; cat it again and redo the change".
+
+This is called **optimistic concurrency**: nothing is locked while the agent thinks; conflicts are detected at the moment of writing. It is the same idea as HTTP's `ETag` and `If-Match`. (The pessimistic alternative, locking a note while someone edits it, needs to know when the editor is done, which a stateless protocol can't tell.)
+
+The token is the first 12 hex characters of the SHA-256 hash of the content. Because it is computed from the content, it never has to be stored or migrated, and two identical texts have the same token. That sounds like a flaw (change a note from A to B and back to A, and an old token for A works again) but is harmless: the agent's change is applied to exactly the text it read.
+
+### Compare-and-swap in MongoDB
+
+Comparing the token and then saving is two steps. Between them, another writer could save, and both would win. So the store makes the comparison part of the write itself: each note has a revision counter, and the replace is one `UpdateOne` whose filter includes the revision the writer saw. If someone got there first, the filter matches nothing and the update changes nothing. One database operation, atomic by itself, no transaction needed. This pattern is called **compare-and-swap (CAS)**.
+
+Because a note's history is stored inside the note's document, the history moves with every write in that same single operation. A move to the trash copies the document and then deletes the original with the same revision filter; if the delete finds nothing, the copy is removed again.
+
+### History and coalescing
+
+Each note keeps its last 10 earlier states, newest first, with who wrote them and when (`history <path>`). `restore <path> <version>` makes one current again, and the state it replaces goes into the history, so a restore can be undone the same way.
+
+An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer within 10 minutes coalesce**: the state they replace is not kept again. What survives is the state before the session. Today every MCP call writes as `dev`; with API keys (step 7) each key is its own writer, so two agents never coalesce into each other.
+
+### The trash
+
+`rm` doesn't delete. It moves the note, history included, into a separate `trash` collection with the time of deletion. MongoDB removes it after 30 days by itself: a **TTL index** on `deletedAt` makes a background task delete documents once that date is older than the index's limit. `restore <path>` brings back the most recently removed note at that path, as long as no new note took its place.
+
+`rm` and `restore` take no version token. A token protects against losing someone's change without noticing; both operations can be undone, so nothing is lost.
+
+### Seeding becomes a three-way merge
+
+Until now, the folder on disk was the source and the database a copy. Now agents write to the database, so the database is the source of truth. Still, editing files and restarting stays useful. The seeder therefore remembers, for each note, the content it last loaded (`seedContent`), and compares three texts: the file, the note, and that base.
+
+| File vs. base | Note vs. base | Meaning | Action |
+|---|---|---|---|
+| same | same | nothing changed | none |
+| changed | same | edited on disk | load the file (the old state goes into the history) |
+| same | changed | edited through MCP | keep the note |
+| changed | changed | edited on both sides | keep the note, warn in the log |
+
+This is the same idea as a **three-way merge** in Git: with only two versions you can see that they differ, but not which side changed. The common ancestor tells you. Notes removed with `rm` stay removed, even though their file is still on disk.

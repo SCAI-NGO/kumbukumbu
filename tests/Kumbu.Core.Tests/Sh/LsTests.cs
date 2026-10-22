@@ -7,7 +7,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class LsTests
 {
-    private static readonly InMemoryNoteReader Reader = new(
+    private static readonly InMemoryNoteStore Reader = new(
         ("/Work/a.md", "A"), ("/Work/projects/x.md", "X"), ("/Work/projects/y.md", "Y"),
         ("/Workshop/w.md", "W"), ("/Ideas/Meeting Notes.md", "M"));
 
@@ -47,7 +47,7 @@ public class LsTests
 
     [Fact]
     public async Task EmptyReaderListsNothing() =>
-        Assert.Equal(ShellResult.Ok(""), await new Ls(new InMemoryNoteReader()).RunAsync([], null, CancellationToken.None));
+        Assert.Equal(ShellResult.Ok(""), await new Ls(new InMemoryNoteStore()).RunAsync([], null, CancellationToken.None));
 
     [Fact]
     public async Task RelativePath() =>

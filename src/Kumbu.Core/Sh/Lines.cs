@@ -13,4 +13,7 @@ public static class Lines
     }
 
     public static string Join(IEnumerable<string> lines) => string.Join('\n', lines);
+
+    /// <summary>"1 line", "12 lines": the line count of a text, for messages.</summary>
+    public static string Count(string text) => Split(text).Count is var n && n == 1 ? "1 line" : $"{n} lines";
 }

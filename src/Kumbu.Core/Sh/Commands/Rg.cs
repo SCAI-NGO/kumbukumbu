@@ -120,7 +120,7 @@ public sealed class Rg(INoteReader notes) : ICommand
 
         var lineNumbers = !options.Has("no-line-number");
         var output = new List<string>();
-        foreach (var note in found.Values.OrderBy(n => n.Path.Value, StringComparer.Ordinal))
+        foreach (var note in found.Values.OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var lines = Lines.Split(note.Content);
             var matches = search.Matches(lines);
@@ -177,7 +177,7 @@ public sealed class Rg(INoteReader notes) : ICommand
             found.UnionWith(below.Select(p => p.Value));
         }
 
-        return ShellResult.Ok(Lines.Join(found.Order(StringComparer.Ordinal)));
+        return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));
     }
 
     private static bool TryCount(

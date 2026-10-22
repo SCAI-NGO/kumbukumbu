@@ -9,12 +9,12 @@ public class FilterTests
 {
     private static readonly string Twelve = string.Concat(Enumerable.Range(1, 12).Select(i => $"line {i}\n"));
 
-    private static readonly Shell Sh = new(new InMemoryNoteReader(
+    private static readonly Shell Sh = TestShell.Of(
         ("/W/twelve.md", Twelve),
         ("/W/words.md", "Größe über alles\nzwei  Wörter\n"),
         ("/W/unsorted.md", "b\nB\na\n10 ten\n9 nine\nb\n-1 minus\n"),
         ("/W/no-newline.md", "a\nb"),
-        ("/W/dir/x.md", "x")));
+        ("/W/dir/x.md", "x"));
 
     private static async Task<string> Ok(string line)
     {
@@ -82,13 +82,46 @@ public class FilterTests
     public async Task Wc(string line, string expected) => Assert.Equal(expected, await Ok(line));
 
     [Theory]
-    [InlineData("sort /W/unsorted.md", "-1 minus\n10 ten\n9 nine\nB\na\nb\nb")]
-    [InlineData("sort -r /W/unsorted.md", "b\nb\na\nB\n9 nine\n10 ten\n-1 minus")]
-    [InlineData("sort -u /W/unsorted.md", "-1 minus\n10 ten\n9 nine\nB\na\nb")]
-    [InlineData("sort -n /W/unsorted.md", "-1 minus\nB\na\nb\nb\n9 nine\n10 ten")]
-    [InlineData("sort -f /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nB\nb\nb")]
-    [InlineData("sort -fu /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nB")]
-    [InlineData("sort -rn /W/unsorted.md", "10 ten\n9 nine\nb\nb\na\nB\n-1 minus")]
+    [InlineData("sort /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nb\nb\nB")]
+    [InlineData("sort -r /W/unsorted.md", "B\nb\nb\na\n9 nine\n10 ten\n-1 minus")]
+    [InlineData("sort -u /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nb\nB")]
+    [InlineData("sort -n /W/unsorted.md", "-1 minus\na\nb\nb\nB\n9 nine\n10 ten")]
+    [InlineData("sort -f /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nb\nb\nB")]
+    [InlineData("sort -fu /W/unsorted.md", "-1 minus\n10 ten\n9 nine\na\nb")]
+    [InlineData("sort -rn /W/unsorted.md", "10 ten\n9 nine\nB\nb\nb\na\n-1 minus")]
     [InlineData("ls /W | sort -r | head -2", "words.md\nunsorted.md")]
     public async Task Sort(string line, string expected) => Assert.Equal(expected, await Ok(line));
+}
+
+public class TextOrderTests
+{
+    private static readonly Shell Sh = TestShell.Of(
+        ("/W/names.md", "Zebra\nÜberlegungen\nuhu\nApfel\näpfel\napfel\nUlm\n"),
+        ("/W/Zoo.md", "z"), ("/W/Übersicht.md", "ü"), ("/W/auto.md", "a"), ("/W/Ulm.md", "u"));
+
+    private static async Task<string> Ok(string line)
+    {
+        var result = await Sh.RunAsync(line, CancellationToken.None);
+        Assert.False(result.IsError, result.Output);
+        return result.Output;
+    }
+
+    [Fact]
+    public void RunsWithIcu() => Assert.True(TextOrder.IsCultureAware, "ICU is missing: umlauts would sort after z");
+
+    [Fact]
+    public async Task SortPutsUmlautsNextToTheirBaseLetter() =>
+        Assert.Equal("apfel\nApfel\näpfel\nÜberlegungen\nuhu\nUlm\nZebra", await Ok("sort /W/names.md"));
+
+    [Fact]
+    public async Task SortUniqueIgnoringCaseKeepsUmlautsApart() =>
+        Assert.Equal("apfel\näpfel\nÜberlegungen\nuhu\nUlm\nZebra", await Ok("sort -fu /W/names.md"));
+
+    [Fact]
+    public async Task LsUsesTheSameOrder() =>
+        Assert.Equal("auto.md\nnames.md\nÜbersicht.md\nUlm.md\nZoo.md", await Ok("ls /W"));
+
+    [Fact]
+    public async Task RgFilesUsesTheSameOrder() => Assert.Equal(
+        "/W/auto.md\n/W/names.md\n/W/Übersicht.md\n/W/Ulm.md\n/W/Zoo.md", await Ok("rg --files /W"));
 }

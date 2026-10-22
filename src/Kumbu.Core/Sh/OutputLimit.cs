@@ -12,12 +12,17 @@ public static class OutputLimit
         var output = result.Output;
         if (output.Length <= MaxChars) return result;
 
-        var keep = MaxChars;
+        // Cut after the last whole line: a cut line could pass for a complete one. Only a first line
+        // longer than the limit is cut inside, and the footer says so.
+        var lastBreak = output.LastIndexOf('\n', MaxChars);
+        var keep = lastBreak > 0 ? lastBreak : MaxChars;
         // Never cut between the halves of a surrogate pair.
-        if (char.IsHighSurrogate(output[keep - 1])) keep--;
+        if (lastBreak <= 0 && char.IsHighSurrogate(output[keep - 1])) keep--;
 
+        var lines = output.AsSpan(0, keep).Count('\n') + 1;
+        var where = lastBreak > 0 ? $"after line {lines}" : "inside line 1, which is longer than the limit";
         var tokens = (output.Length + CharsPerToken - 1) / CharsPerToken;
-        var footer = $"\n[truncated — showing {keep} of {output.Length} chars (~{tokens} tokens); narrow it with rg, head or tail]";
+        var footer = $"\n[truncated {where} — showing {keep} of {output.Length} chars (~{tokens} tokens); narrow it with rg, head or tail]";
         return result with { Output = output[..keep] + footer };
     }
 }

@@ -51,7 +51,7 @@ public sealed class Ls(INoteReader notes) : ICommand
         }
 
         var sorted = entries.ToList();
-        sorted.Sort(StringComparer.Ordinal);
+        sorted.Sort(TextOrder.Default);
         return ShellResult.Ok(string.Join('\n', sorted));
     }
 }

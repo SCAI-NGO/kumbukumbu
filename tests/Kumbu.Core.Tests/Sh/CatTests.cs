@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
@@ -9,7 +10,7 @@ public class CatTests
 {
     private const string Content = "# Title\r\n\n  trailing  \n";
 
-    private static readonly InMemoryNoteReader Reader = new(("/Work/a.md", Content), ("/Work/projects/x.md", "X"));
+    private static readonly InMemoryNoteStore Reader = new(("/Work/a.md", Content), ("/Work/projects/x.md", "X"));
 
     private static Task<ShellResult> Run(params string[] args) =>
         new Cat(Reader).RunAsync(args, null, CancellationToken.None);
@@ -18,7 +19,9 @@ public class CatTests
     public void NameIsCat() => Assert.Equal("cat", new Cat(Reader).Name);
 
     [Fact]
-    public async Task ReturnsContentVerbatim() => Assert.Equal(ShellResult.Ok(Content), await Run("/Work/a.md"));
+    public async Task ReturnsContentVerbatimWithItsVersion() => Assert.Equal(
+        ShellResult.Ok(Content) with { Version = new NoteVersion("/Work/a.md", VersionToken.Of(Content)) },
+        await Run("/Work/a.md"));
 
     [Fact]
     public async Task MissingOperand() => Assert.Equal(ShellResult.Error("cat: missing operand"), await Run());

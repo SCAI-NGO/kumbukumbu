@@ -6,12 +6,12 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class RgTests
 {
-    private static readonly Shell Sh = new(new InMemoryNoteReader(
+    private static readonly Shell Sh = TestShell.Of(
         ("/Demo/welcome.md", "# Welcome\n\nSee [[kumbu]] and [[Meeting Notes]].\n\n## Try it\n\n- TODO: more\n"),
         ("/Demo/projects/kumbu.md", "# Kumbu²\n\nTODO: pipes\nTODO: rg\ndone: ls\n"),
         ("/Demo/Meeting Notes.md", "# Meetings\n\nKumbu stays stateless.\n"),
         ("/Ideas/Überlegungen.md", "# Überlegungen\n\nGrößere Ideen über Kumbu.\n"),
-        ("/Ideas/ctx.md", "a\nb\nMATCH 1\nc\nd\ne\nf\nMATCH 2\ng\nMATCH 3\nh\n")));
+        ("/Ideas/ctx.md", "a\nb\nMATCH 1\nc\nd\ne\nf\nMATCH 2\ng\nMATCH 3\nh\n"));
 
     private static async Task<string> Ok(string line)
     {
@@ -174,7 +174,7 @@ public class RgTests
     [Fact]
     public async Task PathologicalPatternIsFast()
     {
-        var shell = new Shell(new InMemoryNoteReader(("/W/a.md", new string('a', 5_000) + "!")));
+        var shell = TestShell.Of(("/W/a.md", new string('a', 5_000) + "!"));
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var result = await shell.RunAsync("rg '^(a+)+$' /W", CancellationToken.None);
         Assert.Equal(ShellResult.Ok(""), result);
