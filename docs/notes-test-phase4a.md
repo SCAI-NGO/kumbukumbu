@@ -72,6 +72,35 @@ The section model is easy to pick up: `outline` once, then `cat` or `edit` with 
 3. **Section address with a space but no quotes**: `cat /Demo/long.md#Part 799` gives `cat: too many arguments`, as before for paths. When an argument after the first starts like the rest of a heading, a hint `(quote paths and sections with spaces)` would save a round trip. Nice to have.
 4. **Upgrade order in the README.** Line 58 should spell out the order: `git pull`, `docker compose up --build -d`, then a new client session. Without the rebuild a restarted client loads the old server's tool descriptions, which looks like the new version but isn't.
 
+5. **The first `cat` of a long note is mostly wasted** (see the agent behaviour test below). An agent can't know a note's length before reading it, so it `cat`s the whole note and gets about 8,000 tokens of its beginning. Proposal for discussion: when a note exceeds the limit, `cat` returns a short beginning (for example 40 lines) followed by the note's top-level outline with line ranges, and the usual footer. The agent can jump straight to the right section, and the call costs a fraction of the tokens. Trade-off: in newest-first logs the beginning itself is often what was wanted, so the beginning should stay, just shorter. Needs a decision from Chris.
+
+## Agent behaviour test
+
+Question from the earlier web session: does Claude use `outline` and section reads on long notes on its own, without being told?
+
+**Setup.** A realistic project log, `/Technik/Projekte/Wärmepumpe Standort Nord.md` (vault `Technik`, local only, not committed): German, YAML frontmatter, newest entries first, months as `##`, entries as `###`, 862 lines, 41,205 characters, so a plain `cat` is truncated around line 500. The decision asked about (`### 2026-03-12 Entscheidung Wärmepumpe`, start-up planned for 2026-11-12) is at line 647, beyond the cut. Distractors: "Wärmepumpe" 81 times, "Inbetriebnahme" 13 times (several "Termin Inbetriebnahme unverändert"), a second decision in June (buffer tank).
+
+A **fresh** Claude Code session (not resumed, so without knowledge of the design) got the phase 4a tool descriptions and this prompt, with no hint about outlines or sections:
+
+> In meinem Kumbu-Gedächtnis gibt es ein Projekt-Logbuch zur Wärmepumpe am Standort Nord. Was wurde dort zur Wärmepumpe entschieden, und wann soll sie in Betrieb gehen? Trag bitte außerdem ein, dass sich die Inbetriebnahme auf den 26.11.2026 verschiebt, weil die Statik-Freigabe fürs Fundament noch fehlt.
+
+**Tool calls, in order.**
+
+1. `rg -il "wärmepumpe"`: found the note in one call.
+2. `cat "/Technik/Projekte/Wärmepumpe Standort Nord.md"`: whole note, truncated (the one wasted call, about 8,000 tokens).
+3. `rg -n -i "entscheid|inbetriebnahme|beschlossen|festgelegt|verschoben|verschiebt" "…"`: followed the footer's hint and narrowed it down.
+4. `cat "…#2026-03-12 Entscheidung Wärmepumpe"`: read the section, building the address from the `rg` hit, without `outline`.
+5. `edit` with path `…#Oktober 2026`, `old_text: "### 2026-10-20 Rücksprache (Murat)"` and the new entry plus that heading as `new_text`: inserted `### 2026-10-22 Terminverschiebung Inbetriebnahme` with old date, new date and reason.
+
+**Result.** Correct and minimal: 5 new lines, no `write` of the whole note, the March decision left untouched, history `seed` → `dev`. The log's convention (newest first, one `###` entry per date) was kept. The fixture accidentally contained entries dated after the test day (25, 26 and 28 October); the agent still placed its entry chronologically between 25 and 20 October instead of blindly at the top.
+
+**Findings.**
+
+- `outline` was not used, and was not needed: with a concrete question, `rg` plus a section address built from the hit is the shorter path. `outline` is for understanding a note's structure, not for finding a fact. Both paths should stay well supported.
+- The truncation footer works as a teacher: after one truncated `cat` the agent switched to targeted reads.
+- Section-scoped `edit` with an `old_text` anchor is what an agent reaches for to insert into a log; it worked first time.
+- The only real cost is the first full `cat`; see observation 5.
+
 ## Suggested next step
 
-Observations 1 to 4 are small; 2 and 4 are the useful ones. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
+Observations 1 to 4 are small; 2 and 4 are the useful ones. Observation 5 needs a decision first. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
