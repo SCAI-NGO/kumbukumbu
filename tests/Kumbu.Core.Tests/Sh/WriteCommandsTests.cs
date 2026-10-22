@@ -17,7 +17,7 @@ public class WriteCommandsTests
     public WriteCommandsTests()
     {
         _writer = new NoteWriter(_store, _time);
-        _sh = new Shell(_store, _writer);
+        _sh = new Shell(_store, _writer, new NoteMover(_store, _time));
     }
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
@@ -48,7 +48,7 @@ public class WriteCommandsTests
     [InlineData("restore", "restore: missing operand")]
     [InlineData("restore a.md", "restore: a.md: paths must be absolute (there is no working directory)")]
     [InlineData("trash /A /B", "trash: too many arguments")]
-    [InlineData("mv /Demo/a.md /Demo/b.md", "command not found: mv — not yet: moving a note must also rewrite the links to it")]
+    [InlineData("cp /Demo/a.md /Demo/b.md", "command not found: cp — cat the note, then create the copy with the write tool")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
 
     [Fact]

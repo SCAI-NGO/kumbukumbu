@@ -134,6 +134,19 @@ public sealed class MongoNoteStore(IMongoDatabase db) : INoteStore
         return result.MatchedCount == 1;
     }
 
+    public async Task<bool> TryMoveAsync(StoredNote current, StoredNote target, CancellationToken ct)
+    {
+        // Insert at the target first (the unique index refuses an existing note), then delete the source
+        // only if nobody wrote in between; otherwise take the copy back. Nothing is ever lost.
+        if (!await TryCreateAsync(target, ct)) return false;
+
+        var deleted = await _notes.DeleteOneAsync(AtRevision(current), ct);
+        if (deleted.DeletedCount == 1) return true;
+
+        await _notes.DeleteOneAsync(F.Eq(n => n.Path, target.Path.Value), ct);
+        return false;
+    }
+
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
         // Copy first, then delete only if nobody wrote in between. A crash in between leaves a copy

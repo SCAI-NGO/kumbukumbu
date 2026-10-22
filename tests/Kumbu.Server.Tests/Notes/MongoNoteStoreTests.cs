@@ -243,4 +243,38 @@ public sealed class MongoNoteStoreTests(MongoFixture fixture)
         Assert.Equal(new BsonDocument("deletedAt", 1), ttl["key"].AsBsonDocument);
         Assert.Equal(30 * 24 * 3600, ttl["expireAfterSeconds"].ToInt64());
     }
+
+    [Fact]
+    public async Task Move_carries_the_note_with_its_history_to_the_new_path()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var v1 = New("/Work/a.md", "one");
+        await store.TryCreateAsync(v1, CancellationToken.None);
+        var v2 = NoteWriter.Next(v1, "two", "other", T0.AddHours(1));
+        await store.TryReplaceAsync(v1, v2, CancellationToken.None);
+
+        Assert.True(await store.TryMoveAsync(v2, v2 with { Path = P("/Work/b.md"), Revision = 3 }, CancellationToken.None));
+
+        Assert.Null(await store.GetAsync(P("/Work/a.md"), CancellationToken.None));
+        var moved = (await store.GetAsync(P("/Work/b.md"), CancellationToken.None))!;
+        Assert.Equal(("two", 3L, "other"), (moved.Content, moved.Revision, moved.LastWriter));
+        Assert.Equal(["one"], moved.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task Move_never_overwrites_and_never_loses_a_concurrent_write()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        var a = New("/Work/a.md", "a");
+        await store.TryCreateAsync(a, CancellationToken.None);
+        await store.TryCreateAsync(New("/Work/b.md", "b"), CancellationToken.None);
+
+        Assert.False(await store.TryMoveAsync(a, a with { Path = P("/Work/b.md"), Revision = 2 }, CancellationToken.None));
+        Assert.Equal("b", await store.ReadAsync(P("/Work/b.md"), CancellationToken.None));
+
+        await store.TryReplaceAsync(a, NoteWriter.Next(a, "a2", Writers.Dev, T0), CancellationToken.None);
+        Assert.False(await store.TryMoveAsync(a, a with { Path = P("/Work/c.md"), Revision = 2 }, CancellationToken.None));
+        Assert.Equal("a2", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
+        Assert.Null(await store.ReadAsync(P("/Work/c.md"), CancellationToken.None));
+    }
 }

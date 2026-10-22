@@ -262,4 +262,25 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.NotEqual(true, replaced.IsError);
         Assert.Equal("# Plan\n\n## Goals\n- fast\n- small\n\n## Notes\ny\n", Text(await ShAsync($"cat {path}")));
     }
+
+    [Fact]
+    public async Task Links_backlinks_and_mv_over_mcp()
+    {
+        await CallAsync("write", new() { ["path"] = "/Demo/scratch-mv-target.md", ["content"] = "# Target\n" });
+        await CallAsync("write", new() { ["path"] = "/Demo/scratch-mv-source.md", ["content"] = "See [[scratch-mv-target#Target|it]].\n" });
+
+        Assert.Equal(
+            "1: [[scratch-mv-target#Target|it]] → /Demo/scratch-mv-target.md",
+            Text(await ShAsync("links /Demo/scratch-mv-source.md")));
+        Assert.Equal(
+            "/Demo/scratch-mv-source.md:1:See [[scratch-mv-target#Target|it]].",
+            Text(await ShAsync("backlinks /Demo/scratch-mv-target.md")));
+
+        var moved = await ShAsync("mv /Demo/scratch-mv-target.md /Demo/scratch-dir/renamed.md");
+
+        Assert.Equal(
+            "moved /Demo/scratch-mv-target.md to /Demo/scratch-dir/renamed.md; rewrote 1 link in /Demo/scratch-mv-source.md",
+            Text(moved));
+        Assert.Equal("See [[scratch-dir/renamed#Target|it]].\n", Text(await ShAsync("cat /Demo/scratch-mv-source.md")));
+    }
 }
