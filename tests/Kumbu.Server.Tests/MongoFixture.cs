@@ -6,7 +6,7 @@ namespace Kumbu.Server.Tests;
 
 public sealed class MongoFixture : IAsyncLifetime
 {
-    private readonly MongoDbContainer _container = new MongoDbBuilder("mongo:8").Build();
+    private readonly MongoDbContainer _container = new MongoDbBuilder(TestImages.Mongo).Build();
 
     public string ConnectionString => _container.GetConnectionString();
 

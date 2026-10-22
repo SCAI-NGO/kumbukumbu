@@ -35,6 +35,7 @@ Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know
 - Seeding adds and updates, it never deletes. A note you deleted or renamed on disk stays in the database until you wipe it with `docker compose down -v` (this removes the Mongo volume; the next start seeds from scratch).
 - Symlinked vault folders inside `./vaults` do not resolve inside the container. Point `KUMBU_VAULTS` in `.env` at the real folder instead, for example `KUMBU_VAULTS=/home/me/Notes`.
 - The container runs as an unprivileged user (UID 1654). Your files must be readable by it; unreadable files are skipped with a warning in the log.
+- If the `mongo` container exits with "MongoDB cannot start: Linux kernel versions 6.19 and newer has a known incompatibility", your kernel is in the range 6.19–7.0.13, where MongoDB 8.x refuses to start ([SERVER-125742](https://jira.mongodb.org/browse/SERVER-125742)). Set `KUMBU_MONGO_IMAGE=mongo:7.0` in `.env`. The tests use `mongo:7.0` for the same reason.
 
 Connect Claude Code:
 
@@ -42,7 +43,7 @@ Connect Claude Code:
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer <token>"
 ```
 
-Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS` in `.env`.
+Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS` and `KUMBU_MONGO_IMAGE` in `.env`.
 
 ## Development
 

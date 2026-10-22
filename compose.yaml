@@ -1,6 +1,6 @@
 services:
   mongo:
-    image: mongo:8
+    image: ${KUMBU_MONGO_IMAGE:-mongo:8}
     volumes:
       - mongo-data:/data/db
     healthcheck:
