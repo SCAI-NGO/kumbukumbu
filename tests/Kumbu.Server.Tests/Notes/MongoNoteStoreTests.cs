@@ -77,4 +77,31 @@ public sealed class MongoNoteStoreTests(MongoFixture fixture)
         Assert.Equal(["/(draft)/y.md"], await ListAsync(store, "/(draft)"));
         Assert.Empty(await ListAsync(store, "/C+"));
     }
+
+    [Fact]
+    public async Task Read_notes_under_returns_paths_with_content_below_the_directory_only()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        await store.UpsertAsync(P("/Work/a.md"), "a", CancellationToken.None);
+        await store.UpsertAsync(P("/Work/sub/b.md"), "b", CancellationToken.None);
+        await store.UpsertAsync(P("/Workshop/w.md"), "w", CancellationToken.None);
+
+        var notes = await store.ReadNotesUnderAsync(P("/Work"), CancellationToken.None);
+
+        Assert.Equal(
+            ["/Work/a.md:a", "/Work/sub/b.md:b"],
+            notes.Select(n => $"{n.Path.Value}:{n.Content}").Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Read_notes_under_root_returns_every_note()
+    {
+        var store = await NewStoreAsync(fixture.NewDatabase());
+        await store.UpsertAsync(P("/Work/a.md"), "a", CancellationToken.None);
+        await store.UpsertAsync(P("/(draft)/y.md"), "y", CancellationToken.None);
+
+        var notes = await store.ReadNotesUnderAsync(VaultPath.Root, CancellationToken.None);
+
+        Assert.Equal(["/(draft)/y.md", "/Work/a.md"], notes.Select(n => n.Path.Value).Order(StringComparer.Ordinal));
+    }
 }

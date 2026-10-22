@@ -41,11 +41,8 @@ public sealed class MongoNoteStore(IMongoDatabase db) : INoteReader
 
     public async Task<IReadOnlyList<VaultPath>> ListNotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
-        var prefix = dir.IsRoot ? "/" : dir.Value + "/";
-        // Transitional: in step 5 paths are encrypted and an unlocked vault lives in RAM (concept §7).
-        var filter = new BsonDocument("path", new BsonDocument("$regex", "^" + Regex.Escape(prefix)));
         var paths = await _notes
-            .Find(new BsonDocumentFilterDefinition<NoteDocument>(filter))
+            .Find(Below(dir))
             .Project(n => n.Path)
             .ToListAsync(ct);
 
@@ -59,5 +56,32 @@ public sealed class MongoNoteStore(IMongoDatabase db) : INoteReader
         }
 
         return result;
+    }
+
+    public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct)
+    {
+        var docs = await _notes
+            .Find(Below(dir))
+            .Project(n => new { n.Path, n.Content })
+            .ToListAsync(ct);
+
+        var result = new List<Note>(docs.Count);
+        foreach (var doc in docs)
+        {
+            if (VaultPath.TryParse(doc.Path, out var vp))
+            {
+                result.Add(new Note(vp, doc.Content));
+            }
+        }
+
+        return result;
+    }
+
+    private static FilterDefinition<NoteDocument> Below(VaultPath dir)
+    {
+        var prefix = dir.IsRoot ? "/" : dir.Value + "/";
+        // Transitional: in step 5 paths are encrypted and an unlocked vault lives in RAM (concept §7).
+        var filter = new BsonDocument("path", new BsonDocument("$regex", "^" + Regex.Escape(prefix)));
+        return new BsonDocumentFilterDefinition<NoteDocument>(filter);
     }
 }

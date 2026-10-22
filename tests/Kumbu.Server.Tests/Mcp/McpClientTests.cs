@@ -84,4 +84,50 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.NotEqual(true, result.IsError);
         Assert.Equal(expected, Text(result));
     }
+
+    [Fact]
+    public async Task Rg_files_piped_into_rg_finds_a_note_by_its_wikilink_name()
+    {
+        var result = await ShAsync("rg --files | rg -i '/kumbu\\.md$'");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal("/Demo/projects/kumbu.md", Text(result));
+    }
+
+    [Fact]
+    public async Task Rg_searches_every_vault_and_pipes_into_wc()
+    {
+        var listed = await ShAsync("rg -l '\\[\\[kumbu\\]\\]'");
+        var counted = await ShAsync("rg -l '\\[\\[kumbu\\]\\]' | wc -l");
+
+        Assert.Equal("/Demo/Meeting Notes.md\n/Demo/welcome.md", Text(listed));
+        Assert.Equal("2", Text(counted));
+    }
+
+    [Fact]
+    public async Task Rg_matches_umlauts_case_insensitively()
+    {
+        var result = await ShAsync("rg -i '^# \u00FCberlegungen:' /Ideas");
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal("/Ideas/\u00DCberlegungen.md:1:# \u00DCberlegungen: thoughts on memory", Text(result));
+    }
+
+    [Fact]
+    public async Task Unsupported_operator_is_a_tool_error()
+    {
+        var result = await ShAsync("ls /Demo && ls /Ideas");
+
+        Assert.True(result.IsError);
+        Assert.StartsWith("sh: '&&' is not supported", Text(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unknown_command_points_to_help()
+    {
+        var result = await ShAsync("rm /Demo/welcome.md");
+
+        Assert.True(result.IsError);
+        Assert.Equal("command not found: rm \u2014 try 'help'", Text(result));
+    }
 }

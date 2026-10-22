@@ -17,7 +17,7 @@ public static class OutputLimit
         if (char.IsHighSurrogate(output[keep - 1])) keep--;
 
         var tokens = (output.Length + CharsPerToken - 1) / CharsPerToken;
-        var footer = $"\n[truncated — showing {keep} of {output.Length} chars (~{tokens} tokens)]";
+        var footer = $"\n[truncated — showing {keep} of {output.Length} chars (~{tokens} tokens); narrow it with rg, head or tail]";
         return result with { Output = output[..keep] + footer };
     }
 }
