@@ -197,6 +197,14 @@ Each step = a chapter in `CONCEPTS.md`.
 - Verify the current MCP authorization spec details (client registration mechanism, metadata endpoints) before implementing §9.
 - Evaluate the official MCP C# SDK and OpenIddict.
 
+### Later (v2: once the core features are done and deployable)
+- **Vaults as a mountable file system.** Let humans mount their vaults like a local folder (Obsidian on top). Candidates:
+  - **WebDAV** (preferred): mountable without extra software (`davfs2`, `rclone mount`, Finder, Windows network drives); ETags and locks map onto version tokens.
+  - **SFTP** (true sshfs): SSH keys as key slots, but server-side SSH libraries for .NET are scarce.
+  - **Own FUSE client** over the Kumbu² API: full control, but one more program to maintain per platform.
+  - **Sync instead of mount** (sync client or Obsidian plugin): works offline and suits Obsidian's file watching better.
+- To settle for any of them: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; a mount keeps a vault unlocked, which works against the idle TTL (§7). Plaintext on the server adds no new exposure, as search needs it already.
+
 ### Resolved (Oct 21, 2026)
 - Token lifecycle vs. key slots → §9 "Tokens as key slots".
 - Static bearer headers for app connectors → moot, OAuth covers them.
