@@ -32,6 +32,21 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - **Does not protect against:** a malicious operator of the running server (plaintext exists in RAM during requests; search requires it). Users who don't trust the operator self-host.
 - **Note:** the LLM provider of the connected client sees whatever the agent reads. This is not E2EE and must never be labeled as such. The README says all of this plainly.
 
+### Confidentiality classes
+
+Where Kumbu² sits among the ways of talking to an AI about your notes:
+
+| Class | Who can read along | Tool |
+|---|---|---|
+| **C0** | The AI provider, including retention and possibly training | An AI SaaS without zero data retention (ZDR) |
+| **C1** | The AI provider while the agent reads; the server operator in RAM during requests. **No** leak through DB dumps, backups or a stolen disk | **Kumbu²** — any harness you like, Claude on your phone included |
+| **C2** | Nobody but you: local storage, end-to-end encrypted, zero-knowledge backend, a TLS tunnel hides even the traffic to the AI upstream | Chatsundere |
+
+The trade-off is deliberate: C1 buys comfort and freedom of harness with "encryption at rest" instead of end-to-end encryption. Two consequences follow:
+
+- With app connectors (OAuth, §9), the refresh token lives at the AI provider, so the provider holds key material for the vault. That is consistent with C1 — the provider sees the content when reading anyway — but it is stated plainly.
+- Truly critical material belongs in C2, not here.
+
 ## 4. Data model
 
 ### Vaults

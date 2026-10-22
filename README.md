@@ -15,7 +15,9 @@ Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folde
 
 ## Security
 
-Be clear about what this is. There is **no encryption yet**: notes are stored as plaintext in MongoDB. Access is guarded by a **single shared dev token**, sent as `Authorization: Bearer <token>`. Every path requires it except `GET /healthz`. Traffic is plain HTTP. Do not put real secrets in it and do not expose it to an untrusted network.
+**What belongs in Kumbu².** Kumbu² is designed for confidentiality class **C1**: notes are encrypted at rest (once step 5 lands), so database dumps, backups and stolen disks don't leak them, but the AI provider of the connected client sees whatever the agent reads, and the server operator could see plaintext in RAM. It is not end-to-end encrypted and never will be — that is the price of using any harness you like. Truly critical material belongs in an end-to-end encrypted tool (class C2). The classes C0–C2 are explained in [`docs/concept.md` → Confidentiality classes](docs/concept.md#confidentiality-classes). Kumbu² is AGPL-3.0, so deployers and users can read the code and check every claim made here.
+
+**Current state of this build.** Be clear about what this is. There is **no encryption yet**: notes are stored as plaintext in MongoDB. Access is guarded by a **single shared dev token**, sent as `Authorization: Bearer <token>`. Every path requires it except `GET /healthz`. Traffic is plain HTTP. Do not put real secrets in it and do not expose it to an untrusted network.
 
 The server refuses to start unless the token is at least 16 characters (`openssl rand -hex 32` gives 64). Compose publishes port 8080 on **localhost only** (`127.0.0.1:8080:8080` in `compose.yaml`). To reach it from other machines, change that line to `"8080:8080"` deliberately, knowing that anyone on the network who learns the token can read every note.
 
