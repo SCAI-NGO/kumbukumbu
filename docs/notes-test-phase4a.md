@@ -72,7 +72,8 @@ The section model is easy to pick up: `outline` once, then `cat` or `edit` with 
 3. **Section address with a space but no quotes**: `cat /Demo/long.md#Part 799` gives `cat: too many arguments`, as before for paths. When an argument after the first starts like the rest of a heading, a hint `(quote paths and sections with spaces)` would save a round trip. Nice to have.
 4. **Upgrade order in the README.** Line 58 should spell out the order: `git pull`, `docker compose up --build -d`, then a new client session. Without the rebuild a restarted client loads the old server's tool descriptions, which looks like the new version but isn't.
 
-5. **The first `cat` of a long note is mostly wasted** (see the agent behaviour test below). An agent can't know a note's length before reading it, so it `cat`s the whole note and gets about 8,000 tokens of its beginning. Proposal for discussion: when a note exceeds the limit, `cat` returns a short beginning (for example 40 lines) followed by the note's top-level outline with line ranges, and the usual footer. The agent can jump straight to the right section, and the call costs a fraction of the tokens. Trade-off: in newest-first logs the beginning itself is often what was wanted, so the beginning should stay, just shorter. Needs a decision from Chris.
+5. **The first `cat` of a long note is mostly wasted** (see the agent behaviour test below). An agent can't know a note's length before reading it, so it `cat`s the whole note and gets about 8,000 tokens of its beginning. Proposal for discussion: when a note exceeds the limit, `cat` returns a short beginning (for example 40 lines) followed by the note's top-level outline with line ranges, and the usual footer. The agent can jump straight to the right section, and the call costs a fraction of the tokens. Trade-off: in newest-first logs the beginning itself is often what was wanted, so the beginning should stay, just shorter. Needs a decision from Chris. The tested session itself suggested the stronger variant (outline only, no beginning).
+6. **Say it up front in the tool description.** The truncation footer teaches `outline` only after the tokens are spent. One line in the `sh` description, next to the output limit, would teach it before: `Long notes: 'wc -c' or 'outline' first, then cat "note.md#Section" or rg -n.` Cheap, independent of observation 5, and suggested by the tested session itself.
 
 ## Agent behaviour test
 
@@ -88,19 +89,33 @@ A **fresh** Claude Code session (not resumed, so without knowledge of the design
 
 1. `rg -il "wärmepumpe"`: found the note in one call.
 2. `cat "/Technik/Projekte/Wärmepumpe Standort Nord.md"`: whole note, truncated (the one wasted call, about 8,000 tokens).
-3. `rg -n -i "entscheid|inbetriebnahme|beschlossen|festgelegt|verschoben|verschiebt" "…"`: followed the footer's hint and narrowed it down.
-4. `cat "…#2026-03-12 Entscheidung Wärmepumpe"`: read the section, building the address from the `rg` hit, without `outline`.
+3. `rg -n -i "entscheid|inbetriebnahme|beschlossen|festgelegt|verschoben|verschiebt" "…"` and `outline "…"` in parallel: followed the footer's hint and narrowed it down. (The pasted log first showed only the `rg` call; the session's own review below names both.)
+4. `cat "…#2026-03-12 Entscheidung Wärmepumpe"`: read the section, building the address from the `rg` hit (about 160 tokens).
 5. `edit` with path `…#Oktober 2026`, `old_text: "### 2026-10-20 Rücksprache (Murat)"` and the new entry plus that heading as `new_text`: inserted `### 2026-10-22 Terminverschiebung Inbetriebnahme` with old date, new date and reason.
 
 **Result.** Correct and minimal: 5 new lines, no `write` of the whole note, the March decision left untouched, history `seed` → `dev`. The log's convention (newest first, one `###` entry per date) was kept. The fixture accidentally contained entries dated after the test day (25, 26 and 28 October); the agent still placed its entry chronologically between 25 and 20 October instead of blindly at the top.
 
+**The tested session's own review** (after the test was explained to it; summarised from its answer, in German):
+
+| # | Call | Its verdict |
+|---|---|---|
+| 1 | `rg -il "wärmepumpe"` | Good: one hit, note found at once |
+| 2 | `cat` of the whole note | Waste: about 14k tokens, cut at line 508, and the March decision lay behind the cut |
+| 3 | `rg -n` and `outline` in parallel | Should have come right after step 1; `rg` for "Entscheidung" and "Inbetriebnahme" found line 647 at once |
+| 4 | `cat …#2026-03-12 Entscheidung Wärmepumpe` | Good: exactly the section, about 160 tokens |
+| 5 | `edit` on `#Oktober 2026` | Good: section-scoped, placed the entry correctly |
+
+Its ideal path: `rg -il` → `outline` (or `rg -n`) → `cat #section` → `edit`, about 2k instead of 16k tokens. It named as working well: section addresses with dates in headings, the version token that `outline` returns too, and `old_text` only having to be unique within the section. It also spotted the distractors: the entries dated after the test day, the "unverändert" of 28 October, and the foundation approval that had been open for months. (The future-dated entries were an accident of the fixture generator, not intended as bait.)
+
+Its proposals: (a) above a certain size, `cat` without a section returns the outline first instead of the content (a stronger variant of observation 5); (b) the `sh` description recommends "outline first, then `cat` the section" for long notes (observation 6).
+
 **Findings.**
 
-- `outline` was not used, and was not needed: with a concrete question, `rg` plus a section address built from the hit is the shorter path. `outline` is for understanding a note's structure, not for finding a fact. Both paths should stay well supported.
-- The truncation footer works as a teacher: after one truncated `cat` the agent switched to targeted reads.
+- Without any hint the agent used `rg` and `outline` together after the truncated `cat`, and built the section address from the `rg` hit. With a concrete question, `rg` plus a section address is the shortest path; `outline` helps to see the structure. Both should stay well supported.
+- The truncation footer works as a teacher, but only after the tokens are spent: the full `cat` cost about 14k of the roughly 16k tokens of the whole task.
 - Section-scoped `edit` with an `old_text` anchor is what an agent reaches for to insert into a log; it worked first time.
-- The only real cost is the first full `cat`; see observation 5.
+- The agent's own review matches the outside view, which makes it a useful part of this kind of test.
 
 ## Suggested next step
 
-Observations 1 to 4 are small; 2 and 4 are the useful ones. Observation 5 needs a decision first. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
+Observations 1 to 4 and 6 are small; 2, 4 and 6 are the useful ones. Observation 5 needs a decision first. Then build order step 4b: links, backlinks, link normaliser and `mv`, with link rewriting off for renames coming from the Obsidian plugin ([obsidian-plugin-design-spec.md](obsidian-plugin-design-spec.md) §3).
