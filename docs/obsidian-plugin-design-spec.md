@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-22
 **Scope:** The Obsidian plugin that keeps a local Obsidian vault in sync with a Kumbu² vault, and the server API it needs. Builds on [concept.md](concept.md) §13 "Later (v2)", which chose a sync plugin over mounting.
-**Status:** Draft by Claude after discussing questions a) to d) with Chris. Two decisions are open (§12); everything else is a proposal for review.
+**Status:** Draft by Claude after discussing questions a) to d) with Chris. Conflict handling and licence are settled (§12); everything else is a proposal for review.
 
 ## 1. Intent
 
@@ -22,7 +22,7 @@ At COR.energy this is a personal second brain per employee; sharing between peop
 - **Attachments** (images, PDFs, …): concept §4 keeps Kumbu² text only. They stay local; the plugin shows how many files it does not sync.
 - `.obsidian/` and other dot folders: never synced (settings, workspace, plugin data).
 - Sharing a vault between people; selective sync of subfolders.
-- Automatic merging of conflicting edits (see §7 and §12).
+- Automatic merging of conflicting edits (decided against, §7).
 
 ## 2. Shape
 
@@ -119,13 +119,27 @@ Files the server would reject are skipped with a visible reason in the plugin's 
 
 ## 7. Conflicts
 
-The decision is open (§12). The proposal for v1: **keep both, make a conflict copy**, like Dropbox and Obsidian Sync.
+**Decided (Chris, 2026-10-22): keep both, as a conflict copy with a header callout.** No automatic merging and no git-style conflict markers: it is more transparent, and the few conflicts that happen are the user's to resolve.
 
-- The server version stays at the original path; the local text is saved next to it as `<name> (conflict <device> 2026-10-22 14-03).md` and uploaded as a normal new note, so agents see it too.
-- A notice in Obsidian names both files. Resolving means editing one and deleting the other; nothing special.
+- The **server version stays at the original path, unchanged**, so the note stays clean for agents and other devices.
+- The **local text goes to a conflict copy** next to it, `<name> (conflict <device> 2026-10-22 14-03).md`, uploaded as a normal new note so agents see it too. It starts with a callout that says where each change came from and links to the original:
+
+  ```markdown
+  > [!warning] Kumbu² conflict
+  > Change from **Laptop** at 2026-10-22 14:03.
+  > The change from **server (dev)** at 14:01 is in [[projects/Plan|Plan]].
+  > Merge what you need, then delete this copy.
+
+  # Plan
+  …local text…
+  ```
+
+  - "server (…)" names the writer from the server's history (today `dev` or `seed`; from step 7 the key's name, e.g. the agent or the other device).
+  - The link is path-qualified, so it points to the right note even if another note has the same name.
+  - If the local text starts with YAML frontmatter, the callout goes **after** it; frontmatter must stay the first thing in the file.
+- An Obsidian notice names both files; the status view lists open conflict copies. Resolving means editing the original and deleting the copy; nothing special.
 - Device names are set in the plugin settings (default: platform plus a short random suffix).
-
-Why not merging now: line-based three-way merge (`diff3`) works well for appends and edits in different places, but produces conflict markers or wrong results when the same paragraph changed, and a wrong merge is a silent loss. It can come later, on top of conflict copies (merge when clean, copy otherwise). The base text it would need is in the server's history already.
+- The same applies on the first sync, when a path exists on both sides with different content.
 
 ## 8. Authentication and the secret
 
@@ -144,7 +158,7 @@ Server URL (must be `https://` except for `localhost`), vault name (picked from 
 
 ## 10. Repository and release
 
-- **Own repo**, required by Obsidian (`manifest.json`, `README.md`, `LICENSE` at the root of the default branch): proposed `SCAI-NGO/kumbu-obsidian`.
+- **Own repo**, required by Obsidian (`manifest.json`, `README.md`, `LICENSE` at the root of the default branch): proposed `SCAI-NGO/kumbu-obsidian`, licensed AGPL-3.0-or-later like the server.
 - Plugin id `kumbu-sync`, name "Kumbu² Sync" (the id must not contain "obsidian").
 - TypeScript (the Obsidian API ships as TypeScript types), esbuild, pnpm, Vitest; ESLint with Obsidian's recommended plugin rules, as the directory's automated review checks code quality.
 - Releases from a GitHub Actions workflow on a tag: tag = `version` in `manifest.json`, format `x.y.z` without `v`; assets `main.js`, `manifest.json`, `styles.css`.
@@ -160,7 +174,9 @@ Server URL (must be `https://` except for `localhost`), vault name (picked from 
 
 Testing: the sync engine with Vitest (decision table, CRLF, echo suppression, conflict copies, full resync, 412 retry); end to end against the compose stack: edit in a test vault, see it over MCP, and the other way round.
 
-## 12. Open decisions (Chris)
+## 12. Decisions
 
-1. **Conflict strategy:** conflict copies (proposed, §7), or merge when clean plus copy otherwise from the start.
-2. **Licence of the plugin repo:** GPL-3.0 (Chris's default for own open-source projects), AGPL-3.0 (same as the server), or MIT (common for Obsidian plugins).
+Settled with Chris on 2026-10-22:
+
+1. **Conflicts:** conflict copy with a header callout, no automatic merging (§7).
+2. **Licence of the plugin repo:** AGPL-3.0-or-later, the same as the server.
