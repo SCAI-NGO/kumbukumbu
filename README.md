@@ -17,7 +17,7 @@ Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folde
 
 Be clear about what this is. There is **no encryption yet**: notes are stored as plaintext in MongoDB. Access is guarded by a **single shared dev token**, sent as `Authorization: Bearer <token>`. Every path requires it except `GET /healthz`. Traffic is plain HTTP. Do not put real secrets in it and do not expose it to an untrusted network.
 
-The server refuses to start unless the token is at least 16 characters (`openssl rand -hex 32` gives 64). Compose publishes port 8080 on **localhost only** (`127.0.0.1:8080:8080` in `compose.yaml`). To reach it from other machines, change that line to `"8080:8080"` deliberately, knowing that anyone on the network who learns the token can read every note.
+The server refuses to start unless the token is at least 16 characters (`openssl rand -hex 32` gives 64). Compose publishes port 8080 (or `KUMBU_PORT`) on **localhost only** (`127.0.0.1:${KUMBU_PORT:-8080}:8080` in `compose.yaml`). To reach it from other machines, remove the `127.0.0.1:` prefix deliberately, knowing that anyone on the network who learns the token can read every note.
 
 ## Quickstart
 
@@ -43,9 +43,11 @@ Connect Claude Code:
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer <token>"
 ```
 
-Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS` and `KUMBU_MONGO_IMAGE` in `.env`.
+Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE` and `KUMBU_PORT` (host port, default 8080) in `.env`.
 
 ## Development
+
+Any .NET 10 SDK works (`global.json` rolls forward from 10.0.100, so distribution builds in the 1xx band are fine).
 
 ```sh
 dotnet test                        # all tests; the Mongo tests need Docker

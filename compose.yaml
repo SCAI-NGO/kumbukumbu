@@ -12,9 +12,9 @@ services:
   kumbu:
     build: .
     ports:
-      # Localhost only. To reach it from other machines, change this to "8080:8080" on purpose:
+      # Localhost only. To reach it from other machines, drop "127.0.0.1:" on purpose:
       # traffic is plain HTTP and the only guard is the dev token.
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${KUMBU_PORT:-8080}:8080"
     depends_on:
       mongo:
         condition: service_healthy
