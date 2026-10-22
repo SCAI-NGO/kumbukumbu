@@ -160,12 +160,14 @@ public sealed class MongoNoteStore(IMongoDatabase db) : INoteStore
         return [.. docs.Select(ToTrashed).OfType<TrashedNote>()];
     }
 
-    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string writer, DateTime at, CancellationToken ct)
+    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct)
     {
-        var doc = await _trash
+        // Tokens are computed, not stored; a path has few trash entries, so compare them here.
+        var docs = await _trash
             .Find(F.Eq(n => n.Path, path.Value))
             .SortByDescending(n => n.DeletedAt)
-            .FirstOrDefaultAsync(ct);
+            .ToListAsync(ct);
+        var doc = docs.FirstOrDefault(d => version is null || VersionToken.Of(d.Content) == version);
         if (doc is null) return null;
 
         var restored = ToNote(path, doc) with { Revision = doc.Revision + 1, LastWriter = writer, LastWriteAt = at };

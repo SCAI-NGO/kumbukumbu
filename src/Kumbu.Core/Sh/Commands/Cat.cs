@@ -7,16 +7,21 @@ public sealed class Cat(INoteReader notes) : ICommand
 {
     public string Name => "cat";
 
-    public string Usage => "cat <path>";
+    public string Usage => "cat <path>[#section]";
 
-    public string Summary => "print a note";
+    public string Summary => "print a note, or one section of it";
 
     public string Help => """
-        cat <path>
-          Print a note. Its version token comes separately; pass it to 'edit' or 'write' to change the note.
+        cat <path>[#section]
+          Print a note, or one section of it: the heading and everything below it up to the next
+          heading of the same or a higher level. 'outline <path>' lists the sections.
+          Address nested headings as #Parent#Child; a unique heading works on its own. Duplicate
+          headings under one parent take an index, #Notes[2]. Write a literal '#' as \#.
+          The version token comes separately, always for the whole note; pass it to 'edit' or 'write'.
 
           cat /Demo/welcome.md
-          cat "/Demo/Meeting Notes.md" | head -n 20
+          cat "/Demo/welcome.md#Try it"
+          cat "/Work/plan.md#Architecture#Gates" | head -n 20
         """;
 
     public bool ReadsInput => false;
@@ -26,8 +31,7 @@ public sealed class Cat(INoteReader notes) : ICommand
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("cat: missing operand");
         if (args.Count > 1) return ShellResult.Error("cat: too many arguments");
-        if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
+        return await CommandArgs.ReadAddressAsync(Name, notes, args[0], ct);
     }
 }

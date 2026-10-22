@@ -23,10 +23,11 @@ public static class WriteTools
     [McpServerTool(Name = "edit", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.EditDescription)]
     public static async Task<CallToolResult> Edit(
         NoteWriter writer,
-        [Description("Absolute path of the note, e.g. /Work/projects/plan.md")] string path,
+        [Description("Absolute path of the note, e.g. /Work/projects/plan.md, or of one section: /Work/projects/plan.md#Goals")] string path,
         [Description("Version token from cat or the last write/edit")] string version,
         [Description("The replacement text, or the text to append")] string new_text,
-        [Description("Text to replace; must occur exactly once. Leave out to append new_text at the end")] string? old_text = null,
+        [Description("Text to replace; must occur exactly once (in the section, if the path has one). Leave out to append new_text")] string? old_text = null,
+        [Description("Replace the whole section in the path, heading included, with new_text")] bool replace_section = false,
         CancellationToken ct = default) =>
-        ToolResult.From(await writer.EditAsync(path, version, old_text, new_text, Writers.Dev, ct));
+        ToolResult.From(await writer.EditAsync(path, version, old_text, new_text, Writers.Dev, ct, replace_section));
 }

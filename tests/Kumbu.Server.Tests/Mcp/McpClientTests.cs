@@ -61,7 +61,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         Assert.Equal(["content", "path", "version"], Properties(tools["write"]));
         Assert.Equal(["content", "path"], Required(tools["write"]));
-        Assert.Equal(["new_text", "old_text", "path", "version"], Properties(tools["edit"]));
+        Assert.Equal(["new_text", "old_text", "path", "replace_section", "version"], Properties(tools["edit"]));
         Assert.Equal(["new_text", "path", "version"], Required(tools["edit"]));
     }
 
@@ -221,5 +221,45 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         Assert.True(result.IsError);
         Assert.Equal("command not found: frobnicate \u2014 try 'help'", Text(result));
+    }
+
+    [Theory]
+    [InlineData("edit", "path=/Demo/welcome.md,new_text=x", "edit: version is required; get it from 'cat <path>' (it comes as a separate block)")]
+    [InlineData("edit", "version=abc,new_text=x", "edit: path is required; an absolute path like /Work/plan.md")]
+    [InlineData("edit", "path=/Demo/welcome.md,version=abc", "edit: new_text is required; the replacement text, or the text to append")]
+    [InlineData("write", "path=/Demo/x.md", "write: content is required; the note's full Markdown text")]
+    [InlineData("sh", "", "sh: command is required; a command line like ls /")]
+    public async Task A_missing_required_argument_says_what_to_pass(string tool, string args, string message)
+    {
+        var arguments = args.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(a => a.Split('='))
+            .ToDictionary(a => a[0], a => (object?)a[1]);
+
+        var result = await CallAsync(tool, arguments);
+
+        Assert.True(result.IsError);
+        Assert.Equal(message, Text(result));
+    }
+
+    [Fact]
+    public async Task Outline_cat_a_section_and_edit_it()
+    {
+        var path = "/Demo/scratch-sections.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "# Plan\n\n## Goals\n- fast\n\n## Notes\nx\n" });
+
+        Assert.StartsWith("1-7  # Plan", Text(await ShAsync($"outline {path}")), StringComparison.Ordinal);
+        var section = await ShAsync($"cat {path}#Goals");
+        Assert.Equal("## Goals\n- fast", Text(section));
+        Assert.Equal(Token(created), Token(section));
+
+        var appended = await CallAsync("edit", new() { ["path"] = path + "#Goals", ["version"] = Token(section), ["new_text"] = "- small" });
+        Assert.Equal($"appended to section #Plan#Goals of {path} at line 5", Text(appended));
+
+        var replaced = await CallAsync("edit", new()
+        {
+            ["path"] = path + "#Notes", ["version"] = Token(appended), ["new_text"] = "## Notes\ny", ["replace_section"] = true,
+        });
+        Assert.NotEqual(true, replaced.IsError);
+        Assert.Equal("# Plan\n\n## Goals\n- fast\n- small\n\n## Notes\ny\n", Text(await ShAsync($"cat {path}")));
     }
 }

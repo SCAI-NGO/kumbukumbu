@@ -31,7 +31,7 @@ public sealed class Shell
     {
         ICommand[] commands =
         [
-            new Ls(notes), new Cat(notes), new Rg(notes),
+            new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
             new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
             new History(notes), new Restore(writer), new Rm(writer), new Trash(notes),
             new Help(_commands),

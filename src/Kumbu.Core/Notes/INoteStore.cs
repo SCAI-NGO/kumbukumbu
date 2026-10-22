@@ -22,7 +22,8 @@ public interface INoteStore : INoteReader
     /// <summary>Trashed notes at <paramref name="path"/> or below it, most recently deleted first.</summary>
     Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct);
 
-    /// <summary>Moves the most recently deleted note at the path back, recording <paramref name="writer"/>
-    /// as its last writer. Returns null if there is none, or if a note exists at the path.</summary>
-    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string writer, DateTime at, CancellationToken ct);
+    /// <summary>Moves a deleted note at the path back: the most recently deleted one, or the one with
+    /// <paramref name="version"/>. Records <paramref name="writer"/> as its last writer. Returns null if
+    /// there is no such note in the trash, or if a note exists at the path.</summary>
+    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct);
 }

@@ -22,7 +22,7 @@ public static class OutputLimit
         var lines = output.AsSpan(0, keep).Count('\n') + 1;
         var where = lastBreak > 0 ? $"after line {lines}" : "inside line 1, which is longer than the limit";
         var tokens = (output.Length + CharsPerToken - 1) / CharsPerToken;
-        var footer = $"\n[truncated {where} — showing {keep} of {output.Length} chars (~{tokens} tokens); narrow it with rg, head or tail]";
+        var footer = $"\n[truncated {where} — showing {keep} of {output.Length} chars (~{tokens} tokens); narrow it with outline, cat 'note.md#Section', rg, head or tail]";
         return result with { Output = output[..keep] + footer };
     }
 }

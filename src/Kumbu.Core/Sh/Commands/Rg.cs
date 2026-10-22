@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -105,6 +106,11 @@ public sealed class Rg(INoteReader notes) : ICommand
         var found = new Dictionary<VaultPath, Note>();
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)
         {
+            if (SectionAddress.Split(operand).Fragment is not null)
+            {
+                return ShellResult.Error($"rg: {operand}: rg searches whole notes; for one section use: cat \"{operand}\" | rg …");
+            }
+
             if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
 
             var below = await notes.ReadNotesUnderAsync(path, ct);
