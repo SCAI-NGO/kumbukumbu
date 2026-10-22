@@ -198,12 +198,15 @@ Each step = a chapter in `CONCEPTS.md`.
 - Evaluate the official MCP C# SDK and OpenIddict.
 
 ### Later (v2: once the core features are done and deployable)
-- **Vaults as a mountable file system.** Let humans mount their vaults like a local folder (Obsidian on top). Candidates:
-  - **WebDAV** (preferred): mountable without extra software (`davfs2`, `rclone mount`, Finder, Windows network drives); ETags and locks map onto version tokens.
-  - **SFTP** (true sshfs): SSH keys as key slots, but server-side SSH libraries for .NET are scarce.
-  - **Own FUSE client** over the Kumbu² API: full control, but one more program to maintain per platform.
-  - **Sync instead of mount** (sync client or Obsidian plugin): works offline and suits Obsidian's file watching better.
-- To settle for any of them: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; a mount keeps a vault unlocked, which works against the idle TTL (§7). Plaintext on the server adds no new exposure, as search needs it already.
+- **Obsidian sync plugin (preferred, leaning decision Oct 22, 2026).** Humans keep a local copy of their vaults in Obsidian; a plugin syncs it with Kumbu². Chosen over mounting because it works offline and does not fight Obsidian's file watching over a network drive.
+  - Own GitHub repo (TypeScript, pnpm, esbuild): Obsidian plugins are distributed from GitHub releases. Test installs via BRAT; listing in `obsidianmd/obsidian-releases` later.
+  - Authenticates with an API key (§7) as `Authorization: Bearer <key>`; HTTP through Obsidian's `requestUrl` (no CORS, works on mobile).
+  - **One key per device**, so a lost device is revoked by deleting its slot without touching the others.
+  - **The key lives only in Obsidian's `SecretStorage`** (API since Obsidian 1.11.4), never in the plugin's `data.json`, which sits inside the vault and would be synced with it. The plugin refuses to run without it: `minAppVersion` `1.11.4` in `manifest.json`, a load-time check for `app.secretStorage`, and no plain-text key field in its settings.
+  - Known limits of `SecretStorage` to verify before relying on it: the docs only promise local storage keyed to the vault, not OS-keychain encryption at rest; on mobile, secrets with the same name were reported to leak across vaults, so secret names include the vault (e.g. `kumbu-<vault>-<device>`).
+  - Later: an OAuth login flow (§9) instead of pasting a key.
+- **Mounting as an alternative** (not planned): **WebDAV** (mountable without extra software; ETags and locks map onto version tokens), **SFTP** (true sshfs; server-side SSH libraries for .NET are scarce) or an **own FUSE client** over the API. A mount keeps a vault unlocked, which works against the idle TTL (§7).
+- To settle either way: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; sync needs a conflict strategy for offline edits. Plaintext on the server adds no new exposure, as search needs it already.
 
 ### Resolved (Oct 21, 2026)
 - Token lifecycle vs. key slots → §9 "Tokens as key slots".
