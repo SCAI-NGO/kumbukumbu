@@ -1,0 +1,57 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+namespace Kumbu.Server.Tests.Startup;
+
+public sealed class KumbuOptionsValidatorTests
+{
+    private const string ValidMongo = "mongodb://localhost:27017";
+
+    private static KumbuOptions Options(string token, string connectionString) =>
+        new() { DevToken = token, Mongo = new MongoOptions { ConnectionString = connectionString } };
+
+    private static Microsoft.Extensions.Options.ValidateOptionsResult Validate(KumbuOptions o) =>
+        new KumbuOptionsValidator().Validate(null, o);
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("short-token")]
+    [InlineData("0123456789abcde")]
+    [InlineData("change-me")]
+    public void Rejects_an_empty_short_or_placeholder_token(string token)
+    {
+        var result = Validate(Options(token, ValidMongo));
+
+        Assert.True(result.Failed);
+        Assert.Equal([KumbuOptions.DevTokenMessage], result.Failures);
+        Assert.Equal(
+            "Kumbu:DevToken must be at least 16 characters (generate one with: openssl rand -hex 32)",
+            KumbuOptions.DevTokenMessage);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Rejects_an_empty_mongo_connection_string(string connectionString)
+    {
+        var result = Validate(Options(KumbuAppFactory.Token, connectionString));
+
+        Assert.True(result.Failed);
+        Assert.Equal(["Kumbu:Mongo:ConnectionString must be set"], result.Failures);
+    }
+
+    [Fact]
+    public void Reports_both_failures_together()
+    {
+        var result = Validate(Options("", ""));
+
+        Assert.Equal([KumbuOptions.DevTokenMessage, KumbuOptionsValidator.MongoMessage], result.Failures);
+    }
+
+    [Theory]
+    [InlineData("0123456789abcdef")]
+    [InlineData(KumbuAppFactory.Token)]
+    public void Accepts_a_token_of_at_least_16_characters(string token)
+    {
+        Assert.True(Validate(Options(token, ValidMongo)).Succeeded);
+    }
+}

@@ -1,0 +1,30 @@
+services:
+  mongo:
+    image: ${KUMBU_MONGO_IMAGE:-mongo:8}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kumbu:
+    build: .
+    ports:
+      # Localhost only. To reach it from other machines, change this to "8080:8080" on purpose:
+      # traffic is plain HTTP and the only guard is the dev token.
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      Kumbu__Mongo__ConnectionString: mongodb://mongo:27017
+      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
+      Kumbu__Seed__Path: /seed
+    volumes:
+      # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
+      - ${KUMBU_VAULTS:-./vaults}:/seed:ro
+
+volumes:
+  mongo-data:

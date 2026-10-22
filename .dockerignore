@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/TestResults/
+.superpowers/
+.git/
+.github/
+vaults/
+.env
