@@ -271,3 +271,32 @@ A literal `#` in a heading is written `\#` (`#C\# basics`), and a heading that i
 ### One more kind of error message
 
 Tool parameters have a JSON schema, and most clients check it before calling. A model that ignores it, though, used to get the SDK's generic "An error occurred invoking 'edit'", which teaches nothing. A **call-tool filter** now runs before the SDK binds the arguments: it reads the tool's own schema, finds the missing required parameter and answers like every other error, with the next step (`edit: version is required; get it from 'cat <path>'`). A filter here works like ASP.NET middleware: a function that wraps the next handler and may answer on its own instead of calling it.
+
+## 5. Links: resolving at read time, rewriting only on `mv`
+
+### A link is a name, not an address
+
+`[[kumbu]]` doesn't say where the note is. Obsidian finds it when you click: the note whose path ends with `kumbu.md`, whichever folder it is in. That keeps links short and lets people reorganise folders without breaking them. The price: the same text can mean different notes depending on what else exists. If a second `kumbu.md` appears, `[[kumbu]]` becomes **ambiguous**. Obsidian then quietly picks one. Kumbu² follows Obsidian's rules (path suffix, case-insensitive, the source's own folder wins a tie, `./` and `../` relative to the source) but where Obsidian would guess, it reports the candidates instead: an agent can ask, a guess would silently send it to the wrong note.
+
+### Resolve when reading, store nothing
+
+There are two ways to answer "what links here?". Keep an **index** of links that every write updates, or **parse on demand**: read the vault's notes and resolve their links when someone asks. An index is fast, but it can go stale, needs a migration whenever the rules change, and every write path (agents, the seeder, later the Obsidian plugin) has to maintain it. Parsing a few thousand notes takes milliseconds, and the answer is always current. With encryption (step 5) the unlocked vault sits in memory anyway (concept §7). So Kumbu² parses on demand; an index can come if vaults get big.
+
+This fits a decision from step 4a: **content is never rewritten automatically.** Notes are stored exactly as written, and links are a way of *reading* them, not something Kumbu² normalises.
+
+### What counts as a link
+
+A wikilink is `[[target]]`, with optional parts: `#Heading` or `#^block` after the target, `|alias` for the text shown (written `\|` inside tables, where `|` separates columns), and `!` in front for an embed. Links inside fenced code blocks and inline code are examples, not links. Links in YAML frontmatter count, because Obsidian treats them as links. A target that matches no note but looks like a file (`diagram.png`) is an attachment; Kumbu² stores text only, so it shows them as such and leaves them alone.
+
+### Moving a note: compare before and after
+
+`mv` is the one place where Kumbu² writes links. The obvious rule, "rewrite links to the moved note", is not enough. Two cases show why:
+
+- Moving `projects/kumbu.md` to `archive/kumbu.md` changes nothing for `[[kumbu]]`: the name is still unique, the link still finds it. Rewriting it would be an edit for nothing.
+- Moving `a/plan.md` to `a/kumbu.md` touches no link to `plan` that resolves, but every `[[kumbu]]` elsewhere that meant `projects/kumbu.md` would suddenly be ambiguous. That's a **name collision**, and the move must protect those links too.
+
+So `mv` resolves every link in the vault twice, with the notes as they are and as they will be, and rewrites exactly the links whose target would change, back to the note they meant. The new text is the **most specific form**, the note's path in its vault without `.md` (`[[projects/kumbu]]`), so it can't become ambiguous again. Heading, alias and `!` stay; every other byte of the note stays as it was. Each changed note is a normal write (compare-and-swap, history), so a link rewrite can be undone like any edit.
+
+The move itself is atomic per document: insert at the new path (the unique index refuses an existing note), then delete the old path only if nobody wrote in between, else remove the copy again. The history travels with the note; a move changes no text, so the last writer stays who it was.
+
+`mv --keep-links` skips the rewriting. The Obsidian plugin will use it: Obsidian rewrites links itself when a file is renamed and uploads those edits, so a second rewrite on the server would collide with them.
