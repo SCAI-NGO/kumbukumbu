@@ -185,7 +185,7 @@ public sealed class MongoNoteStoreTests(MongoFixture fixture)
         Assert.Equal(T0.AddHours(2), trashed.DeletedAt);
         Assert.Equal(Writers.Dev, trashed.DeletedBy);
 
-        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0.AddHours(3), CancellationToken.None);
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, T0.AddHours(3), CancellationToken.None);
 
         Assert.NotNull(restored);
         Assert.Equal("two", restored.Content);
@@ -219,11 +219,11 @@ public sealed class MongoNoteStoreTests(MongoFixture fixture)
         }
 
         await store.TryCreateAsync(New("/Work/a.md", "occupied"), CancellationToken.None);
-        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0, CancellationToken.None));
+        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, T0, CancellationToken.None));
         Assert.Equal(2, (await store.ListTrashAsync(P("/Work/a.md"), CancellationToken.None)).Count);
 
         await store.TryTrashAsync((await store.GetAsync(P("/Work/a.md"), CancellationToken.None))!, Writers.Dev, T0.AddHours(3), CancellationToken.None);
-        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), Writers.Dev, T0.AddHours(4), CancellationToken.None);
+        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, T0.AddHours(4), CancellationToken.None);
         Assert.Equal("occupied", await store.ReadAsync(P("/Work/a.md"), CancellationToken.None));
         Assert.Equal(
             ["second", "first"],

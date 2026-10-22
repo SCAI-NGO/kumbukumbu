@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Notes;
@@ -41,6 +42,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, string writer, CancellationToken ct)
     {
         const string tool = "write";
+        if (SectionAddress.Split(pathText).Fragment is not null)
+        {
+            return ShellResult.Error(
+                "write: replaces whole notes; to change one section use edit with the section in the path (and replace_section for all of it)");
+        }
+
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
         content = Normalize(content);
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
@@ -71,12 +78,27 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         return await ReplaceAsync(tool, existing, content, writer, $"wrote {path.Value} ({Lines.Count(content)})", ct);
     }
 
-    /// <summary>Replaces the one occurrence of <paramref name="oldText"/>, or appends when it is null.</summary>
+    /// <summary>
+    /// Replaces the one occurrence of <paramref name="oldText"/>, or appends when it is null. With a section
+    /// address in the path ("note.md#Heading") both work inside that section, and
+    /// <paramref name="replaceSection"/> replaces the whole section, heading included.
+    /// </summary>
     public async Task<ShellResult> EditAsync(
-        string pathText, string version, string? oldText, string newText, string writer, CancellationToken ct)
+        string pathText, string version, string? oldText, string newText, string writer, CancellationToken ct,
+        bool replaceSection = false)
     {
         const string tool = "edit";
-        if (!TryParse(tool, pathText, out var path, out var error)) return error;
+        var (notePath, fragment) = SectionAddress.Split(pathText);
+        if (!TryParse(tool, notePath, out var path, out var error)) return error;
+        if (replaceSection && fragment is null)
+        {
+            return ShellResult.Error("edit: replace_section needs a section in the path, e.g. /Work/plan.md#Goals");
+        }
+
+        if (replaceSection && oldText is not null)
+        {
+            return ShellResult.Error("edit: give either old_text or replace_section, not both");
+        }
 
         var existing = await store.GetAsync(path, ct);
         if (existing is null) return Missing(tool, path);
@@ -84,40 +106,87 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
 
         var current = existing.Content;
         newText = Normalize(newText);
-        string content, message;
-        if (oldText is null)
+
+        // The part of the note the edit may touch: all of it, or one section without its trailing blank lines.
+        int scopeStart = 0, scopeEnd = current.Length;
+        string where = path.Value, inSection = "";
+        if (fragment is not null)
         {
-            var separator = current.Length > 0 && !current.EndsWith('\n') ? "\n" : "";
-            content = current + separator + newText;
-            message = $"appended to {path.Value} (now {Lines.Count(content)})";
+            if (!SectionLookup.TryFind(path, current, fragment, out var match, out var sectionError))
+            {
+                return ShellResult.Error($"edit: {sectionError}");
+            }
+
+            scopeStart = match.Offset(match.Heading.Line, current);
+            scopeEnd = match.Offset(match.Heading.ContentEnd, current);
+            where = $"section {match.Heading.Address} of {path.Value}";
+            inSection = $" (in section {match.Heading.Address})";
+        }
+
+        string content, message;
+        if (replaceSection)
+        {
+            content = Splice(current, scopeStart, scopeEnd, newText);
+            message = $"replaced {where} (now {Lines.Count(content)} in the note)";
+        }
+        else if (oldText is null)
+        {
+            // Append after the scope's last line, before blank lines that separate it from what follows.
+            content = Splice(current, scopeEnd, scopeEnd, newText);
+            message = fragment is null
+                ? $"appended to {path.Value} (now {Lines.Count(content)})"
+                : $"appended to {where} at line {current.AsSpan(0, scopeEnd).Count('\n') + 1}";
         }
         else
         {
             oldText = Normalize(oldText);
             if (oldText.Length == 0) return ShellResult.Error("edit: old_text is empty; leave it out to append");
 
-            var at = current.IndexOf(oldText, StringComparison.Ordinal);
+            var scope = current[scopeStart..scopeEnd];
+            var at = scope.IndexOf(oldText, StringComparison.Ordinal);
             if (at < 0)
             {
                 return ShellResult.Error(
-                    $"edit: old_text not found in {path.Value}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
+                    $"edit: old_text not found in {where}; it must match exactly, including whitespace and line breaks (cat it to see the current text)");
             }
 
-            var count = Occurrences(current, oldText);
+            var count = Occurrences(scope, oldText);
             if (count > 1)
             {
                 return ShellResult.Error(
-                    $"edit: old_text occurs {count} times in {path.Value}; include more of the surrounding text so it matches once");
+                    $"edit: old_text occurs {count} times in {where}; include more of the surrounding text so it matches once"
+                    + (fragment is null ? ", or put the section in the path (note.md#Heading)" : ""));
             }
 
+            at += scopeStart;
             content = string.Concat(current.AsSpan(0, at), newText, current.AsSpan(at + oldText.Length));
-            message = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}";
+            message = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
         }
 
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
         if (content == current) return Written($"{path.Value} is unchanged", existing);
 
         return await ReplaceAsync(tool, existing, content, writer, message, ct);
+    }
+
+    /// <summary>
+    /// Puts <paramref name="text"/> in place of [start, end) so it stays on lines of its own. If start is in
+    /// the middle of a line, a line break goes first. If end is at the start of a line, the text needs its
+    /// own line break; if end is at the end of a line, the rest already begins with one.
+    /// </summary>
+    private static string Splice(string content, int start, int end, string text)
+    {
+        var before = content[..start];
+        var after = content[end..];
+        if (text.Length > 0)
+        {
+            if (before.Length > 0 && !before.EndsWith('\n')) text = "\n" + text;
+            var endsAtLineStart = end == 0 || content[end - 1] == '\n';
+            if (after.Length > 0 && endsAtLineStart && !text.EndsWith('\n')) text += "\n";
+            if (after.Length > 0 && !endsAtLineStart && text.EndsWith('\n')) text = text[..^1];
+        }
+
+        return before + text + after;
     }
 
     /// <summary>Moves a note to the trash. Needs no version: it can be undone with <see cref="RestoreAsync"/>.</summary>
@@ -141,30 +210,27 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     }
 
     /// <summary>
-    /// Without a version, brings the note back from the trash. With one (from <c>history</c>), makes that
-    /// version current again; the state it replaces always stays in the history, so this can be undone too.
+    /// Brings a note back. If no note exists at the path: from the trash, the most recently removed one or the
+    /// one with <paramref name="version"/>. If one exists: makes the version from its history current again;
+    /// the state it replaces stays in the history, so this can be undone too.
     /// </summary>
     public async Task<ShellResult> RestoreAsync(VaultPath path, string? version, string writer, CancellationToken ct)
     {
         var existing = await store.GetAsync(path, ct);
-        if (version is null)
-        {
-            if (existing is not null)
-            {
-                return ShellResult.Error(
-                    $"restore: {path.Value} exists; to go back to an earlier version, give one from 'history {Quote(path)}'");
-            }
-
-            var restored = await store.TryRestoreFromTrashAsync(path, writer, Now, ct);
-            return restored is null
-                ? ShellResult.Error($"restore: {path.Value} is not in the trash ('trash' lists what is)")
-                : Written($"restored {path.Value} from the trash", restored);
-        }
-
         if (existing is null)
         {
+            var restored = await store.TryRestoreFromTrashAsync(path, version, writer, Now, ct);
+            if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
+
+            return version is null
+                ? ShellResult.Error($"restore: {path.Value} is not in the trash ('trash' lists what is)")
+                : ShellResult.Error($"restore: {path.Value} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
+        }
+
+        if (version is null)
+        {
             return ShellResult.Error(
-                $"restore: {path.Value}: No such file or directory (to bring back a removed note: restore {Quote(path)})");
+                $"restore: {path.Value} exists; to go back to an earlier version, give one from 'history {Quote(path)}'");
         }
 
         if (existing.Version == version) return Written($"{path.Value} is already at version {version}", existing);
@@ -172,7 +238,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         var entry = existing.History.FirstOrDefault(h => VersionToken.Of(h.Content) == version);
         if (entry is null)
         {
-            return ShellResult.Error($"restore: {path.Value} has no version {version} ('history {Quote(path)}' lists them)");
+            var inTrash = (await store.ListTrashAsync(path, ct)).Any(t => t.Note.Path == path && t.Note.Version == version);
+            return ShellResult.Error(inTrash
+                ? $"restore: version {version} of {path.Value} is in the trash, but a note exists at that path; rm it first, or edit it"
+                : $"restore: {path.Value} has no version {version} ('history {Quote(path)}' lists them)");
         }
 
         var next = Next(existing, entry.Content, writer, Now, keepCurrent: true);

@@ -59,9 +59,9 @@ public class WriteCommandsTests
         Assert.False((await Run("rm /Demo/a.md")).IsError);
 
         Assert.Equal(
-            """
-            2026-10-22 14:08 UTC  /Demo/a.md  (by dev)
-            2026-10-22 14:03 UTC  /Demo/Meeting Notes.md  (by dev)
+            $"""
+            2026-10-22 14:08 UTC  /Demo/a.md  {VersionToken.Of("one\n")}  1 line  (by dev)
+            2026-10-22 14:03 UTC  /Demo/Meeting Notes.md  {VersionToken.Of("m\n")}  1 line  (by dev)
             """,
             (await Run("trash")).Output);
         // Until vaults are real objects (steps 5 and 7), a vault exists only through its notes.
@@ -69,7 +69,7 @@ public class WriteCommandsTests
 
         var restored = await Run("restore \"/Demo/Meeting Notes.md\"");
         Assert.Equal("restored /Demo/Meeting Notes.md from the trash", restored.Output);
-        Assert.Equal("2026-10-22 14:08 UTC  /Demo/a.md  (by dev)", (await Run("trash /Demo")).Output);
+        Assert.Equal($"2026-10-22 14:08 UTC  /Demo/a.md  {VersionToken.Of("one\n")}  1 line  (by dev)", (await Run("trash /Demo")).Output);
         Assert.Equal("m\n", (await Run("cat \"/Demo/Meeting Notes.md\"")).Output);
     }
 
@@ -94,4 +94,38 @@ public class WriteCommandsTests
     [InlineData("ls /Demo | restore")]
     public async Task WritingCommandsDoNotReadFromAPipe(string line) =>
         Assert.EndsWith("does not read from a pipe; only rg, head, tail, wc, sort do", (await Run(line)).Output);
+
+    [Fact]
+    public async Task RestoreAnOlderRemovalByItsVersion()
+    {
+        await Run("rm /Demo/a.md");
+        await _writer.WriteAsync("/Demo/a.md", "second\n", null, Writers.Dev, CancellationToken.None);
+        await Run("rm /Demo/a.md");
+
+        var result = await Run($"restore /Demo/a.md {VersionToken.Of("one\n")}");
+
+        Assert.Equal("restored /Demo/a.md from the trash", result.Output);
+        Assert.Equal("one\n", (await Run("cat /Demo/a.md")).Output);
+        Assert.Contains(VersionToken.Of("second\n"), (await Run("trash")).Output);
+    }
+
+    [Fact]
+    public async Task RestoreAVersionThatIsOnlyInTheTrashWhileTheNoteExists()
+    {
+        await Run("rm /Demo/a.md");
+        await _writer.WriteAsync("/Demo/a.md", "new\n", null, Writers.Dev, CancellationToken.None);
+
+        Assert.Equal(
+            ShellResult.Error($"restore: version {VersionToken.Of("one\n")} of /Demo/a.md is in the trash, but a note exists at that path; rm it first, or edit it"),
+            await Run($"restore /Demo/a.md {VersionToken.Of("one\n")}"));
+    }
+
+    [Fact]
+    public async Task RestoreAnUnknownVersionFromTheTrash()
+    {
+        await Run("rm /Demo/a.md");
+        Assert.Equal(
+            ShellResult.Error("restore: /Demo/a.md has no version abc in the trash ('trash /Demo/a.md' lists them)"),
+            await Run("restore /Demo/a.md abc"));
+    }
 }

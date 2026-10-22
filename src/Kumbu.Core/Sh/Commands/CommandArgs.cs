@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -49,6 +50,21 @@ internal static class CommandArgs
             : ShellResult.Error($"{command}: {path.Value}: No such file or directory");
     }
 
+    /// <summary>Reads a note or, for "note.md#Heading", one section of it. The version token is always
+    /// the whole note's, since writes go to the whole note.</summary>
+    public static async Task<ShellResult> ReadAddressAsync(string command, INoteReader notes, string arg, CancellationToken ct)
+    {
+        var (pathText, fragment) = SectionAddress.Split(arg);
+        if (!TryParsePath(command, pathText, out var path, out var pathError)) return pathError!;
+
+        var note = await ReadNoteAsync(command, notes, path, ct);
+        if (note.IsError || fragment is null) return note;
+
+        return SectionLookup.TryFind(path, note.Output, fragment, out var match, out var error)
+            ? ShellResult.Ok(match.Text) with { Version = note.Version }
+            : ShellResult.Error($"{command}: {error}");
+    }
+
     /// <summary>
     /// The text a filter works on: the piped input, or the one note named by its operands when it starts
     /// the pipeline. A path behind a pipe is an error rather than silently winning over the input.
@@ -65,7 +81,6 @@ internal static class CommandArgs
 
         if (operands.Count == 0) return ShellResult.Error($"{command}: missing operand (give a path, or pipe into it)");
         if (operands.Count > 1) return ShellResult.Error($"{command}: too many arguments");
-        if (!TryParsePath(command, operands[0], out var path, out var pathError)) return pathError!;
-        return await ReadNoteAsync(command, notes, path, ct);
+        return await ReadAddressAsync(command, notes, operands[0], ct);
     }
 }

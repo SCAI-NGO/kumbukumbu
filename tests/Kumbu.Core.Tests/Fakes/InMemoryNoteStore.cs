@@ -69,9 +69,12 @@ public sealed class InMemoryNoteStore : INoteStore
         return Task.FromResult(result);
     }
 
-    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string writer, DateTime at, CancellationToken ct)
+    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct)
     {
-        var latest = _trash.Where(t => t.Note.Path == path).OrderByDescending(t => t.DeletedAt).FirstOrDefault();
+        var latest = _trash
+            .Where(t => t.Note.Path == path && (version is null || t.Note.Version == version))
+            .OrderByDescending(t => t.DeletedAt)
+            .FirstOrDefault();
         if (latest is null || _notes.ContainsKey(path)) return Task.FromResult<StoredNote?>(null);
 
         var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at };

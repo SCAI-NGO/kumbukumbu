@@ -15,8 +15,9 @@ public sealed class Trash(INoteStore notes) : ICommand
     public string Help => $"""
         trash [path]
           List removed notes at or below a path (default: every vault), most recently removed first:
-          time removed (UTC), path, who removed it. They stay for {NoteWriter.TrashRetention.Days} days.
-          'restore <path>' brings one back.
+          time removed (UTC), path, version, lines, who removed it. They stay for {NoteWriter.TrashRetention.Days} days.
+          'restore <path>' brings back the most recently removed one; 'restore <path> <version>' a
+          particular one, if a path was removed more than once.
 
           trash
           trash /Demo
@@ -33,6 +34,7 @@ public sealed class Trash(INoteStore notes) : ICommand
         if (args.Count == 1 && !CommandArgs.TryParsePath(Name, args[0], out path, out var pathError)) return pathError!;
 
         var trashed = await notes.ListTrashAsync(path, ct);
-        return ShellResult.Ok(Lines.Join(trashed.Select(t => $"{History.Time(t.DeletedAt)}  {t.Note.Path.Value}  (by {t.DeletedBy})")));
+        return ShellResult.Ok(Lines.Join(trashed.Select(t =>
+            $"{History.Time(t.DeletedAt)}  {t.Note.Path.Value}  {t.Note.Version}  {Lines.Count(t.Note.Content)}  (by {t.DeletedBy})")));
     }
 }

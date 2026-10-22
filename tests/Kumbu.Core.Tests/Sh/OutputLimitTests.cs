@@ -24,7 +24,7 @@ public class OutputLimitTests
 
         var kept = string.Join('\n', Enumerable.Repeat(line, 240));
         Assert.Equal(
-            kept + "\n[truncated after line 240 — showing 23999 of 60000 chars (~20000 tokens); narrow it with rg, head or tail]",
+            kept + "\n[truncated after line 240 — showing 23999 of 60000 chars (~20000 tokens); narrow it with outline, cat 'note.md#Section', rg, head or tail]",
             result.Output);
     }
 
@@ -42,7 +42,7 @@ public class OutputLimitTests
         var result = OutputLimit.Apply(ShellResult.Ok(new string('a', 61_200)));
         Assert.Equal(
             new string('a', 24_000)
-                + "\n[truncated inside line 1, which is longer than the limit — showing 24000 of 61200 chars (~20400 tokens); narrow it with rg, head or tail]",
+                + "\n[truncated inside line 1, which is longer than the limit — showing 24000 of 61200 chars (~20400 tokens); narrow it with outline, cat 'note.md#Section', rg, head or tail]",
             result.Output);
     }
 

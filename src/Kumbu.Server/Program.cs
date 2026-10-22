@@ -32,7 +32,11 @@ builder.Services.AddSingleton<Shell>();
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type
 // and silently registers no tools; the IEnumerable<Type> overload needs the collection expression.
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
-builder.Services.AddMcpServer(o => o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() })
+builder.Services.AddMcpServer(o =>
+    {
+        o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() };
+        o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
+    })
     .WithHttpTransport()
     .WithTools([typeof(ShTool), typeof(WriteTools)]);
 

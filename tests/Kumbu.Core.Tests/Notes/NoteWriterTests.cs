@@ -169,7 +169,7 @@ public class NoteWriterTests
 
     [Fact]
     public async Task OldTextMustBeUnique() => Assert.Equal(
-        ShellResult.Error("edit: old_text occurs 2 times in /Work/plan.md; include more of the surrounding text so it matches once"),
+        ShellResult.Error("edit: old_text occurs 2 times in /Work/plan.md; include more of the surrounding text so it matches once, or put the section in the path (note.md#Heading)"),
         await Edit("/Work/plan.md", V(Plan), "- ", "* "));
 
     [Fact]

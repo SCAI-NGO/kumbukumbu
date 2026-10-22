@@ -18,6 +18,8 @@ public sealed class History(INoteStore notes) : ICommand
           The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept; writes by the
           same writer within {NoteWriter.CoalesceWindow.TotalMinutes} minutes count as one, so the state before a session survives.
           'restore <path> <version>' makes an earlier version current again.
+          The version is computed from the text, so the same version can appear twice (after a restore,
+          or after changing a text back); either line restores the same text.
 
           history /Demo/welcome.md
         """;
