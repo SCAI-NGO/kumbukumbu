@@ -42,3 +42,25 @@ Out of scope: password slots with Argon2id (there is no password before the logi
 | 12 | The version block starts on a new line, for clients that join blocks without a separator. |
 
 Observations 5 and 9 (an ambiguous link resolved by a move; heading targets not checked) stay open.
+
+## 4. Independent review
+
+Before the PR, a separate review read the encryption code without being told the conclusions. It found the primitives sound (fresh nonces, correct HKDF/AES-GCM use, distinct labels, nothing secret in MongoDB or logs) and no way for one token to reach another's vault, and these defects, all fixed with tests:
+
+| Finding | Fix |
+|---|---|
+| A request cancelled between the two writes of `mv`, `rm` or `restore` left a note at both paths, or in notes and trash. | Once the first write is committed, the rest runs (or undoes it) without the request's cancellation. |
+| Locking a vault while a request held it could leave two copies in memory; a single vault above the memory cap would be reloaded on every request; every request marked all of its token's vaults as used. | Only the minute-by-minute sweep locks vaults, never one used in the last minute; a vault counts as used only when a request touches it. |
+| If writing the recovery key failed, the vault was created anyway, without a usable recovery key, and the file was briefly readable by others. | The key file is written first (created 0600, flushed to disk); only then is the vault stored. If writing fails, no vault is created. |
+| After a token change, the seeder could create a second, empty vault with the name of the locked one, which would later hide the real one. | While vaults exist that the dev token can't open, the seeder creates none and says why. |
+| A vault in memory was handed to any token whose slot matched by lookup hash, without unwrapping it. | The slot is always unwrapped and must yield that vault's key. |
+| The path id and revision in the clear were not bound to the sealed note. | The revision is part of the note's context; on opening, the path id must match the sealed path. |
+| The plaintext check looked at `notes` only. | It also checks `trash` and the old unique index on `path`. |
+| Expired trash and move records stayed in a busy vault's memory. | The sweep drops them. |
+
+## 5. Known limits
+
+- **Rollback.** Someone with write access to the database can put back an *older* sealed version of a document (from a backup) or a deleted note; it opens, because it is genuine. Detecting that needs an authenticated counter or manifest per vault. Not built.
+- **Metadata.** Vault names appear in the server log (`Unlocked vault Demo`); MongoDB holds sizes, counts and times.
+- **Weak tokens.** The lookup value of the dev token is in the database, so a guessable token can be tried offline. The server checks only the length (16 characters); the README says to use a random one.
+- **One process.** Two server processes on one database stay correct (compare-and-swap, unique index, refresh on a failed swap), but one doesn't see the other's new notes until its vault is locked and opened again.

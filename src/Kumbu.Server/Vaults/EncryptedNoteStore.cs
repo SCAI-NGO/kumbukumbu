@@ -60,7 +60,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             var result = await catalog.Notes.UpdateOneAsync(AtRevision(entry.Id, current.Revision), update, cancellationToken: ct);
             if (result.MatchedCount == 0)
             {
-                await catalog.RefreshAsync(vault, current.Path, ct);
+                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
                 return false;
             }
 
@@ -84,21 +84,22 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             // only if nobody wrote in between; otherwise take the copy back. Nothing is ever lost.
             if (!await InsertAsync(vault, target, ct)) return false;
 
-            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), ct);
+            // The first write is committed: from here on, finish or undo it even if the request is cancelled.
+            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), CancellationToken.None);
             if (deleted.DeletedCount == 0)
             {
-                await catalog.Notes.DeleteOneAsync(F.Eq(d => d.Id, vault.Notes[target.Path].Id), ct);
+                await catalog.Notes.DeleteOneAsync(F.Eq(d => d.Id, vault.Notes[target.Path].Id), CancellationToken.None);
                 vault.Notes = vault.Notes.Remove(target.Path);
-                await catalog.RefreshAsync(vault, current.Path, ct);
+                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
                 return false;
             }
 
             var move = new MoveRecord(current.Path, target.Path, movedBy, at);
             var moveId = ObjectId.GenerateNewId();
+            vault.Notes = vault.Notes.Remove(current.Path);
             await catalog.Moves.InsertOneAsync(
                 new SealedDocument { Id = moveId, Vault = vault.Id, PathId = vault.PathId(current.Path), At = at, Blob = vault.SealMove(moveId, move) },
-                cancellationToken: ct);
-            vault.Notes = vault.Notes.Remove(current.Path);
+                cancellationToken: CancellationToken.None);
             vault.Moves = vault.Moves.Add(move);
             return true;
         }
@@ -121,11 +122,12 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 new SealedDocument { Id = trashId, Vault = vault.Id, PathId = vault.PathId(current.Path), DeletedAt = deletedAt, Blob = vault.SealTrash(trashId, trashed) },
                 cancellationToken: ct);
 
-            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), ct);
+            // The copy is committed: from here on, finish or undo it even if the request is cancelled.
+            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), CancellationToken.None);
             if (deleted.DeletedCount == 0)
             {
-                await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, trashId), ct);
-                await catalog.RefreshAsync(vault, current.Path, ct);
+                await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, trashId), CancellationToken.None);
+                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
                 return false;
             }
 
@@ -141,7 +143,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public async Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = path.IsRoot ? (await VaultsAsync(ct)).Values : await VaultAsync(path, ct) is { } v ? [v] : [];
+        IEnumerable<UnlockedVault> vaults = path.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(path, ct) is { } v ? [v] : [];
         var prefix = path.IsRoot ? "/" : path.Value + "/";
         return [.. vaults
             .SelectMany(v => v.Trash.Select(t => t.Trashed))
@@ -165,7 +167,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             var restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at };
             if (!await InsertAsync(vault, restored, ct)) return null;
 
-            await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, latest.Id), ct);
+            // The note is back: remove it from the trash even if the request is cancelled now.
+            await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, latest.Id), CancellationToken.None);
             vault.Trash = vault.Trash.Remove(latest);
             return restored;
         }
@@ -200,13 +203,27 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     private async Task<IEnumerable<StoredNote>> NotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = dir.IsRoot ? (await VaultsAsync(ct)).Values : await VaultAsync(dir, ct) is { } v ? [v] : [];
+        IEnumerable<UnlockedVault> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
         var prefix = dir.IsRoot ? "/" : dir.Value + "/";
         return vaults.SelectMany(v => v.Notes.Values.Select(n => n.Note)).Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal));
     }
 
-    private async Task<UnlockedVault?> VaultAsync(VaultPath path, CancellationToken ct) =>
-        path.Vault is { } name && (await VaultsAsync(ct)).TryGetValue(name, out var vault) ? vault : null;
+    /// <summary>The vault of a path, marked as used now: only vaults a request actually touches count for
+    /// the idle timeout and the least-recently-used order, not every vault its token can open.</summary>
+    private async Task<UnlockedVault?> VaultAsync(VaultPath path, CancellationToken ct)
+    {
+        if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var vault)) return null;
+        vault.Touch(catalog.Now);
+        return vault;
+    }
+
+    /// <summary>All of the credential's vaults, marked as used (a search or listing over every vault).</summary>
+    private async Task<IEnumerable<UnlockedVault>> AllVaultsAsync(CancellationToken ct)
+    {
+        var all = (await VaultsAsync(ct)).Values;
+        foreach (var v in all) v.Touch(catalog.Now);
+        return all;
+    }
 
     /// <summary>The credential's vaults by name, unlocked once per store (one request).</summary>
     private async Task<Dictionary<string, UnlockedVault>> VaultsAsync(CancellationToken ct)

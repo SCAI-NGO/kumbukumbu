@@ -23,7 +23,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     {
         var world = new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
-        foreach (var v in vaults.Length == 0 ? ["Work"] : vaults) await catalog.CreateAsync(v, Token, withRecovery: true, Ct);
+        foreach (var v in vaults.Length == 0 ? ["Work"] : vaults) await catalog.CreateAsync(v, Token, (_, _) => Task.CompletedTask, Ct);
         return (world, catalog, Store(catalog));
     }
 
@@ -91,7 +91,8 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     {
         var world = new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
-        var (_, recovery) = await catalog.CreateAsync("Work", Token, withRecovery: true, Ct);
+        string? recovery = null;
+        await catalog.CreateAsync("Work", Token, (_, key) => { recovery = key; return Task.CompletedTask; }, Ct);
         await Store(catalog).TryCreateAsync(New("/Work/a.md", "kept"), Ct);
         const string newToken = "a-new-token-0123456789abcdef";
 
@@ -292,8 +293,8 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     {
         var world = new VaultWorld(fixture.NewDatabase());
         var setup = world.Catalog();
-        await setup.CreateAsync("Old", Token, withRecovery: false, Ct);
-        await setup.CreateAsync("New", Token, withRecovery: false, Ct);
+        await setup.CreateAsync("Old", Token, saveRecoveryKey: null, Ct);
+        await setup.CreateAsync("New", Token, saveRecoveryKey: null, Ct);
         var big = new string('x', 300_000);
         await Store(setup).TryCreateAsync(New("/Old/a.md", big), Ct);
         await Store(setup).TryCreateAsync(New("/New/a.md", big), Ct);
@@ -301,12 +302,80 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var catalog = world.Catalog(memoryMegabytes: 1, time: clock);
         await Store(catalog).ListVaultsAsync(Ct);
-        clock.Advance(TimeSpan.FromSeconds(1));
-        await Store(catalog).ReadAsync(P("/New/a.md"), Ct);
 
-        // 2 × 600 KB of UTF-16 is above 1 MB: one vault goes, and both still open on demand.
+        // 2 × 600 KB of UTF-16 is above 1 MB, but both were just used: a request may still hold them.
+        catalog.Sweep();
+        Assert.Equal(2, catalog.OpenCount);
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await Store(catalog).ReadAsync(P("/New/a.md"), Ct);
         catalog.Sweep();
         Assert.Equal(1, catalog.OpenCount);
         Assert.Equal(big, await Store(catalog).ReadAsync(P("/Old/a.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_forged_slot_gets_nothing_even_while_the_vault_is_unlocked()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        await store.TryCreateAsync(New("/Work/a.md", "secret"), Ct);
+        const string attacker = "attacker-token-0123456789abcdef";
+        var vaultId = (await world.Db.GetCollection<BsonDocument>("vaults").Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct))["_id"].AsString;
+        await world.Db.GetCollection<BsonDocument>("slots").InsertOneAsync(new BsonDocument
+        {
+            ["vault"] = vaultId, ["kind"] = "key",
+            ["lookup"] = VaultCrypto.Derive(attacker, "kumbu/v1/key-lookup", []),
+            ["wrapped"] = VaultCrypto.Seal(VaultCrypto.NewKey(), VaultCrypto.NewKey(), $"slot:{vaultId}:key"),
+            ["createdAt"] = DateTime.UtcNow,
+        }, cancellationToken: Ct);
+
+        // The vault is in this catalog's memory, unlocked by the real token.
+        Assert.Equal(["Work"], await Store(catalog).ListVaultsAsync(Ct));
+        Assert.Empty(await Store(catalog, attacker).ListVaultsAsync(Ct));
+        Assert.Null(await Store(catalog, attacker).ReadAsync(P("/Work/a.md"), Ct));
+    }
+
+    [Theory]
+    [InlineData("pid")]
+    [InlineData("rev")]
+    public async Task Changing_the_clear_metadata_of_a_note_makes_it_unreadable(string field)
+    {
+        var (world, _, store) = await WorldAsync();
+        await store.TryCreateAsync(New("/Work/a.md", "a"), Ct);
+        await store.TryCreateAsync(New("/Work/b.md", "b"), Ct);
+        var notes = world.Db.GetCollection<BsonDocument>("notes");
+        var doc = await notes.Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct);
+        BsonValue changed = field == "pid" ? new BsonBinaryData(new byte[32]) : new BsonInt64(99);
+        await notes.UpdateOneAsync(new BsonDocument("_id", doc["_id"]), new BsonDocument("$set", new BsonDocument(field, changed)), cancellationToken: Ct);
+
+        Assert.Single(await Store(world.Catalog()).ListNotesUnderAsync(P("/Work"), Ct));
+    }
+
+    [Fact]
+    public async Task Plaintext_trash_from_before_encryption_is_refused_too()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        await world.Db.GetCollection<BsonDocument>("trash").InsertOneAsync(new BsonDocument { ["path"] = "/Work/a.md", ["content"] = "old" }, cancellationToken: Ct);
+
+        await Assert.ThrowsAsync<VaultUnavailableException>(() => Store(world.Catalog()).ListVaultsAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Expired_trash_leaves_the_working_set_at_the_sweep()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var catalog = world.Catalog(idleMinutes: 60 * 24 * 40, time: clock);
+        await catalog.CreateAsync("Work", Token, saveRecoveryKey: null, Ct);
+        var store = Store(catalog);
+        var note = New("/Work/a.md", "a");
+        await store.TryCreateAsync(note, Ct);
+        await store.TryTrashAsync(note, Writers.Dev, clock.GetUtcNow().UtcDateTime, Ct);
+
+        clock.Advance(TimeSpan.FromDays(31));
+        await Store(catalog).ListVaultsAsync(Ct);
+        catalog.Sweep();
+
+        Assert.Empty(await Store(catalog).ListTrashAsync(P("/Work"), Ct));
     }
 }

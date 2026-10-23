@@ -50,13 +50,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         var result = new List<UnlockedVault>();
         foreach (var slot in slots)
         {
-            if (_open.TryGetValue(slot.Vault, out var cached))
-            {
-                cached.Touch(Now);
-                result.Add(cached);
-                continue;
-            }
-
+            // Always open the slot, also for a vault already in memory: a slot that matches the lookup but
+            // doesn't unwrap to that vault's key (inserted by someone with write access to the database) gets nothing.
             byte[] vaultKey;
             try
             {
@@ -71,25 +66,28 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(vault);
         }
 
-        Sweep();
         return result;
     }
 
-    /// <summary>Creates a vault with a slot for <paramref name="secret"/> and, if asked, a recovery key,
-    /// which is returned once and stored nowhere.</summary>
-    public async Task<(UnlockedVault Vault, string? RecoveryKey)> CreateAsync(string name, string secret, bool withRecovery, CancellationToken ct)
+    /// <summary>
+    /// Creates a vault with a slot for <paramref name="secret"/>. With <paramref name="saveRecoveryKey"/> it also
+    /// gets a recovery key, handed to that callback (vault id, key) <em>before</em> anything is stored: if saving
+    /// fails, no vault exists, rather than a vault whose recovery key is lost.
+    /// </summary>
+    public async Task<UnlockedVault> CreateAsync(
+        string name, string secret, Func<string, string, Task>? saveRecoveryKey, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var vaultKey = VaultCrypto.NewKey();
+        var recoveryKey = saveRecoveryKey is null ? null : RecoveryKey.New();
+        if (recoveryKey is not null) await saveRecoveryKey!(id, RecoveryKey.Format(recoveryKey));
+
         var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
         await Vaults.InsertOneAsync(new VaultDocument { Id = id, Meta = meta, CreatedAt = Now }, cancellationToken: ct);
         await AddKeySlotAsync(id, vaultKey, secret, ct);
-
-        string? recovery = null;
-        if (withRecovery)
+        if (recoveryKey is not null)
         {
-            var recoveryKey = RecoveryKey.New();
             await Slots.InsertOneAsync(new SlotDocument
             {
                 Vault = id,
@@ -97,12 +95,11 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 Wrapped = VaultCrypto.Seal(RecoveryKek(recoveryKey, id), vaultKey, SlotContext(id, SlotDocument.Recovery)),
                 CreatedAt = Now,
             }, cancellationToken: ct);
-            recovery = RecoveryKey.Format(recoveryKey);
         }
 
         var vault = new UnlockedVault(id, name, vaultKey, Now);
         _open[id] = vault;
-        return (vault, recovery);
+        return vault;
     }
 
     /// <summary>Opens every vault <paramref name="recoveryKeyText"/> belongs to and gives <paramref name="secret"/>
@@ -143,26 +140,38 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         return await Vaults.CountDocumentsAsync(FilterDefinition<VaultDocument>.Empty, cancellationToken: ct);
     }
 
-    /// <summary>Locks vaults idle for longer than the timeout, then the least recently used ones while the
-    /// working sets exceed the memory cap. Keys are dropped with the vault, not zeroed: a request still using
-    /// the vault must not see its key change under it.</summary>
+    /// <summary>A vault used this recently is never locked: a request may still be working with it.</summary>
+    public static readonly TimeSpan InUse = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Runs once a minute (<see cref="VaultSweeper"/>). Locks vaults idle for longer than the timeout, then the
+    /// least recently used ones while the working sets exceed the memory cap; a vault used within
+    /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired.
+    /// Keys go with the vault, not zeroed: a request still holding it must not see its key change.
+    /// </summary>
     public void Sweep()
     {
         var o = options.Value.Vaults;
         var now = Now;
         foreach (var (id, vault) in _open)
         {
-            if (now - vault.LastUsed > TimeSpan.FromMinutes(o.IdleMinutes) && _open.TryRemove(id, out _))
+            if (now - vault.LastUsed > TimeSpan.FromMinutes(o.IdleMinutes) && now - vault.LastUsed > InUse && _open.TryRemove(id, out _))
             {
                 log.LogInformation("Locked vault {Vault} after {Minutes} idle minutes", vault.Name, o.IdleMinutes);
             }
         }
 
         var cap = o.MemoryLimitMegabytes * 1024L * 1024;
-        foreach (var vault in _open.Values.OrderBy(v => v.LastUsed))
+        foreach (var vault in _open.Values.Where(v => now - v.LastUsed > InUse).OrderBy(v => v.LastUsed))
         {
             if (_open.Values.Sum(v => v.ApproxBytes) <= cap) break;
             if (_open.TryRemove(vault.Id, out _)) log.LogInformation("Locked vault {Vault} to stay below the memory limit", vault.Name);
+        }
+
+        foreach (var vault in _open.Values)
+        {
+            vault.Trash = vault.Trash.RemoveAll(t => now - t.Trashed.DeletedAt > NoteWriter.TrashRetention);
+            vault.Moves = vault.Moves.RemoveAll(m => now - m.MovedAt > Kumbu.Core.Notes.Moves.Retention);
         }
     }
 
@@ -181,7 +190,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await _loading.WaitAsync(ct);
         try
         {
-            if (_open.TryGetValue(id, out var cached)) return cached;
+            if (_open.TryGetValue(id, out var cached))
+            {
+                return CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", [])) ? cached : null;
+            }
 
             var doc = await Vaults.Find(v => v.Id == id).FirstOrDefaultAsync(ct);
             if (doc is null) return null;
@@ -250,8 +262,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     {
         if (_ready) return;
 
+        // Before step 5, notes and trash held a plaintext "path", with a unique index on it.
         var legacy = new MongoDB.Bson.BsonDocument("path", new MongoDB.Bson.BsonDocument("$exists", true));
-        if (await db.GetCollection<MongoDB.Bson.BsonDocument>("notes").Find(legacy).AnyAsync(ct))
+        var oldIndexes = await (await db.GetCollection<MongoDB.Bson.BsonDocument>("notes").Indexes.ListAsync(ct)).ToListAsync(ct);
+        if (await db.GetCollection<MongoDB.Bson.BsonDocument>("notes").Find(legacy).AnyAsync(ct)
+            || await db.GetCollection<MongoDB.Bson.BsonDocument>("trash").Find(legacy).AnyAsync(ct)
+            || oldIndexes.Any(i => i["key"].AsBsonDocument.Contains("path")))
         {
             throw new VaultUnavailableException(
                 "The database holds plaintext notes from before encryption (step 5). Wipe it with 'docker compose down -v'; "

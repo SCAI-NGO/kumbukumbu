@@ -139,15 +139,36 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
     }
 
     [Fact]
-    public async Task Vaults_the_dev_token_cannot_open_are_reported()
+    public async Task While_vaults_dont_open_no_new_vault_is_created()
     {
+        // After a token change, the locked "Demo" may be the real one: a second "Demo" would hide it.
         var world = new VaultWorld(fixture.NewDatabase());
-        await world.Catalog().CreateAsync("Foreign", "someone-elses-token-0123456789", withRecovery: false, Ct);
+        await world.Catalog().CreateAsync("Demo", "the-old-token-0123456789abcdef", saveRecoveryKey: null, Ct);
         Write("Demo/a.md", "a");
 
         var log = await SeedAsync(world);
 
         Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.StartsWith("1 vaults in the database don't open with the dev token"));
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.StartsWith("Did not create vault Demo"));
+        Assert.Empty(await Store(world.Catalog()).ListVaultsAsync(Ct));
+        Assert.Equal(1, await world.Catalog().CountVaultsAsync(Ct));
+    }
+
+    [Fact]
+    public async Task If_the_recovery_key_cant_be_written_no_vault_is_created()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Demo/a.md", "a");
+        var blocked = Path.Combine(_recovery, "not-a-directory");
+        await File.WriteAllTextAsync(blocked, "", Ct);
+        var log = new ListLogger<Seeder>();
+
+        await new Seeder(
+            Options.Create(new KumbuOptions { DevToken = Token, Seed = new SeedOptions { Path = _root }, Recovery = new RecoveryOptions { Path = blocked } }),
+            world.Catalog(), TimeProvider.System, log).StartAsync(Ct);
+
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.StartsWith("Did not create vault Demo: its recovery key could not be written"));
+        Assert.Equal(0, await world.Catalog().CountVaultsAsync(Ct));
     }
 }
 

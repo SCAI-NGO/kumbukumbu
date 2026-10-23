@@ -23,11 +23,15 @@ public sealed class UnlockedVault
         Id = id;
         Name = name;
         _contentKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []);
+        KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         Touch(now);
     }
 
     public string Id { get; }
+
+    /// <summary>Derived from the vault key; a slot that unwraps to another key doesn't get this vault.</summary>
+    public byte[] KeyId { get; }
 
     public string Name { get; }
 
@@ -51,9 +55,21 @@ public sealed class UnlockedVault
     /// <summary>A keyed hash of the path: equal paths give equal ids, but the id reveals nothing else.</summary>
     public byte[] PathId(VaultPath path) => VaultCrypto.Mac(_pathKey, path.Value);
 
-    public byte[] SealNote(ObjectId docId, StoredNote note) => Seal($"note:{Id}:{docId}", Payload.From(note));
+    /// <summary>The revision is part of the context, so a blob only opens next to the revision it was written with.</summary>
+    public byte[] SealNote(ObjectId docId, StoredNote note) => Seal($"note:{Id}:{docId}:{note.Revision}", Payload.From(note));
 
-    public StoredNote OpenNote(SealedDocument doc) => Open<NotePayload>($"note:{Id}:{doc.Id}", doc.Blob).ToNote(doc.Revision);
+    /// <summary>Opens a note and checks that the document's path id belongs to the sealed path, so a
+    /// swapped path id can't show a note under another path.</summary>
+    public StoredNote OpenNote(SealedDocument doc)
+    {
+        var note = Open<NotePayload>($"note:{Id}:{doc.Id}:{doc.Revision}", doc.Blob).ToNote(doc.Revision);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PathId(note.Path), doc.PathId))
+        {
+            throw new InvalidDataException($"Path id of document {doc.Id} does not match its sealed path");
+        }
+
+        return note;
+    }
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
         Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt));
