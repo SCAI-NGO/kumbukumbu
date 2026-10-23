@@ -89,6 +89,29 @@ Not tested: the 512 MB memory cap (would need a large fixture), two server proce
 
 Chris wrote `update.sh` for this phase (pull, test, build, start). Reviewed together: `set -e`, `cd "$(dirname "$0")"`, `git pull --ff-only`, tests before the deploy, and after the start a wait for `Application started`, a check of the startup log for `fail:`/`crit:` lines, and a hint when recovery key files are waiting in `/recovery`. With that, the plaintext refusal at the start of this test, and a locked vault after a token change, both stop the script with the reason instead of passing silently.
 
+## Retest after the fix (PR #7)
+
+Date: 2026-10-23, after PR #7 (`ca82dff`, merged as `3e2537e`), deployed with `update.sh`. `dotnet test`: 588 passed. Same procedure as above; the stack was wiped and reseeded afterwards, `.env` restored byte for byte.
+
+| Observation | Result |
+|---|---|
+| 1: write over a damaged document | Fixed. One byte flipped in a note's blob, server restarted. `write`, `edit`, `mv` (as source and as target), `rm`, `history`, `restore`, `cat` and `wc` on that path all answer `<command>: /Demo/dmg/victim.md: damaged: the stored note doesn't open (changed or damaged outside Kumbu²; the server log has details). Its path stays taken until the document is repaired or removed in the database`. No exception in the log |
+| 2: damaged note visible | Fixed. `ls /` and `ls /Demo` end with `(1 note here doesn't open: changed or damaged outside Kumbu²; the server log has details)`. `ls /Demo/dmg` says `No such file or directory`, which can't be helped: the path is inside the sealed blob, only its keyed hash is known |
+| 3: locked vaults | Fixed. With a new token: `(no vaults)` and `(3 vaults in the database don't open with this token; the server log says how to recover them)`; with one vault locked, the open vaults followed by the same line in the singular |
+| 4: empty folder | Fixed. `Created vault Leer; its recovery key was written to …` |
+| 5: log wording | Fixed. Second start with the keys still set: `Recovery key for vault Demo: the dev token already has a slot there; remove KUMBU_RECOVERY_KEYS from .env (Kumbu__Recovery__Keys)`; `did not create 4 vaults (see above)` is counted apart; `1 vault`, `1 note` |
+| 6: emptied vault seeded again | Documented in the README |
+
+New, all small:
+
+7. **The first access after a repair in the database gives a wrong answer once.** After putting the original blob back (no restart), the first `cat` said `No such file or directory`; the second showed the note. The reason is in `CommandArgs.ReadNoteAsync` (`src/Kumbu.Core/Sh/Commands/CommandArgs.cs:43-55`): `ReadAsync` returns `null`, then `IsDamagedAsync` refreshes the note from MongoDB, finds it healthy and returns `false`, and the caller goes on as if the path were empty. `rm`, `mv`, `restore` and `write` (`NoteWriter.cs:67`, `:219`, `:261`, `NoteMover.cs:21`) follow the same pattern. Suggest doing the refresh *before* the read: `GetAsync`/`ReadAsync` in `EncryptedNoteStore` refresh a path that is marked damaged, and `IsDamagedAsync` only looks at the marker. Rare (it needs an operator repairing the database by hand), so no hurry.
+8. **An empty vault counts as filled on every start.** On each start the seeder logs `Seeded 0 notes into 1 vault` for `Leer`, which already exists, and no `Left vault Leer alone` line. Only the wording.
+9. **A vault created while another token is set has no slot for the old token.** `Leer` was created while the test token was active. After going back to the original token, `ls` reported `1 vault … doesn't open with this token` and the seeder refused to create `Leer` again. This is consistent with key slots (the old token never had access to that vault). It's worth knowing when switching tokens back and forth, and with step 7 it is how it should be anyway.
+
 ## Suggested next step
+
+Observation 7 can go along with step 6, or whenever `EncryptedNoteStore` is touched next; 8 and 9 need nothing. Build order step 6 (embeddings and hybrid search) can start.
+
+### Before the retest
 
 Fix observation 1 (with tests for every write path over a damaged document) and the small observations 3 to 5 before step 6; 2 and 6 can follow. Then build order step 6 (embeddings and hybrid search).
