@@ -25,7 +25,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
     {
         Assert.Equal(2, result.Content.Count);
         var text = Assert.IsType<TextContentBlock>(result.Content[1]).Text;
-        Assert.StartsWith("version of ", text, StringComparison.Ordinal);
+        Assert.StartsWith("\nversion of ", text, StringComparison.Ordinal);
         return text[(text.LastIndexOf(' ') + 1)..];
     }
 
@@ -281,6 +281,6 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.Equal(
             "moved /Demo/scratch-mv-target.md to /Demo/scratch-dir/renamed.md; rewrote 1 link in /Demo/scratch-mv-source.md",
             Text(moved));
-        Assert.Equal("See [[scratch-dir/renamed#Target|it]].\n", Text(await ShAsync("cat /Demo/scratch-mv-source.md")));
+        Assert.Equal("See [[renamed#Target|it]].\n", Text(await ShAsync("cat /Demo/scratch-mv-source.md")));
     }
 }

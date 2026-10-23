@@ -32,6 +32,8 @@ public class WikiLinkTests
     [InlineData("use `[[not a link]]` here\n")]
     [InlineData("``code with ` and [[x]]``\n")]
     [InlineData("[[]]\n")]
+    [InlineData("[[ ]]\n")]
+    [InlineData("[[|x]]\n")]
     [InlineData("[[broken\nacross]]\n")]
     public void NotLinks(string text) => Assert.Empty(WikiLink.Parse(text));
 

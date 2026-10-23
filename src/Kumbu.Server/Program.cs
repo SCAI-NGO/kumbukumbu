@@ -6,6 +6,7 @@ using Kumbu.Server;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
+using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using MongoDB.Driver;
@@ -21,13 +22,18 @@ builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ConnectionString));
 builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
-builder.Services.AddSingleton<MongoNoteStore>();
-builder.Services.AddSingleton<INoteStore>(sp => sp.GetRequiredService<MongoNoteStore>());
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<NoteWriter>();
-builder.Services.AddSingleton<NoteMover>();
+builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddHostedService<Seeder>();
-builder.Services.AddSingleton<Shell>();
+builder.Services.AddHostedService<VaultSweeper>();
+
+// Per request: the request's credential decides which vaults the store can open.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICredential, BearerCredential>();
+builder.Services.AddScoped<INoteStore, EncryptedNoteStore>();
+builder.Services.AddScoped<NoteWriter>();
+builder.Services.AddScoped<NoteMover>();
+builder.Services.AddScoped<Shell>();
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type

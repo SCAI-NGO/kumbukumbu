@@ -68,10 +68,10 @@ public class LinkCommandsTests
             "moved /Demo/projects/kumbu.md to /Demo/archive/kumbu-v1.md; rewrote 2 links in /Demo/Meeting Notes.md, /Demo/welcome.md",
             result.Output);
         Assert.Equal(
-            "# Welcome\nSee [[archive/kumbu-v1]] and [[Meeting Notes|the meeting]].\n![[diagram.png]] [[nope]] [[plan]] [[#Welcome]]\n",
+            "# Welcome\nSee [[kumbu-v1]] and [[Meeting Notes|the meeting]].\n![[diagram.png]] [[nope]] [[plan]] [[#Welcome]]\n",
             await Content("/Demo/welcome.md"));
         // Heading kept; the link in the code block is not a link and stays.
-        Assert.Equal("# Meetings\nRelated: [[archive/kumbu-v1#Goal]]\n```\n[[kumbu]] in code\n```\n", await Content("/Demo/Meeting Notes.md"));
+        Assert.Equal("# Meetings\nRelated: [[kumbu-v1#Goal]]\n```\n[[kumbu]] in code\n```\n", await Content("/Demo/Meeting Notes.md"));
         // Another vault's [[kumbu]] never pointed here.
         Assert.Equal("[[kumbu]] from another vault\n", await Content("/Ideas/x.md"));
         Assert.Null(await _store.ReadAsync(VaultPath.TryParse("/Demo/projects/kumbu.md", out var old) ? old : null!, CancellationToken.None));
@@ -165,4 +165,97 @@ public class LinkCommandsTests
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/a?b.md", out var p) ? p : null!, "x", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
         Assert.False((await Run("mv \"/Demo/a?b.md\" /Demo/a-b.md")).IsError);
     }
+
+    [Fact]
+    public async Task APathKeepsItsLengthAndAMoveBackRestoresTheOriginal()
+    {
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/paths.md", out var p) ? p : null!,
+            "[[projects/kumbu]] [[/projects/kumbu]] [[kumbu.md]] [[Kumbu]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+
+        await Run("mv /Demo/projects/kumbu.md /Demo/archive/old/kumbu-v1.md");
+        Assert.Equal("[[old/kumbu-v1]] [[/archive/old/kumbu-v1]] [[kumbu-v1.md]] [[kumbu-v1]]\n", await Content("/Demo/paths.md"));
+
+        await Run("mv /Demo/archive/old/kumbu-v1.md /Demo/projects/kumbu.md");
+        Assert.Equal("[[projects/kumbu]] [[/projects/kumbu]] [[kumbu.md]] [[kumbu]]\n", await Content("/Demo/paths.md"));
+        Assert.Contains("See [[kumbu]] and", await Content("/Demo/welcome.md"));
+    }
+
+    [Fact]
+    public async Task AKeptFormThatWouldBeAmbiguousFallsBackToTheVaultPath()
+    {
+        // A second "plan" exists in /Demo/b; the bare name would be ambiguous from welcome.md.
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/x/memo.md", out var p) ? p : null!,
+            "m", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/links.md", out var q) ? q : null!,
+            "[[memo]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+
+        await Run("mv /Demo/x/memo.md /Demo/x/plan.md");
+
+        Assert.Equal("[[x/plan]]\n", await Content("/Demo/links.md"));
+    }
+
+    [Fact]
+    public async Task LinkRewritesAreTheirOwnMarkedHistoryEntry()
+    {
+        await Run("mv /Demo/projects/kumbu.md /Demo/projects/kumbu2.md");
+
+        var history = (await Run("history /Demo/welcome.md")).Output.Split('\n');
+        Assert.Contains("dev (mv)", history[0]);
+        Assert.Contains("seed", history[1]);
+    }
+
+    [Fact]
+    public async Task TheOldPathSaysWhereTheNoteWent()
+    {
+        await Run("mv /Demo/a/plan.md /Demo/a/plan-b.md");
+        await Run("mv /Demo/a/plan-b.md /Demo/c/plan-c.md");
+
+        Assert.Equal(
+            ShellResult.Error("cat: /Demo/a/plan.md: No such file or directory; it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC (dev)"),
+            await Run("cat /Demo/a/plan.md"));
+        Assert.StartsWith(
+            "mv: /Demo/a/plan.md: No such file or directory; it was moved to /Demo/c/plan-c.md",
+            (await Run("mv /Demo/a/plan.md /Demo/x.md")).Output);
+
+        await Run("rm /Demo/c/plan-c.md");
+        Assert.EndsWith(
+            "it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC (dev), and is not there any more ('trash' may list it)",
+            (await Run("cat /Demo/a/plan.md")).Output);
+    }
+
+    [Fact]
+    public async Task RmSaysWhichLinksNowLeadNowhere() => Assert.Equal(
+        "removed /Demo/projects/kumbu.md; it stays in the trash for 30 days ('restore /Demo/projects/kumbu.md' brings it back); 2 links in /Demo/Meeting Notes.md, /Demo/welcome.md now lead nowhere",
+        (await Run("rm /Demo/projects/kumbu.md")).Output);
+
+    [Fact]
+    public async Task LinksOfOneSection()
+    {
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/s.md", out var p) ? p : null!,
+            "# A\n[[kumbu]]\n# B\n[[welcome]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+
+        Assert.Equal("4: [[welcome]] → /Demo/welcome.md", (await Run("links /Demo/s.md#B")).Output);
+        Assert.Equal("cat: /Demo/s.md#Nope: no such section ('outline /Demo/s.md' lists them)".Replace("cat:", "links:"), (await Run("links /Demo/s.md#Nope")).Output);
+    }
+
+    [Fact]
+    public async Task LinksOfADirectoryListsTheBrokenOnes() => Assert.Equal(
+        """
+        /Demo/welcome.md:3: [[nope]] → not found
+        /Demo/welcome.md:3: [[plan]] → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
+        """,
+        (await Run("links /Demo")).Output);
+
+    [Fact]
+    public async Task LinksOfADirectoryWithoutProblems() =>
+        Assert.Equal("(no broken or ambiguous links below /Demo/projects)", (await Run("links /Demo/projects")).Output);
+
+    [Fact]
+    public async Task BacklinksSaysWhenNothingLinksAndShowsAmbiguousCandidates() => Assert.Equal(
+        "/Demo/welcome.md:3:![[diagram.png]] [[nope]] [[plan]] [[#Welcome]]  (ambiguous, may mean this note)",
+        (await Run("backlinks /Demo/a/plan.md")).Output);
+
+    [Fact]
+    public async Task BacklinksOfAnUnlinkedNote() =>
+        Assert.Equal("(no notes link here)", (await Run("backlinks /Ideas/x.md")).Output);
 }

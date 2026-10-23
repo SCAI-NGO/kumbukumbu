@@ -18,6 +18,8 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 
     public static string SamplesPath { get; } = Path.Combine(FindRepoRoot(), "samples");
 
+    public string RecoveryPath { get; } = Directory.CreateTempSubdirectory("kumbu-app-recovery-").FullName;
+
     public async ValueTask InitializeAsync() => await _mongo.StartAsync();
 
     public override async ValueTask DisposeAsync()
@@ -32,6 +34,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.UseSetting("Kumbu:Mongo:Database", "t" + Guid.NewGuid().ToString("N"));
         builder.UseSetting("Kumbu:DevToken", Token);
         builder.UseSetting("Kumbu:Seed:Path", SamplesPath);
+        builder.UseSetting("Kumbu:Recovery:Path", RecoveryPath);
     }
 
     /// <summary>Connects the official SDK client over the in-memory test server.</summary>

@@ -241,6 +241,8 @@ Until now, the folder on disk was the source and the database a copy. Now agents
 
 This is the same idea as a **three-way merge** in Git: with only two versions you can see that they differ, but not which side changed. The common ancestor tells you. Notes removed with `rm` stay removed, even though their file is still on disk.
 
+(Replaced in step 5: the seeder is a development aid on its way out, so it now only fills vaults that are still empty. The three-way idea returns with the Obsidian sync plugin, where it belongs.)
+
 ## 4. Sections: the heading as the unit
 
 ### Why sections
@@ -295,8 +297,49 @@ A wikilink is `[[target]]`, with optional parts: `#Heading` or `#^block` after t
 - Moving `projects/kumbu.md` to `archive/kumbu.md` changes nothing for `[[kumbu]]`: the name is still unique, the link still finds it. Rewriting it would be an edit for nothing.
 - Moving `a/plan.md` to `a/kumbu.md` touches no link to `plan` that resolves, but every `[[kumbu]]` elsewhere that meant `projects/kumbu.md` would suddenly be ambiguous. That's a **name collision**, and the move must protect those links too.
 
-So `mv` resolves every link in the vault twice, with the notes as they are and as they will be, and rewrites exactly the links whose target would change, back to the note they meant. The new text is the **most specific form**, the note's path in its vault without `.md` (`[[projects/kumbu]]`), so it can't become ambiguous again. Heading, alias and `!` stay; every other byte of the note stays as it was. Each changed note is a normal write (compare-and-swap, history), so a link rewrite can be undone like any edit.
+So `mv` resolves every link in the vault twice, with the notes as they are and as they will be, and rewrites exactly the links whose target would change, back to the note they meant. The new text keeps **the author's form** where it can (decided after the phase 4b test): a bare name stays a bare name (`[[alpha]]` → `[[omega]]`), a path keeps its length (`[[projects/kumbu]]` → `[[archive/kumbu]]`), so moving a note back restores the original links. Where the kept form wouldn't lead uniquely to the right note, and for relative links and links protected from a collision, it falls back to the **most specific form**, the note's path in its vault without `.md` (`[[projects/kumbu]]`), which can't be ambiguous. Heading, alias and `!` stay; every other byte of the note stays as it was. Each changed note is a normal write (compare-and-swap, history), so a link rewrite can be undone like any edit.
 
 The move itself is atomic per document: insert at the new path (the unique index refuses an existing note), then delete the old path only if nobody wrote in between, else remove the copy again. The history travels with the note; a move changes no text, so the last writer stays who it was.
 
 `mv --keep-links` skips the rewriting. The Obsidian plugin will use it: Obsidian rewrites links itself when a file is renamed and uploads those edits, so a second rewrite on the server would collide with them.
+
+## 6. Encryption at rest: vault keys and key slots
+
+### What it protects, and what not
+
+The threat is a **leak**: a database dump, a stolen backup, a hoster's disk (concept §3). After step 5 such a copy shows random vault ids, keyed hashes of paths, revision numbers, sizes and times. No content, no file names, no vault names.
+
+It does not protect against whoever runs the server while it runs: to search a note, the server has to read it. And until users and API keys arrive (step 7), the dev token unlocks every vault and sits in the server's configuration, so the database plus that file is still everything. Being honest about this is part of the design.
+
+### Sealing: AES-GCM with a context
+
+Every piece of data is **sealed** with AES-256-GCM, an **authenticated** cipher: besides encrypting, it computes a tag over the ciphertext, and decryption fails if a single bit was changed. Each seal uses a fresh random 12-byte **nonce**, so the same note sealed twice looks completely different.
+
+GCM can also authenticate **associated data** that is not encrypted. Kumbu² puts a context there: what the blob is and where it belongs, e.g. `note:<vault id>:<document id>`. A blob only opens in its own context. Someone with write access to the database could otherwise copy a sealed note from one document into another, or from one vault into another, and the server would show it without noticing. With the context, that copy simply fails to open.
+
+### One key per vault, wrapped in slots
+
+Each vault has its own random 32-byte **vault key**. It is never stored as it is. Instead, a **key slot** stores it **wrapped**: sealed with a key-encryption key (KEK) derived from a credential. Today there are two kinds of slot:
+
+- **API-key slot** (the dev token): the KEK is `HKDF(token, "kumbu/v1/key-kek", salt = vault id)`. To find the slot without storing the token, the slot carries a second derivation, `HKDF(token, "kumbu/v1/key-lookup")`. Different labels make two unrelated keys from one secret, so knowing the lookup value says nothing about the KEK.
+- **Recovery slot**: the same with the vault's recovery key.
+
+This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 7); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same.
+
+**HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for, and it comes with passwords in step 7.
+
+### Paths in the dark: keyed hashes
+
+Encrypting paths has a price: MongoDB can no longer find a note by its path or keep two notes from having the same one. Kumbu² gives each document a **keyed hash** of its path, `HMAC(path key, "/Work/plan.md")`, where the path key is derived from the vault key. The same path always gives the same hash, so MongoDB can enforce uniqueness and look things up, but without the key the hash says nothing, not even whether two vaults hold the same path.
+
+Everything else that needs the paths (listing, `rg`, links) works on the **working set**: when a vault is first used, the server decrypts all of it into memory and answers from there. Writes still go to MongoDB first, as one atomic operation (concept §4), and update the working set afterwards. A vault that hasn't been used for 15 minutes is locked again: the server forgets its key and its plaintext. Above a memory limit, the least recently used vault goes first.
+
+Every request derives the lookup value from its own token and only gets the vaults that token has a slot for. An unlocked vault in memory saves the decryption, never the check.
+
+### The recovery key
+
+If the dev token is lost, and with it every API-key slot, the recovery key is the way back in. It is created with the vault and written once to a file for the operator to collect (`/recovery` in the container); it is never logged, because logs are kept and copied. Starting the server with `Kumbu:Recovery:Keys` gives the current token a slot in those vaults. Without either the token or the recovery key, a vault is lost for good, for the operator too. That is the point.
+
+### No migration
+
+Databases from before step 5 hold plaintext. Rather than carrying migration code forever, the server refuses such a database with a clear message, and the development data is seeded again, encrypted.

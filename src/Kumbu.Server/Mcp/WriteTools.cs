@@ -18,7 +18,7 @@ public static class WriteTools
         [Description("The note's full Markdown content")] string content,
         [Description("Version token from cat or the last write/edit; leave out to create a new note")] string? version = null,
         CancellationToken ct = default) =>
-        ToolResult.From(await writer.WriteAsync(path, content, version, Writers.Dev, ct));
+        await ToolResult.RunAsync(() => writer.WriteAsync(path, content, version, Writers.Dev, ct));
 
     [McpServerTool(Name = "edit", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.EditDescription)]
     public static async Task<CallToolResult> Edit(
@@ -29,5 +29,5 @@ public static class WriteTools
         [Description("Text to replace; must occur exactly once (in the section, if the path has one). Leave out to append new_text")] string? old_text = null,
         [Description("Replace the whole section in the path, heading included, with new_text")] bool replace_section = false,
         CancellationToken ct = default) =>
-        ToolResult.From(await writer.EditAsync(path, version, old_text, new_text, Writers.Dev, ct, replace_section));
+        await ToolResult.RunAsync(() => writer.EditAsync(path, version, old_text, new_text, Writers.Dev, ct, replace_section));
 }

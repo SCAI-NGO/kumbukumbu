@@ -20,7 +20,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         {
             return (await store.ListNotesUnderAsync(source, ct)).Count > 0 || source.IsRoot
                 ? ShellResult.Error($"mv: {source.Value}: Is a directory (mv moves one note at a time)")
-                : ShellResult.Error($"mv: {source.Value}: No such file or directory");
+                : ShellResult.Error($"mv: {source.Value}: No such file or directory{await Moves.HintAsync(store, source, ct)}");
         }
 
         // A directory as target keeps the note's name.
@@ -51,7 +51,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         var notes = await store.ReadNotesUnderAsync(vault, ct);
         // A move changes no content, so who wrote it and when stay as they were (the history is about text).
         var moved = existing with { Path = target, Revision = existing.Revision + 1 };
-        if (!await store.TryMoveAsync(existing, moved, ct))
+        if (!await store.TryMoveAsync(existing, moved, writer, time.GetUtcNow().UtcDateTime, ct))
         {
             return ShellResult.Error($"mv: {source.Value} changed while moving it, or {target.Value} was just created; try again");
         }
@@ -103,11 +103,36 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
                 if (now.Kind == LinkKind.Note && now.Target == meant) continue;
 
                 if (!result.TryGetValue(newPath, out var list)) result[newPath] = list = [];
-                list.Add((link, link.WithTarget(LinkResolver.LinkText(meant))));
+                list.Add((link, link.WithTarget(NewTarget(link.Target, newPath, meant, was.Target == source, after))));
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The link text after the move (decided by Chris, 2026-10-23): keep the author's form, a bare name
+    /// stays a bare name and a path keeps its length, if that resolves uniquely to the meant note. Relative
+    /// links, links to other notes caught by a name collision, and forms that would not resolve fall back to
+    /// the vault path, which can't be ambiguous.
+    /// </summary>
+    private static string NewTarget(string oldTarget, VaultPath linking, VaultPath meant, bool namedMovedNote, LinkResolver after)
+    {
+        var text = oldTarget.Trim();
+        var vaultPath = LinkResolver.LinkText(meant);
+        if (!namedMovedNote || text.StartsWith("./", StringComparison.Ordinal) || text.StartsWith("../", StringComparison.Ordinal))
+        {
+            return vaultPath;
+        }
+
+        var segments = vaultPath.Split('/');
+        var kept = text.StartsWith('/')
+            ? "/" + vaultPath
+            : string.Join('/', segments.TakeLast(Math.Min(text.Split('/').Length, segments.Length)));
+        if (text.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) kept += ".md";
+
+        var resolved = after.Resolve(linking, kept);
+        return resolved.Kind == LinkKind.Note && resolved.Target == meant ? kept : vaultPath;
     }
 
     private async Task<bool> RewriteAsync(VaultPath path, List<(WikiLink Link, string Replacement)> links, string writer, CancellationToken ct)
@@ -121,7 +146,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
             if (content is null) return false;
             if (content == current.Content) return true;
 
-            var next = NoteWriter.Next(current, content, writer, time.GetUtcNow().UtcDateTime);
+            // Its own history entry, marked, so a link rewrite can be undone on its own (phase 4b, observation 3).
+            var next = NoteWriter.Next(current, content, $"{writer} (mv)", time.GetUtcNow().UtcDateTime, keepCurrent: true);
             if (await store.TryReplaceAsync(current, next, ct)) return true;
         }
 

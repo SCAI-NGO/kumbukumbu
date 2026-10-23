@@ -48,9 +48,9 @@ internal static class CommandArgs
         }
 
         var below = await notes.ListNotesUnderAsync(path, ct);
-        return below.Count > 0 || path.IsRoot
+        return below.Count > 0 || path.IsRoot || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
             ? ShellResult.Error($"{command}: {path.Value}: Is a directory")
-            : ShellResult.Error($"{command}: {path.Value}: No such file or directory");
+            : ShellResult.Error($"{command}: {path.Value}: No such file or directory{await Moves.HintAsync(notes, path, ct)}");
     }
 
     /// <summary>Reads a note or, for "note.md#Heading", one section of it. The version token is always

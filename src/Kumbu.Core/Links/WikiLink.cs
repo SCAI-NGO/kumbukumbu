@@ -34,7 +34,10 @@ public sealed partial record WikiLink(int Line, int Start, string Raw, bool Embe
             foreach (Match m in LinkRegex().Matches(line))
             {
                 if (spans.Any(s => m.Index >= s.Start && m.Index < s.End)) continue;
-                result.Add(FromMatch(i, m));
+                var link = FromMatch(i, m);
+                // [[ ]] and [[|x]] name nothing; Obsidian doesn't treat them as links either.
+                if (link.Target.Trim().Length == 0 && link.Subpath.Length == 0) continue;
+                result.Add(link);
             }
         }
 
