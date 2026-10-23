@@ -93,6 +93,21 @@ Ordered by usefulness:
     The underlying question (a note *is* its path) comes back with the Obsidian plugin: a client that was offline uploads a file at a path the server has moved since. The move record from observation 1 would let the server answer `moved to …` there too; worth checking against the [plugin spec](obsidian-plugin-design-spec.md) §3.
 12. **The main output ends without a line break.** Claude Code joins the result blocks, so the output reads `… /Demo/welcome.mdversion of /Demo/lt/kumbu.md: …`. Checked with raw `tools/call`: the server sends two separate blocks; the client joins them. A trailing `\n` on the main text would avoid this. Cosmetic.
 
+13. **Coalescing merges different sessions, and can swallow a restore.** Found while resetting the fixture between the runs. `/Technik/Index.md`, as stored:
+
+    | Time (UTC) | Write | Effect on the history |
+    |---|---|---|
+    | 16:26 | created (`0d3d…`) by this session | |
+    | 16:45 | run 1's `mv` rewrites its link (`09be…`) | `0d3d@16:26` goes to the history |
+    | 16:48 | this session's `restore … 0d3d…` | `09be@16:45` goes to the history |
+    | 16:51 | run 2's `mv` rewrites its link (`09be…`) | coalesced with the restore (same writer `dev`, within 10 minutes): the restored state of 16:48 is gone |
+
+    `history` then lists `09be26e54d64` twice in a row (16:51 current, 16:45). Nothing was lost here, since the original is still in the history, but two things show:
+    - Every session writes as `dev`, because there is one shared token. Coalescing, meant to fold one agent's burst of edits into one version, folds *different* agents' work together: this session's restore and the test session's `mv`.
+    - A `restore` is a deliberate checkpoint; a later write by the same writer should not replace it.
+
+    Suggest: a `restore` (like a `mv` rewrite, observation 3) is never coalesced into, and an entry identical to the one before it isn't stored twice. Separating writers properly needs per-client tokens or an MCP session id as writer; worth noting for step 5 or later.
+
 ## Agent behaviour test
 
 A blind run through a subagent of this session was blocked by Claude Code's auto mode (the task includes a delete). Run 1 was then done in a fresh Claude Code session; see the end of this section.
@@ -162,4 +177,4 @@ About 16,000 characters of tool output for the whole task, the outline being the
 
 ## Suggested next step
 
-Test the edit path separately: the same fixture and prompt, answering option 1 (delete and defuse the links). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
+Test the edit path separately: the same fixture and prompt, answering option 1 (delete and defuse the links). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3, 6 and 13, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
