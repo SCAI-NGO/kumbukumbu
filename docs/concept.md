@@ -118,6 +118,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
   - **OAuth token slot:** see §9.
 - Revoking a key = deleting its slot. Password change = rewrap.
 - **An admin cannot reset a password or recover a vault.** No password + no recovery key = data gone. Documented honestly.
+- Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 7) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id) come with logins in step 7. Recovery keys are written once to a file for the operator, never logged.
 - **Unlocked vault = in-memory working set** (texts, vectors, link graph). Server restart = everything locked (feature).
   - Idle TTL: **15 min** for API/OAuth access, **30 min** for web sessions.
   - Global memory cap (configurable, default ~512 MB), LRU eviction of whole vaults.

@@ -19,6 +19,29 @@ public sealed class KumbuOptions
     public MongoOptions Mongo { get; set; } = new();
 
     public SeedOptions Seed { get; set; } = new();
+
+    public RecoveryOptions Recovery { get; set; } = new();
+
+    public VaultOptions Vaults { get; set; } = new();
+}
+
+public sealed class RecoveryOptions
+{
+    /// <summary>Directory new vaults' recovery keys are written to, once. Without it, vaults get no recovery key.</summary>
+    public string? Path { get; set; }
+
+    /// <summary>Recovery keys (separated by commas or whitespace) to give the dev token a slot in their
+    /// vaults at startup, e.g. after changing the token.</summary>
+    public string? Keys { get; set; }
+}
+
+public sealed class VaultOptions
+{
+    /// <summary>An unlocked vault is locked again after this many idle minutes (concept §7).</summary>
+    public int IdleMinutes { get; set; } = 15;
+
+    /// <summary>Unlocked vaults are locked, least recently used first, above this much memory.</summary>
+    public int MemoryLimitMegabytes { get; set; } = 512;
 }
 
 public sealed class MongoOptions

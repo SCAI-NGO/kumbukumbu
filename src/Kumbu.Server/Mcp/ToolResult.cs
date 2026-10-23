@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Sh;
+using Kumbu.Server.Vaults;
 using ModelContextProtocol.Protocol;
 
 namespace Kumbu.Server.Mcp;
@@ -15,9 +16,23 @@ internal static class ToolResult
         List<ContentBlock> content = [new TextContentBlock { Text = result.Output }];
         if (result.Version is { } version)
         {
-            content.Add(new TextContentBlock { Text = $"version of {version.Path}: {version.Token}" });
+            // Starts on its own line: some clients join the blocks without a separator.
+            content.Add(new TextContentBlock { Text = $"\nversion of {version.Path}: {version.Token}" });
         }
 
         return new CallToolResult { IsError = result.IsError, Content = content };
+    }
+
+    /// <summary>Runs a tool body; vaults that can't be used at all become a tool error with the reason.</summary>
+    public static async Task<CallToolResult> RunAsync(Func<Task<ShellResult>> body)
+    {
+        try
+        {
+            return From(await body());
+        }
+        catch (VaultUnavailableException e)
+        {
+            return From(ShellResult.Error(e.Message));
+        }
     }
 }

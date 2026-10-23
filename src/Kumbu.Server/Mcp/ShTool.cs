@@ -16,5 +16,5 @@ public static class ShTool
         Shell shell,
         [Description("A command line, e.g. ls /  or  rg -i kumbu | head -5  or  cat \"/Work/Meeting Notes.md\"")] string command,
         CancellationToken ct) =>
-        ToolResult.From(await shell.RunAsync(command, ct));
+        await ToolResult.RunAsync(() => shell.RunAsync(command, ct));
 }

@@ -22,9 +22,14 @@ services:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
       Kumbu__Seed__Path: /seed
+      # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
+      Kumbu__Recovery__Path: /recovery
+      Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro
+      - recovery-keys:/recovery
 
 volumes:
   mongo-data:
+  recovery-keys:
