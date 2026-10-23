@@ -25,6 +25,7 @@ builder.Services.AddSingleton<MongoNoteStore>();
 builder.Services.AddSingleton<INoteStore>(sp => sp.GetRequiredService<MongoNoteStore>());
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<NoteWriter>();
+builder.Services.AddSingleton<NoteMover>();
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddSingleton<Shell>();
 

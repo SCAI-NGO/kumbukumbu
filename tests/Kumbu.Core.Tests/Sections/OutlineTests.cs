@@ -35,6 +35,9 @@ public class OutlineTests
     [InlineData("   ### Indented", "Indented")]
     [InlineData("# C#", "C#")]
     [InlineData("# Ü & ß", "Ü & ß")]
+    [InlineData(@"# Q\#A", "Q#A")]
+    [InlineData(@"# \*not emphasis\*", "*not emphasis*")]
+    [InlineData(@"# back\slash", @"back\slash")]
     public void HeadingText(string line, string text) => Assert.Equal(text, Assert.Single(Parse(line)).Text);
 
     [Fact]

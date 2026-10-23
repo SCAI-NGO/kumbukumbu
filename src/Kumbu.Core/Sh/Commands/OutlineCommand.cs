@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
@@ -27,7 +28,7 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
     {
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("outline: missing operand");
-        if (args.Count > 1) return ShellResult.Error("outline: too many arguments");
+        if (args.Count > 1) return ShellResult.Error($"outline: too many arguments{CommandArgs.QuoteHint}");
         if (SectionAddress.Split(args[0]).Fragment is not null)
         {
             return ShellResult.Error("outline: give the note without a section; the outline shows all of them");
@@ -36,11 +37,15 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
         var note = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
-        if (note.IsError) return note;
+        return note.IsError ? note : note with { Output = Render(path, note.Output) };
+    }
 
-        var lines = Lines.Split(note.Output);
+    /// <summary>The outline as the command prints it; also what a too long <c>cat</c> returns.</summary>
+    public static string Render(VaultPath path, string content)
+    {
+        var lines = Lines.Split(content);
         var headings = Outline.Parse(lines);
-        if (headings.Count == 0) return note with { Output = $"{path.Value}: no headings ({Lines.Count(note.Output)})" };
+        if (headings.Count == 0) return $"{path.Value}: no headings ({Lines.Count(content)})";
 
         var rows = new List<(string Range, string Text, string Size)>();
         var first = headings[0].Line;
@@ -62,7 +67,7 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
         var textWidth = rows.Max(r => r.Text.Length) + 2;
         var output = rows.Select(r => r.Range.PadRight(rangeWidth) + r.Text.PadRight(textWidth) + r.Size).ToList();
         output.Add($"Read a section: cat \"{path.Value}#Heading\"; nested: #Parent#Child; duplicates: #Heading[2]");
-        return note with { Output = Lines.Join(output) };
+        return Lines.Join(output);
     }
 
     private static string Size(IReadOnlyList<string> lines, int from, int to)

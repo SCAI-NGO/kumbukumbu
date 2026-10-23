@@ -76,9 +76,27 @@ public class SectionEditTests
     }
 
     [Fact]
+    public async Task ReplaceSectionWithTextWithoutAHeadingSaysWhereItWent()
+    {
+        var result = await Edit("/W/plan.md#Notes", null, "- merged into Goals", replaceSection: true);
+
+        Assert.Equal(
+            "replaced section #Plan#Notes of /W/plan.md (now 9 lines in the note); the new text has no heading, so it now belongs to #Plan#Goals",
+            result.Output);
+    }
+
+    [Fact]
+    public async Task ReplacingTheFirstHeadingWithoutOneJoinsThePreamble()
+    {
+        var result = await Edit("/W/plan.md#Plan", null, "just text\n", replaceSection: true);
+        Assert.EndsWith("so it now belongs to the text before the first heading", result.Output);
+    }
+
+    [Fact]
     public async Task ReplaceSectionWithNothingRemovesIt()
     {
-        await Edit("/W/plan.md#Goals", null, "", replaceSection: true);
+        var result = await Edit("/W/plan.md#Goals", null, "", replaceSection: true);
+        Assert.Equal("removed section #Plan#Goals of /W/plan.md (now 9 lines in the note)", result.Output);
         Assert.Equal("# Plan\n\n\n## Notes\n- fast\n- later\n\n## Last\nend", await Content());
     }
 

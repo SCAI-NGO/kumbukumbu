@@ -21,8 +21,56 @@ public class ShellTests
     [Fact]
     public async Task LongOutputIsTruncated()
     {
-        var result = await Run("cat /Work/big.md");
+        var result = await Run("cat /Work/big.md | head -n 1");
         Assert.Contains("[truncated", result.Output);
+    }
+
+    [Fact]
+    public async Task CatAloneOfATooLongNoteGivesItsOutline()
+    {
+        var note = "intro\n" + string.Concat(Enumerable.Range(1, 400).Select(i => $"## Part {i}\n{new string('x', 80)}\n"));
+        var shell = TestShell.Of(("/W/My Log.md", note));
+
+        var result = await shell.RunAsync("cat \"/W/My Log.md\"", CancellationToken.None);
+
+        Assert.False(result.IsError);
+        Assert.StartsWith("1-1      (before the first heading)", result.Output);
+        Assert.Contains("## Part 17 ", result.Output);
+        Assert.DoesNotContain(new string('x', 80), result.Output);
+        Assert.Contains("\n[note too long for one call (~", result.Output);
+        Assert.EndsWith(
+            "k tokens); its outline is above. Read a part: cat \"/W/My Log.md#Section\", head -n 40 \"/W/My Log.md\", rg -n … \"/W/My Log.md\"]",
+            result.Output);
+        Assert.Equal(VersionToken.Of(note), result.Version!.Token);
+    }
+
+    [Fact]
+    public async Task AnOutlineTooLongItselfIsCutButKeepsTheHint()
+    {
+        var note = string.Concat(Enumerable.Range(1, 2000).Select(i => $"## Part {i}\nx\n"));
+        var result = await TestShell.Of(("/W/huge.md", note)).RunAsync("cat /W/huge.md", CancellationToken.None);
+
+        Assert.True(result.Output.Length <= OutputLimit.MaxChars, result.Output.Length.ToString());
+        Assert.Contains("[truncated after line", result.Output);
+        Assert.EndsWith("rg -n … /W/huge.md]", result.Output);
+    }
+
+    [Theory]
+    [InlineData("cat \"/W/My Log.md\" | tail -n 1")]
+    [InlineData("cat \"/W/My Log.md#Part 400\"")]
+    public async Task OnlyAWholeNoteReadByCatAloneTurnsIntoAnOutline(string line)
+    {
+        var note = string.Concat(Enumerable.Range(1, 400).Select(i => $"## Part {i}\n{new string('x', 80)}\n"));
+        var result = await TestShell.Of(("/W/My Log.md", note)).RunAsync(line, CancellationToken.None);
+        Assert.EndsWith(new string('x', 80), result.Output);
+    }
+
+    [Fact]
+    public async Task ASectionTooLongForOneCallIsCut()
+    {
+        var note = "# Big\n" + string.Concat(Enumerable.Repeat(new string('y', 99) + "\n", 400));
+        var result = await TestShell.Of(("/W/big.md", note)).RunAsync("cat /W/big.md#Big", CancellationToken.None);
+        Assert.Contains("[truncated after line", result.Output);
     }
 
     [Fact]

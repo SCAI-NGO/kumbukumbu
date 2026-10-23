@@ -13,8 +13,10 @@ The server offers three MCP tools. `sh` is a shell over your notes:
 - `outline <path>` lists a note's headings with line ranges and sizes
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
+- `links <path>` shows where a note's `[[wikilinks]]` lead, `backlinks <path>` which notes link to it
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
 - `history <path>` lists a note's versions, `restore <path> <version>` goes back to one
+- `mv <path> <target>` moves or renames a note; links whose target the move would change are rewritten (`--keep-links` leaves them)
 - `rm <path>` moves a note to the trash (kept 30 days), `trash` lists it with its version, `restore <path> [version]` brings it back
 - `help [command]` lists the commands or explains one; `<command> --help` does the same
 
@@ -22,7 +24,7 @@ The server offers three MCP tools. `sh` is a shell over your notes:
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
-Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. There is no moving (`mv`), no link resolution, no web UI and no user management yet.
+Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. There is no web UI and no user management yet.
 
 ## Security
 
@@ -55,7 +57,14 @@ Connect Claude Code:
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer <token>"
 ```
 
-MCP clients read the tool descriptions when a session starts. After upgrading the server, start a new client session, or the agent keeps working from the old command list.
+MCP clients read the tool descriptions when a session starts. To upgrade, keep this order:
+
+```sh
+git pull
+docker compose up --build -d     # rebuild the image; a plain restart keeps running the old server
+```
+
+Then start a new client session. Without the rebuild, a restarted client loads the old server's tool descriptions; without the new session, the agent keeps working from the old command list.
 
 Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding). With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE` and `KUMBU_PORT` (host port, default 8080) in `.env`.
 

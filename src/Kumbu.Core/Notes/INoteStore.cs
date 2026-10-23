@@ -16,6 +16,10 @@ public interface INoteStore : INoteReader
     /// <c>current.Revision</c>; returns false otherwise.</summary>
     Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct);
 
+    /// <summary>Moves the note to <paramref name="target"/>'s path if it is still at <c>current.Revision</c>
+    /// and no note exists there; <paramref name="target"/> carries the new path, revision and writer.</summary>
+    Task<bool> TryMoveAsync(StoredNote current, StoredNote target, CancellationToken ct);
+
     /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>.</summary>
     Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct);
 

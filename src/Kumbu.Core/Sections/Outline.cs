@@ -9,24 +9,14 @@ public static partial class Outline
     public static IReadOnlyList<Heading> Parse(IReadOnlyList<string> lines)
     {
         var found = new List<(int Level, string Text, int Line)>();
-        var start = FrontmatterEnd(lines);
-        string? fence = null;
-        for (var i = start; i < lines.Count; i++)
+        var code = CodeLines(lines);
+        for (var i = FrontmatterEnd(lines); i < lines.Count; i++)
         {
             var line = lines[i];
-            if (FenceRegex().Match(line) is { Success: true } f)
-            {
-                var marker = f.Groups[1].Value;
-                if (fence is null) fence = marker;
-                // A closing fence uses the same character, at least as many times, and nothing after it.
-                else if (marker[0] == fence[0] && marker.Length >= fence.Length && f.Groups[2].Value.Trim().Length == 0) fence = null;
-                continue;
-            }
-
-            if (fence is not null) continue;
+            if (code[i]) continue;
             if (HeadingRegex().Match(line) is { Success: true } h)
             {
-                found.Add((h.Groups[1].Length, h.Groups[2].Value.Trim(), i));
+                found.Add((h.Groups[1].Length, Rendered(h.Groups[2].Value.Trim()), i));
             }
         }
 
@@ -57,6 +47,33 @@ public static partial class Outline
         }
 
         return NumberDuplicates(headings);
+    }
+
+    /// <summary>A heading's text as Obsidian shows it: Markdown backslash escapes removed ("Q\#A" is "Q#A"),
+    /// so an address uses the same text a person sees.</summary>
+    public static string Rendered(string source) => BackslashEscapeRegex().Replace(source, "$1");
+
+    /// <summary>Which lines belong to fenced code blocks (``` or ~~~), the fence lines included.</summary>
+    public static bool[] CodeLines(IReadOnlyList<string> lines)
+    {
+        var code = new bool[lines.Count];
+        string? fence = null;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (FenceRegex().Match(lines[i]) is { Success: true } f)
+            {
+                var marker = f.Groups[1].Value;
+                code[i] = true;
+                if (fence is null) fence = marker;
+                // A closing fence uses the same character, at least as many times, and nothing after it.
+                else if (marker[0] == fence[0] && marker.Length >= fence.Length && f.Groups[2].Value.Trim().Length == 0) fence = null;
+                continue;
+            }
+
+            code[i] = fence is not null;
+        }
+
+        return code;
     }
 
     /// <summary>The line after YAML frontmatter ("---" on the first line up to the next "---" or "..."), or 0.</summary>
@@ -112,6 +129,10 @@ public static partial class Outline
     // Up to three spaces, 1-6 hashes, then a space and the text, or nothing; a closing hash run is dropped.
     [GeneratedRegex(@"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")]
     private static partial Regex HeadingRegex();
+
+    // CommonMark: a backslash before ASCII punctuation makes it literal.
+    [GeneratedRegex(@"\\([!-/:-@\[-`{-~])")]
+    private static partial Regex BackslashEscapeRegex();
 
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})(.*)$")]
     private static partial Regex FenceRegex();

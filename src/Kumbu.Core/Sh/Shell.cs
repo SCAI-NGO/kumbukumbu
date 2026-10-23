@@ -10,13 +10,13 @@ public sealed class Shell
     // What models reach for first, and what to use here instead.
     private static readonly Dictionary<string, string> Hints = new(StringComparer.Ordinal)
     {
-        ["mv"] = "not yet: moving a note must also rewrite the links to it",
         ["mkdir"] = "not needed: directories exist through the notes in them; 'write' creates a note at any path in a vault",
         ["touch"] = "use the write tool to create a note",
         ["echo"] = "use the write or edit tool to change a note",
         ["grep"] = "use rg (try 'help rg')",
         ["egrep"] = "use rg (try 'help rg')",
         ["find"] = "use rg --files, e.g. rg --files /Work | rg -i plan",
+        ["cp"] = "cat the note, then create the copy with the write tool",
         ["cd"] = "there is no working directory; use absolute paths",
         ["pwd"] = "there is no working directory; use absolute paths",
         ["tree"] = "use ls, or rg --files /Vault for every note below it",
@@ -27,13 +27,14 @@ public sealed class Shell
     // Insertion order is the order of the help list.
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
 
-    public Shell(INoteStore notes, NoteWriter writer)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover)
     {
         ICommand[] commands =
         [
             new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
+            new LinksCommand(notes), new Backlinks(notes),
             new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
-            new History(notes), new Restore(writer), new Rm(writer), new Trash(notes),
+            new History(notes), new Restore(writer), new Mv(mover), new Rm(writer), new Trash(notes),
             new Help(_commands),
         ];
         foreach (var command in commands)
@@ -74,6 +75,7 @@ public sealed class Shell
             result = args.TakeWhile(a => a != "--").Contains("--help")
                 ? ShellResult.Ok(command.Help)
                 : await command.RunAsync(args, input, ct);
+            if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
             if (result.IsError) break;

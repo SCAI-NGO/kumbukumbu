@@ -60,7 +60,7 @@ public class FilterTests
     [InlineData("head -n -2 /W/twelve.md", "head: invalid number of lines: '-2'")]
     [InlineData("tail -n +x /W/twelve.md", "tail: invalid number of lines: '+x'")]
     [InlineData("head", "head: missing operand (give a path, or pipe into it)")]
-    [InlineData("head /W/twelve.md /W/words.md", "head: too many arguments")]
+    [InlineData("head /W/twelve.md /W/words.md", "head: too many arguments (quote paths and sections that contain spaces: cat \"/Work/My Note.md#Next steps\")")]
     [InlineData("head twelve.md", "head: twelve.md: paths must be absolute (there is no working directory)")]
     [InlineData("head /W/nope.md", "head: /W/nope.md: No such file or directory")]
     [InlineData("tail /W/dir", "tail: /W/dir: Is a directory")]

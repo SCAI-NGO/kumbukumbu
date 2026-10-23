@@ -30,7 +30,7 @@ public sealed class History(INoteStore notes) : ICommand
     {
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("history: missing operand");
-        if (args.Count > 1) return ShellResult.Error("history: too many arguments");
+        if (args.Count > 1) return ShellResult.Error($"history: too many arguments{CommandArgs.QuoteHint}");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
         var note = await notes.GetAsync(path, ct);

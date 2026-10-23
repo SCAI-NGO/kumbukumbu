@@ -53,6 +53,15 @@ public sealed class InMemoryNoteStore : INoteStore
         return Task.FromResult(true);
     }
 
+    public Task<bool> TryMoveAsync(StoredNote current, StoredNote target, CancellationToken ct)
+    {
+        Race(current.Path);
+        if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
+        if (!_notes.TryAdd(target.Path, target)) return Task.FromResult(false);
+        _notes.Remove(current.Path);
+        return Task.FromResult(true);
+    }
+
     public Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
         Race(current.Path);
