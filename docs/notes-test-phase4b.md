@@ -175,6 +175,30 @@ About 16,000 characters of tool output for the whole task, the outline being the
 - Unlike run 1, the answer didn't say that the links now have the long form with the path. With the decided link form (observation 4) this matters less, since bare names stay bare.
 - `rg -n` for the plain name after the move found the frontmatter field `projekt: Wärmepumpe Standort Nord` and the old title: text that `mv` rightly leaves alone, but that a user may want to change. The agent offered it instead of doing it.
 
+### Run 3: blind, with the edit path
+
+**Setup.** Fixture reset again (observation 13 was found while doing it), same blind setup, same prompt. Chris answered the follow-up questions as a user would.
+
+**Tool calls** (from the transcript):
+
+1. `ToolSearch`, `rg -i -l "wärmepumpe|photovoltaik|archiv"`, `ls`, `ls /Technik/Archiv`
+2. `cat` of the log (outline), `backlinks` on both notes, `cat` of the PV note, `help mv`, `head -n 12` of the log, `rg -n -i "Standort Nord|WP Nord|WP-Nord" /`, `cat` of the jour fixe, the template and the index
+3. `mv` to `/Technik/Archiv/2026/Wärmepumpe Nord (Halle 3).md` (6 links in 4 notes), `backlinks` on the new path, `rg -n "Standort Nord" /Technik`
+4. **No `rm` yet: it asked first, this time in its answer instead of `AskUserQuestion`**: the PV note looks active (status, the deadline 15.11., "Ausschreibung läuft" in the index), and two links would be left dangling. Options: (a) delete and remove the index line, leaving the jour fixe as a historical record; (b) delete only; (c) keep it, e.g. move it to `Archiv/2026/`. Chris: "lösch und entfern den eintrag bitte"
+5. `rm`, `cat` of the index (fresh version after the link rewrite), `edit` with `old_text: "\n- [[Photovoltaik Halle 2]] – Ausschreibung läuft"` and empty `new_text`, `rg -n "Photovoltaik Halle 2" /` to confirm only the jour fixe link is left
+6. Asked whether to mark the heat pump as finished in the index and the note. Chris: "ja bitte mach das"
+7. `cat` of the index, `head -n 5` of the note, `rg -n "^status:" /Technik` (how other notes write the status), `edit` of the index moving the entry from "Laufende Projekte" to "Abgeschlossen" in the format of the Süd entry (`(2026)`), `edit` of the note's frontmatter to `status: abgeschlossen`
+
+**Result.** Correct throughout; all three `edit` calls succeeded first time, each with the version from its latest `cat` (or, for the moved note, the token `cat` had given before the `mv`, which the move keeps). The leading `\n` in `old_text` removed the index line without leaving a blank line. It left the now empty heading "Laufende Projekte" and said so, and again left the note's title and the `projekt:` field alone and offered to change them.
+
+**Findings.**
+
+- `edit` is easy to get right for small, exact changes in small notes: `old_text` from the last `cat`, version from the same `cat`. Section addresses weren't needed (the notes are short), which is fine.
+- It re-read the index after the `mv` instead of using the version from before, so the link rewrite caused no conflict. Whether an agent that skips that re-read gets a clear conflict was tested in the hands-on part (it does).
+- The options it offered this time were consistent (a: the jour fixe stays a historical record, unlike run 2's "unlink it to leave the protocol unchanged"). With (c) it offered archiving as an alternative to deleting: good judgement.
+- Three separate runs, three times `backlinks` before acting and the plain name searched with `rg` after the move: this looks stable.
+- Observation 13 again: all writes came from writer `dev`, like this session's reset a few minutes before.
+
 ## Suggested next step
 
-Test the edit path separately: the same fixture and prompt, answering option 1 (delete and defuse the links). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3, 6 and 13, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
+Build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3, 6 and 13, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
