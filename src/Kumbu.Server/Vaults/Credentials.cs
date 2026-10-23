@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 namespace Kumbu.Server.Vaults;
 
-/// <summary>The secret a request unlocks vaults with. Today the dev token; API keys in step 7.</summary>
+/// <summary>The secret a request unlocks vaults with. Today the dev token; API keys in step 8.</summary>
 public interface ICredential
 {
     string Secret { get; }

@@ -220,7 +220,7 @@ Because a note's history is stored inside the note's document, the history moves
 
 Each note keeps its last 10 earlier states, newest first, with who wrote them and when (`history <path>`). `restore <path> <version>` makes one current again, and the state it replaces goes into the history, so a restore can be undone the same way.
 
-An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer within 10 minutes coalesce**: the state they replace is not kept again. What survives is the state before the session. Today every MCP call writes as `dev`; with API keys (step 7) each key is its own writer, so two agents never coalesce into each other.
+An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer within 10 minutes coalesce**: the state they replace is not kept again. What survives is the state before the session. Today every MCP call writes as `dev`; with API keys (step 8) each key is its own writer, so two agents never coalesce into each other.
 
 ### The trash
 
@@ -309,7 +309,7 @@ The move itself is atomic per document: insert at the new path (the unique index
 
 The threat is a **leak**: a database dump, a stolen backup, a hoster's disk (concept §3). After step 5 such a copy shows random vault ids, keyed hashes of paths, revision numbers, sizes and times. No content, no file names, no vault names.
 
-It does not protect against whoever runs the server while it runs: to search a note, the server has to read it. And until users and API keys arrive (step 7), the dev token unlocks every vault and sits in the server's configuration, so the database plus that file is still everything. Being honest about this is part of the design.
+It does not protect against whoever runs the server while it runs: to search a note, the server has to read it. And until users and API keys arrive (step 8), the dev token unlocks every vault and sits in the server's configuration, so the database plus that file is still everything. Being honest about this is part of the design.
 
 ### Sealing: AES-GCM with a context
 
@@ -324,9 +324,9 @@ Each vault has its own random 32-byte **vault key**. It is never stored as it is
 - **API-key slot** (the dev token): the KEK is `HKDF(token, "kumbu/v1/key-kek", salt = vault id)`. To find the slot without storing the token, the slot carries a second derivation, `HKDF(token, "kumbu/v1/key-lookup")`. Different labels make two unrelated keys from one secret, so knowing the lookup value says nothing about the KEK.
 - **Recovery slot**: the same with the vault's recovery key.
 
-This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 7); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same.
+This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 8); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same.
 
-**HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for, and it comes with passwords in step 7.
+**HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for, and it comes with passwords in step 8.
 
 ### Paths in the dark: keyed hashes
 

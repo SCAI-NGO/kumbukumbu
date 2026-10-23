@@ -3,7 +3,7 @@ using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Notes;
 
-/// <summary>Who writes. Step 7 replaces <see cref="Dev"/> with the id of the API key.</summary>
+/// <summary>Who writes. Step 8 replaces <see cref="Dev"/> with the id of the API key.</summary>
 public static class Writers
 {
     public const string Dev = "dev";

@@ -1,7 +1,7 @@
 # Obsidian Sync Plugin — Design
 
 **Date:** 2026-10-22
-**Scope:** The Obsidian plugin that keeps a local Obsidian vault in sync with a Kumbu² vault, and the server API it needs. Builds on [concept.md](concept.md) §13 "Later (v2)", which chose a sync plugin over mounting.
+**Scope:** The Obsidian plugin that keeps a local Obsidian vault in sync with a Kumbu² vault, and the server API it needs. Builds on [concept.md](concept.md) §13 "Obsidian sync" (build order step 11), which chose a sync plugin over mounting.
 **Status:** Draft by Claude after discussing questions a) to d) with Chris. Conflict handling and licence are settled (§12); everything else is a proposal for review.
 
 ## 1. Intent
@@ -41,7 +41,7 @@ One Obsidian vault maps to one Kumbu² vault: the Obsidian vault root is `/<Vaul
 
 ## 3. Server API
 
-A small REST API next to `/mcp`, sharing `NoteWriter` and its rules (path validation, version tokens, history, trash). The web UI (build order step 8) uses the same API, so it is written once and documented as an **OpenAPI** file in the Kumbu² repo; that file is the contract both clients build against.
+A small REST API next to `/mcp`, sharing `NoteWriter` and its rules (path validation, version tokens, history, trash). The web UI (build order step 9) uses the same API, so it is written once and documented as an **OpenAPI** file in the Kumbu² repo; that file is the contract both clients build against.
 
 Version tokens map onto HTTP `ETag` / `If-Match`.
 
@@ -56,7 +56,7 @@ Version tokens map onto HTTP `ETag` / `If-Match`.
 | `POST /api/v1/ws-ticket` | Short-lived ticket for the WebSocket (§5) |
 | `GET /api/v1/ws?ticket=…` | WebSocket for change notifications |
 
-`{path}` is the path inside the vault, each segment URL-encoded. Auth is `Authorization: Bearer <key>` like `/mcp`; until build order step 7 that is the dev token.
+`{path}` is the path inside the vault, each segment URL-encoded. Auth is `Authorization: Bearer <key>` like `/mcp`; until build order step 8 that is the dev token.
 
 Plugin writes are stored **verbatim**: no link normalisation, no reformatting. Anything the server changed would come back to Obsidian as a remote edit and loop.
 
@@ -134,7 +134,7 @@ Files the server would reject are skipped with a visible reason in the plugin's 
   …local text…
   ```
 
-  - "server (…)" names the writer from the server's history (today `dev` or `seed`; from step 7 the key's name, e.g. the agent or the other device).
+  - "server (…)" names the writer from the server's history (today `dev` or `seed`; from step 8 the key's name, e.g. the agent or the other device).
   - The link is path-qualified, so it points to the right note even if another note has the same name.
   - If the local text starts with YAML frontmatter, the callout goes **after** it; frontmatter must stay the first thing in the file.
 - An Obsidian notice names both files; the status view lists open conflict copies. Resolving means editing the original and deleting the copy; nothing special.
@@ -167,10 +167,11 @@ Server URL (must be `https://` except for `localhost`), vault name (picked from 
 
 ## 11. Order of work and parallelism
 
-1. **Server, in the Kumbu² repo:** REST API with ETags, per-vault `seq` and change feed, ws ticket and WebSocket hub, OpenAPI file, tests. Needs step 3 (done).
-2. Then **in parallel**: the plugin (own repo, against the OpenAPI file and a local `docker compose` server) and the web UI (step 8, same API).
-3. Step 4 adds `mv` with optional link rewriting; the plugin switches renames from create plus delete to `mv` without rewriting.
-4. Step 7 replaces the dev token with per-device keys; the plugin needs no change, as it already reads the key from `SecretStorage`.
+Decided on 2026-10-23: the plugin is build order step 11, the last one, after users and API keys (step 8), the web UI (step 9) and OAuth (step 10).
+
+1. **Step 9, in the Kumbu² repo:** the REST API with ETags and the OpenAPI file comes with the web UI. Per-vault `seq` and the change feed are designed then, so step 11 adds to the API instead of reshaping it.
+2. **Step 11, server:** change feed, ws ticket and WebSocket hub where step 9 didn't build them, tests.
+3. **Step 11, plugin** (own repo, against the OpenAPI file and a local `docker compose` server). `mv` with `--keep-links` exists since step 4, so renames from the plugin use it from the start; per-device keys exist since step 8.
 
 Testing: the sync engine with Vitest (decision table, CRLF, echo suppression, conflict copies, full resync, 412 retry); end to end against the compose stack: edit in a test vault, see it over MCP, and the other way round.
 

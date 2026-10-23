@@ -118,7 +118,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
   - **OAuth token slot:** see §9.
 - Revoking a key = deleting its slot. Password change = rewrap.
 - **An admin cannot reset a password or recover a vault.** No password + no recovery key = data gone. Documented honestly.
-- Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 7) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id) come with logins in step 7. Recovery keys are written once to a file for the operator, never logged.
+- Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 8) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id) come with logins in step 8. Recovery keys are written once to a file for the operator, never logged.
 - **Unlocked vault = in-memory working set** (texts, vectors, link graph). Server restart = everything locked (feature).
   - Idle TTL: **15 min** for API/OAuth access, **30 min** for web sessions.
   - Global memory cap (configurable, default ~512 MB), LRU eviction of whole vaults.
@@ -187,10 +187,16 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 3. `edit` / `write` with version tokens; history + trash.
 4. Heading index, sections, links, backlinks, link normalizer (unit-tested).
 5. Encryption: vaults, slots, HKDF/Argon2id, recovery key.
-6. Embeddings + hybrid search.
-7. Users, admin, invites, API keys.
-8. Web UI.
-9. OAuth authorization server for app connectors.
+6. Agent tools for larger changes: view and diff earlier versions, changes across many notes.
+7. Embeddings + hybrid search.
+8. Users, admin, invites, API keys.
+9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Chris builds the UI with Claude Design.
+10. OAuth authorization server for app connectors.
+11. Obsidian sync plugin.
+
+Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10.
+
+v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, to be designed with the same care as the text core, not added on the side.
 
 Each step = a chapter in `CONCEPTS.md`.
 
@@ -199,7 +205,7 @@ Each step = a chapter in `CONCEPTS.md`.
 - Verify the current MCP authorization spec details (client registration mechanism, metadata endpoints) before implementing §9.
 - Evaluate the official MCP C# SDK and OpenIddict.
 
-### Later (v2: once the core features are done and deployable)
+### Obsidian sync (build order step 11, once the core is done and deployable)
 - **Obsidian sync plugin (preferred, leaning decision Oct 22, 2026).** Humans keep a local copy of their vaults in Obsidian; a plugin syncs it with Kumbu². Chosen over mounting because it works offline and does not fight Obsidian's file watching over a network drive.
   - Own GitHub repo (TypeScript, pnpm, esbuild): Obsidian plugins are distributed from GitHub releases. Test installs via BRAT; listing in `obsidianmd/obsidian-releases` later.
   - Authenticates with an API key (§7) as `Authorization: Bearer <key>`; HTTP through Obsidian's `requestUrl` (no CORS, works on mobile).

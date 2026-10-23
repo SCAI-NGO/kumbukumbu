@@ -32,7 +32,7 @@ Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folde
 
 Be clear about what this does not cover (concept §3):
 
-- Until there are users and API keys (build order step 7), the dev token unlocks every vault, and it lives in the server's configuration (`.env`). Whoever has **both** the database and that file can read everything. Encryption protects the database and its backups, not a machine where both are stored.
+- Until there are users and API keys (build order step 8), the dev token unlocks every vault, and it lives in the server's configuration (`.env`). Whoever has **both** the database and that file can read everything. Encryption protects the database and its backups, not a machine where both are stored.
 - The running server sees plaintext in memory; that's how search works. An operator of the running server is trusted.
 - The AI provider of a connected client sees what the agent reads. This is not end-to-end encryption.
 
@@ -47,7 +47,7 @@ docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'
 docker compose exec kumbu sh -c 'rm /recovery/*.recovery-key.txt'
 ```
 
-Without the dev token and without the recovery key, a vault can't be opened by anyone, including you. While some vaults don't open with the dev token, the server creates no new vaults: one of the locked ones might be the vault a folder belongs to. To change the dev token: set the new `KUMBU_DEV_TOKEN` and `KUMBU_RECOVERY_KEYS=<key>,<key>` in `.env`, start once (the log says `Recovery key opened vault …`), then remove `KUMBU_RECOVERY_KEYS` again. The old token keeps its slots until revoking comes with step 7.
+Without the dev token and without the recovery key, a vault can't be opened by anyone, including you. While some vaults don't open with the dev token, the server creates no new vaults: one of the locked ones might be the vault a folder belongs to. To change the dev token: set the new `KUMBU_DEV_TOKEN` and `KUMBU_RECOVERY_KEYS=<key>,<key>` in `.env`, start once (the log says `Recovery key opened vault …`), then remove `KUMBU_RECOVERY_KEYS` again. The old token keeps its slots until revoking comes with step 8.
 
 ## Quickstart
 

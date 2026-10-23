@@ -34,6 +34,6 @@ public interface INoteReader
     Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct);
 
     /// <summary>How many vaults exist that the caller's credential doesn't open. Only meaningful while the dev
-    /// token is the only credential; with per-user keys (step 7) this would tell one user about another's vaults.</summary>
+    /// token is the only credential; with per-user keys (step 8) this would tell one user about another's vaults.</summary>
     Task<int> CountLockedVaultsAsync(CancellationToken ct);
 }
