@@ -64,8 +64,9 @@ public class WriteCommandsTests
             2026-10-22 14:03 UTC  /Demo/Meeting Notes.md  {VersionToken.Of("m\n")}  1 line  (by dev)
             """,
             (await Run("trash")).Output);
-        // Until vaults are real objects (steps 5 and 7), a vault exists only through its notes.
-        Assert.Equal(ShellResult.Error("ls: cannot access '/Demo': No such file or directory"), await Run("ls /Demo"));
+        // A vault exists on its own, also when its last note is in the trash.
+        Assert.Equal(ShellResult.Ok(""), await Run("ls /Demo"));
+        Assert.Equal("Demo/", (await Run("ls")).Output);
 
         var restored = await Run("restore \"/Demo/Meeting Notes.md\"");
         Assert.Equal("restored /Demo/Meeting Notes.md from the trash", restored.Output);

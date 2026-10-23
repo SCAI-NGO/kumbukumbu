@@ -2,6 +2,7 @@
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -9,21 +10,26 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 {
     public string Name => "links";
 
-    public string Usage => "links <path>";
+    public string Usage => "links <path>[#section]";
 
-    public string Summary => "the wikilinks of a note and where they lead";
+    public string Summary => "the wikilinks of a note and where they lead; of a directory: the broken ones";
 
     public string Help => """
-        links <path>
-          List the [[wikilinks]] and ![[embeds]] of a note, one per line: line, the link as written, and
-          where it leads: a note's path, 'not found', 'ambiguous' with the candidates, 'attachment' for
-          files that are not notes, or 'this note' for [[#Heading]]. Links in code don't count.
+        links <path>[#section]
+          List the [[wikilinks]] and ![[embeds]] of a note (or of one section), one per line: line, the
+          link as written, and where it leads: a note's path, 'not found', 'ambiguous' with the
+          candidates, 'attachment' for files that are not notes, or 'this note' for [[#Heading]].
+          Links in code don't count.
           A link resolves within its vault, ignoring case: the note whose path ends with the link
           ([[kumbu]] or [[projects/kumbu]] → /Demo/projects/kumbu.md); if several match, the one in the
           linking note's folder; './' and '../' are relative to it.
+        links <directory>
+          Check every note below a directory (or a whole vault) and list only the links that lead
+          nowhere or are ambiguous, as path:line: link → problem.
 
           links /Demo/welcome.md
-          links /Demo/welcome.md | rg 'not found|ambiguous'
+          links "/Demo/plan.md#Next steps"
+          links /Demo
         """;
 
     public bool ReadsInput => false;
@@ -33,26 +39,61 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("links: missing operand");
         if (args.Count > 1) return ShellResult.Error($"links: too many arguments{CommandArgs.QuoteHint}");
-        if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        var note = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
-        if (note.IsError) return note;
+        var (pathText, fragment) = SectionAddress.Split(args[0]);
+        if (!CommandArgs.TryParsePath(Name, pathText, out var path, out var pathError)) return pathError!;
+        if (path.IsRoot) return ShellResult.Error("links: give a vault or a directory, e.g. links /Demo");
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
-        var resolver = new LinkResolver(vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct));
-        var lines = WikiLink.Parse(note.Output).Select(link =>
+        var content = await notes.ReadAsync(path, ct);
+        if (content is null && fragment is null && (await notes.ListNotesUnderAsync(path, ct)).Count > 0)
         {
-            var r = resolver.Resolve(path, link.Target);
-            var where = r.Kind switch
-            {
-                LinkKind.Note => r.Target!.Value,
-                LinkKind.Self => "this note",
-                LinkKind.Ambiguous => "ambiguous: " + string.Join(", ", r.Candidates.Select(c => c.Value).Order(TextOrder.Default)),
-                LinkKind.Attachment => "attachment (not a note)",
-                _ => "not found",
-            };
-            return $"{link.Line + 1}: {link.Raw} → {where}";
-        });
-        return note with { Output = Lines.Join(lines) };
+            return await CheckDirectoryAsync(vault, path, ct);
+        }
+
+        var note = await CommandArgs.ReadAddressAsync(Name, notes, args[0], ct);
+        if (note.IsError) return note;
+
+        var range = (From: 0, To: int.MaxValue);
+        if (fragment is not null && SectionLookup.TryFind(path, content!, fragment, out var match, out _))
+        {
+            range = (match.Heading.Line, match.Heading.ContentEnd);
+        }
+
+        var resolver = new LinkResolver(vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct));
+        var lines = WikiLink.Parse(content!)
+            .Where(l => l.Line >= range.From && l.Line < range.To)
+            .Select(link => $"{link.Line + 1}: {link.Raw} → {Describe(resolver.Resolve(path, link.Target))}");
+        return note with { Output = Lines.Join(lines) is { Length: > 0 } text ? text : "(no links)" };
     }
+
+    private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
+    {
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
+        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path));
+        var prefix = dir.Value + "/";
+        var output = new List<string>();
+        foreach (var source in all.Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(n => n.Path.Value, TextOrder.Default))
+        {
+            foreach (var link in WikiLink.Parse(source.Content))
+            {
+                var r = resolver.Resolve(source.Path, link.Target);
+                if (r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)
+                {
+                    output.Add($"{source.Path.Value}:{link.Line + 1}: {link.Raw} → {Describe(r)}");
+                }
+            }
+        }
+
+        return ShellResult.Ok(output.Count > 0 ? Lines.Join(output) : $"(no broken or ambiguous links below {dir.Value})");
+    }
+
+    private static string Describe(LinkResolution r) => r.Kind switch
+    {
+        LinkKind.Note => r.Target!.Value,
+        LinkKind.Self => "this note",
+        LinkKind.Ambiguous => "ambiguous: " + string.Join(", ", r.Candidates.Select(c => c.Value).Order(TextOrder.Default)),
+        LinkKind.Attachment => "attachment (not a note)",
+        _ => "not found",
+    };
 }

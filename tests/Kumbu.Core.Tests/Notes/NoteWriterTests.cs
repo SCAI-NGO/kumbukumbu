@@ -295,4 +295,26 @@ public class NoteWriterTests
     [InlineData("/Work/none.md", "rm: /Work/none.md: No such file or directory")]
     public async Task RemoveErrors(string path, string error) =>
         Assert.Equal(ShellResult.Error(error), await _writer.RemoveAsync(P(path), Writers.Dev, Ct));
+
+    [Fact]
+    public async Task AWriteRightAfterARestoreDoesNotSwallowIt()
+    {
+        var bad = (await Write("/Work/plan.md", "bad\n", V(Plan))).Version!.Token;
+        var restored = (await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Writers.Dev, Ct)).Version!.Token;
+        Assert.Equal("dev (restore)", (await Get("/Work/plan.md")).LastWriter);
+
+        await Write("/Work/plan.md", "after\n", restored);
+
+        // The restored state stays in the history although the same writer wrote within ten minutes.
+        Assert.Equal([Plan, "bad\n", Plan], (await Get("/Work/plan.md")).History.Select(h => h.Content));
+        Assert.NotEqual(bad, restored);
+    }
+
+    [Fact]
+    public void AStateAlreadyOnTopOfTheHistoryIsNotStoredTwice()
+    {
+        var note = new StoredNote(P("/Work/a.md"), "x", 3, "other", InMemoryNoteStore.Seeded, [new HistoryEntry("x", "seed", InMemoryNoteStore.Seeded)]);
+        var next = NoteWriter.Next(note, "y", Writers.Dev, InMemoryNoteStore.Seeded.AddDays(1));
+        Assert.Equal(["x"], next.History.Select(h => h.Content));
+    }
 }

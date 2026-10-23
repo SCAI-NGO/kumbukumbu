@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
@@ -24,7 +25,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     public static StoredNote Next(StoredNote current, string content, string writer, DateTime now, bool keepCurrent = false)
     {
         var coalesce = !keepCurrent && current.LastWriter == writer && now - current.LastWriteAt < CoalesceWindow;
-        IReadOnlyList<HistoryEntry> history = coalesce
+        // A state already on top of the history (after a restore, say) is not kept twice.
+        var duplicate = current.History.Count > 0 && current.History[0].Content == current.Content;
+        IReadOnlyList<HistoryEntry> history = coalesce || duplicate
             ? current.History
             : [.. new[] { new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt) }
                 .Concat(current.History).Take(HistoryLimit)];
@@ -71,7 +74,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             return Written($"created {path.Value} ({Lines.Count(content)})", note);
         }
 
-        if (existing is null) return Missing(tool, path);
+        if (existing is null) return await MissingAsync(tool, path, ct);
         if (existing.Version != version) return Conflict(tool, path, version, existing);
         if (existing.Content == content) return Written($"{path.Value} is unchanged", existing);
 
@@ -101,7 +104,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         }
 
         var existing = await store.GetAsync(path, ct);
-        if (existing is null) return Missing(tool, path);
+        if (existing is null) return await MissingAsync(tool, path, ct);
         if (existing.Version != version) return Conflict(tool, path, version, existing);
 
         var current = existing.Content;
@@ -214,16 +217,33 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         {
             return (await store.ListNotesUnderAsync(path, ct)).Count > 0 || path.IsRoot
                 ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm removes one note at a time)")
-                : ShellResult.Error($"rm: {path.Value}: No such file or directory");
+                : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
         }
+
+        // Asked before removing: once the note is gone, its backlinks can't be asked for any more.
+        var vault = VaultPath.Root.Child(path.Segments[0]);
+        var notes = await store.ReadNotesUnderAsync(vault, ct);
+        var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path));
+        var linking = notes
+            .Where(n => n.Path != path)
+            .Select(n => (n.Path, Count: WikiLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
+            .Where(x => x.Count > 0)
+            .OrderBy(x => x.Path.Value, TextOrder.Default)
+            .ToList();
 
         if (!await store.TryTrashAsync(existing, writer, Now, ct))
         {
             return ShellResult.Error($"rm: {path.Value} changed while removing it; try again");
         }
 
-        return ShellResult.Ok(
-            $"removed {path.Value}; it stays in the trash for {TrashRetention.Days} days ('restore {Quote(path)}' brings it back)");
+        var message = $"removed {path.Value}; it stays in the trash for {TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
+        if (linking.Count > 0)
+        {
+            var links = linking.Sum(x => x.Count);
+            message += $"; {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", linking.Select(x => x.Path.Value))} now lead nowhere";
+        }
+
+        return ShellResult.Ok(message);
     }
 
     /// <summary>
@@ -261,7 +281,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
                 : $"restore: {path.Value} has no version {version} ('history {Quote(path)}' lists them)");
         }
 
-        var next = Next(existing, entry.Content, writer, Now, keepCurrent: true);
+        // Marked, so the next write by the same writer doesn't coalesce into it: a restore is a checkpoint.
+        var next = Next(existing, entry.Content, $"{writer} (restore)", Now, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to version {version}", next)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
@@ -276,7 +297,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (!await store.TryReplaceAsync(existing, next, ct))
         {
             var now = await store.GetAsync(existing.Path, ct);
-            return now is null ? Missing(tool, existing.Path) : Conflict(tool, existing.Path, existing.Version, now);
+            return now is null ? await MissingAsync(tool, existing.Path, ct) : Conflict(tool, existing.Path, existing.Version, now);
         }
 
         return Written(message, next);
@@ -287,7 +308,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (NoteNames.Problem(path) is { } problem) return ShellResult.Error($"{tool}: {path.Value}: {problem}");
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
-        if ((await store.ListNotesUnderAsync(vault, ct)).Count == 0)
+        if (!(await store.ListVaultsAsync(ct)).Contains(path.Segments[0]))
         {
             return ShellResult.Error(
                 $"{tool}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
@@ -324,8 +345,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         return bytes > MaxBytes ? ShellResult.Error($"{tool}: the note would be {bytes} bytes; the limit is {MaxBytes} (1 MiB)") : null;
     }
 
-    private static ShellResult Missing(string tool, VaultPath path) =>
-        ShellResult.Error($"{tool}: {path.Value}: No such file or directory (if it was removed, 'trash' lists it)");
+    private async Task<ShellResult> MissingAsync(string tool, VaultPath path, CancellationToken ct) =>
+        await Moves.HintAsync(store, path, ct) is { Length: > 0 } moved
+            ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory{moved}")
+            : ShellResult.Error($"{tool}: {path.Value}: No such file or directory (if it was removed, 'trash' lists it)");
 
     private static ShellResult Conflict(string tool, VaultPath path, string version, StoredNote current) =>
         ShellResult.Error(

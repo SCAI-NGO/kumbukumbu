@@ -10,6 +10,8 @@ public sealed class InMemoryNoteStore : INoteStore
 
     private readonly Dictionary<VaultPath, StoredNote> _notes = [];
     private readonly List<TrashedNote> _trash = [];
+    private readonly List<MoveRecord> _moves = [];
+    private readonly HashSet<string> _vaults = new(StringComparer.Ordinal);
 
     public InMemoryNoteStore(params (string Path, string Content)[] notes)
     {
@@ -17,8 +19,16 @@ public sealed class InMemoryNoteStore : INoteStore
         {
             if (!VaultPath.TryParse(path, out var parsed)) throw new ArgumentException($"Bad path: {path}");
             _notes[parsed] = new StoredNote(parsed, content, 1, Writers.Seed, Seeded, [], content);
+            _vaults.Add(parsed.Vault!);
         }
     }
+
+    public void AddVault(string name) => _vaults.Add(name);
+
+    public Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([.. _vaults]);
+
+    public Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
+        Task.FromResult(_moves.Where(m => m.From == from).OrderByDescending(m => m.MovedAt).FirstOrDefault());
 
     /// <summary>Makes the next compare-and-swap fail once, as if another writer got there first.</summary>
     public Func<StoredNote, StoredNote>? Interfere { get; set; }
@@ -43,7 +53,8 @@ public sealed class InMemoryNoteStore : INoteStore
     public Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct) =>
         Task.FromResult(_notes.GetValueOrDefault(path));
 
-    public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) => Task.FromResult(_notes.TryAdd(note.Path, note));
+    public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>
+        Task.FromResult(_vaults.Contains(note.Path.Vault!) && _notes.TryAdd(note.Path, note));
 
     public Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
     {
@@ -53,12 +64,13 @@ public sealed class InMemoryNoteStore : INoteStore
         return Task.FromResult(true);
     }
 
-    public Task<bool> TryMoveAsync(StoredNote current, StoredNote target, CancellationToken ct)
+    public Task<bool> TryMoveAsync(StoredNote current, StoredNote target, string movedBy, DateTime at, CancellationToken ct)
     {
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
         if (!_notes.TryAdd(target.Path, target)) return Task.FromResult(false);
         _notes.Remove(current.Path);
+        _moves.Add(new MoveRecord(current.Path, target.Path, movedBy, at));
         return Task.FromResult(true);
     }
 
