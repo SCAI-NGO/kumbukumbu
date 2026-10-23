@@ -75,14 +75,22 @@ Ordered by usefulness:
    - (b) The shortest form that resolves uniquely, like Obsidian's default ("shortest path when possible"). Readable, and a move back restores the original. Every later `mv` still checks every link, but a new note created with `write` could make such a link ambiguous; `links` would show it as `ambiguous`, not wrong.
    - (c) Change as little as possible: replace only the part of the link that names the moved note, keep the form the author chose if it stays unique, otherwise the vault path.
 
-   My recommendation: (c), falling back to (a). It keeps the author's style, a move back restores the original, and it is still never ambiguous at the time of the move. **Needs Chris's decision.**
+   **Decided (Chris, 2026-10-23): (c), falling back to (a).** It keeps the author's style, a move back restores the original, and it is never ambiguous at the time of the move. In detail:
+   - Keep the form: a bare name stays a bare name (`[[alpha]]` → `[[omega]]`), a link with a path gets the new path (`[[projects/kumbu]]` → `[[archive/kumbu]]`). Case of the old link doesn't need to survive a rename.
+   - Heading, block, alias, `\|` and the `!` of embeds stay, as now.
+   - Relative links (`./`, `../`) and every link whose kept form would not resolve uniquely to the moved note after the move fall back to the vault path.
+   - Remaining risk, accepted: a note created later with `write` can make a bare-name link ambiguous, or take it over if it lies in the linking note's folder. Hand-written links have the same risk today; the vault path only protected the links `mv` had rewritten.
 5. **`mv` can turn an ambiguous link into a resolved one without saying so.** Moving the hub into `/Demo/lt/sub/` made its `[[dup]]` resolve to the `dup` in the new folder. There is no old target to rewrite it to, so leaving it is right, but the output could say `1 link was ambiguous and now leads to /Demo/lt/sub/dup.md`. Rare, low priority.
 6. **`links note.md#Section` says `No such file or directory`.** `outline` with a section says `give the note without a section`; `links` should do the same. Better: support it, since on a long note (the 862-line log) the links of one section are what an agent wants.
 7. **No vault-wide check for broken links.** After `mv --keep-links`, `rm` or a heading change, finding dangling links takes one `links` call per note, and there is no `xargs`. `links /Demo` (a directory) could print every link that is `not found` or `ambiguous` as `path:line: [[link]] → not found`. Useful for the Obsidian plugin case too.
 8. **`backlinks` with no result prints nothing.** Only the version block comes back, which looks like an error to a reader. `(no notes link here)` would be clearer; listing ambiguous links that might mean this note (`/Demo/lt/hub.md:10: [[dup]] (ambiguous)`) would complete the picture.
 9. **Heading targets aren't checked.** `[[alpha#Nope]]` shows as `→ /Demo/lt/alpha.md`. `links` could add `(no heading #Nope)`. More important later: renaming a heading with `edit` or `replace_section` silently breaks `[[note#Heading]]` links elsewhere; the `edit` result could mention backlinks to the old heading.
 10. **`[[ ]]` and `[[|x]]` count as `this note`.** Obsidian doesn't treat them as links. Cosmetic.
-11. **Seeder and `mv`.** Confirmed as documented, with a side effect that isn't documented: the resurrected copy lies in the old folder, so links from that folder (`[[Meeting Notes]]` in `welcome.md`) now quietly lead to the stale seed copy, and the moved note loses its backlinks. Harmless while the seeder is a dev tool; the known limitation in the design could mention it. Left in the database after this test: `/Demo/archive/Meeting Notes.md` (the moved copy) next to the reseeded original.
+11. **Seeder and `mv`.** Confirmed as documented, with a side effect that isn't documented: the resurrected copy lies in the old folder, so links from that folder (`[[Meeting Notes]]` in `welcome.md`) now quietly lead to the stale seed copy, and the moved note loses its backlinks. The moved copy was put in the trash afterwards, so the reseeded original is the only one again.
+
+    **Decided (Chris, 2026-10-23): the seeder fills only an empty vault.** The seeder is a development aid that will be removed in a few days, not a test bed for future Obsidian syncs; seeding means "start everything from scratch". A vault that already holds notes (or trash) is left alone, so moved, edited and removed notes stay as they are. Adding sample files later then needs `docker compose down -v`. The update and conflict logic of `SeedDecision` can go.
+
+    The underlying question (a note *is* its path) comes back with the Obsidian plugin: a client that was offline uploads a file at a path the server has moved since. The move record from observation 1 would let the server answer `moved to …` there too; worth checking against the [plugin spec](obsidian-plugin-design-spec.md) §3.
 12. **The main output ends without a line break.** Claude Code joins the result blocks, so the output reads `… /Demo/welcome.mdversion of /Demo/lt/kumbu.md: …`. Checked with raw `tools/call`: the server sends two separate blocks; the client joins them. A trailing `\n` on the main text would avoid this. Cosmetic.
 
 ## Agent behaviour test
@@ -101,4 +109,4 @@ Ordered by usefulness:
 
 ## Suggested next step
 
-Run the agent behaviour test. Decide observation 4. Observations 1, 2, 3 and 6 are small and worth doing before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
+Run the agent behaviour test. Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
