@@ -95,7 +95,7 @@ Ordered by usefulness:
 
 ## Agent behaviour test
 
-**Not yet run.** A blind run through a subagent of this session was blocked by Claude Code's auto mode (the task includes a delete). To be run as in phase 4a: a fresh Claude Code session, not resumed.
+A blind run through a subagent of this session was blocked by Claude Code's auto mode (the task includes a delete). Run 1 was then done in a fresh Claude Code session; see the end of this section.
 
 **Fixture** (vault `Technik`, local, written in this session): the log from phase 4a, plus `/Technik/Index.md`, `/Technik/Projekte/Photovoltaik Halle 2.md` (frontmatter link, heading link with alias), `/Technik/Besprechungen/2026-10-20 Jour fixe.md` (embed of a section by vault path, alias link), `/Technik/Archiv/2025/Wärmepumpe Standort Süd.md` (a similar name, links to Nord) and `/Technik/Vorlagen/Projektnotiz.md` (the link only inside a code block, so it must stay untouched). `backlinks` on the log lists 6 lines in 4 notes.
 
@@ -107,6 +107,31 @@ Ordered by usefulness:
 
 **What to watch for:** whether the agent finds `mv` and trusts it instead of `write` plus `rm` plus hand-made link edits; whether it answers the question with `backlinks` (and after the move, on the new path); whether it calls `backlinks` before `rm` on the PV note and mentions that `Jour fixe` links to it (and that the PV note links to the heat pump); whether the code block in the template stays untouched.
 
+### Run 1: not blind
+
+**Setup went wrong twice.** The session started in `/home/chris/workspace`, but the Kumbu MCP server is configured for the project `/home/chris/workspace/kumbukumbu` only (`~/.claude.json`), so the session had no Kumbu tools. It found the repo, read the dev token from `.env` (without printing it), read `tools/list` and called `sh` through a small curl script. On the way, its third call was `rg -n -i 'wärmepumpe|photovoltaik|archiv' docs/notes-test-phase4b.md`, which showed it the fixture description (including that the code block must stay untouched), the prompt, and the `mv` rows of the results table. It did not see "What to watch for". So it knew beforehand that `mv` rewrites links, which was the main question.
+
+**Kumbu calls, in order** (each batch through the script; from the session transcript):
+
+1. `rg --files /Technik`, `rg --files | rg -i "wärme|photovolt|archiv"`, `help mv`, `backlinks` on the heat pump note, `backlinks` on the PV note
+2. `cat` of the template, the index, the jour fixe and the PV note; `ls /Technik/Archiv`
+3. `mv "/Technik/Projekte/Wärmepumpe Standort Nord.md" "/Technik/Archiv/2026/Wärmepumpe Nord (Halle 3).md"`
+4. `backlinks` on the new path, `rg -n "Standort Nord" /Technik`, `links` on the jour fixe and the PV note, `outline` of the moved note
+5. `rm "/Technik/Projekte/Photovoltaik Halle 2.md"`, `trash /Technik`, `rg -n "Photovoltaik Halle 2" /Technik`, `links /Technik/Index.md`
+
+**Result.** Correct: one `mv`, the missing `Archiv/2026/` created by it, 6 links in 4 notes rewritten with embed, heading and alias kept, the template's code block untouched, the PV note in the trash. The answer listed all six linking lines, named the long link form, and reported the two links left dangling by the `rm` (index and jour fixe). It did not tidy the index on its own but asked: remove the PV line? move the heat pump to "Abgeschlossen" now or later?
+
+**What still counts, despite the contamination:**
+
+- `backlinks` on **both** notes before changing anything, then reading every linking note: the order the tools are meant for.
+- Moving before deleting, with its own reason: the PV note, if restored, then already holds the corrected links.
+- After the move, `rg -n "Standort Nord"` to find mentions that aren't links. A plain-text mention is something `mv` can't know about; the agent thought of it.
+- After `rm` it had to search for the dangling links itself with `rg`: confirms observation 2.
+- Asking instead of editing the index: good judgement, not a tool question.
+- Side finding: an agent without the MCP tools but with a shell finds the token in `.env` and talks to the server directly. Expected for a dev setup with a shared token on localhost; one more reason for per-client tokens later.
+
+**Run 2** should be blind: fixture reset (restore the four linking notes to their versions before the move, `mv --keep-links` the note back, `restore` the PV note), and a session started where it cannot read the repo, with the Kumbu tools loaded natively, e.g. `claude --mcp-config <file> --strict-mcp-config` in an empty directory.
+
 ## Suggested next step
 
-Run the agent behaviour test. Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
+Run the agent behaviour test (run 2, blind). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
