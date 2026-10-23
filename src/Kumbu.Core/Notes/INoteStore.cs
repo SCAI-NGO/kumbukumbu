@@ -16,9 +16,12 @@ public interface INoteStore : INoteReader
     /// <c>current.Revision</c>; returns false otherwise.</summary>
     Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct);
 
-    /// <summary>Moves the note to <paramref name="target"/>'s path if it is still at <c>current.Revision</c>
-    /// and no note exists there, and records the move; <paramref name="target"/> carries the new path and revision.</summary>
-    Task<bool> TryMoveAsync(StoredNote current, StoredNote target, string movedBy, DateTime at, CancellationToken ct);
+    /// <summary>
+    /// Writes every change of <paramref name="batch"/>, or none: each note must still be at the revision the
+    /// batch saw, and no move target may exist. Moves are recorded with <paramref name="movedBy"/> and
+    /// <paramref name="at"/>. Returns the paths that stood in the way; empty if it was written.
+    /// </summary>
+    Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string movedBy, DateTime at, CancellationToken ct);
 
     /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>.</summary>
     Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct);

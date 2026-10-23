@@ -187,6 +187,19 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
     }
 
     [Fact]
+    public async Task An_empty_vault_is_left_alone_on_the_next_start()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Directory.CreateDirectory(Path.Combine(_root, "Leer"));
+        await SeedAsync(world);
+
+        var log = await SeedAsync(world);
+
+        Assert.Contains(log.Entries, e => e.Message == "Left vault Leer alone: it is empty, and so is its folder");
+        Assert.Contains(log.Entries, e => e.Message == "Seeded 0 notes into 0 vaults; left 1 vault alone (0 files skipped)");
+    }
+
+    [Fact]
     public async Task A_recovery_key_whose_slot_exists_reminds_to_remove_it()
     {
         var world = new VaultWorld(fixture.NewDatabase());

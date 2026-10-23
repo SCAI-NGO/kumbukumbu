@@ -26,6 +26,7 @@ public sealed class Ls(INoteReader notes) : ICommand
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
+        if (CommandArgs.RefuseVersion(Name, args, "ls lists directories, which have none") is { } versionError) return versionError;
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count > 1) return ShellResult.Error("ls: too many arguments");
 

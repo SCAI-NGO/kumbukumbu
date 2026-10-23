@@ -154,3 +154,18 @@ Settled with Chris on 2026-10-23:
 ## 4. Testing
 
 Unit tests in `Kumbu.Core.Tests` for the diff (empty notes, no final newline, long lines, word diff, a version missing from history), `--version` on each reading command and the refusals, the plan token (a note changed, removed or added between preview and apply), `word` matching, `replace_all` with sections, folder moves (nested folders, links in and out of the folder, relative links, a target inside the source, a name collision), and `history` on a directory with `--since`. Server tests for the transactions: a failure in the middle of a folder move or an apply leaves nothing changed. Then the hands-on test as the agent, including the compose restarts from §2.7 against the real stack, and a blind run with a realistic task such as "rename the project Hecate to Selene everywhere in my notes".
+
+## 5. Implementation notes
+
+Decisions made while building, for review with the PR:
+
+- **One commit primitive.** `INoteStore.TryCommitAsync(NoteBatch)` takes replaces and moves and writes all or none; folder `mv` and `replace` build one batch each, a single-note `mv` is a batch of one, and `TryMoveAsync` is gone. In MongoDB the order inside the transaction is: replaces, then delete every move source, then insert every target. So a note can move to a path another note of the same batch leaves, while the unique index still refuses a target that exists. A batch stays within one vault.
+- **Trash, restore, create and replace** run as transactions as well, through one helper that commits, then changes the working set; on abort it reads the touched paths again. A cancelled request aborts the transaction: nothing half-done, and the `CancellationToken.None` guard is gone.
+- **Standalone MongoDB is refused** with a message pointing to compose.yaml (checked once, with `hello`, next to the index setup).
+- **Plans live in memory** (`ReplacePlans`, one hour, single use) and are lost on a restart; the error says to preview again. A call with another path, text or `word` than the plan's is refused and the plan stays valid.
+- **Preview format:** a summary line, one line per note with its count, then up to three excerpts each for the first five notes (`path:line: …before [-old-]{+new+} after…`, 30 characters of context), then `plan: <token>`. Over the output limit, the preview is refused (`… too many for one preview; narrow the path`).
+- **`--version` with `rg`** is accepted only for a single note operand and no piped input; a folder gets the refusal from §2.1, not "Is a directory".
+- **History of a directory** shows every state the histories hold, each with `+added -removed` against the next older state of that note (a first state counts all its lines as added).
+- **Folder `mv`** follows Unix: into the target if that folder exists, otherwise renamed to it. A folder move with one note returns that note's version token, as a note move does.
+- **Phase 5, observation 8:** an existing empty vault whose folder is empty too is now "left alone" (`Left vault Leer alone: it is empty, and so is its folder`) instead of "seeded with 0 notes".
+- **Verified in this sandbox** with `mongo:7.0` (MongoDB 8 and Docker Hub are not reachable here): the compose health check initiates the set on the first start, and the set is a writable primary again after `up --force-recreate` and after `restart`. Then the server against that stack over MCP: replace preview → apply → the plan is refused a second time, `history /Demo --since 1h`, `diff --word`, folder `mv` with move records.

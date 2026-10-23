@@ -5,7 +5,7 @@ namespace Kumbu.Core.Sh.Commands;
 
 public sealed class Tail(INoteReader notes) : ICommand
 {
-    private static readonly Option[] Spec = [new('n', "lines", TakesValue: true)];
+    private static readonly Option[] Spec = [new('n', "lines", TakesValue: true), new(null, "version", TakesValue: true)];
 
     public string Name => "tail";
 
@@ -40,7 +40,7 @@ public sealed class Tail(INoteReader notes) : ICommand
             }
         }
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct);
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
         if (text.IsError) return text;
 
         var lines = Lines.Split(text.Output);

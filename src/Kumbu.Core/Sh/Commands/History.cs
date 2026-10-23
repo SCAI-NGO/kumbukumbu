@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Text.RegularExpressions;
+using Kumbu.Core.Diffs;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class History(INoteStore notes) : ICommand
+public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICommand
 {
     public string Name => "history";
 
-    public string Usage => "history <path>";
+    public string Usage => "history [--since T] <path>";
 
-    public string Summary => "versions of a note, newest first";
+    public string Summary => "versions of a note; of a directory: the latest writes below it";
 
     public string Help => $"""
         history <path>
@@ -21,25 +24,105 @@ public sealed class History(INoteStore notes) : ICommand
           The version is computed from the text, so the same version can appear twice (after a restore,
           or after changing a text back); either line restores the same text.
 
+        history [--since T] <directory>
+          The latest writes below a directory or vault (or / for every vault), newest first: time,
+          writer, note, version, lines added and removed. --since takes 30m, 2h, 1d or a UTC time;
+          without it, the last 50. Only what the histories still hold (10 versions per note, writes
+          within 10 minutes by one writer count as one). Then 'diff <note> <version>' shows a change.
+
           history /Demo/welcome.md
+          history /Demo --since 2h
         """;
 
     public bool ReadsInput => false;
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count == 0) return ShellResult.Error("history: missing operand");
-        if (args.Count > 1) return ShellResult.Error($"history: too many arguments{CommandArgs.QuoteHint}");
-        if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
+        if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
+        var operands = options.Operands;
+        if (operands.Count == 0) return ShellResult.Error("history: missing operand");
+        if (operands.Count > 1) return ShellResult.Error($"history: too many arguments{CommandArgs.QuoteHint}");
+        if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
+
+        DateTime? since = null;
+        if (options.Value("since") is { } sinceText)
+        {
+            if (ParseSince(sinceText, now()) is not { } parsed)
+            {
+                return ShellResult.Error($"history: --since takes 30m, 2h, 1d or a UTC time like 2026-10-23 14:00 (got '{sinceText}')");
+            }
+
+            since = parsed;
+        }
 
         var note = await notes.GetAsync(path, ct);
-        if (note is null) return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
+        if (note is null)
+        {
+            if (path.IsRoot || (await notes.ListNotesUnderAsync(path, ct)).Count > 0
+                || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0])))
+            {
+                return await WritesBelowAsync(path, since, ct);
+            }
+
+            return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
+        }
 
         var lines = new List<string> { Line(note.Content, note.LastWriter, note.LastWriteAt) + "  (current)" };
         lines.AddRange(note.History.Select(h => Line(h.Content, h.WrittenBy, h.WrittenAt)));
         return ShellResult.Ok(Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
+
+    private static readonly Option[] Spec = [new(null, "since", TakesValue: true)];
+
+    private const int DefaultLimit = 50;
+
+    /// <summary>Every write the history still holds below a directory, newest first: one per state of a note.</summary>
+    private async Task<ShellResult> WritesBelowAsync(VaultPath dir, DateTime? since, CancellationToken ct)
+    {
+        var writes = new List<(DateTime At, string Writer, string Path, string Version, int Added, int Removed)>();
+        foreach (var path in await notes.ListNotesUnderAsync(dir, ct))
+        {
+            if (await notes.GetAsync(path, ct) is not { } note) continue;
+            var states = new List<(string Content, string Writer, DateTime At)> { (note.Content, note.LastWriter, note.LastWriteAt) };
+            states.AddRange(note.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt)));
+            for (var i = 0; i < states.Count; i++)
+            {
+                var (content, writer, at) = states[i];
+                if (since is { } from && at < from) continue;
+                var (added, removed) = TextDiff.Count(i + 1 < states.Count ? states[i + 1].Content : "", content);
+                writes.Add((at, writer, path.Value, VersionToken.Of(content), added, removed));
+            }
+        }
+
+        var shown = writes.OrderByDescending(w => w.At).ThenBy(w => w.Path, TextOrder.Default).ToList();
+        if (since is null && shown.Count > DefaultLimit) shown = shown[..DefaultLimit];
+        if (shown.Count == 0)
+        {
+            return ShellResult.Ok(since is null ? $"(no writes below {dir.Value})" : $"(no writes below {dir.Value} since {Time(since.Value)})");
+        }
+
+        var writerWidth = shown.Max(w => w.Writer.Length);
+        var pathWidth = shown.Max(w => w.Path.Length);
+        return ShellResult.Ok(Lines.Join(shown.Select(w =>
+            $"{Time(w.At)}  {w.Writer.PadRight(writerWidth)}  {w.Path.PadRight(pathWidth)}  {w.Version}  +{w.Added} -{w.Removed}")));
+    }
+
+    /// <summary>"30m", "2h", "1d", or a UTC time such as "2026-10-23 14:00" or "2026-10-23T14:00Z".</summary>
+    internal static DateTime? ParseSince(string text, DateTime now)
+    {
+        if (RelativeRegex().Match(text) is { Success: true } m)
+        {
+            var n = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            return m.Groups[2].Value switch { "m" => now.AddMinutes(-n), "h" => now.AddHours(-n), _ => now.AddDays(-n) };
+        }
+
+        return DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var at)
+            ? at
+            : null;
+    }
+
+    [GeneratedRegex(@"^(\d+)([mhd])$")]
+    private static partial Regex RelativeRegex();
 
     private static string Line(string content, string writer, DateTime at) =>
         $"{VersionToken.Of(content)}  {Time(at)}  {writer}  {Lines.Count(content)}";

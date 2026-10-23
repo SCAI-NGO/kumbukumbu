@@ -34,7 +34,7 @@ public sealed class Shell
             new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
             new LinksCommand(notes), new Backlinks(notes),
             new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
-            new History(notes), new Restore(writer), new Mv(mover), new Rm(writer), new Trash(notes),
+            new History(notes, () => writer.Now), new DiffCommand(notes), new Restore(writer), new Mv(mover), new Rm(writer), new Trash(notes),
             new Help(_commands),
         ];
         foreach (var command in commands)

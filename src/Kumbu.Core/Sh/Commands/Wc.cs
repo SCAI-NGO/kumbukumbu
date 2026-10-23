@@ -8,7 +8,7 @@ public sealed class Wc(INoteReader notes) : ICommand
 {
     private static readonly Option[] Spec =
     [
-        new('l', "lines"), new('w', "words"), new('m', "chars"), new('c', "bytes"),
+        new('l', "lines"), new('w', "words"), new('m', "chars"), new('c', "bytes"), new(null, "version", TakesValue: true),
     ];
 
     public string Name => "wc";
@@ -37,11 +37,11 @@ public sealed class Wc(INoteReader notes) : ICommand
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct);
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
         if (text.IsError) return text;
         var content = text.Output;
 
-        var all = !Spec.Any(o => options.Has(o.Long));
+        var all = !Spec.Where(o => o.Long != "version").Any(o => options.Has(o.Long));
         var counts = new List<string>();
         if (all || options.Has("lines")) counts.Add(Lines.Split(content).Count.ToString());
         if (all || options.Has("words"))

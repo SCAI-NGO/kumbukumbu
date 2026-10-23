@@ -37,16 +37,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Lists_sh_write_and_edit_with_their_manuals()
+    public async Task Lists_sh_write_edit_and_replace_with_their_manuals()
     {
         await using var client = await app.ConnectAsync();
 
         var tools = await client.ListToolsAsync(cancellationToken: Ct);
 
-        Assert.Equal(["edit", "sh", "write"], tools.Select(t => t.Name).Order());
+        Assert.Equal(["edit", "replace", "sh", "write"], tools.Select(t => t.Name).Order());
         Assert.Contains("ls [path]", tools.Single(t => t.Name == "sh").Description, StringComparison.Ordinal);
         Assert.StartsWith("Create a note", tools.Single(t => t.Name == "write").Description, StringComparison.Ordinal);
         Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);
+        Assert.StartsWith("Replace a text in every note", tools.Single(t => t.Name == "replace").Description, StringComparison.Ordinal);
+        Assert.True(tools.Single(t => t.Name == "replace").ProtocolTool.Annotations?.DestructiveHint);
     }
 
     [Fact]
@@ -62,8 +64,44 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         Assert.Equal(["content", "path", "version"], Properties(tools["write"]));
         Assert.Equal(["content", "path"], Required(tools["write"]));
-        Assert.Equal(["new_text", "old_text", "path", "replace_section", "version"], Properties(tools["edit"]));
+        Assert.Equal(["new_text", "old_text", "path", "replace_all", "replace_section", "version"], Properties(tools["edit"]));
         Assert.Equal(["new_text", "path", "version"], Required(tools["edit"]));
+        Assert.Equal(["new_text", "old_text", "path", "plan", "word"], Properties(tools["replace"]));
+        Assert.Equal(["new_text", "old_text", "path"], Required(tools["replace"]));
+    }
+
+    [Fact]
+    public async Task Replace_previews_then_applies_in_one_transaction_and_diff_shows_it()
+    {
+        await CallAsync("write", new() { ["path"] = "/Demo/rename/a.md", ["content"] = "Project Hecate starts.\n" });
+        await CallAsync("write", new() { ["path"] = "/Demo/rename/b.md", ["content"] = "Hecate, again: Hecate.\n" });
+        var args = new Dictionary<string, object?> { ["path"] = "/Demo/rename", ["old_text"] = "Hecate", ["new_text"] = "Selene" };
+
+        var preview = await CallAsync("replace", args);
+        Assert.NotEqual(true, preview.IsError);
+        Assert.StartsWith("3 occurrences of \"Hecate\" in 2 notes below /Demo/rename", Text(preview), StringComparison.Ordinal);
+        var plan = Text(preview).Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))[6..];
+
+        var applied = await CallAsync("replace", new(args) { ["plan"] = plan });
+        Assert.Equal("replaced 3 occurrences in 2 notes", Text(applied));
+        Assert.Equal("Selene, again: Selene.\n", Text(await ShAsync("cat /Demo/rename/b.md")));
+
+        var diff = Text(await ShAsync("diff --word /Demo/rename/a.md"));
+        Assert.Contains("dev (replace)", diff, StringComparison.Ordinal);
+        Assert.Contains("[-Hecate-]{+Selene+}", diff, StringComparison.Ordinal);
+        Assert.Contains("/Demo/rename/b.md", Text(await ShAsync("history /Demo/rename --since 1h")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Edit_replace_all_over_mcp()
+    {
+        var path = "/Demo/scratch-all.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "a b a\n" });
+
+        var edited = await CallAsync("edit", new() { ["path"] = path, ["version"] = Token(created), ["old_text"] = "a", ["new_text"] = "c", ["replace_all"] = true });
+
+        Assert.Equal($"replaced 2 occurrences in {path}", Text(edited));
+        Assert.Equal("c b c\n", Text(await ShAsync($"cat {path}")));
     }
 
     [Fact]

@@ -18,14 +18,17 @@ public static class Manual
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes
           sort [-r|-u|-n|-f] [path]       sort lines
-          history <path>                  versions of a note
+          history <path> [--since 2h]     versions of a note; on a folder or vault: recent writes below it
+          diff <path> [from [to]]         what changed between versions (default: last change); --word
+          diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
-          mv <path> <target>              move or rename a note; links to it are rewritten
+          mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
           rm <path>                       move a note to the trash (kept 30 days)
           trash [path]                    list removed notes
           help [command]                  options and examples of a command
 
-        To change notes use the 'write' and 'edit' tools, never this shell: content does not go through sh.
+        Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
+        To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
         '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.
         All paths are absolute (e.g. /Work/projects/plan.md); there is no working directory.
@@ -56,6 +59,8 @@ public static class Manual
         Replace: old_text must occur exactly once in the note, matching exactly (whitespace and line breaks
         included); it becomes new_text. Include enough surrounding text to make it unique.
         Append: leave out old_text; new_text is added at the end, on a new line.
+        replace_all: every occurrence of old_text becomes new_text (in the section, if the path has one).
+        To replace text across many notes, use the replace tool.
 
         Sections: put a section in the path, /Work/plan.md#Goals (nested: #Architecture#Gates; sh 'outline'
         lists them). Then old_text only has to be unique within the section, appending adds to the end of
@@ -65,5 +70,19 @@ public static class Manual
         version is the token from 'cat' (or from the last write or edit). If the note changed since, the edit
         fails: cat it again and redo the change. Returns the new version token; earlier versions stay
         recoverable (sh: history, restore).
+        """;
+
+    public const string ReplaceDescription = """
+        Replace a text in every note below a path in Kumbu² (a Markdown second brain; read it with the sh tool),
+        e.g. rename a project everywhere. Two steps:
+
+        1. Preview: call without plan. Lists every note that would change, with counts and excerpts, and
+           returns a plan token. Nothing is written.
+        2. Apply: the same call with plan set to that token. All notes change together, or none: if any of
+           them changed since the preview, nothing is written; preview again.
+
+        path is a vault, a folder or one note (/Work, /Work/projects, /Work/plan.md). old_text matches
+        literally, case-sensitive; with word, only as a whole word (Hecate, not Hecates). A plan is valid for
+        one hour and once. Every changed note keeps its earlier version (sh: history, diff, restore).
         """;
 }

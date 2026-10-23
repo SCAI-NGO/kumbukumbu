@@ -9,7 +9,7 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
 {
     public string Name => "outline";
 
-    public string Usage => "outline <path>";
+    public string Usage => "outline [--version V] <path>";
 
     public string Summary => "the headings of a note, with line ranges and sizes";
 
@@ -18,6 +18,7 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
           List the sections of a note: line range, heading, and size in tokens (about). Duplicate
           headings under one parent show their index. Headings in code blocks and frontmatter don't count.
           Read a section with: cat "<path>#Heading" (nested: #Parent#Child).
+          --version V   the outline of an earlier version from 'history <path>'.
 
           outline /Demo/welcome.md
         """;
@@ -26,17 +27,20 @@ public sealed class OutlineCommand(INoteReader notes) : ICommand
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count == 0) return ShellResult.Error("outline: missing operand");
-        if (args.Count > 1) return ShellResult.Error($"outline: too many arguments{CommandArgs.QuoteHint}");
-        if (SectionAddress.Split(args[0]).Fragment is not null)
+        if (!CommandArgs.TryTakeVersion(Name, args, out var version, out var rest, out var versionError)) return versionError!;
+        if (CommandArgs.CheckOptions(Name, rest) is { } optionError) return optionError;
+        if (rest.Count == 0) return ShellResult.Error("outline: missing operand");
+        if (rest.Count > 1) return ShellResult.Error($"outline: too many arguments{CommandArgs.QuoteHint}");
+        if (SectionAddress.Split(rest[0]).Fragment is not null)
         {
             return ShellResult.Error("outline: give the note without a section; the outline shows all of them");
         }
 
-        if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
+        if (!CommandArgs.TryParsePath(Name, rest[0], out var path, out var pathError)) return pathError!;
 
-        var note = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
+        var note = version is null
+            ? await CommandArgs.ReadNoteAsync(Name, notes, path, ct)
+            : await CommandArgs.ReadVersionAsync(Name, notes, path, version, ct);
         return note.IsError ? note : note with { Output = Render(path, note.Output) };
     }
 

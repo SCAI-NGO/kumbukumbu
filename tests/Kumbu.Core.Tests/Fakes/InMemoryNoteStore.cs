@@ -45,6 +45,9 @@ public sealed class InMemoryNoteStore : INoteStore
     /// <summary>Makes the next compare-and-swap fail once, as if another writer got there first.</summary>
     public Func<StoredNote, StoredNote>? Interfere { get; set; }
 
+    public Task<string?> ReadVersionAsync(VaultPath path, string version, CancellationToken ct) =>
+        Task.FromResult(_notes.TryGetValue(path, out var n) ? Versions.Find(n, version) : null);
+
     public Task<string?> ReadAsync(VaultPath path, CancellationToken ct) =>
         Task.FromResult(_notes.TryGetValue(path, out var note) ? note.Content : null);
 
@@ -76,14 +79,34 @@ public sealed class InMemoryNoteStore : INoteStore
         return Task.FromResult(true);
     }
 
-    public Task<bool> TryMoveAsync(StoredNote current, StoredNote target, string movedBy, DateTime at, CancellationToken ct)
+    public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string movedBy, DateTime at, CancellationToken ct)
     {
-        Race(current.Path);
-        if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
-        if (!_notes.TryAdd(target.Path, target)) return Task.FromResult(false);
-        _notes.Remove(current.Path);
-        _moves.Add(new MoveRecord(current.Path, target.Path, movedBy, at));
-        return Task.FromResult(true);
+        foreach (var (current, _) in batch.Replaces.Concat(batch.Moves)) Race(current.Path);
+
+        // Check everything first, then write everything: all or nothing.
+        var conflicts = new List<VaultPath>();
+        foreach (var (current, _) in batch.Replaces.Concat(batch.Moves))
+        {
+            if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) conflicts.Add(current.Path);
+        }
+
+        var leaving = batch.Moves.Select(m => m.Current.Path).ToHashSet();
+        foreach (var (_, target) in batch.Moves)
+        {
+            if ((_notes.ContainsKey(target.Path) && !leaving.Contains(target.Path)) || Damaged.Contains(target.Path)) conflicts.Add(target.Path);
+        }
+
+        if (conflicts.Count > 0) return Task.FromResult<IReadOnlyList<VaultPath>>(conflicts);
+
+        foreach (var (current, next) in batch.Replaces) _notes[current.Path] = next;
+        foreach (var (current, _) in batch.Moves) _notes.Remove(current.Path);
+        foreach (var (current, target) in batch.Moves)
+        {
+            _notes[target.Path] = target;
+            _moves.Add(new MoveRecord(current.Path, target.Path, movedBy, at));
+        }
+
+        return Task.FromResult<IReadOnlyList<VaultPath>>([]);
     }
 
     public Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)

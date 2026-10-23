@@ -9,7 +9,7 @@ public sealed partial class Sort(INoteReader notes) : ICommand
 {
     private static readonly Option[] Spec =
     [
-        new('r', "reverse"), new('u', "unique"), new('n', "numeric-sort"), new('f', "ignore-case"),
+        new('r', "reverse"), new('u', "unique"), new('n', "numeric-sort"), new('f', "ignore-case"), new(null, "version", TakesValue: true),
     ];
 
     public string Name => "sort";
@@ -37,7 +37,7 @@ public sealed partial class Sort(INoteReader notes) : ICommand
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct);
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
         if (text.IsError) return text;
 
         var keyComparer = options.Has("numeric-sort")

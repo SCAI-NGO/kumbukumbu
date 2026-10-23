@@ -299,7 +299,7 @@ A wikilink is `[[target]]`, with optional parts: `#Heading` or `#^block` after t
 
 So `mv` resolves every link in the vault twice, with the notes as they are and as they will be, and rewrites exactly the links whose target would change, back to the note they meant. The new text keeps **the author's form** where it can (decided after the phase 4b test): a bare name stays a bare name (`[[alpha]]` → `[[omega]]`), a path keeps its length (`[[projects/kumbu]]` → `[[archive/kumbu]]`), so moving a note back restores the original links. Where the kept form wouldn't lead uniquely to the right note, and for relative links and links protected from a collision, it falls back to the **most specific form**, the note's path in its vault without `.md` (`[[projects/kumbu]]`), which can't be ambiguous. Heading, alias and `!` stay; every other byte of the note stays as it was. Each changed note is a normal write (compare-and-swap, history), so a link rewrite can be undone like any edit.
 
-The move itself is atomic per document: insert at the new path (the unique index refuses an existing note), then delete the old path only if nobody wrote in between, else remove the copy again. The history travels with the note; a move changes no text, so the last writer stays who it was.
+The move and its link rewrites are one transaction (chapter 7): delete the old path only if nobody wrote in between, insert at the new path (the unique index refuses an existing note), and rewrite the linking notes, or none of it. The history travels with the note; a move changes no text, so the last writer stays who it was.
 
 `mv --keep-links` skips the rewriting. The Obsidian plugin will use it: Obsidian rewrites links itself when a file is renamed and uploads those edits, so a second rewrite on the server would collide with them.
 
@@ -332,7 +332,7 @@ This is how disk encryption like LUKS works: many slots, one key. Revoking a cre
 
 Encrypting paths has a price: MongoDB can no longer find a note by its path or keep two notes from having the same one. Kumbu² gives each document a **keyed hash** of its path, `HMAC(path key, "/Work/plan.md")`, where the path key is derived from the vault key. The same path always gives the same hash, so MongoDB can enforce uniqueness and look things up, but without the key the hash says nothing, not even whether two vaults hold the same path.
 
-Everything else that needs the paths (listing, `rg`, links) works on the **working set**: when a vault is first used, the server decrypts all of it into memory and answers from there. Writes still go to MongoDB first, as one atomic operation (concept §4), and update the working set afterwards. A vault that hasn't been used for 15 minutes is locked again: the server forgets its key and its plaintext. Above a memory limit, the least recently used vault goes first.
+Everything else that needs the paths (listing, `rg`, links) works on the **working set**: when a vault is first used, the server decrypts all of it into memory and answers from there. Writes still go to MongoDB first, as one transaction (chapter 7), and update the working set afterwards. A vault that hasn't been used for 15 minutes is locked again: the server forgets its key and its plaintext. Above a memory limit, the least recently used vault goes first.
 
 Every request derives the lookup value from its own token and only gets the vaults that token has a slot for. An unlocked vault in memory saves the decryption, never the check.
 
@@ -343,3 +343,24 @@ If the dev token is lost, and with it every API-key slot, the recovery key is th
 ### No migration
 
 Databases from before step 5 hold plaintext. Rather than carrying migration code forever, the server refuses such a database with a clear message, and the development data is seeded again, encrypted.
+
+## 7. Many notes at once: diffs, plans and transactions
+
+### Diff: the shortest edit script
+
+`diff` answers "what did this write change?". Two texts are split into lines, and the question becomes: which lines must go and which must come to turn one into the other, with as few changes as possible? **Myers' algorithm** (1986, the one `git diff` uses) finds such a shortest edit script. It walks the edit graph diagonal by diagonal, where a diagonal step is a line both texts share and costs nothing, and stops at the first path that reaches the end. Kumbu² first trims the lines both versions start and end with, so a small change in a long note costs almost nothing.
+
+The output is the **unified diff** format: `@@ -12,3 +12,4 @@` says the hunk covers 3 lines from line 12 of the old text and 4 from line 12 of the new one, followed by context lines (` `), removed (`-`) and added (`+`) lines. Three lines of context, as in git.
+
+Markdown paragraphs are often one long line, so one changed word marks the whole paragraph. `--word` runs the same algorithm again on the words of the changed lines and marks them inline, `[-old-]{+new+}`, as `git diff --word-diff` does.
+
+### Plan tokens: apply what was shown
+
+A change across many notes is the one place where an agent's mistake is expensive to undo by hand. So `replace` is two calls. The preview lists every note it would change and returns a **plan token**: a hash over the call (path, old text, new text, word) and the version of every listed note. The server keeps the plan for an hour. The apply names the token and gets exactly that plan: if any of its notes has another version now, nothing is written. A note added after the preview is not touched, since the preview didn't show it. The idea is the version token's (chapter 3), lifted from one note to a set of notes: *what you saw is what you change*.
+
+### Transactions, and why MongoDB needs a replica set for them
+
+Until step 6 every write touched one document, and a single-document write is atomic in MongoDB. A folder move or a `replace` touches many, and must not stop halfway. A **transaction** groups writes: they all become visible at once when it **commits**, or none do when it **aborts**. Kumbu² runs each change in one: every compare-and-swap, every insert, every move record. If one of them is refused (a note changed, a target exists), the transaction aborts and the working set in memory stays as it was. A cancelled request aborts too; before transactions, a cancellation between two writes needed special care.
+
+MongoDB offers transactions only on a **replica set**, because they are built on the replication log (the oplog). A replica set with a single member is still a replica set: no extra container, no extra cost. The trap is its configuration, which stores each member's host name. Docker's default host name is the container id, which changes when the container is recreated, and the node then no longer recognises itself as a member. `compose.yaml` therefore sets `hostname: mongo`, initiates the set with that name from the health check on first start, and the server connects with `directConnection=true`, so it talks to that one node without caring about names in the configuration.
+

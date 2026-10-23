@@ -12,7 +12,7 @@ public sealed class Mv(NoteMover mover) : ICommand
 
     public string Usage => "mv [--keep-links] <path> <target>";
 
-    public string Summary => "move or rename a note; links to it follow";
+    public string Summary => "move or rename a note or a folder (path ending in /); links follow";
 
     public string Help => """
         mv [--keep-links] <path> <target>
@@ -22,10 +22,15 @@ public sealed class Mv(NoteMover mover) : ICommand
           Every [[wikilink]] in the vault that the move would change is rewritten to point where it
           pointed before, in its most specific form ([[projects/archive/kumbu]]); heading, alias and
           embed stay. The rest of each note stays as it was. The output names the notes it changed.
+        mv [--keep-links] <folder>/ <target>
+          Move a folder with every note below it, keeping the structure: into <target> if that folder
+          exists, otherwise renamed to <target>. The '/' after the folder is required.
+          Everything, the moves and the link rewrites, happens at once or not at all.
           --keep-links  move only; leave links as they are (for clients that rewrite them themselves)
 
           mv /Demo/projects/kumbu.md /Demo/projects/kumbu-v2.md
           mv "/Demo/Meeting Notes.md" /Demo/archive/
+          mv /Demo/projects/ /Demo/archive/2026/
         """;
 
     public bool ReadsInput => false;
@@ -43,6 +48,9 @@ public sealed class Mv(NoteMover mover) : ICommand
 
         if (!CommandArgs.TryParsePath(Name, operands[0], out var source, out var sourceError)) return sourceError!;
         if (!CommandArgs.TryParsePath(Name, operands[1], out var target, out var targetError)) return targetError!;
+
+        // The trailing '/' says "the folder": a mistyped note name never moves a folder.
+        if (operands[0].EndsWith('/')) return await mover.MoveFolderAsync(source, target, !options.Has("keep-links"), Writers.Dev, ct);
         if (operands[1].EndsWith('/')) target = target.Child(source.Name);
 
         return await mover.MoveAsync(source, target, !options.Has("keep-links"), Writers.Dev, ct);

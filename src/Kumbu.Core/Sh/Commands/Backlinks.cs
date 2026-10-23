@@ -26,6 +26,7 @@ public sealed class Backlinks(INoteReader notes) : ICommand
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
+        if (CommandArgs.RefuseVersion(Name, args, "backlinks reads other notes, each with its own versions") is { } versionError) return versionError;
         if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
         if (args.Count == 0) return ShellResult.Error("backlinks: missing operand");
         if (args.Count > 1) return ShellResult.Error($"backlinks: too many arguments{CommandArgs.QuoteHint}");

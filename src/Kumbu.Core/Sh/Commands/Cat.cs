@@ -9,7 +9,7 @@ public sealed class Cat(INoteReader notes) : ICommand
 {
     public string Name => "cat";
 
-    public string Usage => "cat <path>[#section]";
+    public string Usage => "cat [--version V] <path>[#section]";
 
     public string Summary => "print a note, or one section of it";
 
@@ -20,6 +20,8 @@ public sealed class Cat(INoteReader notes) : ICommand
           Address nested headings as #Parent#Child; a unique heading works on its own. Duplicate
           headings under one parent take an index, #Notes[2]. Write a literal '#' as \#.
           The version token comes separately, always for the whole note; pass it to 'edit' or 'write'.
+          --version V   print an earlier version from 'history <path>' instead (no version token: an
+                        earlier version can be compared with 'diff' and brought back with 'restore')
           A whole note too long for one call (about 8000 tokens) prints its outline instead; read it in
           parts with cat "<path>#Section", head -n 40 <path> or rg -n. In a pipeline, cat passes the
           whole note on (cat <path> | tail -n 50).
@@ -33,11 +35,12 @@ public sealed class Cat(INoteReader notes) : ICommand
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count == 0) return ShellResult.Error("cat: missing operand");
-        if (args.Count > 1) return ShellResult.Error($"cat: too many arguments{CommandArgs.QuoteHint}");
+        if (!CommandArgs.TryTakeVersion(Name, args, out var version, out var rest, out var versionError)) return versionError!;
+        if (CommandArgs.CheckOptions(Name, rest) is { } optionError) return optionError;
+        if (rest.Count == 0) return ShellResult.Error("cat: missing operand");
+        if (rest.Count > 1) return ShellResult.Error($"cat: too many arguments{CommandArgs.QuoteHint}");
 
-        return await CommandArgs.ReadAddressAsync(Name, notes, args[0], ct);
+        return await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
     }
 
     /// <summary>

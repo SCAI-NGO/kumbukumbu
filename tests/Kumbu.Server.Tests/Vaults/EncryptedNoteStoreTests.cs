@@ -19,6 +19,9 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
     private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, []);
 
+    private static async Task<bool> MoveAsync(INoteStore store, StoredNote current, StoredNote target) =>
+        (await store.TryCommitAsync(new NoteBatch { Moves = { (current, target) } }, Writers.Dev, T0, Ct)).Count == 0;
+
     private async Task<(VaultWorld World, VaultCatalog Catalog, EncryptedNoteStore Store)> WorldAsync(params string[] vaults)
     {
         var world = new VaultWorld(fixture.NewDatabase());
@@ -51,7 +54,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await store.TryCreateAsync(New("/Geheimprojekt/weg.md", "Acme Papierkorb"), Ct);
         await store.TryTrashAsync((await store.GetAsync(P("/Geheimprojekt/weg.md"), Ct))!, Writers.Dev, T0, Ct);
         var other = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
-        await store.TryMoveAsync(other, other with { Path = P("/Geheimprojekt/Archiv/Acme.md"), Revision = other.Revision + 1 }, Writers.Dev, T0, Ct);
+        await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv/Acme.md"), Revision = other.Revision + 1 });
 
         var everything = new StringBuilder();
         foreach (var name in await (await world.Db.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
@@ -203,7 +206,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var v1 = New("/Work/a.md", "one");
         await store.TryCreateAsync(v1, Ct);
 
-        Assert.True(await store.TryMoveAsync(v1, v1 with { Path = P("/Work/b.md"), Revision = 2 }, Writers.Dev, T0, Ct));
+        Assert.True(await MoveAsync(store, v1, v1 with { Path = P("/Work/b.md"), Revision = 2 }));
 
         var later = Store(world.Catalog());
         Assert.Null(await later.GetAsync(P("/Work/a.md"), Ct));
@@ -219,14 +222,98 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await store.TryCreateAsync(a, Ct);
         await store.TryCreateAsync(New("/Work/b.md", "b"), Ct);
 
-        Assert.False(await store.TryMoveAsync(a, a with { Path = P("/Work/b.md"), Revision = 2 }, Writers.Dev, T0, Ct));
+        Assert.False(await MoveAsync(store, a, a with { Path = P("/Work/b.md"), Revision = 2 }));
         Assert.Equal("b", await store.ReadAsync(P("/Work/b.md"), Ct));
 
         await Store(world.Catalog()).TryReplaceAsync(a, NoteWriter.Next(a, "a2", Writers.Dev, T0), Ct);
-        Assert.False(await store.TryMoveAsync(a, a with { Path = P("/Work/c.md"), Revision = 2 }, Writers.Dev, T0, Ct));
+        Assert.False(await MoveAsync(store, a, a with { Path = P("/Work/c.md"), Revision = 2 }));
         var later = Store(world.Catalog());
         Assert.Equal("a2", await later.ReadAsync(P("/Work/a.md"), Ct));
         Assert.Null(await later.ReadAsync(P("/Work/c.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_batch_that_fails_at_its_last_step_writes_nothing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        var b = New("/Work/b.md", "b");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+        await store.TryCreateAsync(New("/Work/taken.md", "taken"), Ct);
+
+        // The replace and the first move go through; the last move's target exists, so the transaction aborts.
+        var taken = New("/Work/taken.md", "taken");
+        var batch = new NoteBatch
+        {
+            Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, T0)) },
+            Moves = { (b, b with { Path = P("/Work/moved/b.md"), Revision = 2 }), (taken, taken with { Path = P("/Work/a.md"), Revision = 2 }) },
+        };
+
+        var conflicts = await store.TryCommitAsync(batch, Writers.Dev, T0, Ct);
+
+        Assert.Equal([P("/Work/a.md")], conflicts);
+        var later = Store(world.Catalog());
+        Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Equal("b", await later.ReadAsync(P("/Work/b.md"), Ct));
+        Assert.Equal("taken", await later.ReadAsync(P("/Work/taken.md"), Ct));
+        Assert.Null(await later.ReadAsync(P("/Work/moved/b.md"), Ct));
+        Assert.Null(await later.FindMoveAsync(P("/Work/b.md"), Ct));
+        // The store that tried still matches the database.
+        Assert.Equal("a", await store.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Null(await store.ReadAsync(P("/Work/moved/b.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_stale_revision_anywhere_in_a_batch_writes_nothing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        var b = New("/Work/b.md", "b");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+        await Store(world.Catalog()).TryReplaceAsync(b, NoteWriter.Next(b, "b by someone else", "other", T0), Ct);
+
+        var batch = new NoteBatch { Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, T0)), (b, NoteWriter.Next(b, "b2", Writers.Dev, T0)) } };
+
+        Assert.Equal([P("/Work/b.md")], await store.TryCommitAsync(batch, Writers.Dev, T0, Ct));
+        var later = Store(world.Catalog());
+        Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Equal("b by someone else", await later.ReadAsync(P("/Work/b.md"), Ct));
+        Assert.Equal("b by someone else", await store.ReadAsync(P("/Work/b.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Moves_may_swap_into_paths_other_moves_leave()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        var b = New("/Work/b.md", "b");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+
+        var batch = new NoteBatch { Moves = { (a, a with { Path = P("/Work/b.md"), Revision = 2 }), (b, b with { Path = P("/Work/c.md"), Revision = 2 }) } };
+
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0, Ct));
+        var later = Store(world.Catalog());
+        Assert.Null(await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Equal("a", await later.ReadAsync(P("/Work/b.md"), Ct));
+        Assert.Equal("b", await later.ReadAsync(P("/Work/c.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_cancelled_trash_leaves_the_note_where_it_was()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        await store.TryCreateAsync(a, Ct);
+        await store.GetAsync(a.Path, Ct);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.TryTrashAsync(a, Writers.Dev, T0, new CancellationToken(canceled: true)));
+
+        var later = Store(world.Catalog());
+        Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Empty(await later.ListTrashAsync(P("/Work"), Ct));
     }
 
     [Fact]
@@ -403,6 +490,27 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         Assert.Equal(1, await later.CountDamagedAsync(P("/Work"), Ct));
         // The create is refused by the unique index; no exception escapes.
         Assert.False(await later.TryCreateAsync(New("/Work/a.md", "new"), Ct));
+    }
+
+    [Fact]
+    public async Task The_first_read_after_a_repair_in_the_database_finds_the_note()
+    {
+        var (world, _, store) = await WorldAsync();
+        await store.TryCreateAsync(New("/Work/a.md", "a"), Ct);
+        var notes = world.Db.GetCollection<BsonDocument>("notes");
+        var original = await notes.Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct);
+        await DamageAsync(world, "blob");
+        var running = world.Catalog();
+        var damaged = Store(running);
+        Assert.Null(await damaged.GetAsync(P("/Work/a.md"), Ct));
+
+        // Put the original blob back, without a restart: the very next read sees it.
+        await notes.ReplaceOneAsync(new BsonDocument("_id", original["_id"]), original, cancellationToken: Ct);
+        var repaired = Store(running);
+
+        Assert.Equal("a", await repaired.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.False(await repaired.IsDamagedAsync(P("/Work/a.md"), Ct));
+        Assert.Equal(0, await repaired.CountDamagedAsync(P("/Work"), Ct));
     }
 
     [Fact]

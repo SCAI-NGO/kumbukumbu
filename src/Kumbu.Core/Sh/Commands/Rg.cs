@@ -22,7 +22,7 @@ public sealed class Rg(INoteReader notes) : ICommand
         new('l', "files-with-matches"), new('c', "count"), new('n', "line-number"), new('N', "no-line-number"),
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
-        new('C', "context", TakesValue: true), new(null, "files"),
+        new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true),
     ];
 
     public string Name => "rg";
@@ -50,6 +50,7 @@ public sealed class Rg(INoteReader notes) : ICommand
           -N, --no-line-number       hide line numbers
           -m, --max-count N          at most N matching lines per note
           -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
+          --version V                search an earlier version (from 'history') of the one note given
           -A N, -B N, -C N           N lines of context after, before, or around each match
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
@@ -89,8 +90,30 @@ public sealed class Rg(INoteReader notes) : ICommand
         if (!TryBuildRegex(patterns, options, out var regex, out error)) return error;
         var search = new Search(regex, options.Has("invert-match"), max, before!.Value, after!.Value);
 
+        Note? versioned = null;
+        if (options.Value("version") is { } version)
+        {
+            if (input is not null || operands.Count != 1)
+            {
+                return ShellResult.Error("rg: --version names a version of one note; give rg a single note");
+            }
+
+            if (!CommandArgs.TryParsePath(Name, operands[0], out var notePath, out var pathError)) return pathError!;
+            if (notePath.IsRoot || (await notes.ListNotesUnderAsync(notePath, ct)).Count > 0)
+            {
+                return ShellResult.Error("rg: --version names a version of one note; give rg a single note");
+            }
+
+            var old = await CommandArgs.ReadVersionAsync(Name, notes, notePath, version, ct);
+            if (old.IsError) return old;
+            input = null;
+            operands = [];
+            versioned = new Note(notePath, old.Output);
+        }
+
         try
         {
+            if (versioned is not null) return SearchContents(search, options, [versioned]);
             return input is null
                 ? await SearchNotesAsync(search, options, operands, ct)
                 : SearchInput(search, options, operands, input);
@@ -124,9 +147,14 @@ public sealed class Rg(INoteReader notes) : ICommand
             foreach (var note in below) found.TryAdd(note.Path, note);
         }
 
+        return SearchContents(search, options, found.Values);
+    }
+
+    private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found)
+    {
         var lineNumbers = !options.Has("no-line-number");
         var output = new List<string>();
-        foreach (var note in found.Values.OrderBy(n => n.Path.Value, TextOrder.Default))
+        foreach (var note in found.OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var lines = Lines.Split(note.Content);
             var matches = search.Matches(lines);
