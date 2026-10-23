@@ -6,7 +6,8 @@ namespace Kumbu.Server.Notes;
 
 public sealed record SeedFile(VaultPath Path, string Content);
 
-public sealed record SeedScan(IReadOnlyList<SeedFile> Files, IReadOnlyList<string> Warnings);
+/// <param name="Vaults">Every vault folder, also one without notes.</param>
+public sealed record SeedScan(IReadOnlyList<SeedFile> Files, IReadOnlyList<string> Warnings, IReadOnlyList<string> Vaults);
 
 public static class SeedScanner
 {
@@ -74,6 +75,14 @@ public static class SeedScanner
             files.Add(new SeedFile(path, text.Replace("\r\n", "\n", StringComparison.Ordinal)));
         }
 
-        return new SeedScan(files, warnings);
+        var vaults = Directory.EnumerateDirectories(root)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => !name.StartsWith('.') && VaultPath.TryParse("/" + name, out _))
+            .Select(name => name.Normalize(NormalizationForm.FormC))
+            .Union(files.Select(f => f.Path.Vault!))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        return new SeedScan(files, warnings, vaults);
     }
 }

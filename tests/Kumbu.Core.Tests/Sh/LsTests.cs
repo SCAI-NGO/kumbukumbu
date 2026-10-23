@@ -46,8 +46,17 @@ public class LsTests
         Assert.Equal(ShellResult.Ok("Meeting Notes.md"), await Run("/Work/../Ideas"));
 
     [Fact]
-    public async Task EmptyReaderListsNothing() =>
-        Assert.Equal(ShellResult.Ok(""), await new Ls(new InMemoryNoteStore()).RunAsync([], null, CancellationToken.None));
+    public async Task WithoutVaultsItSaysSo() =>
+        Assert.Equal(ShellResult.Ok("(no vaults)"), await new Ls(new InMemoryNoteStore()).RunAsync([], null, CancellationToken.None));
+
+    [Fact]
+    public async Task LockedVaultsAreMentioned()
+    {
+        var store = new InMemoryNoteStore { LockedVaults = 3 };
+        Assert.Equal(
+            ShellResult.Ok("(no vaults)\n(3 vaults in the database don't open with this token; the server log says how to recover them)"),
+            await new Ls(store).RunAsync([], null, CancellationToken.None));
+    }
 
     [Fact]
     public async Task RelativePath() =>

@@ -47,6 +47,8 @@ internal static class CommandArgs
             return ShellResult.Ok(content) with { Version = new NoteVersion(path.Value, VersionToken.Of(content)) };
         }
 
+        if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(command, path));
+
         var below = await notes.ListNotesUnderAsync(path, ct);
         return below.Count > 0 || path.IsRoot || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
             ? ShellResult.Error($"{command}: {path.Value}: Is a directory")

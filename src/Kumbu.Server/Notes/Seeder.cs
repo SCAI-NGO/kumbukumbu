@@ -13,6 +13,9 @@ namespace Kumbu.Server.Notes;
 /// </summary>
 public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog, TimeProvider time, ILogger<Seeder> log) : IHostedService
 {
+    /// <summary>How the setting is named with Compose and directly.</summary>
+    private const string RecoveryKeysSetting = "KUMBU_RECOVERY_KEYS from .env (Kumbu__Recovery__Keys)";
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var o = options.Value;
@@ -39,8 +42,16 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
     private async Task RecoverAsync(string key, string devToken, CancellationToken ct)
     {
         var vaults = await catalog.RecoverAsync(key, devToken, ct);
-        if (vaults.Count == 0) log.LogWarning("A recovery key from Kumbu:Recovery:Keys opened no vault (mistyped, or its vault is gone)");
-        else log.LogInformation("Recovery key opened vault {Vaults}; the dev token now has a slot there", string.Join(", ", vaults));
+        if (vaults.Count == 0)
+        {
+            log.LogWarning("A recovery key from {Setting} opened no vault (mistyped, or its vault is gone)", RecoveryKeysSetting);
+        }
+
+        foreach (var (name, added) in vaults)
+        {
+            if (added) log.LogInformation("Recovery key opened vault {Vault}; the dev token now has a slot there", name);
+            else log.LogInformation("Recovery key for vault {Vault}: the dev token already has a slot there; remove {Setting}", name, RecoveryKeysSetting);
+        }
     }
 
     private async Task SeedAsync(string seedPath, string devToken, bool mayCreate, CancellationToken ct)
@@ -55,36 +66,37 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
         var scan = SeedScanner.Scan(seedPath);
         var store = new EncryptedNoteStore(catalog, new FixedCredential(devToken));
         var existing = await store.ListVaultsAsync(ct);
-        int seeded = 0, filled = 0, left = 0;
-        foreach (var group in scan.Files.GroupBy(f => f.Path.Vault!).OrderBy(g => g.Key, StringComparer.Ordinal))
+        int seeded = 0, filled = 0, left = 0, refused = 0;
+        foreach (var name in scan.Vaults)
         {
-            var root = Kumbu.Core.Paths.VaultPath.Root.Child(group.Key);
-            if (existing.Contains(group.Key)
+            var root = Kumbu.Core.Paths.VaultPath.Root.Child(name);
+            if (existing.Contains(name)
                 && ((await store.ListNotesUnderAsync(root, ct)).Count > 0 || (await store.ListTrashAsync(root, ct)).Count > 0))
             {
                 left++;
-                log.LogInformation("Left vault {Vault} alone: it already holds notes (seeding only fills empty vaults)", group.Key);
+                log.LogInformation("Left vault {Vault} alone: it already holds notes (seeding only fills empty vaults)", name);
                 continue;
             }
 
-            if (!existing.Contains(group.Key))
+            if (!existing.Contains(name))
             {
                 // A vault the token can't open may be this one with the real notes: creating a second "Demo"
                 // would hide it once the token gets access again.
                 if (!mayCreate)
                 {
-                    left++;
-                    log.LogError("Did not create vault {Vault}: some vaults don't open with the dev token, and one may be this one", group.Key);
+                    refused++;
+                    log.LogError("Did not create vault {Vault}: some vaults don't open with the dev token, and one may be this one", name);
                     continue;
                 }
 
-                if (!await CreateVaultAsync(group.Key, devToken, ct)) continue;
+                // An empty folder becomes an empty vault too, ready for 'write'.
+                if (!await CreateVaultAsync(name, devToken, ct)) { refused++; continue; }
                 store = new EncryptedNoteStore(catalog, new FixedCredential(devToken));
             }
 
             filled++;
             var now = time.GetUtcNow().UtcDateTime;
-            foreach (var file in group)
+            foreach (var file in scan.Files.Where(f => f.Path.Vault == name))
             {
                 if (await store.TryCreateAsync(new StoredNote(file.Path, file.Content, 1, Writers.Seed, now, [], file.Content), ct)) seeded++;
             }
@@ -96,9 +108,12 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
         }
 
         log.LogInformation(
-            "Seeded {Notes} notes into {Filled} vaults; left {Left} vaults alone ({Skipped} files skipped)",
-            seeded, filled, left, scan.Warnings.Count);
+            "Seeded {Notes} into {Filled}; left {Left} alone{Refused} ({Skipped} skipped)",
+            Count(seeded, "note"), Count(filled, "vault"), Count(left, "vault"),
+            refused > 0 ? $"; did not create {Count(refused, "vault")} (see above)" : "", Count(scan.Warnings.Count, "file"));
     }
+
+    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
     private async Task<bool> CreateVaultAsync(string name, string devToken, CancellationToken ct)
     {
@@ -172,8 +187,8 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
         if (locked > 0)
         {
             log.LogWarning(
-                "{Count} vaults in the database don't open with the dev token. If it was changed, start once with Kumbu__Recovery__Keys",
-                locked);
+                "{Count} in the database {Verb} open with the dev token. If it was changed, start once with the recovery keys in {Setting}",
+                Count((int)locked, "vault"), locked == 1 ? "doesn't" : "don't", RecoveryKeysSetting);
         }
 
         return locked;

@@ -64,3 +64,14 @@ Before the PR, a separate review read the encryption code without being told the
 - **Metadata.** Vault names appear in the server log (`Unlocked vault Demo`); MongoDB holds sizes, counts and times.
 - **Weak tokens.** The lookup value of the dev token is in the database, so a guessable token can be tried offline. The server checks only the length (16 characters); the README says to use a random one.
 - **One process.** Two server processes on one database stay correct (compare-and-swap, unique index, refresh on a failed swap), but one doesn't see the other's new notes until its vault is locked and opened again.
+
+## 6. After the hands-on test (phase 5 notes)
+
+| Observation | Change |
+|---|---|
+| 1 | A document that doesn't open is remembered by its path id (the only thing known about it). `write`, `edit`, `mv`, `rm`, `restore` and `cat` on that path say `damaged: the stored note doesn't open …` instead of throwing or claiming the path is free; a repair or removal in the database counts at the next attempt. The tool catches any remaining cryptographic error as a message. |
+| 2 | `ls` of the vault and of the root ends with `(N notes here don't open: …)`. |
+| 3 | `ls` without vaults says `(no vaults)`, and how many vaults don't open with the token. This hint has to go with per-user keys (step 7), where it would tell one user about another's vaults. |
+| 4 | An empty folder becomes an empty vault. |
+| 5 | Recovery log lines tell a new slot from an existing one and name `KUMBU_RECOVERY_KEYS` as well as `Kumbu__Recovery__Keys`; the summary counts refused vaults separately and uses singular and plural. |
+| 6 | README: a vault whose notes were all removed and whose trash expired is seeded again. |

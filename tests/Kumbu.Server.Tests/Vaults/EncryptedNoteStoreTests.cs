@@ -96,8 +96,8 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await Store(catalog).TryCreateAsync(New("/Work/a.md", "kept"), Ct);
         const string newToken = "a-new-token-0123456789abcdef";
 
-        Assert.Equal(["Work"], await world.Catalog().RecoverAsync(recovery!, newToken, Ct));
-        Assert.Equal(["Work"], await world.Catalog().RecoverAsync(recovery!.ToLowerInvariant(), newToken, Ct));
+        Assert.Equal([("Work", true)], await world.Catalog().RecoverAsync(recovery!, newToken, Ct));
+        Assert.Equal([("Work", false)], await world.Catalog().RecoverAsync(recovery!.ToLowerInvariant(), newToken, Ct));
 
         var after = Store(world.Catalog(), newToken);
         Assert.Equal("kept", await after.ReadAsync(P("/Work/a.md"), Ct));
@@ -377,5 +377,55 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         catalog.Sweep();
 
         Assert.Empty(await Store(catalog).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    private static async Task DamageAsync(VaultWorld world, string field)
+    {
+        var notes = world.Db.GetCollection<BsonDocument>("notes");
+        var doc = await notes.Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct);
+        var update = field == "blob"
+            ? new BsonDocument("blob", new BsonBinaryData([.. doc["blob"].AsByteArray.Take(40), .. new byte[20]]))
+            : new BsonDocument("rev", doc["rev"].ToInt64() + 7);
+        await notes.UpdateOneAsync(new BsonDocument("_id", doc["_id"]), new BsonDocument("$set", update), cancellationToken: Ct);
+    }
+
+    [Fact]
+    public async Task A_damaged_note_is_known_by_its_path_and_blocks_it_cleanly()
+    {
+        var (world, _, store) = await WorldAsync();
+        await store.TryCreateAsync(New("/Work/a.md", "a"), Ct);
+        await DamageAsync(world, "blob");
+
+        var later = Store(world.Catalog());
+        Assert.Null(await later.GetAsync(P("/Work/a.md"), Ct));
+        Assert.True(await later.IsDamagedAsync(P("/Work/a.md"), Ct));
+        Assert.False(await later.IsDamagedAsync(P("/Work/b.md"), Ct));
+        Assert.Equal(1, await later.CountDamagedAsync(P("/Work"), Ct));
+        // The create is refused by the unique index; no exception escapes.
+        Assert.False(await later.TryCreateAsync(New("/Work/a.md", "new"), Ct));
+    }
+
+    [Fact]
+    public async Task A_note_damaged_after_loading_is_found_by_the_failed_swap()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var note = New("/Work/a.md", "a");
+        await store.TryCreateAsync(note, Ct);
+        await DamageAsync(world, "rev");
+
+        Assert.False(await Store(catalog).TryReplaceAsync(note, NoteWriter.Next(note, "b", Writers.Dev, T0), Ct));
+
+        var after = Store(catalog);
+        Assert.Null(await after.GetAsync(P("/Work/a.md"), Ct));
+        Assert.True(await after.IsDamagedAsync(P("/Work/a.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Locked_vaults_are_counted_for_the_token()
+    {
+        var (world, _, _) = await WorldAsync("Mine");
+        await world.Catalog().CreateAsync("Theirs", "someone-elses-token-0123456789", saveRecoveryKey: null, Ct);
+
+        Assert.Equal(1, await Store(world.Catalog()).CountLockedVaultsAsync(Ct));
     }
 }

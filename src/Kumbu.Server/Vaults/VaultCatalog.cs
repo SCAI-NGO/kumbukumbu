@@ -103,14 +103,14 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     }
 
     /// <summary>Opens every vault <paramref name="recoveryKeyText"/> belongs to and gives <paramref name="secret"/>
-    /// a slot there, if it has none. Returns the names of those vaults.</summary>
-    public async Task<IReadOnlyList<string>> RecoverAsync(string recoveryKeyText, string secret, CancellationToken ct)
+    /// a slot there, if it has none. Returns those vaults' names, and whether a slot was added.</summary>
+    public async Task<IReadOnlyList<(string Name, bool Added)>> RecoverAsync(string recoveryKeyText, string secret, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         if (!RecoveryKey.TryParse(recoveryKeyText, out var recoveryKey)) return [];
 
         var lookup = VaultCrypto.Derive(secret, LookupLabel, []);
-        var names = new List<string>();
+        var names = new List<(string, bool)>();
         foreach (var slot in await Slots.Find(s => s.Kind == SlotDocument.Recovery).ToListAsync(ct))
         {
             byte[] vaultKey;
@@ -123,16 +123,18 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 continue;
             }
 
-            if (!await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Vault, slot.Vault) & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup)).AnyAsync(ct))
-            {
-                await AddKeySlotAsync(slot.Vault, vaultKey, secret, ct);
-            }
+            var added = !await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Vault, slot.Vault) & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup)).AnyAsync(ct);
+            if (added) await AddKeySlotAsync(slot.Vault, vaultKey, secret, ct);
 
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) names.Add(vault.Name);
+            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) names.Add((vault.Name, added));
         }
 
         return names;
     }
+
+    /// <summary>Vaults <paramref name="secret"/> has no slot for.</summary>
+    public async Task<int> CountLockedAsync(string secret, CancellationToken ct) =>
+        (int)(await CountVaultsAsync(ct) - (await OpenAsync(secret, ct)).Select(v => v.Id).Distinct().Count());
 
     public async Task<long> CountVaultsAsync(CancellationToken ct)
     {
@@ -181,8 +183,24 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>Reads one note again after a compare-and-swap failed: someone else wrote it.</summary>
     internal async Task RefreshAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
-        var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path))).FirstOrDefaultAsync(ct);
-        vault.Notes = doc is null ? vault.Notes.Remove(path) : vault.Notes.SetItem(path, (doc.Id, vault.OpenNote(doc)));
+        var pathId = vault.PathId(path);
+        var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
+        var key = Convert.ToBase64String(pathId);
+        if (doc is null)
+        {
+            vault.Notes = vault.Notes.Remove(path);
+            vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+        }
+        else if (TryOpen(vault, () => vault.OpenNote(doc), doc) is { } note)
+        {
+            vault.Notes = vault.Notes.SetItem(path, (doc.Id, note));
+            vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+        }
+        else
+        {
+            vault.Notes = vault.Notes.Remove(path);
+            vault.DamagedPathIds = vault.DamagedPathIds.Add(key);
+        }
     }
 
     private async Task<UnlockedVault?> LoadAsync(string id, byte[] vaultKey, CancellationToken ct)
@@ -202,12 +220,15 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
             var vault = new UnlockedVault(id, meta.Name, vaultKey, Now);
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
+            var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))
             {
                 if (TryOpen(vault, () => vault.OpenNote(d), d) is { } note) notes[note.Path] = (d.Id, note);
+                else damaged.Add(Convert.ToBase64String(d.PathId));
             }
 
             vault.Notes = notes.ToImmutable();
+            vault.DamagedPathIds = damaged.ToImmutable();
             vault.Trash = [.. (await Trash.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenTrash(d), d)))
                 .Where(t => t.Trashed is not null)

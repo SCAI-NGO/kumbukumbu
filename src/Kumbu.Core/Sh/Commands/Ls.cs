@@ -37,14 +37,25 @@ public sealed class Ls(INoteReader notes) : ICommand
 
         if (dir.IsRoot)
         {
-            // Vaults exist on their own, so an empty one is listed too.
-            return ShellResult.Ok(string.Join('\n', (await notes.ListVaultsAsync(ct)).Order(TextOrder.Default).Select(v => v + "/")));
+            // Vaults exist on their own, so an empty one is listed too. Saying what is missing keeps an
+            // agent from mistaking locked or damaged data for an empty memory and starting from scratch.
+            var lines = (await notes.ListVaultsAsync(ct)).Order(TextOrder.Default).Select(v => v + "/").ToList();
+            if (lines.Count == 0) lines.Add("(no vaults)");
+            if (await notes.CountLockedVaultsAsync(ct) is var locked and > 0)
+            {
+                lines.Add($"({locked} {(locked == 1 ? "vault" : "vaults")} in the database {(locked == 1 ? "doesn't" : "don't")} open with this token; the server log says how to recover {(locked == 1 ? "it" : "them")})");
+            }
+
+            if (await notes.CountDamagedAsync(dir, ct) is var damagedAll and > 0) lines.Add(Damage.Summary(damagedAll));
+            return ShellResult.Ok(string.Join('\n', lines));
         }
 
         var below = await notes.ListNotesUnderAsync(dir, ct);
-        if (below.Count == 0 && dir.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(dir.Segments[0]))
+        var isVault = dir.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(dir.Segments[0]);
+        var damaged = isVault ? await notes.CountDamagedAsync(dir, ct) : 0;
+        if (below.Count == 0 && isVault)
         {
-            return ShellResult.Ok("");
+            return ShellResult.Ok(damaged > 0 ? Damage.Summary(damaged) : "");
         }
 
         if (below.Count == 0)
@@ -63,6 +74,7 @@ public sealed class Ls(INoteReader notes) : ICommand
 
         var sorted = entries.ToList();
         sorted.Sort(TextOrder.Default);
+        if (damaged > 0) sorted.Add(Damage.Summary(damaged));
         return ShellResult.Ok(string.Join('\n', sorted));
     }
 }
