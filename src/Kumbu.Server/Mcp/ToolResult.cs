@@ -34,5 +34,10 @@ internal static class ToolResult
         {
             return From(ShellResult.Error(e.Message));
         }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // A backstop: the stores mark damaged documents, so this should not happen.
+            return From(ShellResult.Error("stored data doesn't open (changed or damaged outside Kumbu²); the server log has details"));
+        }
     }
 }

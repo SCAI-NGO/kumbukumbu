@@ -18,6 +18,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         var existing = await store.GetAsync(source, ct);
         if (existing is null)
         {
+            if (await store.IsDamagedAsync(source, ct)) return ShellResult.Error(Damage.Message("mv", source));
             return (await store.ListNotesUnderAsync(source, ct)).Count > 0 || source.IsRoot
                 ? ShellResult.Error($"mv: {source.Value}: Is a directory (mv moves one note at a time)")
                 : ShellResult.Error($"mv: {source.Value}: No such file or directory{await Moves.HintAsync(store, source, ct)}");
@@ -36,6 +37,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         }
 
         if (NoteNames.Problem(target) is { } problem) return ShellResult.Error($"mv: {target.Value}: {problem}");
+        if (await store.IsDamagedAsync(target, ct)) return ShellResult.Error(Damage.Message("mv", target));
         if (await store.GetAsync(target, ct) is not null)
         {
             return ShellResult.Error($"mv: {target.Value} already exists; rm it first, or choose another name");

@@ -64,6 +64,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             }
 
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
+            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
 
             var note = new StoredNote(path, content, 1, writer, Now, []);
             if (!await store.TryCreateAsync(note, ct))
@@ -215,6 +216,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         var existing = await store.GetAsync(path, ct);
         if (existing is null)
         {
+            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("rm", path));
             return (await store.ListNotesUnderAsync(path, ct)).Count > 0 || path.IsRoot
                 ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm removes one note at a time)")
                 : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
@@ -256,6 +258,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         var existing = await store.GetAsync(path, ct);
         if (existing is null)
         {
+            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
             var restored = await store.TryRestoreFromTrashAsync(path, version, writer, Now, ct);
             if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
 
@@ -346,7 +349,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     }
 
     private async Task<ShellResult> MissingAsync(string tool, VaultPath path, CancellationToken ct) =>
-        await Moves.HintAsync(store, path, ct) is { Length: > 0 } moved
+        await store.IsDamagedAsync(path, ct) ? ShellResult.Error(Damage.Message(tool, path))
+        : await Moves.HintAsync(store, path, ct) is { Length: > 0 } moved
             ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory{moved}")
             : ShellResult.Error($"{tool}: {path.Value}: No such file or directory (if it was removed, 'trash' lists it)");
 

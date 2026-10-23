@@ -20,6 +20,11 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 
     public string RecoveryPath { get; } = Directory.CreateTempSubdirectory("kumbu-app-recovery-").FullName;
 
+    public string DatabaseName { get; } = "t" + Guid.NewGuid().ToString("N");
+
+    /// <summary>The app's database, for tests that change it behind the server's back.</summary>
+    public MongoDB.Driver.IMongoDatabase Database => new MongoDB.Driver.MongoClient(_mongo.GetConnectionString()).GetDatabase(DatabaseName);
+
     public async ValueTask InitializeAsync() => await _mongo.StartAsync();
 
     public override async ValueTask DisposeAsync()
@@ -31,7 +36,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("Kumbu:Mongo:ConnectionString", _mongo.GetConnectionString());
-        builder.UseSetting("Kumbu:Mongo:Database", "t" + Guid.NewGuid().ToString("N"));
+        builder.UseSetting("Kumbu:Mongo:Database", DatabaseName);
         builder.UseSetting("Kumbu:DevToken", Token);
         builder.UseSetting("Kumbu:Seed:Path", SamplesPath);
         builder.UseSetting("Kumbu:Recovery:Path", RecoveryPath);

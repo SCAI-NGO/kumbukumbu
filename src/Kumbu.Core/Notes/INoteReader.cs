@@ -25,4 +25,15 @@ public interface INoteReader
 
     /// <summary>The most recent move away from <paramref name="from"/>, or null.</summary>
     Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct);
+
+    /// <summary>Whether a stored note at this path exists but doesn't open (changed or damaged outside Kumbu²).</summary>
+    Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct);
+
+    /// <summary>How many stored notes don't open, in all vaults (root) or in one vault (its root).
+    /// Damaged notes can't be placed in a directory, since their paths are what doesn't open.</summary>
+    Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct);
+
+    /// <summary>How many vaults exist that the caller's credential doesn't open. Only meaningful while the dev
+    /// token is the only credential; with per-user keys (step 7) this would tell one user about another's vaults.</summary>
+    Task<int> CountLockedVaultsAsync(CancellationToken ct);
 }

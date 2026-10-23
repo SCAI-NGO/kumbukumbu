@@ -148,7 +148,8 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
 
         var log = await SeedAsync(world);
 
-        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.StartsWith("1 vaults in the database don't open with the dev token"));
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.StartsWith("1 vault in the database doesn't open with the dev token"));
+        Assert.Contains(log.Entries, e => e.Message == "Seeded 0 notes into 0 vaults; left 0 vaults alone; did not create 1 vault (see above) (0 files skipped)");
         Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.StartsWith("Did not create vault Demo"));
         Assert.Empty(await Store(world.Catalog()).ListVaultsAsync(Ct));
         Assert.Equal(1, await world.Catalog().CountVaultsAsync(Ct));
@@ -169,6 +170,35 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
 
         Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.StartsWith("Did not create vault Demo: its recovery key could not be written"));
         Assert.Equal(0, await world.Catalog().CountVaultsAsync(Ct));
+    }
+
+    [Fact]
+    public async Task An_empty_folder_becomes_an_empty_vault()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Directory.CreateDirectory(Path.Combine(_root, "Leer"));
+        Directory.CreateDirectory(Path.Combine(_root, ".hidden"));
+        Write("Demo/a.md", "a");
+
+        var log = await SeedAsync(world);
+
+        Assert.Equal(["Demo", "Leer"], (await Store(world.Catalog()).ListVaultsAsync(Ct)).Order());
+        Assert.Contains(log.Entries, e => e.Message == "Seeded 1 note into 2 vaults; left 0 vaults alone (0 files skipped)");
+    }
+
+    [Fact]
+    public async Task A_recovery_key_whose_slot_exists_reminds_to_remove_it()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Demo/a.md", "a");
+        await SeedAsync(world);
+        var key = (await File.ReadAllLinesAsync(Directory.GetFiles(_recovery).Single(), Ct)).Single(l => l.StartsWith("kumbu-rk-"));
+
+        var log = new ListLogger<Seeder>();
+        await NewSeeder(world.Catalog(), log, recoveryKeys: key).StartAsync(Ct);
+
+        Assert.Contains(log.Entries, e => e.Message ==
+            "Recovery key for vault Demo: the dev token already has a slot there; remove KUMBU_RECOVERY_KEYS from .env (Kumbu__Recovery__Keys)");
     }
 }
 

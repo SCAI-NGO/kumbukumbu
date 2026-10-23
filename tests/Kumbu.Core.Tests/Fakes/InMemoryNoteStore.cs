@@ -25,6 +25,18 @@ public sealed class InMemoryNoteStore : INoteStore
 
     public void AddVault(string name) => _vaults.Add(name);
 
+    /// <summary>Paths whose stored document doesn't open.</summary>
+    public HashSet<VaultPath> Damaged { get; } = [];
+
+    public int LockedVaults { get; set; }
+
+    public Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) => Task.FromResult(Damaged.Contains(path));
+
+    public Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct) =>
+        Task.FromResult(Damaged.Count(d => vaultOrRoot.IsRoot || d.Vault == vaultOrRoot.Vault));
+
+    public Task<int> CountLockedVaultsAsync(CancellationToken ct) => Task.FromResult(LockedVaults);
+
     public Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([.. _vaults]);
 
     public Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
@@ -54,7 +66,7 @@ public sealed class InMemoryNoteStore : INoteStore
         Task.FromResult(_notes.GetValueOrDefault(path));
 
     public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>
-        Task.FromResult(_vaults.Contains(note.Path.Vault!) && _notes.TryAdd(note.Path, note));
+        Task.FromResult(_vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path) && _notes.TryAdd(note.Path, note));
 
     public Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
     {

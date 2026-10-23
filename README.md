@@ -8,7 +8,7 @@ Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes
 
 The server offers three MCP tools. `sh` is a shell over your notes:
 
-- `ls [path]` lists a directory (no path lists the vaults)
+- `ls [path]` lists a directory (no path lists the vaults, and says if vaults don't open with the token or notes are damaged)
 - `cat <path>` prints a note, with its **version token** in a separate block; `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`)
 - `outline <path>` lists a note's headings with line ranges and sizes
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
@@ -47,7 +47,7 @@ docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'
 docker compose exec kumbu sh -c 'rm /recovery/*.recovery-key.txt'
 ```
 
-Without the dev token and without the recovery key, a vault can't be opened by anyone, including you. To change the dev token: set the new `KUMBU_DEV_TOKEN` and `KUMBU_RECOVERY_KEYS=<key>,<key>` in `.env`, start once (the log says `Recovery key opened vault …`), then remove `KUMBU_RECOVERY_KEYS` again. The old token keeps its slots until revoking comes with step 7.
+Without the dev token and without the recovery key, a vault can't be opened by anyone, including you. While some vaults don't open with the dev token, the server creates no new vaults: one of the locked ones might be the vault a folder belongs to. To change the dev token: set the new `KUMBU_DEV_TOKEN` and `KUMBU_RECOVERY_KEYS=<key>,<key>` in `.env`, start once (the log says `Recovery key opened vault …`), then remove `KUMBU_RECOVERY_KEYS` again. The old token keeps its slots until revoking comes with step 7.
 
 ## Quickstart
 
@@ -63,7 +63,7 @@ docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'   # store the
 Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know:
 
 - **MongoDB is the source of truth.** Agents' changes live there; Kumbu² never writes back to `./vaults`.
-- Seeding is for starting from scratch: at startup each folder becomes an encrypted vault, or fills one that is still empty. A vault that already holds notes (or trash) is left alone, so later changes on disk are not loaded. To load the folders again, `docker compose down -v` wipes the database, **including every change agents made and the vaults' keys**; the next start creates new vaults with new recovery keys.
+- Seeding is for starting from scratch: at startup each folder becomes an encrypted vault (an empty folder an empty vault), or fills one that is still empty. A vault that already holds notes (or trash) is left alone, so later changes on disk are not loaded. One catch: a vault whose notes were all removed, with the trash expired after 30 days, counts as empty and is filled again on the next start. To load the folders again, `docker compose down -v` wipes the database, **including every change agents made and the vaults' keys**; the next start creates new vaults with new recovery keys.
 - Upgrading from before encryption: the server refuses plaintext data from earlier versions and says so. Wipe it with `docker compose down -v`.
 - Symlinked vault folders inside `./vaults` do not resolve inside the container. Point `KUMBU_VAULTS` in `.env` at the real folder instead, for example `KUMBU_VAULTS=/home/me/Notes`.
 - The container runs as an unprivileged user (UID 1654). Your files must be readable by it; unreadable files are skipped with a warning in the log.

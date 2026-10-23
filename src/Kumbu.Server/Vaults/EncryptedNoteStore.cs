@@ -31,6 +31,23 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
         await VaultAsync(from, ct) is { } v ? v.Moves.Where(m => m.From == from).MaxBy(m => m.MovedAt) : null;
 
+    /// <summary>Checks a path known to be damaged against MongoDB again, so a repair or removal in the database
+    /// counts at once, without restarting the server.</summary>
+    public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct)
+    {
+        if (await VaultAsync(path, ct) is not { } v || v.Notes.ContainsKey(path) || !v.IsDamaged(path)) return false;
+        await catalog.RefreshAsync(v, path, ct);
+        return !v.Notes.ContainsKey(path) && v.IsDamaged(path);
+    }
+
+    public async Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct)
+    {
+        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? (await VaultsAsync(ct)).Values : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
+        return vaults.Sum(v => v.DamagedPathIds.Count);
+    }
+
+    public Task<int> CountLockedVaultsAsync(CancellationToken ct) => catalog.CountLockedAsync(credential.Secret, ct);
+
     public async Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct) =>
         await VaultAsync(path, ct) is { } v && v.Notes.TryGetValue(path, out var n) ? n.Note : null;
 

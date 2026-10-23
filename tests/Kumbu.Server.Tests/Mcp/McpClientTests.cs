@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using ModelContextProtocol.Client;
+using MongoDB.Driver;
 using ModelContextProtocol.Protocol;
 
 namespace Kumbu.Server.Tests.Mcp;
@@ -282,5 +283,39 @@ public sealed class McpClientTests(KumbuAppFactory app)
             "moved /Demo/scratch-mv-target.md to /Demo/scratch-dir/renamed.md; rewrote 1 link in /Demo/scratch-mv-source.md",
             Text(moved));
         Assert.Equal("See [[renamed#Target|it]].\n", Text(await ShAsync("cat /Demo/scratch-mv-source.md")));
+    }
+
+    [Fact]
+    public async Task A_document_damaged_behind_the_servers_back_gives_clear_errors()
+    {
+        var path = "/Demo/scratch-damaged.md";
+        var created = await CallAsync("write", new() { ["path"] = path, ["content"] = "fine\n" });
+        var notes = app.Database.GetCollection<MongoDB.Bson.BsonDocument>("notes");
+        var doc = await notes.Find(MongoDB.Driver.FilterDefinition<MongoDB.Bson.BsonDocument>.Empty)
+            .Sort(new MongoDB.Bson.BsonDocument("_id", -1)).FirstAsync(Ct);
+        await notes.UpdateOneAsync(
+            new MongoDB.Bson.BsonDocument("_id", doc["_id"]),
+            new MongoDB.Bson.BsonDocument("$set", new MongoDB.Bson.BsonDocument
+            {
+                ["rev"] = doc["rev"].ToInt64() + 7,
+                ["blob"] = new MongoDB.Bson.BsonBinaryData(new byte[60]),
+            }),
+            cancellationToken: Ct);
+
+        // The swap fails, the refresh finds the document damaged: a message, no exception.
+        var edited = await CallAsync("edit", new() { ["path"] = path, ["version"] = Token(created), ["new_text"] = "more" });
+        Assert.True(edited.IsError);
+        Assert.StartsWith($"edit: {path}: damaged: the stored note doesn't open", Text(edited), StringComparison.Ordinal);
+
+        var written = await CallAsync("write", new() { ["path"] = path, ["content"] = "new" });
+        Assert.StartsWith($"write: {path}: damaged:", Text(written), StringComparison.Ordinal);
+        Assert.StartsWith($"cat: {path}: damaged:", Text(await ShAsync($"cat {path}")), StringComparison.Ordinal);
+        Assert.EndsWith("(1 note here doesn't open: changed or damaged outside Kumbu²; the server log has details)", Text(await ShAsync("ls /Demo")), StringComparison.Ordinal);
+
+        // Removed in the database: the next attempt notices without a restart.
+        await notes.DeleteOneAsync(new MongoDB.Bson.BsonDocument("_id", doc["_id"]), Ct);
+        Assert.NotEqual(true, (await CallAsync("write", new() { ["path"] = path, ["content"] = "again" })).IsError);
+        Assert.NotEqual(true, (await ShAsync($"rm {path}")).IsError);
+        Assert.DoesNotContain("doesn't open", Text(await ShAsync("ls /Demo")), StringComparison.Ordinal);
     }
 }

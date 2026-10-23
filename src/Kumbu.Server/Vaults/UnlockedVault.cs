@@ -44,6 +44,12 @@ public sealed class UnlockedVault
 
     public ImmutableList<MoveRecord> Moves { get; set; } = [];
 
+    /// <summary>Path ids of notes whose documents don't open. Their paths are sealed, so the path id is all
+    /// that's known; it is enough to tell a request that asks for that path.</summary>
+    public ImmutableHashSet<string> DamagedPathIds { get; set; } = [];
+
+    public bool IsDamaged(VaultPath path) => DamagedPathIds.Contains(Convert.ToBase64String(PathId(path)));
+
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
     /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included).</summary>
