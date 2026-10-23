@@ -130,8 +130,36 @@ A blind run through a subagent of this session was blocked by Claude Code's auto
 - Asking instead of editing the index: good judgement, not a tool question.
 - Side finding: an agent without the MCP tools but with a shell finds the token in `.env` and talks to the server directly. Expected for a dev setup with a shared token on localhost; one more reason for per-client tokens later.
 
-**Run 2** should be blind: fixture reset (restore the four linking notes to their versions before the move, `mv --keep-links` the note back, `restore` the PV note), and a session started where it cannot read the repo, with the Kumbu tools loaded natively, e.g. `claude --mcp-config <file> --strict-mcp-config` in an empty directory.
+### Run 2: blind
+
+**Setup.** Fixture reset: the four linking notes restored to their versions before run 1, the note moved back with `mv --keep-links`, the PV note restored from the trash and to its first version; `backlinks` gave the same 6 lines as before run 1. A fresh session in an empty directory outside the repo, started with `claude --mcp-config <file> --strict-mcp-config` (only the Kumbu server, tools loaded natively). Same prompt. The session touched nothing but the Kumbu tools.
+
+**Tool calls, in order** (from the transcript):
+
+1. `ToolSearch` for the three Kumbu tools
+2. `rg -i -l "wärmepumpe|photovoltaik|archiv"`: all candidate notes in one call
+3. `ls`, `ls /Technik/Archiv/`: found `2025/` only
+4. `cat` of the heat pump log: the note is too long, so it got the outline (about 9,600 characters instead of 8,000 tokens of the beginning; the phase 4a decision paying off)
+5. `backlinks` on the heat pump note, `cat` of the PV note, `backlinks` on the PV note
+6. `rg -n -i "Standort Nord|WP Nord|Halle 3|Photovoltaik Halle 2"`: mentions that aren't links, and whether the new name is taken
+7. `cat` of the jour fixe, `head -n 10` of the log (its frontmatter)
+8. `help mv`, then one `mv` to `/Technik/Archiv/2026/Wärmepumpe Nord (Halle 3).md`
+9. `backlinks` on the new path, `rg -n "Standort Nord" /Technik`, `cat` of the template
+10. **`AskUserQuestion` before the `rm`**: the PV note is still linked from the index and the jour fixe, and by its own content the tender is still running. Options: delete and defuse the links (recommended: drop the index line, turn the jour fixe link into plain text), only delete, don't delete. Chris answered "only delete".
+11. `rm` of the PV note
+
+About 16,000 characters of tool output for the whole task, the outline being the largest part.
+
+**Result.** Correct and minimal, the same end state as run 1: one `mv`, 6 links in 4 notes rewritten, the code block untouched, the PV note in the trash. The answer listed the four remaining linking lines, said that the PV note's two links went with it, named the template's code block as "not a real link, left as it was", and listed the two links now dangling. It also pointed out what the move left stale in content: the archived note still says `status: in Umsetzung` and its title still has the old name, the index still says "Inbetriebnahme Ende November", and the log has entries after the test day, so it may still be in use.
+
+**Findings.**
+
+- Without knowing the design, the agent went `backlinks` → read → `help mv` → `mv` → `backlinks` on the new path. It trusted `mv` with the links and checked the result instead of editing links by hand.
+- It used `backlinks` before deleting, unasked, and turned what it found into a question to the user. Observation 2 (`rm` reports dangling links) is still worth doing for agents that don't check first, but this one did.
+- Its recommended option 1 contradicts itself: turning the jour fixe link into plain text is meant to leave the protocol unchanged, but it changes it. A design question about agent judgement, not about the tools. The edit path (remove an index line, unlink a link) is to be tested separately.
+- Unlike run 1, the answer didn't say that the links now have the long form with the path. With the decided link form (observation 4) this matters less, since bare names stay bare.
+- `rg -n` for the plain name after the move found the frontmatter field `projekt: Wärmepumpe Standort Nord` and the old title: text that `mv` rightly leaves alone, but that a user may want to change. The agent offered it instead of doing it.
 
 ## Suggested next step
 
-Run the agent behaviour test (run 2, blind). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
+Test the edit path separately: the same fixture and prompt, answering option 1 (delete and defuse the links). Then build the decided observations 4 (link form) and 11 (seeder only fills an empty vault), and observations 1, 2, 3 and 6, which are small, before step 5; 7 to 9 can follow when they come up. Then build order step 5 (encryption).
