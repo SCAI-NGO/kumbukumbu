@@ -53,7 +53,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task InitializeReturnsTheInstructions()
+    public async Task Initialize_returns_the_instructions()
     {
         await using var client = await app.ConnectAsync();
 
