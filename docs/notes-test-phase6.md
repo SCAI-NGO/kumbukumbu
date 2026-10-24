@@ -63,7 +63,45 @@ The live `tools/list` was read after reconnecting: `sh`, `write`, `edit`, `repla
 
 The stack was wiped and reseeded afterwards. Server log during all of this: no `fail:` or exception apart from the deliberate damage.
 
-Not tested: a transaction aborted by a server crash halfway (would need a kill at the right instant; the unit tests cover the abort path), a `replace` over more notes than fit into the output, history coalescing over real 10-minute windows. No blind agent run yet (see "Suggested next step").
+Not tested: a transaction aborted by a server crash halfway (would need a kill at the right instant; the unit tests cover the abort path), a `replace` over more notes than fit into the output, history coalescing over real 10-minute windows. The blind agent run follows below.
+
+## Blind run: renaming a project
+
+Date: 2026-10-24, after the tests above, before step 6b. Setup as in the phase 4b notes: a fresh Claude Code session started by Chris in an empty scratchpad directory with `--mcp-config <0600 file> --strict-mcp-config` (only the Kumbu² server; the token file was deleted afterwards), no repository, no CLAUDE.md of the project, no project memory. The run took 7 minutes.
+
+**Fixture** (`/Demo/arbeit/`, 10 notes in German, written through MCP, snapshot kept for a rerun): the project note `projekte/Hecate.md` (frontmatter, sections, named after the Greek goddess), `projekte/Hecate Retrospektive.md` (a retrospective of version 1 that might keep its name), two meeting minutes, two people, a todo list, a log with a `kubectl` command in a code block, `ideen/gates.md` with the genitive `Hecates`, and `ideen/namensideen.md`, a table of mythological names where Hecate is also the goddess. Links in every form: bare `[[Hecate]]`, `[[Hecate#Architektur]]`, `[[Hecate|das Gate-Projekt]]`, `[[projekte/Hecate]]`, `[[Hecate Retrospektive]]` and `[[Hecate Retrospektive#Was nicht gut lief]]`. Identifiers in inline code: `hecate-proxy`, `hecate-rules/`.
+
+**Prompt (Chris, verbatim):** „Das Projekt Hecate heißt jetzt Janus. Bitte aktualisiere meine Notizen."
+
+### What the agent did
+
+1. Explored: `rg -i hecate`, `rg --files | rg -i hecate`, `cat` of the project note, the name table and the log, `rg -i janus` (to see whether the new name was already taken).
+2. **Asked two questions before writing anything**, each with a recommendation:
+   - Technical identifiers (`hecate-proxy`, `hecate-rules/`, the `kubectl` command): leave them (recommended) or rename them too. The reason given was that they are real names of deployments and folders, which stay until the infrastructure is renamed too. Chris: leave them.
+   - Older entries (retrospective, log, both meetings): "links yes, text no" (recommended: links lead to the new note, old minutes keep the name of the time, the retrospective note is renamed with a note "then Hecate"), rename everything, or keep the retrospective's name. Chris: the recommendation.
+3. `mv` of both project notes **first**: 11 links rewritten by the server in every form (heading, alias and path kept).
+4. `write` of the project note (title, prose, a sentence on the old name, `aliases: [Hecate]` in the frontmatter for Obsidian), then targeted `edit` calls with `old_text` in the retrospective, the todo list, `anna.md`, `gates.md` (`Hecates Regeln` → `Die Regeln von Janus`, grammatically right) and the name table (Hecate "wieder frei", Janus given to `[[Janus]]`).
+5. A final `rg -n Hecate` to check what is left, and a summary that lists exactly what was renamed, adapted and left alone on purpose.
+
+**It never used `replace`.** The tool was loaded, but each change needed judgement (current state or historical record, project or goddess), so it worked note by note.
+
+### Result
+
+| Check | Result |
+|---|---|
+| Links after the run (`links` on all 10 notes) | 16 links, none broken, none ambiguous |
+| The goddess in `namensideen.md` | Left alone, as text and in the table's origin column |
+| Identifiers in code | Unchanged, as Chris answered |
+| Meetings, log, retrospective text | Text unchanged, links updated, as Chris answered. `Anna stellt die Hecate-Regeln … vor, siehe [[Janus#Architektur]]` is the intended mix |
+| History | The fixture's state survives in every changed note (e.g. `todo.md`: fixture `dev`, link rewrite `dev (mv)`, edit `dev`): the `dev (mv)` writer breaks the coalescing chain |
+| The agent's summary | Accurate; "11 wikilinks" is the exact count |
+
+### What this means for the decisions
+
+- **Observation 1 stands, with lower urgency.** A careful agent did exactly what the warning would recommend (`mv` first, then text). The renaming with judgement made `replace` the wrong tool here, so the warning protects the other case: an agent, or a user's explicit "replace Hecate with Janus everywhere", that does reach for `replace`. A literal `replace` on this fixture would have changed the goddess, `Hecates`, the old minutes and the retrospective's links. The blind run doesn't test that path; a rerun after step 6b with the prompt „Ersetze überall Hecate durch Janus." would.
+- **The questions were the best part.** The agent found both traps the fixture was built around, plus the history question, on its own, and asked instead of guessing. Nothing in the manual told it to; the tool output (`rg -i hecate` showing code identifiers and old minutes) was enough.
+- **For step 6b, changesets and the dev token:** here the fixture (written as `dev` at 11:35) and the agent's run (as `dev` from 11:41) were 6 minutes apart. Today the `dev (mv)` label keeps them apart; with changesets "whichever tool wrote them", they would be one changeset, and the fixture's state would not be in the history. Until step 8 gives each agent its own key, everything is `dev`. That is right for the design, but tests must leave more than 10 minutes between preparing a fixture and a run (or keep a snapshot, as here).
+- Small: `aliases: [Hecate]` makes Obsidian find the note under the old name, in search and link suggestions. Kumbu²'s link resolution ignores aliases (as Obsidian does for `[[Hecate]]`); `rg Hecate` still finds the note through its frontmatter.
 
 ## Observations from the agent's side
 
@@ -85,5 +123,5 @@ Minor: `mv /Demo/q7/ /Demo/q7/` says `/Demo/q7/q7/ is inside /Demo/q7/` (the tar
 
 1. **Build order step 6b** (added to concept §12): implement the decisions on observations 1 (warn on links that would break) and 2 (changesets with ids, `replace` without its exception), together with named checkpoints (concept §4).
 2. Small fixes in step 6b, or with step 7 at the latest: 4, 7, 9; 5, 6 and 8 when convenient; 3 is an idea for later.
-3. **A blind agent run for `replace`** (fresh session, setup as in the phase 4b notes): a vault with a project note `hecate.md`, ten notes linking `[[hecate]]` and mentioning Hecate in prose, and the neutral prompt "The project Hecate is now called Janus. Please update my notes." This shows whether an agent renames the note with `mv` before replacing, or breaks the links (observation 1), and is worth doing before and after the fix.
+3. Rerun the blind test after step 6b, with the same fixture (snapshot) and a second, literal prompt („Ersetze überall Hecate durch Janus.") that leads to `replace`, to see the link warning work.
 4. Then build order step 7 (embeddings and hybrid search).
