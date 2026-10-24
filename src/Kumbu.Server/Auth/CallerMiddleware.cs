@@ -13,8 +13,9 @@ namespace Kumbu.Server.Auth;
 /// configured, or an API key) or, under <c>/api</c> only, the session cookie. Which requests need one
 /// fails closed:
 /// <list type="bullet">
-/// <item>every matched endpoint, unless it is marked <c>AllowAnonymous()</c> (<c>/healthz</c>; later
-/// <c>POST /api/session</c>, <c>POST /api/join</c>, <c>GET /api/invitations/{code}</c>, <c>POST /api/recover</c>),
+/// <item>every matched endpoint, unless it is marked <c>AllowAnonymous()</c> (<c>/healthz</c>,
+/// <c>/api/openapi.json</c>, <c>POST /api/session</c>, <c>POST /api/join</c>, <c>GET /api/invitations/{code}</c>,
+/// <c>POST /api/recover</c>),
 /// so a path spelled differently but routed to <c>MapMcp</c> is still guarded;</item>
 /// <item>every path under <c>/mcp</c> or <c>/api</c> (case-insensitively: endpoint routing matches literal
 /// segments case-insensitively, so <c>/MCP</c> reaches <c>MapMcp("/mcp")</c>), also without an endpoint, unless an

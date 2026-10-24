@@ -5,6 +5,7 @@ using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
@@ -55,6 +56,17 @@ builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
+builder.Services.AddSingleton<AccountLimits>();
+
+// The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
+// body that can't be bound throws, so ApiErrors answers it as {"error": ...} like every other refusal.
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.RespectNullableAnnotations = true;
+    o.SerializerOptions.RespectRequiredConstructorParameters = true;
+});
+builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+builder.Services.AddOpenApi();
 
 // Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
 // and its writer label goes on every write. Scoped, and nothing singleton may depend on them.
@@ -110,6 +122,10 @@ if (!TextOrder.IsCultureAware)
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
+var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
+app.UseSecurityHeaders(publicUrl);
+app.Use(ApiErrors.BadRequestsAsync);
+
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
@@ -125,8 +141,11 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
 app.UseMiddleware<CallerMiddleware>();
-app.MapGet("/healthz", () => "ok").AllowAnonymous();
+app.UseCallerRules(publicUrl);
+app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
 app.MapMcp("/mcp");
+app.MapOpenApi("/api/openapi.json").AllowAnonymous();
+app.MapAccountApi();
 
 app.Run();
 return 0;
