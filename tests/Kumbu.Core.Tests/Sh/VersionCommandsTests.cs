@@ -161,6 +161,18 @@ public class VersionCommandsTests
     }
 
     [Fact]
+    public async Task AFolderMoveThatKeepsItsNameShowsTheFolder()
+    {
+        var store = new InMemoryNoteStore(("/Demo/projects/x.md", "x\n"), ("/Demo/projects/y.md", "y\n"));
+        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        await sh.RunAsync("mv /Demo/projects/ /Demo/archive/projects/", CancellationToken.None);
+
+        Assert.Equal(
+            "2026-10-23 14:00 UTC  dev (mv)  /Demo/projects/ → /Demo/archive/projects/  2 notes",
+            (await sh.RunAsync("history --since 1h /Demo", CancellationToken.None)).Output);
+    }
+
+    [Fact]
     public async Task ARestoresMovesAreOneRowEach()
     {
         var store = new InMemoryNoteStore(("/W/r/x.md", "x\n"), ("/W/r/y.md", "y\n"));

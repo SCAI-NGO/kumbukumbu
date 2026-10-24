@@ -121,8 +121,14 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
                     continue;
                 }
 
+                // The shared tail includes the moved folder's own name when it keeps it ("mv /W/p/ /W/a/p/");
+                // the folders below the pair that every record shares belong to the folder move.
+                var below = list.Select(m => m.From.Segments.TakeLast(SharedTail(m)).SkipLast(1).ToList()).ToList();
+                var depth = 0;
+                while (below.All(b => depth < b.Count && b[depth] == below[0][depth])) depth++;
+                var sub = string.Concat(below[0].Take(depth).Select(s => s + "/"));
                 var (from, to) = folderMove.Key;
-                rows.Add((group.Key.MovedAt, writer, $"{from} → {to}", $"{list.Count} notes"));
+                rows.Add((group.Key.MovedAt, writer, $"{from}{sub} → {to}{sub}", $"{list.Count} notes"));
             }
         }
 
@@ -153,12 +159,21 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
     {
         var from = move.From.Segments;
         var to = move.To.Segments;
-        var tail = 0;
-        while (tail < from.Count && tail < to.Count && from[^(tail + 1)] == to[^(tail + 1)]) tail++;
+        var tail = SharedTail(move);
         if (tail == 0) return (move.From.Value, move.To.Value);
 
         string Folder(IReadOnlyList<string> segments) => "/" + string.Join('/', segments.Take(segments.Count - tail).Append("")).TrimStart('/');
         return (Folder(from), Folder(to));
+    }
+
+    /// <summary>How many trailing segments the source and target path of a move share.</summary>
+    private static int SharedTail(MoveRecord move)
+    {
+        var from = move.From.Segments;
+        var to = move.To.Segments;
+        var tail = 0;
+        while (tail < from.Count && tail < to.Count && from[^(tail + 1)] == to[^(tail + 1)]) tail++;
+        return tail;
     }
 
     /// <summary>"30m", "2h", "1d", or a UTC time such as "2026-10-23 14:00" or "2026-10-23T14:00Z".</summary>

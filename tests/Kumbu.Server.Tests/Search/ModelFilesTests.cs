@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Search;
 using Kumbu.Server.Search;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Kumbu.Server.Tests.Search;
 
@@ -76,5 +78,59 @@ public sealed class ModelFilesTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_dir, "model_fp16.onnx.part")));
         Assert.True(File.Exists(Path.Combine(_dir, "model_fp16.onnx")));
         Assert.False(File.Exists(Path.Combine(_dir, "arctic-m", "model_fp16.onnx")));
+    }
+
+    [Fact]
+    public async Task AReadOnlyModelFolderTurnsSearchByMeaningOffInsteadOfStoppingTheServer()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix file modes only.");
+            return;
+        }
+
+        Sparse("tokenizer.json", 17_083_009);
+        Sparse("model_fp16.onnx", 613_266_244);
+        File.SetUnixFileMode(_dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            if (CanWrite(_dir)) Assert.Skip("Running with privileges that write to a read-only folder anyway (root).");
+
+            var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { ModelPath = _dir } });
+            using var embedder = new OnnxEmbedder(options, new NoHttp(), NullLogger<OnnxEmbedder>.Instance);
+            await embedder.StartAsync(TestContext.Current.CancellationToken);
+            for (var i = 0; i < 100 && embedder.State != SemanticState.Off && !embedder.ExecuteTask!.IsCompleted; i++)
+            {
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+
+            Assert.False(embedder.ExecuteTask!.IsFaulted, embedder.ExecuteTask.Exception?.Message);
+            Assert.Equal(SemanticState.Off, embedder.State);
+            Assert.StartsWith("the embedding model isn't available", embedder.Reason, StringComparison.Ordinal);
+            await embedder.StopAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            File.SetUnixFileMode(_dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static bool CanWrite(string dir)
+    {
+        try
+        {
+            File.Create(Path.Combine(dir, "probe")).Dispose();
+            File.Delete(Path.Combine(dir, "probe"));
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class NoHttp : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => throw new InvalidOperationException("The test must not download");
     }
 }

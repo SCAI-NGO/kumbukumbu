@@ -104,7 +104,17 @@ dotnet test tests/Kumbu.Core.Tests # core only, no Docker
 KUMBU_MODEL_DIR=/path/to/models dotnet test   # also the tests against the real model and tokenizer
 ```
 
-Without `KUMBU_MODEL_DIR` the tests use a stand-in embedder and skip the two tests that need the real model files (`tokenizer.json`, `model_fp16.onnx`).
+`KUMBU_MODEL_DIR` holds one folder per model, as the server keeps them below `Kumbu:Search:ModelPath`:
+
+```
+$KUMBU_MODEL_DIR/
+  arctic-m/tokenizer.json
+  arctic-m/model_fp16.onnx
+  arctic-l/tokenizer.json
+  arctic-l/model_fp16.onnx
+```
+
+Without it the tests use a stand-in embedder and skip the three tests that need the real files: the tokenizer test of each model and the ranking test against arctic-m. A directory in the layout of step 7 (arctic-m's files directly in it) is moved into `arctic-m/` when the server starts (`ModelFiles.AdoptStep7Layout`); the tests don't move it and skip until then.
 
 ## More
 

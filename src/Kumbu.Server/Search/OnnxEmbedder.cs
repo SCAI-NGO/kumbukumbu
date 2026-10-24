@@ -41,11 +41,19 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
             return;
         }
 
+        try
+        {
+            ModelFiles.AdoptStep7Layout(o.ModelPath);
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException)
+        {
+            log.LogWarning("The model files of step 7 in {Path} couldn't be moved into {Key}/ ({Message}); the model is downloaded there instead", o.ModelPath, ModelFiles.Default, e.Message);
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                ModelFiles.AdoptStep7Layout(o.ModelPath);
                 var dir = ModelFiles.Directory(o.ModelPath, o.Model);
                 await DownloadAsync(_model, dir, stoppingToken);
                 Load(dir, o.Threads);
@@ -54,7 +62,7 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
                 log.LogInformation("Embedding model loaded ({Key}: {Repository} at {Revision})", _model.Key, _model.Repository, _model.Revision[..8]);
                 return;
             }
-            catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or OnnxRuntimeException or TaskCanceledException && !stoppingToken.IsCancellationRequested)
+            catch (Exception e) when (e is HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException or OnnxRuntimeException or TaskCanceledException && !stoppingToken.IsCancellationRequested)
             {
                 (State, Reason) = (SemanticState.Off, $"the embedding model isn't available ({e.Message}); the server tries again every {RetryAfter.TotalMinutes} minutes");
                 log.LogError("Embedding model not available: {Message}", e.Message);

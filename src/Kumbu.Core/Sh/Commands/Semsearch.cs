@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
@@ -13,7 +12,7 @@ namespace Kumbu.Core.Sh.Commands;
 /// ranks by cosine similarity plus a small bonus for the query's words; <c>--words</c> ranks by BM25 alone.
 /// <c>rg</c> stays the plain, unranked regex search.
 /// </summary>
-public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
+public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
 {
     private const int DefaultMax = 10;
     private const int SnippetLength = 160;
@@ -80,16 +79,26 @@ public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : I
         }
 
         var chunks = found.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
-        var byKey = chunks.ToDictionary(c => c.Key);
 
         // Every chunk with a cosine takes part, so the bonus can lift a section from anywhere in the scope.
         SemanticResult? semantic = null;
+        var notIndexed = false;
         List<(Chunk Chunk, double? Score)> ranked;
         if (options.Has("words")) ranked = RankByWords(chunks, query);
         else
         {
             semantic = await index.SearchAsync(scope, query, int.MaxValue, ct);
-            if (semantic.State == SemanticState.Ready) ranked = RankByMeaning(chunks, semantic, query, options.Has("meaning"));
+            if (semantic.State == SemanticState.Ready)
+            {
+                ranked = RankByMeaning(chunks, semantic, query, options.Has("meaning"));
+
+                // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
+                if (ranked.Count == 0 && semantic.Pending > 0 && !options.Has("meaning"))
+                {
+                    ranked = RankByWords(chunks, query);
+                    notIndexed = true;
+                }
+            }
             else if (options.Has("meaning")) return ShellResult.Error($"semsearch: {semantic.Reason ?? "search by meaning isn't available"}; without --meaning, it ranks by words");
             else ranked = RankByWords(chunks, query);
         }
@@ -106,7 +115,7 @@ public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : I
             lines.Add($"   {Snippet(c)}");
         }
 
-        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), listed.Count > 0));
+        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0));
         return ShellResult.Ok(Lines.Join(lines));
     }
 
@@ -133,12 +142,9 @@ public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : I
 
     private static bool IsHeadingOnly(Chunk chunk)
     {
-        var text = chunk.Text.Trim();
-        return !text.Contains('\n') && HeadingLine().IsMatch(text);
+        var text = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+        return text.Count == 1 && Outline.HeadingRegex().IsMatch(text[0]);
     }
-
-    [GeneratedRegex(@"^#{1,6}\s")]
-    private static partial Regex HeadingLine();
 
     /// <summary>The current chunk for a hit: the same start line, or the chunk that now contains it (the
     /// index may lag behind a write by a moment).</summary>
@@ -158,7 +164,7 @@ public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : I
         return text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";
     }
 
-    private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool any)
+    private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool notIndexed, bool any)
     {
         var read = any ? "; cat \"path#Section\" reads one" : "";
         if (wordsOnly) return $"(ranked by words{read})";
@@ -168,6 +174,7 @@ public sealed partial class Semsearch(INoteReader notes, ISearchIndex index) : I
         {
             var one = semantic.Pending == 1;
             var subject = one ? "note isn't" : "notes aren't";
+            if (notIndexed) return $"(ranked by words only: {semantic.Pending} {subject} indexed yet{read})";
             var verb = one ? "isn't" : "aren't";
             var rest = meaningOnly ? $"{verb} ranked" : $"{verb} ranked by meaning; semsearch --words finds {(one ? "it" : "them")}";
             return $"(ranked by {by}; {semantic.Pending} {subject} indexed yet and {rest}{read})";

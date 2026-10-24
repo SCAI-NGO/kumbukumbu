@@ -126,17 +126,38 @@ public class SearchTests
     [Fact]
     public async Task SemsearchSaysWhatIsNotIndexedYet()
     {
-        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [], 2));
-        Assert.EndsWith("(ranked by words and meaning; 2 notes aren't indexed yet and aren't ranked by meaning; semsearch --words finds them)", (await Run("semsearch rules /Demo", index)).Output);
-        Assert.EndsWith("(ranked by meaning; 2 notes aren't indexed yet and aren't ranked)", (await Run("semsearch --meaning rules /Demo", index)).Output);
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.5)], 2));
+        Assert.EndsWith("(ranked by words and meaning; 2 notes aren't indexed yet and aren't ranked by meaning; semsearch --words finds them; cat \"path#Section\" reads one)", (await Run("semsearch rules /Demo", index)).Output);
+        Assert.EndsWith("(ranked by meaning; 2 notes aren't indexed yet and aren't ranked; cat \"path#Section\" reads one)", (await Run("semsearch --meaning rules /Demo", index)).Output);
     }
 
     [Fact]
     public async Task PendingNotesAreNamedWithWords()
     {
-        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [], 1));
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.5)], 1));
 
-        Assert.EndsWith("1 note isn't indexed yet and isn't ranked by meaning; semsearch --words finds it)", (await Run("semsearch rules /Demo", index)).Output);
+        Assert.EndsWith("1 note isn't indexed yet and isn't ranked by meaning; semsearch --words finds it; cat \"path#Section\" reads one)", (await Run("semsearch rules /Demo", index)).Output);
+    }
+
+    [Fact]
+    public async Task SemsearchRanksByWordsWhileNothingIsIndexedYet()
+    {
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [], 2));
+
+        Assert.Equal(
+            """
+            1. /Demo/gate.md#Gate  lines 1-2
+               The service checks rules at the entrance.
+            (ranked by words only: 2 notes aren't indexed yet; cat "path#Section" reads one)
+            """,
+            (await Run("semsearch rules /Demo", index)).Output);
+        Assert.Equal(
+            "(nothing found for 'zebra' below /Demo)\n(ranked by words only: 2 notes aren't indexed yet)",
+            (await Run("semsearch zebra /Demo", index)).Output);
+        Assert.EndsWith("(ranked by meaning; 2 notes aren't indexed yet and aren't ranked)", (await Run("semsearch --meaning rules /Demo", index)).Output);
+        Assert.EndsWith(
+            "(ranked by words only: 1 note isn't indexed yet; cat \"path#Section\" reads one)",
+            (await Run("semsearch rules /Demo", new FakeIndex(new SemanticResult(SemanticState.Ready, [], 1)))).Output);
     }
 
     [Fact]
