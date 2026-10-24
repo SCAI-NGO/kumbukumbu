@@ -1,7 +1,9 @@
 # Kumbukumbu — Mobile Editor Spec
 
 Status: **ready for implementation** · Source of truth for look & behaviour: the clickable prototype ("Kumbu Mobile Editor" canvas).
-Stack: TypeScript + Vite + React + Tailwind, `pnpm`. Mobile-first; desktop/tablet layout is a later iteration.
+Stack: TypeScript + Vite + React + Tailwind, `pnpm` (TypeScript decided by Chris, 2026-10-24; the prototype's JSX was for the prototype only). Mobile-first; desktop/tablet layout is a later iteration.
+
+**The prototype is the template for look and feel, not for the backend** (Chris, 2026-10-24). It was made without the full Kumbu² context. Where this spec and `docs/concept.md` differ, the concept wins; the sections below are corrected accordingly (wiki links stay within a vault, agent provenance comes from the history, the API works with paths and version tokens, the UI acts as the user).
 
 ---
 
@@ -73,7 +75,7 @@ Suggested state: one `useEditorStore` (Zustand or a reducer) holding `currentNot
 
 ### Read mode
 
-- **Wiki links** `[[Name]]` resolve by note name, case-insensitive, across vaults. If the note doesn't exist yet, show a dashed underline in muted color; tapping it creates the note in the current folder and opens it in Write mode.
+- **Wiki links** `[[Name]]` resolve within the note's vault, exactly as the MCP `links` command does (the note whose path ends with the link, as in Obsidian; ambiguous links are shown as such), from the same code path. **No links across vaults** (decided by Chris, 2026-10-24). If the note doesn't exist yet, show a dashed underline in muted color; tapping it creates the note in the current folder and opens it in Write mode.
 - **Tasks**: tapping the checkbox toggles `- [ ]` ↔ `- [x]` on that exact source line (hit target 44×44).
 - **Backlinks**: shown under the note, tap to open.
 
@@ -114,9 +116,9 @@ Suggested state: one `useEditorStore` (Zustand or a reducer) holding `currentNot
 
 ## 5. Agent provenance
 
-- The banner appears when the current note has edits by an agent key that the user has not seen yet (or within the last N days; this needs deciding).
-- "Show" highlights the affected blocks with an accent tint and a key label (e.g. `liz`) in the top-right corner of the block.
-- **Backend requirement:** block-level authorship. Proposal: since chunking is already per heading, store `lastEditedBy: apiKeyName` and `lastEditedAt` per chunk, plus a per-user `lastSeenRevision` per note, so the API can return the changed ranges since the user last looked.
+- The banner appears when the current note has changes by an agent that the user has not seen yet (or within the last N days; this needs deciding).
+- "Show" highlights the changed blocks with an accent tint and the writer's label (e.g. `liz`) in the top-right corner of the block.
+- **Backend: from what exists** (decided by Chris, 2026-10-24). Provenance comes from the note's history and changesets (`docs/concept.md` §4, CONCEPTS chapter 8): each version records its writer, and the changes since the user last looked are the diff between the version they last saw and the current one. The only new state is the last version a user has seen, per user and note. No per-chunk authorship is stored.
 - Later: "Accept / Revert" per block. This is out of scope for v1, but leave room for it in the component.
 
 ---
@@ -145,7 +147,7 @@ Suggested state: one `useEditorStore` (Zustand or a reducer) holding `currentNot
 
 The user picks a colour scheme in their settings (decided by Chris, 2026-10-24): the classic Linux schemes, **Catppuccin** and **Tokyo Night** among them, and at least one light scheme. The tokens above are the default scheme ("Kumbu"); every scheme defines the same tokens, so components only ever use tokens.
 
-Candidates: Kumbu (default), Catppuccin Mocha and Latte, Tokyo Night and Tokyo Night Day, Gruvbox Dark and Light, Nord, Dracula, Solarized Dark and Light.
+The set (decided by Chris, 2026-10-24: all of them; a scheme is little more than a token file, and a wide choice makes users feel at home): Kumbu (default), Catppuccin Mocha and Latte, Tokyo Night and Tokyo Night Day, Gruvbox Dark and Light, Nord, Dracula, Solarized Dark and Light, Everforest Dark and Light, Rosé Pine and Rosé Pine Dawn, One Dark and One Light.
 
 **The schemes can't be taken over unchanged.** Their own colours for secondary text (comments, subtext) often miss the 4.5:1 contrast this spec requires, and on light backgrounds even the accent does. Measured against each scheme's background, with the colour the scheme intends for each role:
 
@@ -162,6 +164,12 @@ Candidates: Kumbu (default), Catppuccin Mocha and Latte, Tokyo Night and Tokyo N
 | Dracula | 13.4 | 13.4 | 7.7 | **3.0** | 5.9 |
 | Solarized Dark | 5.6 | 4.7 | 4.7 | **2.8** | 4.7 |
 | Solarized Light | 5.0 | **4.1** | **4.1** | **2.5** | **3.0** |
+| Everforest Dark | 7.4 | 7.4 | 5.1 | **3.8** | 6.2 |
+| Everforest Light | 5.2 | 5.2 | **3.1** | **2.6** | **2.7** |
+| Rosé Pine | 13.4 | 13.4 | 5.5 | **3.4** | 10.5 |
+| Rosé Pine Dawn | 6.7 | 6.7 | **4.0** | **2.7** | **2.6** |
+| One Dark | 6.6 | 6.6 | **3.7** | **2.3** | 5.9 |
+| One Light | 10.9 | 10.9 | 5.0 | **2.5** | **3.9** |
 
 So each scheme ships as a Kumbu variant of it:
 
@@ -178,12 +186,13 @@ So each scheme ships as a Kumbu variant of it:
 
 ## 7. Data & API (assumptions, align with the backend)
 
-- `GET /vaults` → list of vaults the API key can read.
-- `GET /vaults/{v}/tree` → folder/note structure (names only, lazy load per folder if large).
-- `GET /notes/{id}` → `{ id, vault, path[], name, markdown, revision, agentEdits?: [{ key, at, ranges }] }`
-- `PUT /notes/{id}` → `{ markdown, baseRevision }`, which returns `409` on conflict.
-- `GET /search?q=&mode=hybrid|semantic|exact&vault=` → `[{ noteId, name, path, snippet, score, reason }]`. The UI should get the **same ranking as the MCP `search` tool**, served from one code path.
-- `GET /notes/{id}/backlinks`
+The REST API is designed in build step 9 (OpenAPI, shared with the Obsidian plugin); what the UI needs from it, in Kumbu²'s terms:
+
+- The UI acts as the **signed-in user**; API keys (step 8) are for agents and devices. `GET /vaults` lists the vaults the user can open.
+- Notes are addressed by **path** (`/Work/projects/plan.md`), as everywhere in Kumbu²; there are no note ids.
+- Reading a note returns its Markdown and its **version token**; saving sends the token back and gets `409` when the note changed since (the same rule as the MCP `write` and `edit`).
+- Tree, backlinks and search come from the same code paths as `ls`, `backlinks` and the MCP search, so UI and agents see the same results and ranking. Search modes: hybrid, meaning, exact (build step 7).
+- Agent provenance: the note's history (writer, time, version) and a diff against the version the user last saw.
 - **Autosave:** debounce at 800 ms, plus a save on blur and on `visibilitychange`.
 - **Conflict on 409:** show a non-blocking toast with "Agent changed this note — reload / keep mine / view diff". Agents edit concurrently, so this *will* happen.
 
@@ -194,7 +203,7 @@ So each scheme ships as a Kumbu variant of it:
 1. **Editor engine:** start with a plain `<textarea>` (rock-solid with mobile IME). Revisit CodeMirror 6 only if syntax highlighting or live preview is really missed.
 2. **Offline:** no offline cache in v1. Any cache means plaintext or the vault key on the device, which conflicts with the encryption-at-rest model. This is a deliberate policy choice; document it in the README.
 3. **Markdown renderer:** use `markdown-it` or `remark` with a custom wiki-link plugin, instead of the prototype's hand-rolled parser. Preserve Obsidian syntax "as is" (embeds, callouts, frontmatter): render what we support and show the rest raw.
-4. **Agent banner window:** "unseen since my last visit" (needs `lastSeenRevision`) vs. "last N days".
+4. **Agent banner window:** "unseen since my last visit" (needs the last version a user has seen) vs. "last N days".
 5. **Large vaults:** virtualize the tree list above ~500 rows.
 
 ---
