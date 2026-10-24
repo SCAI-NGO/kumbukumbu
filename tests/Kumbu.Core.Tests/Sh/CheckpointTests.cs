@@ -22,8 +22,8 @@ public class CheckpointTests
 
     public CheckpointTests()
     {
-        _writer = new NoteWriter(_store, _time);
-        _sh = new Shell(_store, _writer, new NoteMover(_store, _time), new Checkpoints(_store, _writer, new Plans(), limit: 3));
+        _writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        _sh = new Shell(_store, _writer, new NoteMover(_store, _time, new FixedCaller(Writers.Dev)), new Checkpoints(_store, _writer, new Plans(), limit: 3));
     }
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
@@ -35,7 +35,7 @@ public class CheckpointTests
     private async Task Write(string path, string content)
     {
         var current = await Content(path);
-        Assert.False((await _writer.WriteAsync(path, content, current is null ? null : VersionToken.Of(current), Writers.Dev, CancellationToken.None)).IsError);
+        Assert.False((await _writer.WriteAsync(path, content, current is null ? null : VersionToken.Of(current), CancellationToken.None)).IsError);
     }
 
     private static string Plan(ShellResult preview) =>
@@ -144,7 +144,7 @@ public class CheckpointTests
         _time.Advance(TimeSpan.FromMinutes(1));
         await Write("/Demo/arbeit/plan.md", "# Plan\nJanus\n");
         await Write("/Demo/arbeit/new.md", "new\n");
-        await _writer.RemoveAsync(P("/Demo/arbeit/sub/todo.md"), Writers.Dev, CancellationToken.None);
+        await _writer.RemoveAsync(P("/Demo/arbeit/sub/todo.md"), CancellationToken.None);
 
         Assert.Equal(
             """
@@ -194,7 +194,7 @@ public class CheckpointTests
         await Run("mkcp /Demo/arbeit before");
         await Write("/Demo/arbeit/plan.md", "# Plan\nJanus\n");
         await Write("/Demo/arbeit/new.md", "new\n");
-        await _writer.RemoveAsync(P("/Demo/arbeit/sub/todo.md"), Writers.Dev, CancellationToken.None);
+        await _writer.RemoveAsync(P("/Demo/arbeit/sub/todo.md"), CancellationToken.None);
 
         var preview = await Run("restore --checkpoint before /Demo/arbeit/");
         Assert.StartsWith(
@@ -252,7 +252,7 @@ public class CheckpointTests
     public async Task RestoreBringsBackARemovedNote()
     {
         await Run("mkcp /Demo/welcome.md w");
-        await _writer.RemoveAsync(P("/Demo/welcome.md"), Writers.Dev, CancellationToken.None);
+        await _writer.RemoveAsync(P("/Demo/welcome.md"), CancellationToken.None);
 
         Assert.Equal("restored /Demo/welcome.md from checkpoint 'w' (it had been removed)", (await Run("restore --checkpoint w /Demo/welcome.md")).Output);
         Assert.Equal("hi [[plan]]\n", await Content("/Demo/welcome.md"));
@@ -336,7 +336,7 @@ public class CheckpointTests
         await Write("/Demo/arbeit/new.md", "new\n");
         var plan = Plan(await Run("restore --checkpoint before /Demo/arbeit"));
         await Run($"restore --checkpoint before --plan {plan} /Demo/arbeit");
-        await _writer.RemoveAsync(P("/Demo/welcome.md"), Writers.Dev, CancellationToken.None);
+        await _writer.RemoveAsync(P("/Demo/welcome.md"), CancellationToken.None);
 
         var rows = (await Run("history --since 1h /Demo")).Output.Split('\n');
 

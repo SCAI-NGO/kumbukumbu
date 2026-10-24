@@ -22,7 +22,7 @@ public class FolderMoveTests
     public FolderMoveTests()
     {
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
-        _sh = new Shell(_store, new NoteWriter(_store, time), new NoteMover(_store, time));
+        _sh = new Shell(_store, new NoteWriter(_store, time, new FixedCaller(Writers.Dev)), new NoteMover(_store, time, new FixedCaller(Writers.Dev)));
     }
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);

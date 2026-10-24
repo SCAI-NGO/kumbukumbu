@@ -9,10 +9,11 @@ namespace Kumbu.Core.Notes;
 /// <c>mv</c>: moves one note, or a folder of notes, within a vault and rewrites every link whose target the
 /// move would change. Everything (moves, link rewrites, move records) is one batch: all or nothing.
 /// </summary>
-public sealed class NoteMover(INoteStore store, TimeProvider time)
+public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
-    public async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, string writer, CancellationToken ct)
+    public async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
+        if (caller.Refuse("mv", source) is { } refused) return refused;
         var existing = await store.GetAsync(source, ct);
         if (existing is null)
         {
@@ -31,14 +32,15 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         if (target == source) return ShellResult.Error($"mv: {source.Value} and {target.Value} are the same note");
         if (await CheckTargetAsync(source, target, [], ct) is { } problem) return problem;
 
-        return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks, writer,
+        return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
             $"moved {source.Value} to {target.Value}", ct);
     }
 
     /// <summary>Moves every note below <paramref name="source"/>, keeping the structure below it. Like Unix mv,
     /// into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
-    public async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, string writer, CancellationToken ct)
+    public async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
+        if (caller.Refuse("mv", source) is { } refused) return refused;
         if (source.Segments.Count < 2) return ShellResult.Error($"mv: {source.Value}/ is a vault; a vault can't be moved");
         var below = await store.ListNotesUnderAsync(source, ct);
         if (below.Count == 0)
@@ -69,7 +71,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         }
 
         var count = map.Count == 1 ? "1 note" : $"{map.Count} notes";
-        return await CommitAsync(map, rewriteLinks, writer, $"moved {source.Value}/ to {target.Value}/ ({count})", ct);
+        return await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/ ({count})", ct);
     }
 
     private static VaultPath Rebase(VaultPath path, VaultPath from, VaultPath to)
@@ -108,13 +110,14 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
     /// all other notes. A move changes no text, so a note without rewrites keeps its writer; rewritten notes
     /// get their own history entry, marked "(mv)".</summary>
     private async Task<ShellResult> CommitAsync(
-        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string writer, string message, CancellationToken ct)
+        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct)
     {
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
         var rewrites = rewriteLinks ? Rewrites(notes, map) : [];
         var now = time.GetUtcNow().UtcDateTime;
+        var writer = caller.Writer;
         var marked = $"{writer} (mv)";
         // Link rewrites join the writer's changeset like any write.
         var changeset = await Changeset.ForAsync(store, vault.Segments[0], writer, now, ct);

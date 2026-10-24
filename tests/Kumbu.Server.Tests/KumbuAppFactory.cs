@@ -16,7 +16,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 {
     public const string Token = "test-token-0123456789abcdef";
 
-    private readonly MongoDbContainer _mongo = new MongoDbBuilder(TestImages.Mongo).WithReplicaSet().Build();
+    private readonly MongoDbContainer _mongo = TestImages.MongoContainer();
 
     public static string SamplesPath { get; } = Path.Combine(FindRepoRoot(), "samples");
 
@@ -53,16 +53,43 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 
     public Search.FakeEmbedder Embedder { get; } = new();
 
+    /// <summary>The origin <see cref="PublicApi"/> is reached at.</summary>
+    public const string PublicUrl = "https://kumbu.test";
+
+    private WebApplicationFactory<Program>? _publicApi;
+
+    /// <summary>
+    /// The app as a public instance: <c>Kumbu:PublicUrl</c> set, the client IP taken from <c>X-Forwarded-For</c>
+    /// (so each test can count against an address of its own) and a cheap Argon2. Built once and shared, so its
+    /// in-memory rate limits are shared too.
+    /// </summary>
+    public WebApplicationFactory<Program> PublicApi => _publicApi ??= WithWebHostBuilder(b =>
+    {
+        b.UseSetting("Kumbu:PublicUrl", PublicUrl);
+        b.UseSetting("Kumbu:Proxy:Trusted", "true");
+        b.ConfigureServices(services =>
+        {
+            services.RemoveAll<Kumbu.Server.Accounts.Argon2Kdf>();
+            services.AddSingleton(new Kumbu.Server.Accounts.Argon2Kdf(new Kumbu.Server.Accounts.Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)));
+        });
+    });
+
     /// <summary>Waits until the notes written so far are indexed.</summary>
     public Task IndexedAsync() => Services.GetRequiredService<Kumbu.Server.Search.SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 
-    /// <summary>Connects the official SDK client over the in-memory test server.</summary>
-    public async Task<McpClient> ConnectAsync(string? token = Token)
+    /// <summary>Connects the official SDK client over the in-memory test server, with a bearer token, a
+    /// session cookie (the secret from <c>Sessions.StartAsync</c>), both or neither.</summary>
+    public async Task<McpClient> ConnectAsync(string? token = Token, string? session = null)
     {
         var headers = new Dictionary<string, string>();
         if (token is not null)
         {
             headers["Authorization"] = $"Bearer {token}";
+        }
+
+        if (session is not null)
+        {
+            headers["Cookie"] = $"{Kumbu.Server.Auth.CallerMiddleware.SessionCookie}={session}";
         }
 
         var transport = new HttpClientTransport(

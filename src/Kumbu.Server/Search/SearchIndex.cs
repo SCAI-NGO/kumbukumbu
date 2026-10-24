@@ -55,8 +55,8 @@ public sealed class SearchIndex : BackgroundService
         var otherModel = embeddings.Where(e => e.Value.Model != _embedder.Model && notes.ContainsKey(e.Key)).ToList();
         if (otherModel.Count > 0)
         {
-            _log.LogInformation("Vault {Name}: {Count} {Notes} to embed with {New} (were {Old})",
-                vault.Name, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", _embedder.Model,
+            _log.LogInformation("Vault {VaultId}: {Count} {Notes} to embed with {New} (were {Old})",
+                vault.Id, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", _embedder.Model,
                 string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
@@ -81,7 +81,7 @@ public sealed class SearchIndex : BackgroundService
             catch (Exception e) when (e is not OperationCanceledException)
             {
                 // The next write or unlock tries again; one bad note must not stop the index.
-                _log.LogError("Indexing a note of vault {Vault} failed: {Message}", vault.Name, e.Message);
+                _log.LogError("Indexing a note of vault {VaultId} failed: {Message}", vault.Id, e.Message);
             }
             finally
             {

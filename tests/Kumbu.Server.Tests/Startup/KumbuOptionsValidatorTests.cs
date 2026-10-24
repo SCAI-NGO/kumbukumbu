@@ -5,19 +5,18 @@ public sealed class KumbuOptionsValidatorTests
 {
     private const string ValidMongo = "mongodb://localhost:27017";
 
-    private static KumbuOptions Options(string token, string connectionString) =>
+    private static KumbuOptions Options(string? token, string connectionString) =>
         new() { DevToken = token, Mongo = new MongoOptions { ConnectionString = connectionString } };
 
     private static Microsoft.Extensions.Options.ValidateOptionsResult Validate(KumbuOptions o) =>
         new KumbuOptionsValidator().Validate(null, o);
 
     [Theory]
-    [InlineData("")]
     [InlineData("   ")]
     [InlineData("short-token")]
     [InlineData("0123456789abcde")]
     [InlineData("change-me")]
-    public void Rejects_an_empty_short_or_placeholder_token(string token)
+    public void Rejects_a_blank_short_or_placeholder_token(string token)
     {
         var result = Validate(Options(token, ValidMongo));
 
@@ -59,10 +58,18 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Contains("arctic-l", failure);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Accepts_no_dev_token_at_all(string? token)
+    {
+        Assert.True(Validate(Options(token, ValidMongo)).Succeeded);
+    }
+
     [Fact]
     public void Reports_both_failures_together()
     {
-        var result = Validate(Options("", ""));
+        var result = Validate(Options("short", ""));
 
         Assert.Equal([KumbuOptions.DevTokenMessage, KumbuOptionsValidator.MongoMessage], result.Failures);
     }
@@ -73,5 +80,47 @@ public sealed class KumbuOptionsValidatorTests
     public void Accepts_a_token_of_at_least_16_characters(string token)
     {
         Assert.True(Validate(Options(token, ValidMongo)).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("kumbu.example.org")]
+    [InlineData("/join")]
+    [InlineData("ftp://kumbu.example.org")]
+    [InlineData("https://kumbu.example.org/?x=1")]
+    [InlineData("https://kumbu.example.org/kumbu")]
+    [InlineData("https://user@kumbu.example.org")]
+    public void Rejects_a_public_url_that_isnt_an_absolute_http_url(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.PublicUrl = url;
+
+        Assert.Equal([KumbuOptionsValidator.PublicUrlMessage], Validate(options).Failures);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("https://kumbu.example.org")]
+    [InlineData("http://localhost:8080/")]
+    public void Accepts_no_public_url_or_an_absolute_http_url(string? url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.PublicUrl = url;
+
+        Assert.True(Validate(options).Succeeded);
+    }
+
+    // Behind a proxy that terminates TLS the request's own scheme is http, so without a PublicUrl the Origin
+    // check would refuse every state-changing request from the web app.
+    [Fact]
+    public void A_trusted_proxy_needs_a_public_url()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Proxy.Trusted = true;
+
+        Assert.Equal([KumbuOptionsValidator.ProxyNeedsPublicUrlMessage], Validate(options).Failures);
+
+        options.PublicUrl = "https://kumbu.example.org";
+        Assert.True(Validate(options).Succeeded);
     }
 }

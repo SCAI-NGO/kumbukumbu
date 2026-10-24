@@ -23,6 +23,9 @@ public sealed class SlotDocument
     public const string ApiKey = "key";
     public const string Recovery = "recovery";
 
+    /// <summary>The vault key wrapped by the owner's user key (accounts design §3); has no recovery slot of its own.</summary>
+    public const string User = "user";
+
     [BsonId]
     public ObjectId Id { get; set; }
 
@@ -35,6 +38,23 @@ public sealed class SlotDocument
     /// <summary>Identifies which credential the slot belongs to; derived, never the credential itself.</summary>
     [BsonElement("lookup"), BsonIgnoreIfNull]
     public byte[]? Lookup { get; set; }
+
+    /// <summary>User slots only: a keyed hash of the vault's normalised name, so MongoDB can keep a user's vault
+    /// names unique (partial unique index with <see cref="Lookup"/>) without ever seeing a name.</summary>
+    [BsonElement("nameId"), BsonIgnoreIfNull]
+    public byte[]? NameId { get; set; }
+
+    /// <summary>User slots only: the owner's user id, in the clear, so the admin's user list can count a user's
+    /// vaults and their storage without any key. Which user owns which vaults is no secret from the operator.</summary>
+    [BsonElement("owner"), BsonIgnoreIfNull]
+    public string? Owner { get; set; }
+
+    /// <summary>
+    /// Slots of an API key (kind <see cref="ApiKey"/>) only: the key's id. Such a slot seals the vault key together
+    /// with the key's right on the vault; the dev token's slots have none and seal the vault key alone.
+    /// </summary>
+    [BsonElement("apiKey"), BsonIgnoreIfNull]
+    public string? KeyId { get; set; }
 
     [BsonElement("wrapped")]
     public byte[] Wrapped { get; set; } = [];

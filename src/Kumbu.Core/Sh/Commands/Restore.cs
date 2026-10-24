@@ -43,13 +43,13 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints) : IComma
         {
             if (operands.Count > 1) return ShellResult.Error($"restore: --checkpoint takes one path; the checkpoint is the version{CommandArgs.QuoteHint}");
             if (!CommandArgs.TryParsePath(Name, operands[0], out var scope, out var scopeError)) return scopeError!;
-            return await checkpoints.RestoreAsync(scope, checkpoint, options.Value("plan"), Writers.Dev, ct);
+            return await checkpoints.RestoreAsync(scope, checkpoint, options.Value("plan"), ct);
         }
 
         if (options.Has("plan")) return ShellResult.Error("restore: --plan applies the preview of a restore --checkpoint");
         if (operands.Count > 2) return ShellResult.Error("restore: too many arguments");
         if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
 
-        return await writer.RestoreAsync(path, operands.Count == 2 ? operands[1] : null, Writers.Dev, ct);
+        return await writer.RestoreAsync(path, operands.Count == 2 ? operands[1] : null, ct);
     }
 }

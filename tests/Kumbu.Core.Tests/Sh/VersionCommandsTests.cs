@@ -20,8 +20,8 @@ public class VersionCommandsTests
 
     public VersionCommandsTests()
     {
-        _writer = new NoteWriter(_store, _time);
-        _sh = new Shell(_store, _writer, new NoteMover(_store, _time));
+        _writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        _sh = new Shell(_store, _writer, new NoteMover(_store, _time, new FixedCaller(Writers.Dev)));
     }
 
     private static string V(string content) => VersionToken.Of(content);
@@ -29,7 +29,7 @@ public class VersionCommandsTests
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
 
     private async Task WritePlanV2() =>
-        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V2, V(V1), Writers.Dev, CancellationToken.None)).IsError);
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V2, V(V1), CancellationToken.None)).IsError);
 
     // --- --version ---
 
@@ -152,7 +152,7 @@ public class VersionCommandsTests
     public async Task AFolderMoveIsOneRowWithItsNoteCount()
     {
         var store = new InMemoryNoteStore(("/Demo/a/x.md", "x\n"), ("/Demo/a/deep/y.md", "y\n"));
-        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
         await sh.RunAsync("mv /Demo/a/ /Demo/b/", CancellationToken.None);
 
         Assert.Equal(
@@ -164,7 +164,7 @@ public class VersionCommandsTests
     public async Task AFolderMoveThatKeepsItsNameShowsTheFolder()
     {
         var store = new InMemoryNoteStore(("/Demo/projects/x.md", "x\n"), ("/Demo/projects/y.md", "y\n"));
-        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
         await sh.RunAsync("mv /Demo/projects/ /Demo/archive/projects/", CancellationToken.None);
 
         Assert.Equal(
@@ -179,7 +179,7 @@ public class VersionCommandsTests
         var at = _time.GetUtcNow().UtcDateTime;
         store.AddMove(new MoveRecord(Path("/W/elsewhere/x2.md"), Path("/W/r/x.md"), "dev (restore)", at));
         store.AddMove(new MoveRecord(Path("/W/r/sub/z.md"), Path("/W/r/y.md"), "dev (restore)", at));
-        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
 
         var rows = (await sh.RunAsync("history --since 1h /W", CancellationToken.None)).Output.Split('\n');
 
@@ -197,7 +197,7 @@ public class VersionCommandsTests
         store.AddMove(new MoveRecord(Path("/W/a/x.md"), Path("/W/b/x.md"), "dev", at));
         store.AddMove(new MoveRecord(Path("/W/a/deep/y.md"), Path("/W/b/deep/y.md"), "dev", at));
         store.AddMove(new MoveRecord(Path("/W/c.md"), Path("/W/d.md"), "dev", at));
-        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
 
         // The "what" column is padded to the longest entry, so the note count lines up.
         Assert.Equal(
@@ -212,10 +212,10 @@ public class VersionCommandsTests
     {
         await WritePlanV2();
         _time.Advance(TimeSpan.FromMinutes(9));
-        Assert.False((await _writer.WriteAsync("/Demo/old.md", "o2\n", V("o\n"), Writers.Dev, CancellationToken.None)).IsError);
+        Assert.False((await _writer.WriteAsync("/Demo/old.md", "o2\n", V("o\n"), CancellationToken.None)).IsError);
         _time.Advance(TimeSpan.FromMinutes(9));
         // 18 minutes after the first write, but never 10 minutes without one: still the same changeset.
-        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V1, V(V2), Writers.Dev, CancellationToken.None)).IsError);
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V1, V(V2), CancellationToken.None)).IsError);
 
         var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
         var old = (await _store.GetAsync(VaultPath.TryParse("/Demo/old.md", out var o) ? o : null!, CancellationToken.None))!;
@@ -229,7 +229,7 @@ public class VersionCommandsTests
     {
         await WritePlanV2();
         _time.Advance(TimeSpan.FromMinutes(11));
-        await _writer.WriteAsync("/Demo/plan.md", "v3\n", V(V2), Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/plan.md", "v3\n", V(V2), CancellationToken.None);
         var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
         Assert.Equal([V2, V1], plan.History.Select(h => h.Content));
 
@@ -239,7 +239,7 @@ public class VersionCommandsTests
         {
             _time.Advance(TimeSpan.FromMinutes(9));
             var next = $"v{i + 4}\n";
-            await _writer.WriteAsync("/Demo/plan.md", next, V(version), Writers.Dev, CancellationToken.None);
+            await _writer.WriteAsync("/Demo/plan.md", next, V(version), CancellationToken.None);
             version = next;
         }
 
@@ -254,7 +254,7 @@ public class VersionCommandsTests
         await WritePlanV2();
         await Run($"restore /Demo/plan.md {V(V1)}");
         _time.Advance(TimeSpan.FromMinutes(1));
-        await _writer.WriteAsync("/Demo/plan.md", "after\n", V(V1), Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/plan.md", "after\n", V(V1), CancellationToken.None);
 
         var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
         Assert.Equal([V1, V2, V1], plan.History.Select(h => h.Content));

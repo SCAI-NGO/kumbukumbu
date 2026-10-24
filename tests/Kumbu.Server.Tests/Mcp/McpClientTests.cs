@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Sh;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using MongoDB.Driver;
 using ModelContextProtocol.Protocol;
@@ -201,7 +202,9 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var result = await ShAsync("ls /");
 
         Assert.NotEqual(true, result.IsError);
-        Assert.Equal("Demo/\nIdeas/", Text(result));
+        // Only the vault lines: users' vaults that other tests in this collection create are neither listed nor counted
+        // as locked, but a footer below the list (a hint, a locked count) isn't part of what this test checks.
+        Assert.Equal(["Demo/", "Ideas/"], Text(result).Split('\n').TakeWhile(l => l.EndsWith('/')));
     }
 
     [Fact]
@@ -387,5 +390,60 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.NotEqual(true, (await CallAsync("write", new() { ["path"] = path, ["content"] = "again" })).IsError);
         Assert.NotEqual(true, (await ShAsync($"rm {path}")).IsError);
         Assert.DoesNotContain("doesn't open", Text(await ShAsync("ls /Demo")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_read_only_key_is_refused_every_write_with_the_missing_right_named()
+    {
+        var users = new Kumbu.Server.Accounts.UserCatalog(
+            app.Database,
+            new Kumbu.Server.Accounts.Argon2Kdf(new Kumbu.Server.Accounts.Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)),
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<Kumbu.Server.Accounts.UserCatalog>.Instance);
+        var username = "u" + Guid.NewGuid().ToString("N")[..12];
+        await users.CreateAsync(username, "correct horse battery staple", Kumbu.Server.Accounts.Roles.User, Ct);
+        var (user, userKey, _) = (await users.TrySignInAsync(username, "correct horse battery staple", Ct))!.Value;
+        var catalog = app.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        var reading = (await catalog.CreateForUserAsync("Reading", user.Id, userKey, Ct)).Id;
+        var writing = (await catalog.CreateForUserAsync("Writing", user.Id, userKey, Ct)).Id;
+        var keys = app.Services.GetRequiredService<Kumbu.Server.Accounts.ApiKeys>();
+        var (writer, _) = await keys.CreateAsync(user, userKey, "seeder", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Write }, Ct);
+        var (reader, _) = await keys.CreateAsync(
+            user, userKey, "reader",
+            new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Read, [writing] = Kumbu.Server.Accounts.KeyRight.Write },
+            Ct);
+        string version;
+        await using (var seeder = await app.ConnectAsync(writer))
+        {
+            version = Token(await seeder.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Reading/a.md", ["content"] = "Hecate\n" }, cancellationToken: Ct));
+            Assert.NotEqual(true, (await seeder.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "mkcp /Reading before" }, cancellationToken: Ct)).IsError);
+        }
+
+        await using var client = await app.ConnectAsync(reader);
+        async Task<string> Refused(string tool, Dictionary<string, object?> args)
+        {
+            var result = await client.CallToolAsync(tool, args, cancellationToken: Ct);
+            Assert.True(result.IsError, tool);
+            return Text(result);
+        }
+
+        Task<string> Sh(string command) => Refused("sh", new() { ["command"] = command });
+
+        Assert.Equal("write: this key can only read vault Reading", await Refused("write", new() { ["path"] = "/Reading/b.md", ["content"] = "x" }));
+        Assert.Equal("edit: this key can only read vault Reading", await Refused("edit", new() { ["path"] = "/Reading/a.md", ["version"] = version, ["new_text"] = "x" }));
+        Assert.Equal("replace: this key can only read vault Reading", await Refused("replace", new() { ["path"] = "/Reading", ["old_text"] = "Hecate", ["new_text"] = "Selene" }));
+        Assert.Equal("rm: this key can only read vault Reading", await Sh("rm /Reading/a.md"));
+        Assert.Equal("mv: this key can only read vault Reading", await Sh("mv /Reading/a.md /Reading/c.md"));
+        Assert.Equal("restore: this key can only read vault Reading", await Sh($"restore /Reading/a.md {version}"));
+        Assert.Equal("mkcp: this key can only read vault Reading", await Sh("mkcp /Reading later"));
+        Assert.Equal("rmcp: this key can only read vault Reading", await Sh("rmcp /Reading before"));
+
+        // Nothing was written; reading still works, and so does writing where the key may write.
+        var cat = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "cat /Reading/a.md" }, cancellationToken: Ct);
+        Assert.Equal("Hecate\n", Text(cat));
+        Assert.Equal(version, Token(cat));
+        Assert.DoesNotContain("b.md", Text(await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "ls /Reading" }, cancellationToken: Ct)), StringComparison.Ordinal);
+        var allowed = await client.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Writing/b.md", ["content"] = "fine\n" }, cancellationToken: Ct);
+        Assert.NotEqual(true, allowed.IsError);
     }
 }

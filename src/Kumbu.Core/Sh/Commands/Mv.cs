@@ -53,9 +53,9 @@ public sealed class Mv(NoteMover mover) : ICommand
         if (!CommandArgs.TryParsePath(Name, operands[1], out var target, out var targetError)) return targetError!;
 
         // The trailing '/' says "the folder": a mistyped note name never moves a folder.
-        if (operands[0].EndsWith('/')) return await mover.MoveFolderAsync(source, target, !options.Has("keep-links"), Writers.Dev, ct);
+        if (operands[0].EndsWith('/')) return await mover.MoveFolderAsync(source, target, !options.Has("keep-links"), ct);
         if (operands[1].EndsWith('/')) target = target.Child(source.Name);
 
-        return await mover.MoveAsync(source, target, !options.Has("keep-links"), Writers.Dev, ct);
+        return await mover.MoveAsync(source, target, !options.Has("keep-links"), ct);
     }
 }

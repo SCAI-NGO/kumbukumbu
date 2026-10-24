@@ -641,4 +641,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         Assert.Equal(1, await Store(world.Catalog()).CountLockedVaultsAsync(Ct));
     }
+
+    [Fact]
+    public async Task Users_vaults_are_not_counted_as_locked_for_the_dev_token()
+    {
+        var (world, _, _) = await WorldAsync("Mine");
+        await world.Catalog().CreateForUserAsync("Lea's", "user-lea", System.Security.Cryptography.RandomNumberGenerator.GetBytes(32), Ct);
+        await world.Catalog().CreateAsync("Theirs", "someone-elses-token-0123456789", saveRecoveryKey: null, Ct);
+
+        Assert.Equal(1, await Store(world.Catalog()).CountLockedVaultsAsync(Ct));
+    }
 }

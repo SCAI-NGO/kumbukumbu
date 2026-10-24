@@ -22,18 +22,24 @@ services:
     build: .
     ports:
       # Localhost only. To reach it from other machines, drop "127.0.0.1:" on purpose:
-      # traffic is plain HTTP and the only guard is the dev token.
+      # traffic is plain HTTP and the only guard is a key.
       - "127.0.0.1:${KUMBU_PORT:-8080}:8080"
     depends_on:
       mongo:
         condition: service_healthy
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
-      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
+      # Optional: empty, the dev token opens nothing (a public instance), and seeding is skipped.
+      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:-}
+      # Where users reach the server; invitation links (and `kumbu bootstrap-admin`) are built from it.
+      Kumbu__PublicUrl: ${KUMBU_PUBLIC_URL:-}
       Kumbu__Seed__Path: /seed
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
       Kumbu__Recovery__Path: /recovery
       Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
+      # Only behind a reverse proxy that is the only way in: with the port above published, clients could
+      # send their own X-Forwarded-For and pick the IP that rate limits count against.
+      Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
       # The embedding model for semsearch, downloaded here on the first start (about 630 MB for arctic-m, 1.1 GB for arctic-l).
       Kumbu__Search__ModelPath: /models

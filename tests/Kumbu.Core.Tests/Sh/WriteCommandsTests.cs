@@ -16,8 +16,8 @@ public class WriteCommandsTests
 
     public WriteCommandsTests()
     {
-        _writer = new NoteWriter(_store, _time);
-        _sh = new Shell(_store, _writer, new NoteMover(_store, _time));
+        _writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        _sh = new Shell(_store, _writer, new NoteMover(_store, _time, new FixedCaller(Writers.Dev)));
     }
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
@@ -25,7 +25,7 @@ public class WriteCommandsTests
     [Fact]
     public async Task HistoryListsCurrentThenEarlierVersions()
     {
-        await _writer.WriteAsync("/Demo/a.md", "two\nlines\n", VersionToken.Of("one\n"), Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/a.md", "two\nlines\n", VersionToken.Of("one\n"), CancellationToken.None);
 
         var result = await Run("history /Demo/a.md");
 
@@ -82,7 +82,7 @@ public class WriteCommandsTests
     [Fact]
     public async Task RestoreAVersionFromHistory()
     {
-        await _writer.WriteAsync("/Demo/a.md", "two\n", VersionToken.Of("one\n"), Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/a.md", "two\n", VersionToken.Of("one\n"), CancellationToken.None);
 
         var result = await Run($"restore /Demo/a.md {VersionToken.Of("one\n")}");
 
@@ -100,7 +100,7 @@ public class WriteCommandsTests
     public async Task RestoreAnOlderRemovalByItsVersion()
     {
         await Run("rm /Demo/a.md");
-        await _writer.WriteAsync("/Demo/a.md", "second\n", null, Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/a.md", "second\n", null, CancellationToken.None);
         await Run("rm /Demo/a.md");
 
         var result = await Run($"restore /Demo/a.md {VersionToken.Of("one\n")}");
@@ -114,7 +114,7 @@ public class WriteCommandsTests
     public async Task RestoreAVersionThatIsOnlyInTheTrashWhileTheNoteExists()
     {
         await Run("rm /Demo/a.md");
-        await _writer.WriteAsync("/Demo/a.md", "new\n", null, Writers.Dev, CancellationToken.None);
+        await _writer.WriteAsync("/Demo/a.md", "new\n", null, CancellationToken.None);
 
         Assert.Equal(
             ShellResult.Error($"restore: version {VersionToken.Of("one\n")} of /Demo/a.md is in the trash, but a note exists at that path; rm it first, or edit it"),

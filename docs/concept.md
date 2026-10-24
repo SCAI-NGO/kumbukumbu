@@ -134,7 +134,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 
 ## 8. Users & admin
 
-- **Bootstrap token** printed to the container log on first start (or set via env). Whoever presents it becomes **primary admin**. (Prevents the "first bot wins" race.)
+- **Bootstrap by command, not by log** (built in step 8, replacing the earlier idea of a token printed to the container log on first start): `docker compose exec kumbu kumbu bootstrap-admin` prints a one-time invitation link (`…/join#<code>`, 24 hours, replaced when run again, refused once a primary admin exists). Whoever opens it becomes **primary admin**; the race for the first account is won by the person with a shell on the container, not by whoever first finds the server. Not the log, because logs are collected, shipped and kept, and anyone who can read that line would become primary admin. The same reasoning as the recovery key's file (§7). Needs `KUMBU_PUBLIC_URL`.
 - Admins can promote other admins. Primary admin cannot be removed.
 - **Invites:** single-use, expiring, revocable links.
 - **Deactivating a user** kills all their API keys and sessions immediately.
@@ -203,7 +203,7 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 6. Agent tools for larger changes: view and diff earlier versions, changes across many notes.
 6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
 7. Embeddings + hybrid search; first, the decisions and fixes from the phase 6b test (`docs/notes-test-phase6b.md`): a folder restore moves moved notes back and rewrites their links; `replace` warns about links that would lead to another note and names the note named after the old text; small fixes.
-8. Users, admin, invites, API keys.
+8. Users, admin, invites, API keys. **Built** (users with a user key, sessions as slots, API keys with per-vault rights sealed into their slots, invitations, the `bootstrap-admin` command, admin tools, and the REST API under `/api`; `CONCEPTS.md` chapter 10).
 9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. The prototype is the template for look and feel only; where it differs from this concept (links across vaults, per-chunk authorship, note ids, keys instead of the user), the concept wins. TypeScript. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
 10. OAuth authorization server for app connectors.
 11. Obsidian sync plugin.

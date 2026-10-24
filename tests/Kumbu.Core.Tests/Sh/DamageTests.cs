@@ -20,7 +20,7 @@ public class DamageTests
     {
         _store.Damaged.Add(VaultPath.TryParse("/Demo/projects/kumbu.md", out var p) ? p : null!);
         _sh = TestShell.Of(_store);
-        _writer = new NoteWriter(_store, TimeProvider.System);
+        _writer = new NoteWriter(_store, TimeProvider.System, new FixedCaller(Writers.Dev));
     }
 
     private Task<ShellResult> Run(string line) => _sh.RunAsync(line, CancellationToken.None);
@@ -42,12 +42,12 @@ public class DamageTests
     [Fact]
     public async Task WriteToADamagedPath() => Assert.Equal(
         ShellResult.Error($"write: /Demo/projects/kumbu.md{Suffix}"),
-        await _writer.WriteAsync("/Demo/projects/kumbu.md", "new", null, Writers.Dev, CancellationToken.None));
+        await _writer.WriteAsync("/Demo/projects/kumbu.md", "new", null, CancellationToken.None));
 
     [Fact]
     public async Task EditOfADamagedPath() => Assert.Equal(
         ShellResult.Error($"edit: /Demo/projects/kumbu.md{Suffix}"),
-        await _writer.EditAsync("/Demo/projects/kumbu.md", "abc", null, "x", Writers.Dev, CancellationToken.None));
+        await _writer.EditAsync("/Demo/projects/kumbu.md", "abc", null, "x", CancellationToken.None));
 
     [Fact]
     public async Task LsOfTheVaultAndTheRootCountThem()

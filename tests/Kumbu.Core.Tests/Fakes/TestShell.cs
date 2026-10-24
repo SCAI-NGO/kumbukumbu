@@ -12,6 +12,6 @@ public static class TestShell
     public static Shell Of(InMemoryNoteStore store, TimeProvider? time = null)
     {
         time ??= new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
-        return new(store, new NoteWriter(store, time), new NoteMover(store, time));
+        return new(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
     }
 }

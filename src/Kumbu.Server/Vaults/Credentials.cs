@@ -1,26 +1,58 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 namespace Kumbu.Server.Vaults;
 
-/// <summary>The secret a request unlocks vaults with. Today the dev token; API keys in step 8.</summary>
+/// <summary>
+/// How a caller opens vaults: through key slots of a secret (the dev token), through the slots of an API key, or through the
+/// user slots of a user key (a session). The store asks once per request.
+/// </summary>
 public interface ICredential
 {
-    string Secret { get; }
+    Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct);
+
+    /// <summary>Vaults in the database this credential has no way into; <c>ls /</c> mentions them.</summary>
+    Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct);
 }
 
-/// <summary>The bearer token of the current request (already checked by the auth middleware).</summary>
-public sealed class BearerCredential(IHttpContextAccessor http) : ICredential
+/// <summary>A secret with key slots of its own: the dev token. Not a record, so that ToString can't print it.</summary>
+public sealed class FixedCredential(string secret) : ICredential
 {
-    public string Secret
-    {
-        get
-        {
-            var header = http.HttpContext?.Request.Headers.Authorization.ToString() ?? "";
-            return header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? header[7..] : "";
-        }
-    }
+    public Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenAsync(secret, ct);
+
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => catalog.CountLockedAsync(secret, ct);
 }
 
-public sealed record FixedCredential(string Secret) : ICredential;
+/// <summary>A user's key, from their session: opens exactly the user's own vaults.</summary>
+public sealed class UserCredential(string userId, byte[] userKey) : ICredential
+{
+    public Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenForUserAsync(userId, userKey, ct);
+
+    // Every other vault in the database belongs to someone else; counting them would tell a user how many
+    // vaults the instance holds, and none of them is theirs to unlock.
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+}
+
+/// <summary>
+/// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
+/// request, so the rights <see cref="CanWrite"/> answers from are those of exactly the vaults the store sees.
+/// </summary>
+public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
+{
+    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+
+    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
+
+    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
+
+    // As for a session: the other vaults belong to someone else or weren't given to this key.
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+
+    /// <summary>Only for a vault opened with the right to write (named as the store names vaults, ordinally).
+    /// Fails closed: false before the vaults were opened, and for a vault this key doesn't have.</summary>
+    public bool CanWrite(string vault) =>
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
+}
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>
 public sealed class VaultUnavailableException(string message) : Exception(message);

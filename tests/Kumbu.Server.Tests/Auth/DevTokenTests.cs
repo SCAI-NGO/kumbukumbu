@@ -38,8 +38,8 @@ public sealed class DevTokenTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    // Endpoint routing matches literal segments case-insensitively, so /MCP reaches MapMcp("/mcp").
-    // The middleware therefore fails closed: everything except /healthz needs the token.
+    // Endpoint routing matches literal segments case-insensitively, so /MCP reaches MapMcp("/mcp"): the
+    // middleware compares case-insensitively and also guards every endpoint not marked anonymous.
     [Theory]
     [InlineData("/MCP")]
     [InlineData("/Mcp")]
@@ -54,12 +54,14 @@ public sealed class DevTokenTests(KumbuAppFactory app)
         Assert.Equal("Bearer", Assert.Single(response.Headers.WwwAuthenticate).Scheme);
     }
 
-    [Fact]
-    public async Task Unknown_path_without_authorization_is_401()
+    [Theory]
+    [InlineData("/api/anything")]
+    [InlineData("/Api/anything")]
+    public async Task Unknown_api_path_without_authorization_is_401(string path)
     {
         using var http = app.CreateClient();
 
-        using var response = await http.GetAsync("/anything", Ct);
+        using var response = await http.GetAsync(path, Ct);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

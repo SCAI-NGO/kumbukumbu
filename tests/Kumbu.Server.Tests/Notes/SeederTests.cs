@@ -156,6 +156,40 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
     }
 
     [Fact]
+    public async Task Vaults_of_users_neither_count_as_locked_nor_stop_seeding()
+    {
+        // A user's vault never opens with the dev token, and needn't: seeding goes on beside it.
+        var world = new VaultWorld(fixture.NewDatabase());
+        await world.Catalog().CreateForUserAsync("Demo", "u1", Kumbu.Core.Crypto.VaultCrypto.NewKey(), Ct);
+        Write("Demo/a.md", "a");
+        Write("Ideas/b.md", "b");
+
+        var log = await SeedAsync(world);
+
+        Assert.DoesNotContain(log.Entries, e => e.Level >= LogLevel.Warning && e.Message.Contains("open with the dev token", StringComparison.Ordinal));
+        Assert.Contains(log.Entries, e => e.Message == "Seeded 2 notes into 2 vaults; left 0 vaults alone (0 files skipped)");
+        Assert.Equal(["Demo", "Ideas"], (await Store(world.Catalog()).ListVaultsAsync(Ct)).Order());
+        Assert.Equal(3, await world.Catalog().CountVaultsAsync(Ct));
+    }
+
+    [Fact]
+    public async Task With_users_vaults_present_a_locked_dev_token_vault_still_stops_new_vaults()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        await world.Catalog().CreateForUserAsync("Arbeit", "u1", Kumbu.Core.Crypto.VaultCrypto.NewKey(), Ct);
+        await world.Catalog().CreateAsync("Demo", "the-old-token-0123456789abcdef", saveRecoveryKey: null, Ct);
+        Write("Demo/a.md", "a");
+
+        var log = await SeedAsync(world);
+
+        // One, not two: the user's vault isn't counted.
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Warning && e.Message.StartsWith("1 vault in the database doesn't open with the dev token", StringComparison.Ordinal));
+        Assert.Contains(log.Entries, e => e.Level == LogLevel.Error && e.Message.StartsWith("Did not create vault Demo", StringComparison.Ordinal));
+        Assert.Empty(await Store(world.Catalog()).ListVaultsAsync(Ct));
+        Assert.Equal(2, await world.Catalog().CountVaultsAsync(Ct));
+    }
+
+    [Fact]
     public async Task If_the_recovery_key_cant_be_written_no_vault_is_created()
     {
         var world = new VaultWorld(fixture.NewDatabase());

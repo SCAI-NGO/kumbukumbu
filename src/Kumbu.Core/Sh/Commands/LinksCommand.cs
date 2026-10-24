@@ -65,10 +65,9 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
             range = (match.Heading.Line, match.Heading.ContentEnd);
         }
 
-        var resolver = new LinkResolver(vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct));
-        var lines = WikiLink.Parse(content!)
-            .Where(l => l.Line >= range.From && l.Line < range.To)
-            .Select(link => $"{link.Line + 1}: {link.Raw} → {Describe(resolver.Resolve(path, link.Target))}");
+        var lines = (await NoteLinks.OfAsync(notes, path, content!, ct))
+            .Where(l => l.Link.Line >= range.From && l.Link.Line < range.To)
+            .Select(l => $"{l.Link.Line + 1}: {l.Link.Raw} → {Describe(l.Resolution)}");
         return note with { Output = Lines.Join(lines) is { Length: > 0 } text ? text : "(no links)" };
     }
 

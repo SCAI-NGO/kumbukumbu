@@ -26,11 +26,18 @@ public sealed class Seeder(
             return;
         }
 
+        // Seeded vaults and recovered slots belong to the dev token; without one there is nobody to give them to.
+        if (o.DevToken is not { Length: > 0 } devToken)
+        {
+            log.LogWarning("Kumbu:DevToken is not set: neither Kumbu:Seed:Path nor Kumbu:Recovery:Keys is applied");
+            return;
+        }
+
         try
         {
-            foreach (var key in recoveryKeys) await RecoverAsync(key, o.DevToken, cancellationToken);
-            var locked = await LockedVaultsAsync(o.DevToken, cancellationToken);
-            if (!string.IsNullOrEmpty(o.Seed.Path)) await SeedAsync(o.Seed.Path, o.DevToken, mayCreate: locked == 0, cancellationToken);
+            foreach (var key in recoveryKeys) await RecoverAsync(key, devToken, cancellationToken);
+            var locked = await LockedVaultsAsync(devToken, cancellationToken);
+            if (!string.IsNullOrEmpty(o.Seed.Path)) await SeedAsync(o.Seed.Path, devToken, mayCreate: locked == 0, cancellationToken);
         }
         catch (VaultUnavailableException e)
         {
@@ -190,9 +197,7 @@ public sealed class Seeder(
     /// <summary>How many vaults the dev token can't open; warns if there are any.</summary>
     private async Task<long> LockedVaultsAsync(string devToken, CancellationToken ct)
     {
-        var total = await catalog.CountVaultsAsync(ct);
-        var mine = (await catalog.OpenAsync(devToken, ct)).Select(v => v.Id).Distinct().Count();
-        var locked = total - mine;
+        var locked = await catalog.CountLockedAsync(devToken, ct);
         if (locked > 0)
         {
             log.LogWarning(

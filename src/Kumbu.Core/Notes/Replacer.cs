@@ -14,18 +14,19 @@ public sealed record ReplacePlan(string Path, string OldText, string NewText, bo
 /// preview lists every affected note and returns a plan token; the apply, with that token, changes exactly
 /// those notes at exactly those versions in one batch, or nothing.
 /// </summary>
-public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
+public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, ICaller caller)
 {
     private const int ExcerptNotes = 5;
     private const int ExcerptsPerNote = 3;
     private const int ExcerptContext = 30;
 
     public async Task<ShellResult> RunAsync(
-        string pathText, string oldText, string newText, bool word, string? plan, string writer, CancellationToken ct)
+        string pathText, string oldText, string newText, bool word, string? plan, CancellationToken ct)
     {
         const string tool = "replace";
         if (SectionAddress.Split(pathText).Fragment is not null) return ShellResult.Error("replace: works on whole notes; to change one section, use edit");
         if (!VaultPath.TryParse(pathText, out var path)) return ShellResult.Error($"replace: {pathText}: paths must be absolute, e.g. /Work/projects");
+        if (caller.Refuse(tool, path) is { } refused) return refused;
         if (path.IsRoot) return ShellResult.Error("replace: works within one vault; give a vault, a folder or a note, e.g. /Work");
         oldText = oldText.Replace("\r\n", "\n", StringComparison.Ordinal);
         newText = newText.Replace("\r\n", "\n", StringComparison.Ordinal);
@@ -34,7 +35,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
 
         return plan is null
             ? await PreviewAsync(tool, path, oldText, newText, word, ct)
-            : await ApplyAsync(path, oldText, newText, word, plan, writer, ct);
+            : await ApplyAsync(path, oldText, newText, word, plan, ct);
     }
 
     private async Task<ShellResult> PreviewAsync(string tool, VaultPath path, string oldText, string newText, bool word, CancellationToken ct)
@@ -170,8 +171,9 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
         return output;
     }
 
-    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string writer, CancellationToken ct)
+    private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, CancellationToken ct)
     {
+        var writer = caller.Writer;
         var now = time.GetUtcNow().UtcDateTime;
         if (plans.Take<ReplacePlan>(token, now) is not { } plan) return ShellResult.Error(plans.Unavailable("replace", token, now));
 

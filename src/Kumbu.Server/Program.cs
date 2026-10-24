@@ -4,16 +4,31 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
+using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using MongoDB.Driver;
 
-var builder = WebApplication.CreateBuilder(args);
+// `kumbu bootstrap-admin` runs a command against the configured MongoDB instead of the server, then exits.
+var bootstrapCommand = args is [BootstrapAdmin.Command, ..];
+var builder = WebApplication.CreateBuilder(bootstrapCommand ? args[1..] : args);
+if (bootstrapCommand)
+{
+    // The command prints its link alone on stdout; the log goes to stderr.
+    builder.Logging.ClearProviders().AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+}
+
+// ASP.NET logs every request line at Information ("Request starting POST /api/..."), endpoint matches and
+// results: nothing an operator needs, and a URL may carry something secret. Warnings and errors stay.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
@@ -36,9 +51,33 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
-// Per request: the request's credential decides which vaults the store can open.
+builder.Services.AddSingleton(_ => new Argon2Kdf());
+builder.Services.AddSingleton<UserCatalog>();
+builder.Services.AddSingleton<Sessions>();
+builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddSingleton<ServerSecret>();
+builder.Services.AddSingleton<Invitations>();
+builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<BootstrapAdmin>();
+builder.Services.AddSingleton<WrongKeyLimiter>();
+builder.Services.AddSingleton<AccountLimits>();
+
+// The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
+// body that can't be bound throws, so ApiErrors answers it as {"error": ...} like every other refusal.
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.RespectNullableAnnotations = true;
+    o.SerializerOptions.RespectRequiredConstructorParameters = true;
+});
+builder.Services.Configure<RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+builder.Services.AddOpenApi();
+
+// Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
+// and its writer label goes on every write. Scoped, and nothing singleton may depend on them.
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<ICredential, BearerCredential>();
+builder.Services.AddScoped(RequestCaller.Current);
+builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
+builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
@@ -65,17 +104,57 @@ builder.Services.AddMcpServer(o =>
 
 var app = builder.Build();
 
+if (bootstrapCommand)
+{
+    KumbuOptions options;
+    try
+    {
+        options = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value;
+    }
+    catch (OptionsValidationException e)
+    {
+        await Console.Error.WriteLineAsync(string.Join(Environment.NewLine, e.Failures));
+        return 2;
+    }
+
+    return await BootstrapAdmin.ExecuteAsync(app.Services.GetRequiredService<BootstrapAdmin>(), options.PublicUrl, Console.Out, Console.Error, CancellationToken.None);
+}
+
 // Without ICU (globalization-invariant mode, or an image without libicu) .NET compares by code point.
 if (!TextOrder.IsCultureAware)
 {
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
-app.UseMiddleware<DevTokenMiddleware>();
-app.MapGet("/healthz", () => "ok");
+var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
+app.UseSecurityHeaders(publicUrl);
+app.Use(ApiErrors.BadRequestsAsync);
+
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
+{
+    // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
+    // can be pinned: any peer is trusted, which is safe only because the proxy is the container's only way in
+    // (no published port). ForwardLimit 1 takes the rightmost X-Forwarded-For entry, the one Traefik appended;
+    // whatever a client put in the header itself is ignored.
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor, ForwardLimit = 1 };
+    forwarded.KnownIPNetworks.Clear();
+    forwarded.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwarded);
+}
+
+// Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
+app.UseRouting();
+app.UseMiddleware<CallerMiddleware>();
+app.UseCallerRules(publicUrl);
+app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
 app.MapMcp("/mcp");
+app.MapOpenApi("/api/openapi.json").AllowAnonymous();
+app.MapAccountApi();
+app.MapNoteApi();
+app.MapUploadApi();
 
 app.Run();
+return 0;
 
 static string ServerVersion()
 {
