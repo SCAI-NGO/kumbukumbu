@@ -14,6 +14,9 @@ public interface INoteReader
     /// <summary>Returns the note content, or null if no such note exists.</summary>
     Task<string?> ReadAsync(VaultPath path, CancellationToken ct);
 
+    /// <summary>The content of one version of a note (the current one or one in its history), or null.</summary>
+    Task<string?> ReadVersionAsync(VaultPath path, string version, CancellationToken ct);
+
     /// <summary>Returns all notes strictly below <paramref name="dir"/>; the root yields every note.</summary>
     Task<IReadOnlyList<VaultPath>> ListNotesUnderAsync(VaultPath dir, CancellationToken ct);
 

@@ -10,7 +10,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 {
     public string Name => "links";
 
-    public string Usage => "links <path>[#section]";
+    public string Usage => "links [--version V] <path>[#section]";
 
     public string Summary => "the wikilinks of a note and where they lead; of a directory: the broken ones";
 
@@ -19,7 +19,8 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
           List the [[wikilinks]] and ![[embeds]] of a note (or of one section), one per line: line, the
           link as written, and where it leads: a note's path, 'not found', 'ambiguous' with the
           candidates, 'attachment' for files that are not notes, or 'this note' for [[#Heading]].
-          Links in code don't count.
+          Links in code don't count. --version V lists the links of an earlier version, resolved
+          against the notes as they are now.
           A link resolves within its vault, ignoring case: the note whose path ends with the link
           ([[kumbu]] or [[projects/kumbu]] → /Demo/projects/kumbu.md); if several match, the one in the
           linking note's folder; './' and '../' are relative to it.
@@ -36,11 +37,12 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
-        if (CommandArgs.CheckOptions(Name, args) is { } optionError) return optionError;
-        if (args.Count == 0) return ShellResult.Error("links: missing operand");
-        if (args.Count > 1) return ShellResult.Error($"links: too many arguments{CommandArgs.QuoteHint}");
+        if (!CommandArgs.TryTakeVersion(Name, args, out var version, out var rest, out var versionError)) return versionError!;
+        if (CommandArgs.CheckOptions(Name, rest) is { } optionError) return optionError;
+        if (rest.Count == 0) return ShellResult.Error("links: missing operand");
+        if (rest.Count > 1) return ShellResult.Error($"links: too many arguments{CommandArgs.QuoteHint}");
 
-        var (pathText, fragment) = SectionAddress.Split(args[0]);
+        var (pathText, fragment) = SectionAddress.Split(rest[0]);
         if (!CommandArgs.TryParsePath(Name, pathText, out var path, out var pathError)) return pathError!;
         if (path.IsRoot) return ShellResult.Error("links: give a vault or a directory, e.g. links /Demo");
 
@@ -48,11 +50,14 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         var content = await notes.ReadAsync(path, ct);
         if (content is null && fragment is null && (await notes.ListNotesUnderAsync(path, ct)).Count > 0)
         {
-            return await CheckDirectoryAsync(vault, path, ct);
+            return version is null
+                ? await CheckDirectoryAsync(vault, path, ct)
+                : ShellResult.Error("links: --version names a version of one note; a directory has none");
         }
 
-        var note = await CommandArgs.ReadAddressAsync(Name, notes, args[0], ct);
+        var note = await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
         if (note.IsError) return note;
+        if (version is not null) content = await notes.ReadVersionAsync(path, version, ct);
 
         var range = (From: 0, To: int.MaxValue);
         if (fragment is not null && SectionLookup.TryFind(path, content!, fragment, out var match, out _))

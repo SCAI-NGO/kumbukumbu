@@ -55,14 +55,60 @@ internal static class CommandArgs
             : ShellResult.Error($"{command}: {path.Value}: No such file or directory{await Moves.HintAsync(notes, path, ct)}");
     }
 
+    /// <summary>
+    /// Takes "--version V" or "--version=V" out of the arguments of a command that has no other options.
+    /// Error if it is given without a value.
+    /// </summary>
+    public static bool TryTakeVersion(string command, IReadOnlyList<string> args, out string? version, out List<string> rest, out ShellResult? error)
+    {
+        version = null;
+        error = null;
+        rest = [];
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i] == "--version")
+            {
+                if (i + 1 >= args.Count)
+                {
+                    error = ShellResult.Error($"{command}: option '--version' requires an argument (a version from 'history <path>')");
+                    return false;
+                }
+
+                version = args[++i];
+            }
+            else if (args[i].StartsWith("--version=", StringComparison.Ordinal)) version = args[i]["--version=".Length..];
+            else rest.Add(args[i]);
+        }
+
+        return true;
+    }
+
+    /// <summary>For commands where a version makes no sense; null if no --version was given.</summary>
+    public static ShellResult? RefuseVersion(string command, IReadOnlyList<string> args, string why) =>
+        args.Any(a => a == "--version" || a.StartsWith("--version=", StringComparison.Ordinal))
+            ? ShellResult.Error($"{command}: --version names a version of one note; {why}")
+            : null;
+
+    /// <summary>The content of one version of a note, with the usual errors for a missing note.</summary>
+    public static async Task<ShellResult> ReadVersionAsync(string command, INoteReader notes, VaultPath path, string version, CancellationToken ct)
+    {
+        var current = await ReadNoteAsync(command, notes, path, ct);
+        if (current.IsError) return current;
+        return await notes.ReadVersionAsync(path, version, ct) is { } content
+            ? ShellResult.Ok(content)
+            : ShellResult.Error($"{command}: {path.Value} has no version {version} ('history {SectionLookup.Quote(path)}' lists them)");
+    }
+
     /// <summary>Reads a note or, for "note.md#Heading", one section of it. The version token is always
-    /// the whole note's, since writes go to the whole note.</summary>
-    public static async Task<ShellResult> ReadAddressAsync(string command, INoteReader notes, string arg, CancellationToken ct)
+    /// the whole note's, since writes go to the whole note. With <paramref name="version"/>, reads that
+    /// earlier version instead, without a token: an earlier version can be restored, not edited.</summary>
+    public static async Task<ShellResult> ReadAddressAsync(
+        string command, INoteReader notes, string arg, CancellationToken ct, string? version = null)
     {
         var (pathText, fragment) = SectionAddress.Split(arg);
         if (!TryParsePath(command, pathText, out var path, out var pathError)) return pathError!;
 
-        var note = await ReadNoteAsync(command, notes, path, ct);
+        var note = version is null ? await ReadNoteAsync(command, notes, path, ct) : await ReadVersionAsync(command, notes, path, version, ct);
         if (note.IsError || fragment is null) return note;
 
         return SectionLookup.TryFind(path, note.Output, fragment, out var match, out var error)
@@ -75,8 +121,13 @@ internal static class CommandArgs
     /// the pipeline. A path behind a pipe is an error rather than silently winning over the input.
     /// </summary>
     public static async Task<ShellResult> FilterInputAsync(
-        string command, INoteReader notes, IReadOnlyList<string> operands, string? input, CancellationToken ct)
+        string command, INoteReader notes, IReadOnlyList<string> operands, string? input, CancellationToken ct, string? version = null)
     {
+        if (input is not null && version is not null)
+        {
+            return ShellResult.Error($"{command}: --version names a version of a note; piped input has none (put --version on the command that reads the note)");
+        }
+
         if (input is not null)
         {
             return operands.Count == 0
@@ -86,6 +137,6 @@ internal static class CommandArgs
 
         if (operands.Count == 0) return ShellResult.Error($"{command}: missing operand (give a path, or pipe into it)");
         if (operands.Count > 1) return ShellResult.Error($"{command}: too many arguments{QuoteHint}");
-        return await ReadAddressAsync(command, notes, operands[0], ct);
+        return await ReadAddressAsync(command, notes, operands[0], ct, version);
     }
 }

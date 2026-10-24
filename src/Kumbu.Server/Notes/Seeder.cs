@@ -78,6 +78,14 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
                 continue;
             }
 
+            var files = scan.Files.Where(f => f.Path.Vault == name).ToList();
+            if (existing.Contains(name) && files.Count == 0)
+            {
+                left++;
+                log.LogInformation("Left vault {Vault} alone: it is empty, and so is its folder", name);
+                continue;
+            }
+
             if (!existing.Contains(name))
             {
                 // A vault the token can't open may be this one with the real notes: creating a second "Demo"
@@ -96,7 +104,7 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
 
             filled++;
             var now = time.GetUtcNow().UtcDateTime;
-            foreach (var file in scan.Files.Where(f => f.Path.Vault == name))
+            foreach (var file in files)
             {
                 if (await store.TryCreateAsync(new StoredNote(file.Path, file.Content, 1, Writers.Seed, now, [], file.Content), ct)) seeded++;
             }

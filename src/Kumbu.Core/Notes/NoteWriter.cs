@@ -89,9 +89,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     /// </summary>
     public async Task<ShellResult> EditAsync(
         string pathText, string version, string? oldText, string newText, string writer, CancellationToken ct,
-        bool replaceSection = false)
+        bool replaceSection = false, bool replaceAll = false)
     {
         const string tool = "edit";
+        if (replaceAll && (oldText is null || replaceSection))
+        {
+            return ShellResult.Error("edit: replace_all needs old_text (and no replace_section): it replaces every occurrence of old_text");
+        }
+
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
         if (replaceSection && fragment is null)
@@ -157,16 +162,23 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             }
 
             var count = Occurrences(scope, oldText);
-            if (count > 1)
+            if (replaceAll)
+            {
+                content = string.Concat(current.AsSpan(0, scopeStart), scope.Replace(oldText, newText, StringComparison.Ordinal), current.AsSpan(scopeEnd));
+                message = $"replaced {count} {(count == 1 ? "occurrence" : "occurrences")} in {where}";
+            }
+            else if (count > 1)
             {
                 return ShellResult.Error(
                     $"edit: old_text occurs {count} times in {where}; include more of the surrounding text so it matches once"
                     + (fragment is null ? ", or put the section in the path (note.md#Heading)" : ""));
             }
-
-            at += scopeStart;
-            content = string.Concat(current.AsSpan(0, at), newText, current.AsSpan(at + oldText.Length));
-            message = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
+            else
+            {
+                at += scopeStart;
+                content = string.Concat(current.AsSpan(0, at), newText, current.AsSpan(at + oldText.Length));
+                message = $"edited {path.Value} at line {current.AsSpan(0, at).Count('\n') + 1}{inSection}";
+            }
         }
 
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
@@ -291,7 +303,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
     }
 
-    private DateTime Now => time.GetUtcNow().UtcDateTime;
+    public DateTime Now => time.GetUtcNow().UtcDateTime;
 
     private async Task<ShellResult> ReplaceAsync(
         string tool, StoredNote existing, string content, string writer, string message, CancellationToken ct)

@@ -39,6 +39,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
+    /// <summary>A session for one transaction over several documents.</summary>
+    internal Task<IClientSessionHandle> StartSessionAsync(CancellationToken ct) => db.Client.StartSessionAsync(cancellationToken: ct);
+
     /// <summary>The vaults <paramref name="secret"/> has a slot for, unlocked. A vault in the cache is used only
     /// for a secret whose slot was found here, so the cache saves work but never replaces authorization.</summary>
     public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(string secret, CancellationToken ct)
@@ -277,11 +280,20 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 
-    /// <summary>Creates the indexes and refuses plaintext notes from before encryption, once per process.
-    /// Lazy, so the server starts before MongoDB is reachable.</summary>
+    /// <summary>Creates the indexes, refuses a MongoDB without transactions and plaintext notes from before
+    /// encryption, once per process. Lazy, so the server starts before MongoDB is reachable.</summary>
     private async Task EnsureReadyAsync(CancellationToken ct)
     {
         if (_ready) return;
+
+        // Changes to several notes (mv, replace) run as transactions, which MongoDB has only on a replica set.
+        var hello = await db.Client.GetDatabase("admin").RunCommandAsync<MongoDB.Bson.BsonDocument>(new MongoDB.Bson.BsonDocument("hello", 1), cancellationToken: ct);
+        if (!hello.Contains("setName"))
+        {
+            throw new VaultUnavailableException(
+                "MongoDB runs standalone, but Kumbu² needs a replica set for transactions (a single node is enough). "
+                + "Start it with '--replSet rs0' and initiate the set, as compose.yaml does.");
+        }
 
         // Before step 5, notes and trash held a plaintext "path", with a unique index on it.
         var legacy = new MongoDB.Bson.BsonDocument("path", new MongoDB.Bson.BsonDocument("$exists", true));

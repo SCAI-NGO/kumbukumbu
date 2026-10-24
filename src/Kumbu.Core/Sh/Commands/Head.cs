@@ -5,7 +5,7 @@ namespace Kumbu.Core.Sh.Commands;
 
 public sealed class Head(INoteReader notes) : ICommand
 {
-    private static readonly Option[] Spec = [new('n', "lines", TakesValue: true)];
+    private static readonly Option[] Spec = [new('n', "lines", TakesValue: true), new(null, "version", TakesValue: true)];
 
     public string Name => "head";
 
@@ -34,7 +34,7 @@ public sealed class Head(INoteReader notes) : ICommand
             return ShellResult.Error($"head: invalid number of lines: '{value}'");
         }
 
-        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct);
+        var text = await CommandArgs.FilterInputAsync(Name, notes, options.Operands, input, ct, options.Value("version"));
         if (text.IsError) return text;
 
         return ShellResult.Ok(Lines.Join(Lines.Split(text.Output).Take(count)));

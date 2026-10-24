@@ -14,7 +14,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
 {
     public const string Token = "test-token-0123456789abcdef";
 
-    private readonly MongoDbContainer _mongo = new MongoDbBuilder(TestImages.Mongo).Build();
+    private readonly MongoDbContainer _mongo = new MongoDbBuilder(TestImages.Mongo).WithReplicaSet().Build();
 
     public static string SamplesPath { get; } = Path.Combine(FindRepoRoot(), "samples");
 

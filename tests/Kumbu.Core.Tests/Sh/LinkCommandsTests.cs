@@ -148,7 +148,7 @@ public class LinkCommandsTests
     [Theory]
     [InlineData("mv /Demo/a/plan.md", "mv: missing operand (mv <path> <target>)")]
     [InlineData("mv /Demo/nope.md /Demo/x.md", "mv: /Demo/nope.md: No such file or directory")]
-    [InlineData("mv /Demo/a /Demo/c", "mv: /Demo/a: Is a directory (mv moves one note at a time)")]
+    [InlineData("mv /Demo/a /Demo/c", "mv: /Demo/a: Is a directory (to move the folder, write /Demo/a/)")]
     [InlineData("mv /Demo/a/plan.md /Demo/b/plan.md", "mv: /Demo/b/plan.md already exists; rm it first, or choose another name")]
     [InlineData("mv /Demo/a/plan.md /Demo/a/plan.md", "mv: /Demo/a/plan.md and /Demo/a/plan.md are the same note")]
     [InlineData("mv /Demo/a/plan.md /Ideas/plan.md", "mv: notes can't move between vaults (Demo → Ideas); a vault is its own space")]

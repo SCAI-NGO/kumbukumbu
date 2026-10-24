@@ -1,12 +1,21 @@
 services:
   mongo:
     image: ${KUMBU_MONGO_IMAGE:-mongo:8}
+    # A single-node replica set: MongoDB has transactions only on a replica set.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    # The replica set config stores the member's host; the default hostname (the container id)
+    # changes whenever the container is recreated, and the node would lose its own set.
+    hostname: mongo
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      # Initiates the set on the first start (idempotent), then reports whether this node is the
+      # writable primary, which takes a few seconds after every start.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }; quit(db.hello().isWritablePrimary ? 0 : 1)"]
       interval: 5s
-      timeout: 5s
+      timeout: 10s
+      start_period: 30s
+      start_interval: 1s
       retries: 10
 
   kumbu:
@@ -19,7 +28,7 @@ services:
       mongo:
         condition: service_healthy
     environment:
-      Kumbu__Mongo__ConnectionString: mongodb://mongo:27017
+      Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
       Kumbu__Seed__Path: /seed
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.

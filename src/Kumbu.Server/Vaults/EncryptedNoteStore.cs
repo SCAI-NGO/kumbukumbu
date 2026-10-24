@@ -8,8 +8,8 @@ namespace Kumbu.Server.Vaults;
 
 /// <summary>
 /// <see cref="INoteStore"/> over encrypted vaults, for one credential (one request). Reads come from the
-/// unlocked working set; every write is one atomic MongoDB operation on a sealed document (compare-and-swap
-/// on the revision), and changes the working set only after MongoDB took it.
+/// unlocked working set; every write is one MongoDB transaction over sealed documents (compare-and-swap on
+/// the revision), and changes the working set only after MongoDB committed it.
 /// </summary>
 public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential) : INoteStore
 {
@@ -19,8 +19,10 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public async Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Keys];
 
-    public async Task<string?> ReadAsync(VaultPath path, CancellationToken ct) =>
-        await VaultAsync(path, ct) is { } v && v.Notes.TryGetValue(path, out var n) ? n.Note.Content : null;
+    public async Task<string?> ReadAsync(VaultPath path, CancellationToken ct) => (await GetAsync(path, ct))?.Content;
+
+    public async Task<string?> ReadVersionAsync(VaultPath path, string version, CancellationToken ct) =>
+        await GetAsync(path, ct) is { } note ? Versions.Find(note, version) : null;
 
     public async Task<IReadOnlyList<VaultPath>> ListNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => n.Path)];
@@ -31,14 +33,10 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
         await VaultAsync(from, ct) is { } v ? v.Moves.Where(m => m.From == from).MaxBy(m => m.MovedAt) : null;
 
-    /// <summary>Checks a path known to be damaged against MongoDB again, so a repair or removal in the database
-    /// counts at once, without restarting the server.</summary>
-    public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct)
-    {
-        if (await VaultAsync(path, ct) is not { } v || v.Notes.ContainsKey(path) || !v.IsDamaged(path)) return false;
-        await catalog.RefreshAsync(v, path, ct);
-        return !v.Notes.ContainsKey(path) && v.IsDamaged(path);
-    }
+    /// <summary>Only the marker: <see cref="GetAsync"/>, which every command reads a note with first, already
+    /// checked a damaged path against MongoDB again.</summary>
+    public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) =>
+        await VaultAsync(path, ct) is { } v && !v.Notes.ContainsKey(path) && v.IsDamaged(path);
 
     public async Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct)
     {
@@ -48,114 +46,127 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => catalog.CountLockedAsync(credential.Secret, ct);
 
-    public async Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct) =>
-        await VaultAsync(path, ct) is { } v && v.Notes.TryGetValue(path, out var n) ? n.Note : null;
+    /// <summary>A path marked damaged is read from MongoDB again first, so a repair or removal in the database
+    /// counts on the first access, without restarting the server.</summary>
+    public async Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct)
+    {
+        if (await VaultAsync(path, ct) is not { } vault) return null;
+        if (!vault.Notes.ContainsKey(path) && vault.IsDamaged(path))
+        {
+            await vault.Gate.WaitAsync(ct);
+            try
+            {
+                await catalog.RefreshAsync(vault, path, ct);
+            }
+            finally
+            {
+                vault.Gate.Release();
+            }
+        }
+
+        return vault.Notes.TryGetValue(path, out var n) ? n.Note : null;
+    }
 
     public async Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct)
     {
         if (await VaultAsync(note.Path, ct) is not { } vault) return false;
-        await vault.Gate.WaitAsync(ct);
-        try
+        return await WriteAsync(vault, [note.Path], async session =>
         {
-            return await InsertAsync(vault, note, ct);
-        }
-        finally
-        {
-            vault.Gate.Release();
-        }
+            var id = ObjectId.GenerateNewId();
+            if (!await InsertNoteAsync(session, vault, id, note, ct)) return null;
+            return () => vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
+        }, ct);
     }
 
-    public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
+    public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct) =>
+        (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, current.LastWriter, current.LastWriteAt, ct)).Count == 0;
+
+    /// <summary>
+    /// One transaction: replaces (compare-and-swap on the revision), then the sources of all moves are deleted
+    /// (same check) before their targets are inserted, so a note may move to where another one just left. The
+    /// unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
+    /// </summary>
+    public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string movedBy, DateTime at, CancellationToken ct)
     {
-        if (await VaultAsync(current.Path, ct) is not { } vault || !vault.Notes.TryGetValue(current.Path, out var entry)) return false;
-        await vault.Gate.WaitAsync(ct);
-        try
+        if (batch.IsEmpty) return [];
+        var paths = batch.Replaces.Select(r => r.Current.Path).Concat(batch.Moves.SelectMany(m => new[] { m.Current.Path, m.Target.Path })).Distinct().ToList();
+        if (paths.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));
+        if (await VaultAsync(paths[0], ct) is not { } vault) return paths;
+
+        VaultPath? conflict = null;
+        var written = await WriteAsync(vault, paths, async session =>
         {
-            var update = Builders<SealedDocument>.Update
-                .Set(d => d.Revision, next.Revision)
-                .Set(d => d.Blob, vault.SealNote(entry.Id, next));
-            var result = await catalog.Notes.UpdateOneAsync(AtRevision(entry.Id, current.Revision), update, cancellationToken: ct);
-            if (result.MatchedCount == 0)
+            var apply = new List<Action>();
+            foreach (var (current, next) in batch.Replaces)
             {
-                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
-                return false;
+                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                var update = Builders<SealedDocument>.Update
+                    .Set(d => d.Revision, next.Revision)
+                    .Set(d => d.Blob, vault.SealNote(entry.Id, next));
+                var result = await catalog.Notes.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision), update, cancellationToken: ct);
+                if (result.MatchedCount == 0) return Refuse(current.Path);
+                apply.Add(() => vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next)));
             }
 
-            vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next));
-            return true;
-        }
-        finally
-        {
-            vault.Gate.Release();
-        }
-    }
-
-    public async Task<bool> TryMoveAsync(StoredNote current, StoredNote target, string movedBy, DateTime at, CancellationToken ct)
-    {
-        if (await VaultAsync(current.Path, ct) is not { } vault || !vault.Notes.TryGetValue(current.Path, out var entry)) return false;
-        if (target.Path.Vault != current.Path.Vault) return false;
-        await vault.Gate.WaitAsync(ct);
-        try
-        {
-            // Insert at the target first (the unique index refuses an existing note), then delete the source
-            // only if nobody wrote in between; otherwise take the copy back. Nothing is ever lost.
-            if (!await InsertAsync(vault, target, ct)) return false;
-
-            // The first write is committed: from here on, finish or undo it even if the request is cancelled.
-            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), CancellationToken.None);
-            if (deleted.DeletedCount == 0)
+            foreach (var (current, _) in batch.Moves)
             {
-                await catalog.Notes.DeleteOneAsync(F.Eq(d => d.Id, vault.Notes[target.Path].Id), CancellationToken.None);
-                vault.Notes = vault.Notes.Remove(target.Path);
-                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
-                return false;
+                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+                if (deleted.DeletedCount == 0) return Refuse(current.Path);
+                apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
             }
 
-            var move = new MoveRecord(current.Path, target.Path, movedBy, at);
-            var moveId = ObjectId.GenerateNewId();
-            vault.Notes = vault.Notes.Remove(current.Path);
-            await catalog.Moves.InsertOneAsync(
-                new SealedDocument { Id = moveId, Vault = vault.Id, PathId = vault.PathId(current.Path), At = at, Blob = vault.SealMove(moveId, move) },
-                cancellationToken: CancellationToken.None);
-            vault.Moves = vault.Moves.Add(move);
-            return true;
-        }
-        finally
+            foreach (var (current, target) in batch.Moves)
+            {
+                var id = ObjectId.GenerateNewId();
+                if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
+
+                var move = new MoveRecord(current.Path, target.Path, movedBy, at);
+                var moveId = ObjectId.GenerateNewId();
+                await catalog.Moves.InsertOneAsync(
+                    session,
+                    new SealedDocument { Id = moveId, Vault = vault.Id, PathId = vault.PathId(current.Path), At = at, Blob = vault.SealMove(moveId, move) },
+                    cancellationToken: ct);
+                apply.Add(() =>
+                {
+                    vault.Notes = vault.Notes.SetItem(target.Path, (id, target));
+                    vault.Moves = vault.Moves.Add(move);
+                });
+            }
+
+            return () => apply.ForEach(a => a());
+        }, ct);
+
+        return written ? [] : [conflict ?? paths[0]];
+
+        Action? Refuse(VaultPath path)
         {
-            vault.Gate.Release();
+            conflict = path;
+            return null;
         }
     }
 
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
-        if (await VaultAsync(current.Path, ct) is not { } vault || !vault.Notes.TryGetValue(current.Path, out var entry)) return false;
-        await vault.Gate.WaitAsync(ct);
-        try
+        if (await VaultAsync(current.Path, ct) is not { } vault) return false;
+        return await WriteAsync(vault, [current.Path], async session =>
         {
-            // Copy into the trash first, then delete only if nobody wrote in between.
+            if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
+            var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+            if (deleted.DeletedCount == 0) return null;
+
             var trashed = new TrashedNote(current, deletedBy, deletedAt);
             var trashId = ObjectId.GenerateNewId();
             await catalog.Trash.InsertOneAsync(
+                session,
                 new SealedDocument { Id = trashId, Vault = vault.Id, PathId = vault.PathId(current.Path), DeletedAt = deletedAt, Blob = vault.SealTrash(trashId, trashed) },
                 cancellationToken: ct);
-
-            // The copy is committed: from here on, finish or undo it even if the request is cancelled.
-            var deleted = await catalog.Notes.DeleteOneAsync(AtRevision(entry.Id, current.Revision), CancellationToken.None);
-            if (deleted.DeletedCount == 0)
+            return () =>
             {
-                await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, trashId), CancellationToken.None);
-                await catalog.RefreshAsync(vault, current.Path, CancellationToken.None);
-                return false;
-            }
-
-            vault.Notes = vault.Notes.Remove(current.Path);
-            vault.Trash = vault.Trash.Add((trashId, trashed));
-            return true;
-        }
-        finally
-        {
-            vault.Gate.Release();
-        }
+                vault.Notes = vault.Notes.Remove(current.Path);
+                vault.Trash = vault.Trash.Add((trashId, trashed));
+            };
+        }, ct);
     }
 
     public async Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct)
@@ -171,8 +182,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct)
     {
         if (await VaultAsync(path, ct) is not { } vault) return null;
-        await vault.Gate.WaitAsync(ct);
-        try
+        StoredNote? restored = null;
+        var written = await WriteAsync(vault, [path], async session =>
         {
             var latest = vault.Trash
                 .Where(t => t.Trashed.Note.Path == path && (version is null || t.Trashed.Note.Version == version))
@@ -181,13 +192,60 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             if (latest.Trashed is null) return null;
 
             var note = latest.Trashed.Note;
-            var restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at };
-            if (!await InsertAsync(vault, restored, ct)) return null;
+            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at };
+            var id = ObjectId.GenerateNewId();
+            if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
+            var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id), cancellationToken: ct);
+            if (removed.DeletedCount == 0) return null;
+            return () =>
+            {
+                vault.Notes = vault.Notes.SetItem(path, (id, restored));
+                vault.Trash = vault.Trash.Remove(latest);
+            };
+        }, ct);
+        return written ? restored : null;
+    }
 
-            // The note is back: remove it from the trash even if the request is cancelled now.
-            await catalog.Trash.DeleteOneAsync(F.Eq(d => d.Id, latest.Id), CancellationToken.None);
-            vault.Trash = vault.Trash.Remove(latest);
-            return restored;
+    /// <summary>
+    /// Runs <paramref name="work"/> in one transaction under the vault's gate. It returns what to change in the
+    /// working set, or null to abort. The working set changes only after MongoDB committed; after an abort,
+    /// <paramref name="paths"/> are read again, since someone else wrote them. A cancelled request aborts too,
+    /// so it can't leave half a change behind.
+    /// </summary>
+    private async Task<bool> WriteAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
+    {
+        await vault.Gate.WaitAsync(ct);
+        try
+        {
+            using var session = await catalog.StartSessionAsync(ct);
+            session.StartTransaction();
+            Action? apply;
+            try
+            {
+                apply = await work(session);
+            }
+            catch (MongoException e) when (e.HasErrorLabel("TransientTransactionError"))
+            {
+                // A write conflict with another transaction: someone else got there first.
+                apply = null;
+            }
+            catch
+            {
+                await AbortAsync(session);
+                throw;
+            }
+
+            if (apply is null)
+            {
+                await AbortAsync(session);
+                foreach (var path in paths) await catalog.RefreshAsync(vault, path, ct);
+                return false;
+            }
+
+            // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
+            await session.CommitTransactionAsync(CancellationToken.None);
+            apply();
+            return true;
         }
         finally
         {
@@ -195,24 +253,33 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
     }
 
-    /// <summary>Inserts a sealed note; false if one exists at that path. Call with the vault's gate held.</summary>
-    private async Task<bool> InsertAsync(UnlockedVault vault, StoredNote note, CancellationToken ct)
+    private static async Task AbortAsync(IClientSessionHandle session)
     {
-        var id = ObjectId.GenerateNewId();
+        try
+        {
+            if (session.IsInTransaction) await session.AbortTransactionAsync(CancellationToken.None);
+        }
+        catch (MongoException)
+        {
+            // The server already aborted it (a failed write inside a transaction does that).
+        }
+    }
+
+    /// <summary>Inserts a sealed note; false if one exists at that path (the unique index refuses it).</summary>
+    private async Task<bool> InsertNoteAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredNote note, CancellationToken ct)
+    {
         try
         {
             await catalog.Notes.InsertOneAsync(
+                session,
                 new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(note.Path), Revision = note.Revision, Blob = vault.SealNote(id, note) },
                 cancellationToken: ct);
+            return true;
         }
         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
-            await catalog.RefreshAsync(vault, note.Path, ct);
             return false;
         }
-
-        vault.Notes = vault.Notes.SetItem(note.Path, (id, note));
-        return true;
     }
 
     private static FilterDefinition<SealedDocument> AtRevision(ObjectId id, long revision) =>

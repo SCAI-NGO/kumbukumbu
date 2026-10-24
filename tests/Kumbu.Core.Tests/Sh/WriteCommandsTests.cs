@@ -40,7 +40,7 @@ public class WriteCommandsTests
 
     [Theory]
     [InlineData("history /Demo/nope.md", "history: /Demo/nope.md: No such file or directory")]
-    [InlineData("history /Demo", "history: /Demo: Is a directory")]
+    [InlineData("history /Demo --since soon", "history: --since takes 30m, 2h, 1d or a UTC time like 2026-10-23 14:00 (got 'soon')")]
     [InlineData("history", "history: missing operand")]
     [InlineData("rm", "rm: missing operand")]
     [InlineData("rm /Demo/a.md /Demo/b.md", "rm: too many arguments (rm removes one note at a time)")]

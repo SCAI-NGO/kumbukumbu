@@ -6,7 +6,7 @@ Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes
 
 ## Status: reading, searching, writing, encrypted at rest
 
-The server offers three MCP tools. `sh` is a shell over your notes:
+The server offers four MCP tools. `sh` is a shell over your notes:
 
 - `ls [path]` lists a directory (no path lists the vaults, and says if vaults don't open with the token or notes are damaged)
 - `cat <path>` prints a note, with its **version token** in a separate block; `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`)
@@ -15,12 +15,16 @@ The server offers three MCP tools. `sh` is a shell over your notes:
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
 - `links <path>` shows where a note's `[[wikilinks]]` lead (`links <directory>` lists the broken ones), `backlinks <path>` which notes link to it
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
-- `history <path>` lists a note's versions, `restore <path> <version>` goes back to one
-- `mv <path> <target>` moves or renames a note; links whose target the move would change are rewritten in the form the author used (`--keep-links` leaves them); the old path remembers where the note went for 30 days
+- `history <path>` lists a note's versions, `restore <path> <version>` goes back to one; `history <folder> --since 2h` lists the latest writes below a folder or vault, with lines added and removed
+- `diff <path>` shows what the last write changed, `diff <path> <version> [<version>]` compares versions, `diff <path> <other>` two notes; `--word` marks changed words inside lines
+- `--version <token>` reads an earlier version with `cat`, `outline`, `links`, `head`, `tail`, `wc`, `sort`, and `rg` on one note
+- `mv <path> <target>` moves or renames a note, `mv <folder>/ <target>/` a whole folder in one transaction; links whose target the move would change are rewritten in the form the author used (`--keep-links` leaves them); the old path remembers where the note went for 30 days
 - `rm <path>` moves a note to the trash (kept 30 days) and names the links that now lead nowhere; `trash` lists it with its version, `restore <path> [version]` brings it back
 - `help [command]` lists the commands or explains one; `<command> --help` does the same
 
-`write` creates a note or replaces its content, and `edit` replaces one unique passage or appends to the end, of the whole note or of one section (`path` = `/Work/plan.md#Goals`; `replace_section` replaces the section). Both take the version token from `cat`; if the note changed in the meantime, the write fails instead of overwriting someone else's change. The last 10 versions of each note are kept (writes by the same writer within 10 minutes count as one; a `restore` and the link rewrites of an `mv` always get their own version), so the state before an agent session can always be restored. New notes can only go into existing vaults.
+`write` creates a note or replaces its content, and `edit` replaces one unique passage or appends to the end, of the whole note or of one section (`path` = `/Work/plan.md#Goals`; `replace_section` replaces the section, `replace_all` every occurrence). Both take the version token from `cat`; if the note changed in the meantime, the write fails instead of overwriting someone else's change. The last 10 versions of each note are kept (writes by the same writer within 10 minutes count as one; a `restore` and the link rewrites of an `mv` always get their own version), so the state before an agent session can always be restored. New notes can only go into existing vaults.
+
+`replace` changes a text in every note below a folder or vault: the first call previews every note it would change and returns a plan token, the second call with that token applies exactly that preview in one transaction, or nothing if a note changed in between. Each changed note gets its own version, marked `dev (replace)`.
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
@@ -62,6 +66,7 @@ docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'   # store the
 
 Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know:
 
+- **MongoDB runs as a single-node replica set**, since it has transactions only then. `compose.yaml` sets this up and needs no manual step: a fixed host name and a health check that initiates the set on the first start. Running MongoDB yourself, start it with `--replSet rs0`, initiate the set, and add `?directConnection=true` to the connection string; a standalone MongoDB is refused with a message that says so.
 - **MongoDB is the source of truth.** Agents' changes live there; Kumbu² never writes back to `./vaults`.
 - Seeding is for starting from scratch: at startup each folder becomes an encrypted vault (an empty folder an empty vault), or fills one that is still empty. A vault that already holds notes (or trash) is left alone, so later changes on disk are not loaded. One catch: a vault whose notes were all removed, with the trash expired after 30 days, counts as empty and is filled again on the next start. To load the folders again, `docker compose down -v` wipes the database, **including every change agents made and the vaults' keys**; the next start creates new vaults with new recovery keys.
 - Upgrading from before encryption: the server refuses plaintext data from earlier versions and says so. Wipe it with `docker compose down -v`.
