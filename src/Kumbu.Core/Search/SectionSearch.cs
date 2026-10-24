@@ -110,6 +110,21 @@ public static class SectionSearch
         return Shorten(text);
     }
 
+    /// <summary>
+    /// The first line of the section, below its heading, that contains the query or one of its words (ignoring
+    /// case), trimmed like <see cref="Snippet"/>; the start of the section if no line does.
+    /// </summary>
+    public static string Snippet(Chunk chunk, string query)
+    {
+        var terms = Bm25.QueryTerms(query);
+        var lines = chunk.Text.Split('\n');
+        var first = lines.Skip(chunk.Address.Length > 0 && lines.Length > 1 ? 1 : 0)
+            .Select(l => l.Trim())
+            .FirstOrDefault(l => l.Length > 0
+                && (l.Contains(query, StringComparison.OrdinalIgnoreCase) || Bm25.Terms(l).Any(t => terms.Contains(t))));
+        return first is null ? Snippet(chunk) : Shorten(first);
+    }
+
     /// <summary>At most the length of a snippet, with an ellipsis if cut.</summary>
     public static string Shorten(string text) => text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";
 

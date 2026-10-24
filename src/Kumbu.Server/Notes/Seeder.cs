@@ -197,9 +197,7 @@ public sealed class Seeder(
     /// <summary>How many vaults the dev token can't open; warns if there are any.</summary>
     private async Task<long> LockedVaultsAsync(string devToken, CancellationToken ct)
     {
-        var total = await catalog.CountVaultsAsync(ct);
-        var mine = (await catalog.OpenAsync(devToken, ct)).Select(v => v.Id).Distinct().Count();
-        var locked = total - mine;
+        var locked = await catalog.CountLockedAsync(devToken, ct);
         if (locked > 0)
         {
             log.LogWarning(

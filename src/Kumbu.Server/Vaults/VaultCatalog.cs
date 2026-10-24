@@ -328,9 +328,20 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         return names;
     }
 
-    /// <summary>Vaults <paramref name="secret"/> has no slot for.</summary>
-    public async Task<int> CountLockedAsync(string secret, CancellationToken ct) =>
-        (int)(await CountVaultsAsync(ct) - (await OpenAsync(secret, ct)).Select(v => v.Id).Distinct().Count());
+    /// <summary>
+    /// Vaults without a user slot that <paramref name="secret"/> has no slot for: the dev-token vaults it can't open
+    /// (after the token was changed). A user's vault was never the token's to open; counting it would make a
+    /// dev-token agent think something is broken, and tell it how many vaults the users have.
+    /// </summary>
+    public async Task<int> CountLockedAsync(string secret, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var owned = (await Slots.Distinct(s => s.Vault, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User), cancellationToken: ct).ToListAsync(ct))
+            .ToHashSet(StringComparer.Ordinal);
+        var unowned = await Vaults.CountDocumentsAsync(Builders<VaultDocument>.Filter.Nin(v => v.Id, owned), cancellationToken: ct);
+        var opened = (await OpenAsync(secret, ct)).Select(v => v.Id).Where(id => !owned.Contains(id)).Distinct().Count();
+        return (int)(unowned - opened);
+    }
 
     public async Task<long> CountVaultsAsync(CancellationToken ct)
     {

@@ -52,6 +52,8 @@ public static class UploadApi
     {
         if (body.OnConflict is not ("ask" or "replace" or "skip")) throw ApiErrors.BadRequest("onConflict is 'ask', 'replace' or 'skip'.");
         if (body.Files.Count == 0) throw ApiErrors.BadRequest("There are no files to upload.");
+        // The JSON reader checks the nullability of properties, not of list elements.
+        if (body.Files.Any(f => f is null)) throw ApiErrors.BadRequest("Every entry of 'files' is a file: {\"path\": ..., \"content\": ...}.");
         if (body.Files.Count > MaxFiles || body.Files.Sum(f => (long)Encoding.UTF8.GetByteCount(f.Content)) > MaxBytes)
         {
             throw new ApiException(StatusCodes.Status413PayloadTooLarge, Limits);

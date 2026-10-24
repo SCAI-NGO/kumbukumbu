@@ -74,14 +74,6 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         });
     });
 
-    private WebApplicationFactory<Program>? _notesApi;
-
-    /// <summary>
-    /// <see cref="PublicApi"/> on a database of its own: the notes API tests create a user vault each, and the dev
-    /// token's <c>ls /</c> in other tests counts every vault it can't open.
-    /// </summary>
-    public WebApplicationFactory<Program> NotesApi => _notesApi ??= PublicApi.WithWebHostBuilder(b => b.UseSetting("Kumbu:Mongo:Database", DatabaseName + "-notes"));
-
     /// <summary>Waits until the notes written so far are indexed.</summary>
     public Task IndexedAsync() => Services.GetRequiredService<Kumbu.Server.Search.SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 

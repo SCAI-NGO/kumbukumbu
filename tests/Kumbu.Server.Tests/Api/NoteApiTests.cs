@@ -15,7 +15,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private WebApplicationFactory<Program> Api => app.NotesApi;
+    private WebApplicationFactory<Program> Api => app.PublicApi;
 
     private Task<RestClient> UserAsync(string vault = "Arbeit") => RestClient.NewAsync(Api, vault);
 
@@ -214,6 +214,8 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal("See [[kumbu-v2]].\n", (await user.ReadAsync("index.md"))["content"]!.GetValue<string>());
 
         using var missing = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/nothing.md", to = "/Arbeit/x.md" });
+        using var dotted = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/index.md", to = "/Arbeit/a/../x.md" });
+        Assert.Equal(HttpStatusCode.BadRequest, dotted.StatusCode);
         using var exists = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/index.md", to = "/Arbeit/old/kumbu-v2.md" });
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, exists.StatusCode);
@@ -277,7 +279,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal(1, best["startLine"]!.GetValue<int>());
         Assert.Equal(3, best["endLine"]!.GetValue<int>());
         Assert.Equal("Tomatoes grow in the greenhouse.", best["snippet"]!.GetValue<string>());
-        Assert.Equal("exact", best["reason"]!.GetValue<string>());
+        Assert.Equal("all words", best["reason"]!.GetValue<string>());
         Assert.True(best["score"]!.GetValue<double>() > 0);
         // A heading with nothing below it is hidden, as in semsearch.
         Assert.DoesNotContain(hybrid["results"]!.AsArray(), r => r!["path"]!.GetValue<string>() == "/Arbeit/empty.md");
@@ -297,6 +299,30 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         using var badMode = await user.GetAsync("/api/search?q=x&mode=fuzzy");
         Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, badMode.StatusCode);
+    }
+
+    [Fact]
+    public async Task Each_result_says_why_it_was_found_and_shows_the_line_with_a_word_of_the_query()
+    {
+        var user = await UserAsync();
+        await user.CreateAsync("greenhouse.md", "# Shelves\n\nWooden boards.\n");
+        await user.CreateAsync("garden.md", "# Beds\n\nThe soil is dark.\nRipe tomatoes grow here.\n\n# Tools\n\nA rake and a spade.\n");
+        await Api.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        async Task<JsonNode> BestAsync(string query, string address)
+        {
+            using var response = await user.GetAsync($"/api/search?q={Uri.EscapeDataString(query)}&mode=hybrid&n=50&path=/Arbeit");
+            return (await JsonAsync(response))["results"]!.AsArray().First(r => r!["address"]!.GetValue<string>() == address)!;
+        }
+
+        Assert.Equal("title", (await BestAsync("greenhouse", "#Shelves"))["reason"]!.GetValue<string>());
+        Assert.Equal("exact", (await BestAsync("ripe tomatoes", "#Beds"))["reason"]!.GetValue<string>());
+        Assert.Equal("all words", (await BestAsync("tomatoes ripe", "#Beds"))["reason"]!.GetValue<string>());
+        Assert.Equal("meaning", (await BestAsync("spade shovel", "#Tools"))["reason"]!.GetValue<string>());
+
+        // Not the start of the section: the first line with a word of the query.
+        Assert.Equal("Ripe tomatoes grow here.", (await BestAsync("tomatoes ripe", "#Beds"))["snippet"]!.GetValue<string>());
+        Assert.Equal("The soil is dark.", (await BestAsync("soil", "#Beds"))["snippet"]!.GetValue<string>());
     }
 
     [Fact]

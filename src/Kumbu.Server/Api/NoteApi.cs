@@ -5,6 +5,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
+using Kumbu.Core.Sh.Commands;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
@@ -60,7 +61,8 @@ public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
-/// <c>exact</c> (every word of the query is in the section) or <c>meaning</c>.</summary>
+/// <c>exact</c> (the whole query is in the section, ignoring case), <c>all words</c> (every word of it is) or
+/// <c>meaning</c>. <c>snippet</c>: the first line of the section with a word of the query, else its start.</summary>
 public sealed record SearchResultView(string Path, string Address, int StartLine, int EndLine, string Snippet, double? Score, string Reason);
 
 /// <summary><c>notIndexed</c>: notes in the scope not indexed for meaning yet (they rank by words only, or not at
@@ -213,6 +215,11 @@ public static class NoteApi
 
         if (!VaultPath.TryParse(body.To, out var target) || target.IsRoot) throw ApiErrors.BadRequest("'to' is a path in the vault, e.g. /Work/archive/plan.md.");
         if (body.From.Contains('\\') || body.To.Contains('\\')) throw ApiErrors.BadRequest("Paths separate folders with '/', not '\\'.");
+        // As in URL paths: a path names one place exactly, never one reached by stepping up.
+        if (new[] { body.From, body.To }.SelectMany(p => p.Split('/')).Any(seg => seg is "." or ".."))
+        {
+            throw ApiErrors.BadRequest("Paths may not contain '.' or '..' segments.");
+        }
 
         await RequireVaultAsync(store, source, ct);
         Refuse(caller, "mv", source);
@@ -312,7 +319,7 @@ public static class NoteApi
         if (exact)
         {
             return TypedResults.Ok(new SearchView(
-                [.. SectionSearch.Exact(notes, query, max).Select(m => Result(m.Chunk, SectionSearch.Shorten(m.FirstMatch.Trim()), 1.0, InTitle(query, m.Chunk) ? "title" : "exact"))],
+                [.. SectionSearch.Exact(notes, query, max).Select(m => Result(m.Chunk, SectionSearch.Snippet(m.Chunk, query), 1.0, InTitle(query, m.Chunk) ? "title" : "exact"))],
                 0,
                 null));
         }
@@ -327,7 +334,7 @@ public static class NoteApi
             _ => null,
         };
         return TypedResults.Ok(new SearchView(
-            [.. ranked.Hits.Select(h => Result(h.Chunk, SectionSearch.Snippet(h.Chunk), h.Score, Reason(query, h.Chunk)))],
+            [.. ranked.Hits.Select(h => Result(h.Chunk, SectionSearch.Snippet(h.Chunk, query), h.Score, Reason(query, h.Chunk)))],
             ranked.Semantic?.Pending ?? 0,
             notice));
 
@@ -335,13 +342,16 @@ public static class NoteApi
             new(c.Path.Value, c.Address, c.StartLine + 1, c.EndLine, snippet, score, reason);
     }
 
-    /// <summary>The MOBILE_EDITOR reason tags the ranking can tell apart.</summary>
+    /// <summary>The reason tags of MOBILE_EDITOR §4, strongest first: the query in the note's name, the whole query
+    /// in the section (as <c>mode=exact</c> would find it), every word of it there, or only the meaning.</summary>
     private static string Reason(string query, Chunk chunk)
     {
         if (InTitle(query, chunk)) return "title";
+        var literal = Rg.Pattern([query], fixedStrings: true, wordRegexp: false, ignoreCase: true);
+        if (chunk.Text.Split('\n').Any(literal.IsMatch)) return "exact";
         var terms = Bm25.QueryTerms(query);
         var words = Bm25.Terms(chunk.Text).ToHashSet(StringComparer.Ordinal);
-        return terms.Count > 0 && terms.All(words.Contains) ? "exact" : "meaning";
+        return terms.Count > 0 && terms.All(words.Contains) ? "all words" : "meaning";
     }
 
     private static bool InTitle(string query, Chunk chunk)

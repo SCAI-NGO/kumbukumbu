@@ -10,7 +10,7 @@ namespace Kumbu.Server.Tests.Api;
 [Collection("app")]
 public sealed class UploadApiTests(KumbuAppFactory app)
 {
-    private WebApplicationFactory<Program> Api => app.NotesApi;
+    private WebApplicationFactory<Program> Api => app.PublicApi;
 
     private static Task<JsonNode> JsonAsync(HttpResponseMessage response) => RestClient.JsonAsync(response);
 
@@ -166,6 +166,7 @@ public sealed class UploadApiTests(KumbuAppFactory app)
         using var refused = await user.SendAsync(HttpMethod.Post, $"/api/upload/{user.Vault}", new { files = new[] { File("a.md", "a") } }, bearer: key);
         using var unknown = await user.SendAsync(HttpMethod.Post, "/api/upload/Nirgends", new { files = new[] { File("a.md", "a") } });
         using var badFolder = await user.SendAsync(HttpMethod.Post, $"/api/upload/{user.Vault}/a//b", new { files = new[] { File("a.md", "a") } });
+        using var nullFile = await user.SendAsync(HttpMethod.Post, $"/api/upload/{user.Vault}", new { files = new object?[] { null } });
         using var badPolicy = await user.SendAsync(HttpMethod.Post, $"/api/upload/{user.Vault}", new { files = new[] { File("a.md", "a") }, onConflict = "merge" });
 
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
@@ -173,5 +174,7 @@ public sealed class UploadApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, badFolder.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, badPolicy.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, nullFile.StatusCode);
+        Assert.False(string.IsNullOrEmpty(await RestClient.ErrorAsync(nullFile)));
     }
 }
