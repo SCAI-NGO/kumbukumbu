@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Sh;
 using ModelContextProtocol.Client;
 using MongoDB.Driver;
 using ModelContextProtocol.Protocol;
@@ -49,6 +50,16 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.StartsWith("Change part of a note", tools.Single(t => t.Name == "edit").Description, StringComparison.Ordinal);
         Assert.StartsWith("Replace a text in every note", tools.Single(t => t.Name == "replace").Description, StringComparison.Ordinal);
         Assert.True(tools.Single(t => t.Name == "replace").ProtocolTool.Annotations?.DestructiveHint);
+    }
+
+    [Fact]
+    public async Task InitializeReturnsTheInstructions()
+    {
+        await using var client = await app.ConnectAsync();
+
+        Assert.Equal(ServerInstructions.Text, client.ServerInstructions);
+        Assert.Contains("semsearch", client.ServerInstructions, StringComparison.Ordinal);
+        Assert.Contains("rg", client.ServerInstructions, StringComparison.Ordinal);
     }
 
     [Fact]

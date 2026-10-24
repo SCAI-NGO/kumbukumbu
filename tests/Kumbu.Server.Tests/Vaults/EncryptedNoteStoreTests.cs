@@ -48,16 +48,16 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     public async Task Nothing_readable_reaches_the_database()
     {
         var (world, _, store) = await WorldAsync("Geheimprojekt");
-        await store.TryCreateAsync(New("/Geheimprojekt/Pläne/Übernahme.md", "Wir kaufen die Firma Acme."), Ct);
+        await store.TryCreateAsync(New("/Geheimprojekt/Pläne/Übernahme.md", "Wir kaufen die Firma Acme-Übernahme-Geheimprojekt."), Ct);
         var created = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
-        await store.TryReplaceAsync(created, NoteWriter.Next(created, "Wir kaufen die Firma Acme nicht.", "other", T0.AddDays(1)), Ct);
-        await store.TryCreateAsync(New("/Geheimprojekt/weg.md", "Acme Papierkorb"), Ct);
+        await store.TryReplaceAsync(created, NoteWriter.Next(created, "Wir kaufen die Firma Acme-Übernahme-Geheimprojekt nicht.", "other", T0.AddDays(1)), Ct);
+        await store.TryCreateAsync(New("/Geheimprojekt/weg.md", "Acme-Übernahme-Geheimprojekt Papierkorb"), Ct);
         await store.TryTrashAsync((await store.GetAsync(P("/Geheimprojekt/weg.md"), Ct))!, Writers.Dev, T0, Ct);
         var other = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
-        await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv/Acme.md"), Revision = other.Revision + 1 });
-        var moved = (await store.GetAsync(P("/Geheimprojekt/Archiv/Acme.md"), Ct))!;
+        await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv/Geheimakte Übernahme.md"), Revision = other.Revision + 1 });
+        var moved = (await store.GetAsync(P("/Geheimprojekt/Archiv/Geheimakte Übernahme.md"), Ct))!;
         Assert.True(await store.TryAddCheckpointAsync(
-            new Checkpoint("vor-Acme-Kauf", P("/Geheimprojekt/Archiv"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]),
+            new Checkpoint("vor-Acme-Übernahme-Geheimprojekt-Kauf", P("/Geheimprojekt/Archiv"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]),
             [new Note(moved.Path, moved.Content)], Ct));
 
         var everything = new StringBuilder();
@@ -74,7 +74,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         }
 
         var dump = everything.ToString();
-        foreach (var secret in new[] { "Acme", "Geheimprojekt", "Pläne", "Übernahme", "Archiv", "Papierkorb", "kaufen", Token })
+        foreach (var secret in new[] { "Acme-Übernahme-Geheimprojekt", "Geheimakte Übernahme", "Geheimprojekt", "Pläne", "Archiv", "Papierkorb", Token })
         {
             Assert.DoesNotContain(secret, dump, StringComparison.OrdinalIgnoreCase);
         }

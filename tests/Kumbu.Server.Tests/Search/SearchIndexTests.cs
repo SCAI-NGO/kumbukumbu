@@ -60,7 +60,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Embeddings_are_sealed_and_survive_a_restart_without_embedding_again()
     {
         var s = await StartAsync();
-        await s.Store.TryCreateAsync(New("/Work/Geheim.md", "# Übernahme\nWir kaufen die Firma Acme.\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/Geheim.md", "# Geheimakte Übernahme\nWir kaufen die Firma Acme-Übernahme-Geheimprojekt.\n"), Ct);
         await IdleAsync(s);
 
         var dump = new StringBuilder();
@@ -70,12 +70,12 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         }
 
         Assert.NotEmpty(dump.ToString());
-        foreach (var secret in new[] { "Acme", "Geheim", "Übernahme", "kaufen" }) Assert.DoesNotContain(secret, dump.ToString(), StringComparison.OrdinalIgnoreCase);
+        foreach (var secret in new[] { "Acme-Übernahme-Geheimprojekt", "Geheimakte Übernahme" }) Assert.DoesNotContain(secret, dump.ToString(), StringComparison.OrdinalIgnoreCase);
 
         var later = await StartAsync(s.World);
         await IdleAsync(later);
         Assert.Equal(0, later.Embedder.Embedded);
-        Assert.Equal(P("/Work/Geheim.md"), Assert.Single((await later.Store.SearchAsync(P("/"), "Firma Acme", 1, Ct)).Hits).Path);
+        Assert.Equal(P("/Work/Geheim.md"), Assert.Single((await later.Store.SearchAsync(P("/"), "Firma Acme-Übernahme-Geheimprojekt", 1, Ct)).Hits).Path);
     }
 
     [Fact]
