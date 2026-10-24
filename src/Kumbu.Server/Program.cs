@@ -4,11 +4,13 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using MongoDB.Driver;
@@ -36,14 +38,18 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
-// Per request: the request's credential decides which vaults the store can open.
+builder.Services.AddSingleton<Sessions>();
+builder.Services.AddSingleton<WrongKeyLimiter>();
+
+// Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
+// and its writer label goes on every write. Scoped, and nothing singleton may depend on them.
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<ICredential, BearerCredential>();
+builder.Services.AddScoped(RequestCaller.Current);
+builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
+builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
-// The caller is always the dev token for now; the request's own caller replaces it.
-builder.Services.AddScoped<ICaller>(_ => new FixedCaller(Writers.Dev));
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<Replacer>();
@@ -73,8 +79,22 @@ if (!TextOrder.IsCultureAware)
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
-app.UseMiddleware<DevTokenMiddleware>();
-app.MapGet("/healthz", () => "ok");
+if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
+{
+    // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
+    // can be pinned: any peer is trusted, which is safe only because the proxy is the container's only way in
+    // (no published port). ForwardLimit 1 takes the rightmost X-Forwarded-For entry, the one Traefik appended;
+    // whatever a client put in the header itself is ignored.
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor, ForwardLimit = 1 };
+    forwarded.KnownIPNetworks.Clear();
+    forwarded.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwarded);
+}
+
+// Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
+app.UseRouting();
+app.UseMiddleware<CallerMiddleware>();
+app.MapGet("/healthz", () => "ok").AllowAnonymous();
 app.MapMcp("/mcp");
 
 app.Run();

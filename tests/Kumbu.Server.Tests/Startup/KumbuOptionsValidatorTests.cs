@@ -5,19 +5,18 @@ public sealed class KumbuOptionsValidatorTests
 {
     private const string ValidMongo = "mongodb://localhost:27017";
 
-    private static KumbuOptions Options(string token, string connectionString) =>
+    private static KumbuOptions Options(string? token, string connectionString) =>
         new() { DevToken = token, Mongo = new MongoOptions { ConnectionString = connectionString } };
 
     private static Microsoft.Extensions.Options.ValidateOptionsResult Validate(KumbuOptions o) =>
         new KumbuOptionsValidator().Validate(null, o);
 
     [Theory]
-    [InlineData("")]
     [InlineData("   ")]
     [InlineData("short-token")]
     [InlineData("0123456789abcde")]
     [InlineData("change-me")]
-    public void Rejects_an_empty_short_or_placeholder_token(string token)
+    public void Rejects_a_blank_short_or_placeholder_token(string token)
     {
         var result = Validate(Options(token, ValidMongo));
 
@@ -59,10 +58,18 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Contains("arctic-l", failure);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Accepts_no_dev_token_at_all(string? token)
+    {
+        Assert.True(Validate(Options(token, ValidMongo)).Succeeded);
+    }
+
     [Fact]
     public void Reports_both_failures_together()
     {
-        var result = Validate(Options("", ""));
+        var result = Validate(Options("short", ""));
 
         Assert.Equal([KumbuOptions.DevTokenMessage, KumbuOptionsValidator.MongoMessage], result.Failures);
     }

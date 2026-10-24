@@ -13,7 +13,7 @@ public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
         var failures = new List<string>();
-        if (!KumbuOptions.IsUsableDevToken(options))
+        if (options.HasDevToken && !KumbuOptions.IsUsableDevToken(options.DevToken!))
         {
             failures.Add(KumbuOptions.DevTokenMessage);
         }

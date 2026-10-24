@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace Kumbu.Server.Tests.Startup;
 
 /// <summary>
-/// Spec §2: the server refuses to start without a usable dev token or a Mongo connection string.
+/// Spec §2: the server refuses to start with an unusable dev token (it may be absent) or without a Mongo connection string.
 /// The rules and messages are tested on <see cref="KumbuOptionsValidator"/> directly; these only prove
 /// the host enforces them. A failed start races host disposal under WebApplicationFactory, so the
 /// surfaced exception type varies (OptionsValidationException or ObjectDisposedException): ThrowsAny.
@@ -28,11 +28,20 @@ public sealed class StartupValidationTests
     }
 
     [Fact]
-    public void Refuses_to_start_with_an_empty_token()
+    public void Refuses_to_start_with_a_short_token()
+    {
+        using var factory = new Factory("0123456789abcde", UnusedMongo);
+
+        Assert.ThrowsAny<Exception>(() => factory.Server);
+    }
+
+    // The dev token is optional (accounts design: off on a public instance).
+    [Fact]
+    public void Starts_without_a_token()
     {
         using var factory = new Factory("", UnusedMongo);
 
-        Assert.ThrowsAny<Exception>(() => factory.Server);
+        Assert.NotNull(factory.Server);
     }
 
     [Fact]

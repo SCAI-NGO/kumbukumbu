@@ -56,13 +56,19 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <summary>Waits until the notes written so far are indexed.</summary>
     public Task IndexedAsync() => Services.GetRequiredService<Kumbu.Server.Search.SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 
-    /// <summary>Connects the official SDK client over the in-memory test server.</summary>
-    public async Task<McpClient> ConnectAsync(string? token = Token)
+    /// <summary>Connects the official SDK client over the in-memory test server, with a bearer token, a
+    /// session cookie (the secret from <c>Sessions.StartAsync</c>), both or neither.</summary>
+    public async Task<McpClient> ConnectAsync(string? token = Token, string? session = null)
     {
         var headers = new Dictionary<string, string>();
         if (token is not null)
         {
             headers["Authorization"] = $"Bearer {token}";
+        }
+
+        if (session is not null)
+        {
+            headers["Cookie"] = $"{Kumbu.Server.Auth.CallerMiddleware.SessionCookie}={session}";
         }
 
         var transport = new HttpClientTransport(

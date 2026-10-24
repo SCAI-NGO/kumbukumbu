@@ -34,6 +34,9 @@ services:
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
       Kumbu__Recovery__Path: /recovery
       Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
+      # Only behind a reverse proxy that is the only way in: with the port above published, clients could
+      # send their own X-Forwarded-For and pick the IP that rate limits count against.
+      Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
       # The embedding model for semsearch, downloaded here on the first start (about 630 MB for arctic-m, 1.1 GB for arctic-l).
       Kumbu__Search__ModelPath: /models

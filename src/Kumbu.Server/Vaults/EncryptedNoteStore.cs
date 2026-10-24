@@ -53,7 +53,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         return vaults.Sum(v => v.DamagedPathIds.Count);
     }
 
-    public Task<int> CountLockedVaultsAsync(CancellationToken ct) => catalog.CountLockedAsync(credential.Secret, ct);
+    public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
 
     public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
         await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
@@ -476,7 +476,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     private async Task<Dictionary<string, UnlockedVault>> VaultsAsync(CancellationToken ct)
     {
         if (_vaults is not null) return _vaults;
-        var open = await catalog.OpenAsync(credential.Secret, ct);
+        var open = await credential.OpenAsync(catalog, ct);
         return _vaults = open.GroupBy(v => v.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
     }
 }

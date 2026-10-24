@@ -8,13 +8,18 @@ public sealed class KumbuOptions
     public const string DevTokenMessage =
         "Kumbu:DevToken must be at least 16 characters (generate one with: openssl rand -hex 32)";
 
-    /// <summary>Rejects empty, short and the old placeholder token: the one shared secret must be a real one.</summary>
-    public static bool IsUsableDevToken(KumbuOptions o) =>
-        !string.IsNullOrWhiteSpace(o.DevToken)
-        && o.DevToken.Trim().Length >= MinDevTokenLength
-        && o.DevToken != "change-me";
+    /// <summary>Rejects blank, short and the old placeholder token: if there is a dev token, it must be a real secret.</summary>
+    public static bool IsUsableDevToken(string token) =>
+        !string.IsNullOrWhiteSpace(token)
+        && token.Trim().Length >= MinDevTokenLength
+        && token != "change-me";
 
-    public string DevToken { get; set; } = "";
+    /// <summary>Optional: without it (empty or unset) the dev token opens nothing, as on a public instance.</summary>
+    public string? DevToken { get; set; }
+
+    public bool HasDevToken => !string.IsNullOrEmpty(DevToken);
+
+    public ProxyOptions Proxy { get; set; } = new();
 
     public MongoOptions Mongo { get; set; } = new();
 
@@ -62,6 +67,13 @@ public sealed class VaultOptions
 
     /// <summary>Named checkpoints a vault keeps at most (concept §4); mkcp beyond it fails.</summary>
     public int CheckpointLimit { get; set; } = Kumbu.Core.Notes.Checkpoints.DefaultLimit;
+}
+
+public sealed class ProxyOptions
+{
+    /// <summary>Behind a reverse proxy (Traefik): take the client IP from <c>X-Forwarded-For</c>. Only set this
+    /// when the proxy is the only way in, or clients could pick the IP that rate limits count against.</summary>
+    public bool Trusted { get; set; }
 }
 
 public sealed class MongoOptions
