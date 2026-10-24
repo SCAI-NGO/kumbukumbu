@@ -33,7 +33,7 @@ public sealed class Mkcp(Checkpoints checkpoints) : ICommand
         if (args.Count < 2) return ShellResult.Error("mkcp: missing operand (mkcp <path> <name>)");
         if (args.Count > 2) return ShellResult.Error($"mkcp: too many arguments{CommandArgs.QuoteHint}");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
-        return await checkpoints.MakeAsync(path, args[1], Writers.Dev, ct);
+        return await checkpoints.MakeAsync(path, args[1], ct);
     }
 }
 

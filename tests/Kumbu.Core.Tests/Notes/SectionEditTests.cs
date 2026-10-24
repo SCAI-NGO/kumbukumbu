@@ -14,10 +14,10 @@ public class SectionEditTests
     private readonly InMemoryNoteStore _store = new(("/W/plan.md", Plan));
     private readonly NoteWriter _writer;
 
-    public SectionEditTests() => _writer = new NoteWriter(_store, new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1)));
+    public SectionEditTests() => _writer = new NoteWriter(_store, new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1)), new FixedCaller(Writers.Dev));
 
     private Task<ShellResult> Edit(string path, string? oldText, string newText, bool replaceSection = false) =>
-        _writer.EditAsync(path, VersionToken.Of(Plan), oldText, newText, Writers.Dev, CancellationToken.None, replaceSection);
+        _writer.EditAsync(path, VersionToken.Of(Plan), oldText, newText, CancellationToken.None, replaceSection);
 
     private async Task<string> Content() =>
         (await _store.ReadAsync(VaultPath.TryParse("/W/plan.md", out var p) ? p : throw new InvalidOperationException(), CancellationToken.None))!;
@@ -110,19 +110,19 @@ public class SectionEditTests
     [Fact]
     public async Task WriteRejectsASection() => Assert.Equal(
         ShellResult.Error("write: replaces whole notes; to change one section use edit with the section in the path (and replace_section for all of it)"),
-        await _writer.WriteAsync("/W/plan.md#Goals", "x", VersionToken.Of(Plan), Writers.Dev, CancellationToken.None));
+        await _writer.WriteAsync("/W/plan.md#Goals", "x", VersionToken.Of(Plan), CancellationToken.None));
 
     [Fact]
     public async Task EditsAtTheEndKeepTheFinalLineBreak()
     {
         var store = new InMemoryNoteStore(("/W/n.md", "# A\nx\n\n# B\ny\n"));
-        var writer = new NoteWriter(store, new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1)));
+        var writer = new NoteWriter(store, new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1)), new FixedCaller(Writers.Dev));
         var path = VaultPath.TryParse("/W/n.md", out var p) ? p : throw new InvalidOperationException();
 
-        await writer.EditAsync("/W/n.md#B", VersionToken.Of("# A\nx\n\n# B\ny\n"), null, "## B\nz", Writers.Dev, CancellationToken.None, replaceSection: true);
+        await writer.EditAsync("/W/n.md#B", VersionToken.Of("# A\nx\n\n# B\ny\n"), null, "## B\nz", CancellationToken.None, replaceSection: true);
         Assert.Equal("# A\nx\n\n## B\nz\n", await store.ReadAsync(path, CancellationToken.None));
 
-        await writer.EditAsync("/W/n.md#B", VersionToken.Of("# A\nx\n\n## B\nz\n"), null, "more", Writers.Dev, CancellationToken.None);
+        await writer.EditAsync("/W/n.md#B", VersionToken.Of("# A\nx\n\n## B\nz\n"), null, "more", CancellationToken.None);
         Assert.Equal("# A\nx\n\n## B\nz\nmore\n", await store.ReadAsync(path, CancellationToken.None));
     }
 }

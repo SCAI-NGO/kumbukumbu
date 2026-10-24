@@ -28,6 +28,6 @@ public sealed class Rm(NoteWriter writer) : ICommand
         if (args.Count > 1) return ShellResult.Error("rm: too many arguments (rm removes one note at a time)");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        return await writer.RemoveAsync(path, Writers.Dev, ct);
+        return await writer.RemoveAsync(path, ct);
     }
 }

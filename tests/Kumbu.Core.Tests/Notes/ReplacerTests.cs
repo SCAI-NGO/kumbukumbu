@@ -20,7 +20,7 @@ public class ReplacerTests
     private readonly Plans _plans = new();
     private readonly Replacer _replacer;
 
-    public ReplacerTests() => _replacer = new Replacer(_store, _time, _plans);
+    public ReplacerTests() => _replacer = new Replacer(_store, _time, _plans, new FixedCaller(Writers.Dev));
 
     private static CancellationToken Ct => CancellationToken.None;
 
@@ -29,7 +29,7 @@ public class ReplacerTests
     private async Task<string> Content(string path) => (await _store.ReadAsync(P(path), Ct))!;
 
     private Task<ShellResult> Run(string path, string oldText, string newText, bool word = false, string? plan = null) =>
-        _replacer.RunAsync(path, oldText, newText, word, plan, Writers.Dev, Ct);
+        _replacer.RunAsync(path, oldText, newText, word, plan, Ct);
 
     private static string Plan(ShellResult preview) =>
         preview.Output.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))["plan: ".Length..];
@@ -123,7 +123,7 @@ public class ReplacerTests
             ("/Work/projects/Hecate Retro.md", "# Retro\n"),
             ("/Work/log.md", "See [[Hecate]], [[Hecate Retro#Bad|the retro]] and [[Hecate|it]].\nHecate shipped.\n"));
 
-        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+        var preview = await new Replacer(store, _time, _plans, new FixedCaller(Writers.Dev)).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Ct);
 
         Assert.Contains(
             """
@@ -146,7 +146,7 @@ public class ReplacerTests
         var store = new InMemoryNoteStore(
             ("/Work/Hecate.md", "h\n"), ("/Work/myth/Janus.md", "the god\n"), ("/Work/log.md", "[[Hecate]] and [[x|Hecate]]\n"));
 
-        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+        var preview = await new Replacer(store, _time, _plans, new FixedCaller(Writers.Dev)).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Ct);
 
         Assert.Contains(
             """
@@ -162,7 +162,7 @@ public class ReplacerTests
     {
         var store = new InMemoryNoteStore(("/Work/x.md", "x\n"), ("/Work/log.md", "[[x|Hecate]] and [[x#Hecate]]\n"));
 
-        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+        var preview = await new Replacer(store, _time, _plans, new FixedCaller(Writers.Dev)).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Ct);
 
         Assert.Contains("2 occurrences inside [[links]]; each still leads to the same note afterwards.", preview.Output);
         Assert.DoesNotContain("Named after", preview.Output);
@@ -173,7 +173,7 @@ public class ReplacerTests
     {
         var store = new InMemoryNoteStore([.. Enumerable.Range(0, 7).Select(i => ($"/Work/n{i}.md", "it's here\n"))]);
 
-        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work", "it's", "it is", true, null, Writers.Dev, Ct);
+        var preview = await new Replacer(store, _time, _plans, new FixedCaller(Writers.Dev)).RunAsync("/Work", "it's", "it is", true, null, Ct);
 
         Assert.Contains("… excerpts of the first 5 notes only; every line: rg -n -F -w 'it'\\''s' /Work", preview.Output);
     }
@@ -244,7 +244,7 @@ public class ReplacerTests
     public async Task TooManyMatchesForOnePreview()
     {
         var store = new InMemoryNoteStore([.. Enumerable.Range(0, 2000).Select(i => ($"/Big/folder-with-a-long-name/note-{i:D4}.md", "x Hecate\n"))]);
-        var result = await new Replacer(store, _time, _plans).RunAsync("/Big", "Hecate", "Selene", false, null, Writers.Dev, Ct);
+        var result = await new Replacer(store, _time, _plans, new FixedCaller(Writers.Dev)).RunAsync("/Big", "Hecate", "Selene", false, null, Ct);
 
         Assert.Equal(ShellResult.Error("replace: 2000 matches in 2000 notes, too many for one preview; narrow the path"), result);
     }
@@ -275,9 +275,9 @@ public class ReplacerTests
     public async Task ReplaceAllInANoteAndInASection()
     {
         var store = new InMemoryNoteStore(("/Work/s.md", "# A\nx x\n# B\nx\n"));
-        var writer = new NoteWriter(store, _time);
+        var writer = new NoteWriter(store, _time, new FixedCaller(Writers.Dev));
 
-        var all = await writer.EditAsync("/Work/s.md#A", VersionToken.Of("# A\nx x\n# B\nx\n"), "x", "y", Writers.Dev, Ct, replaceAll: true);
+        var all = await writer.EditAsync("/Work/s.md#A", VersionToken.Of("# A\nx x\n# B\nx\n"), "x", "y", Ct, replaceAll: true);
 
         Assert.Equal("replaced 2 occurrences in section #A of /Work/s.md", all.Output);
         Assert.Equal("# A\ny y\n# B\nx\n", await store.ReadAsync(P("/Work/s.md"), Ct));
@@ -286,8 +286,8 @@ public class ReplacerTests
     [Fact]
     public async Task ReplaceAllNeedsOldText()
     {
-        var writer = new NoteWriter(_store, _time);
-        var result = await writer.EditAsync("/Work/c.md", VersionToken.Of("nothing here\n"), null, "y", Writers.Dev, Ct, replaceAll: true);
+        var writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        var result = await writer.EditAsync("/Work/c.md", VersionToken.Of("nothing here\n"), null, "y", Ct, replaceAll: true);
 
         Assert.Equal(ShellResult.Error("edit: replace_all needs old_text (and no replace_section): it replaces every occurrence of old_text"), result);
     }

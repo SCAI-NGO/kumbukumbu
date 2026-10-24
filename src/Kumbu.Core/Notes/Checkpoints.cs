@@ -30,8 +30,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     public async Task<IReadOnlyList<string>> VaultsWithAsync(string name, CancellationToken ct) =>
         [.. (await store.ListCheckpointsAsync(VaultPath.Root, ct)).Where(c => c.Name == name).Select(c => c.Vault).Distinct()];
 
-    public async Task<ShellResult> MakeAsync(VaultPath path, string name, string by, CancellationToken ct)
+    public async Task<ShellResult> MakeAsync(VaultPath path, string name, CancellationToken ct)
     {
+        if (writer.Caller.Refuse("mkcp", path) is { } refused) return refused;
         if (path.IsRoot) return ShellResult.Error("mkcp: a checkpoint covers a vault, a folder or a note, e.g. mkcp /Demo before-cleanup");
         if (!Checkpoint.IsValidName(name)) return ShellResult.Error($"mkcp: '{name}' is not a checkpoint name: {Checkpoint.NameRule}");
 
@@ -66,7 +67,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         var checkpoint = new Checkpoint(
-            name, path, folder, by, writer.Now,
+            name, path, folder, writer.Caller.Writer, writer.Now,
             [.. notes.OrderBy(n => n.Path.Value, TextOrder.Default).Select(n => new CheckpointNote(n.Path, VersionToken.Of(n.Content)))]);
         if (!await store.TryAddCheckpointAsync(checkpoint, notes, ct))
         {
@@ -101,6 +102,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
     public async Task<ShellResult> RemoveAsync(VaultPath path, string name, CancellationToken ct)
     {
+        if (writer.Caller.Refuse("rmcp", path) is { } refused) return refused;
         if (path.IsRoot) return ShellResult.Error("rmcp: give a path in the checkpoint's vault: rmcp /Demo <name>");
         var vault = path.Segments[0];
         if (await FindAsync(vault, name, ct) is not { } checkpoint) return ShellResult.Error(Missing("rmcp", vault, name));
@@ -162,8 +164,10 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     /// gets a preview and a plan token first, and its apply makes the folder match the checkpoint exactly:
     /// changed notes get their content then, removed ones come back, newer ones go to the trash.
     /// </summary>
-    public async Task<ShellResult> RestoreAsync(VaultPath path, string name, string? token, string by, CancellationToken ct)
+    public async Task<ShellResult> RestoreAsync(VaultPath path, string name, string? token, CancellationToken ct)
     {
+        if (writer.Caller.Refuse("restore", path) is { } refused) return refused;
+        var by = writer.Caller.Writer;
         if (path.IsRoot) return ShellResult.Error("restore: give a path in the checkpoint's vault, e.g. restore --checkpoint before-cleanup /Demo");
         var (view, error) = await OpenAsync("restore", path.Segments[0], name, ct);
         if (view is null) return error!;

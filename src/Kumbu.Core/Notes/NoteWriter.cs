@@ -11,8 +11,10 @@ namespace Kumbu.Core.Notes;
 /// Every change to a note goes through here: validation, version tokens (optimistic concurrency),
 /// history with coalescing, and the trash. Messages read like shell errors, so a model can act on them.
 /// </summary>
-public sealed class NoteWriter(INoteStore store, TimeProvider time)
+public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller caller)
 {
+    public ICaller Caller => caller;
+
     public const int MaxBytes = 1_048_576;
     public const int HistoryLimit = 10;
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);
@@ -43,12 +45,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         };
     }
 
-    /// <summary>The changeset a write by <paramref name="writer"/> in the vault of <paramref name="path"/> joins now.</summary>
-    public Task<Changeset> ChangesetAsync(VaultPath path, string writer, CancellationToken ct) =>
-        Changeset.ForAsync(store, path.Segments[0], writer, Now, ct);
+    /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
+    public Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
+        Changeset.ForAsync(store, path.Segments[0], caller.Writer, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
-    public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, string writer, CancellationToken ct)
+    public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct)
     {
         const string tool = "write";
         if (SectionAddress.Split(pathText).Fragment is not null)
@@ -58,6 +60,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         }
 
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
+        if (caller.Refuse(tool, path) is { } refused) return refused;
         content = Normalize(content);
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
 
@@ -72,7 +75,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
 
-            var note = new StoredNote(path, content, 1, writer, Now, [], Changeset: await ChangesetAsync(path, writer, ct));
+            var note = new StoredNote(path, content, 1, caller.Writer, Now, [], Changeset: await ChangesetAsync(path, ct));
             if (!await store.TryCreateAsync(note, ct))
             {
                 return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again");
@@ -85,7 +88,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (existing.Version != version) return Conflict(tool, path, version, existing);
         if (existing.Content == content) return Written($"{path.Value} is unchanged", existing);
 
-        return await ReplaceAsync(tool, existing, content, writer, $"wrote {path.Value} ({Lines.Count(content)})", ct);
+        return await ReplaceAsync(tool, existing, content, $"wrote {path.Value} ({Lines.Count(content)})", ct);
     }
 
     /// <summary>
@@ -94,7 +97,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     /// <paramref name="replaceSection"/> replaces the whole section, heading included.
     /// </summary>
     public async Task<ShellResult> EditAsync(
-        string pathText, string version, string? oldText, string newText, string writer, CancellationToken ct,
+        string pathText, string version, string? oldText, string newText, CancellationToken ct,
         bool replaceSection = false, bool replaceAll = false)
     {
         const string tool = "edit";
@@ -105,6 +108,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
 
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
+        if (caller.Refuse(tool, path) is { } refused) return refused;
         if (replaceSection && fragment is null)
         {
             return ShellResult.Error("edit: replace_section needs a section in the path, e.g. /Work/plan.md#Goals");
@@ -190,7 +194,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
         if (content == current) return Written($"{path.Value} is unchanged", existing);
 
-        return await ReplaceAsync(tool, existing, content, writer, message, ct);
+        return await ReplaceAsync(tool, existing, content, message, ct);
     }
 
     /// <summary>
@@ -229,8 +233,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     }
 
     /// <summary>Moves a note to the trash. Needs no version: it can be undone with <see cref="RestoreAsync"/>.</summary>
-    public async Task<ShellResult> RemoveAsync(VaultPath path, string writer, CancellationToken ct)
+    public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct)
     {
+        if (caller.Refuse("rm", path) is { } refused) return refused;
         var existing = await store.GetAsync(path, ct);
         if (existing is null)
         {
@@ -251,7 +256,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
 
-        if (!await store.TryTrashAsync(existing, writer, Now, ct))
+        if (!await store.TryTrashAsync(existing, caller.Writer, Now, ct))
         {
             return ShellResult.Error($"rm: {path.Value} changed while removing it; try again");
         }
@@ -271,13 +276,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     /// one with <paramref name="version"/>. If one exists: makes the version from its history current again;
     /// the state it replaces stays in the history, so this can be undone too.
     /// </summary>
-    public async Task<ShellResult> RestoreAsync(VaultPath path, string? version, string writer, CancellationToken ct)
+    public async Task<ShellResult> RestoreAsync(VaultPath path, string? version, CancellationToken ct)
     {
+        if (caller.Refuse("restore", path) is { } refused) return refused;
         var existing = await store.GetAsync(path, ct);
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
-            var restored = await store.TryRestoreFromTrashAsync(path, version, writer, Now, ct);
+            var restored = await store.TryRestoreFromTrashAsync(path, version, caller.Writer, Now, ct);
             if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
 
             return version is null
@@ -303,7 +309,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
         }
 
         // In no changeset, so the next write doesn't coalesce into it: a restore is a checkpoint.
-        var next = Next(existing, entry.Content, $"{writer} (restore)", Now, changeset: null, keepCurrent: true);
+        var next = Next(existing, entry.Content, $"{caller.Writer} (restore)", Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to version {version}", next)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
@@ -343,9 +349,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
     }
 
     private async Task<ShellResult> ReplaceAsync(
-        string tool, StoredNote existing, string content, string writer, string message, CancellationToken ct)
+        string tool, StoredNote existing, string content, string message, CancellationToken ct)
     {
-        var next = Next(existing, content, writer, Now, await ChangesetAsync(existing.Path, writer, ct));
+        var next = Next(existing, content, caller.Writer, Now, await ChangesetAsync(existing.Path, ct));
         if (!await store.TryReplaceAsync(existing, next, ct))
         {
             var now = await store.GetAsync(existing.Path, ct);

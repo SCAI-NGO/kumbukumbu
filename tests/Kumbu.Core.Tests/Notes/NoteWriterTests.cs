@@ -15,7 +15,7 @@ public class NoteWriterTests
     private readonly FakeTimeProvider _time = new(InMemoryNoteStore.Seeded.AddDays(1));
     private readonly NoteWriter _writer;
 
-    public NoteWriterTests() => _writer = new NoteWriter(_store, _time);
+    public NoteWriterTests() => _writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
 
     private static CancellationToken Ct => CancellationToken.None;
 
@@ -25,11 +25,11 @@ public class NoteWriterTests
 
     private static string V(string content) => VersionToken.Of(content);
 
-    private Task<ShellResult> Write(string path, string content, string? version, string writer = Writers.Dev) =>
-        _writer.WriteAsync(path, content, version, writer, Ct);
+    private Task<ShellResult> Write(string path, string content, string? version) =>
+        _writer.WriteAsync(path, content, version, Ct);
 
-    private Task<ShellResult> Edit(string path, string version, string? oldText, string newText, string writer = Writers.Dev) =>
-        _writer.EditAsync(path, version, oldText, newText, writer, Ct);
+    private Task<ShellResult> Edit(string path, string version, string? oldText, string newText) =>
+        _writer.EditAsync(path, version, oldText, newText, Ct);
 
     [Fact]
     public async Task CreatingANoteSaysWhichLinksItMakesAmbiguous()
@@ -223,7 +223,7 @@ public class NoteWriterTests
         var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;
         _time.Advance(TimeSpan.FromMinutes(10));
         var v2 = (await Edit("/Work/plan.md", v1, null, "b")).Version!.Token;
-        await Edit("/Work/plan.md", v2, null, "c", writer: "other");
+        await new NoteWriter(_store, _time, new FixedCaller("other")).EditAsync("/Work/plan.md", v2, null, "c", Ct);
 
         var note = await Get("/Work/plan.md");
         Assert.Equal([Plan + "a\nb", Plan + "a", Plan], note.History.Select(h => h.Content));
@@ -250,7 +250,7 @@ public class NoteWriterTests
     {
         var v1 = (await Write("/Work/plan.md", "bad\n", V(Plan))).Version!.Token;
 
-        var result = await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Writers.Dev, Ct);
+        var result = await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Ct);
 
         Assert.Equal($"restored /Work/plan.md to version {V(Plan)}", result.Output);
         var note = await Get("/Work/plan.md");
@@ -263,23 +263,23 @@ public class NoteWriterTests
     [Fact]
     public async Task RestoreOfAnUnknownVersion() => Assert.Equal(
         ShellResult.Error("restore: /Work/plan.md has no version abc ('history /Work/plan.md' lists them)"),
-        await _writer.RestoreAsync(P("/Work/plan.md"), "abc", Writers.Dev, Ct));
+        await _writer.RestoreAsync(P("/Work/plan.md"), "abc", Ct));
 
     [Fact]
     public async Task RestoreToTheCurrentVersionChangesNothing() => Assert.Equal(
         $"/Work/plan.md is already at version {V(Plan)}",
-        (await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Writers.Dev, Ct)).Output);
+        (await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Ct)).Output);
 
     // --- trash ---
 
     [Fact]
     public async Task RemoveMovesToTheTrashAndRestoreBringsItBack()
     {
-        var removed = await _writer.RemoveAsync(P("/Work/plan.md"), Writers.Dev, Ct);
+        var removed = await _writer.RemoveAsync(P("/Work/plan.md"), Ct);
         Assert.Equal("removed /Work/plan.md; it stays in the trash for 30 days ('restore /Work/plan.md' brings it back)", removed.Output);
         Assert.Null(await _store.GetAsync(P("/Work/plan.md"), Ct));
 
-        var restored = await _writer.RestoreAsync(P("/Work/plan.md"), null, Writers.Dev, Ct);
+        var restored = await _writer.RestoreAsync(P("/Work/plan.md"), null, Ct);
 
         Assert.Equal("restored /Work/plan.md from the trash", restored.Output);
         Assert.Equal(V(Plan), restored.Version!.Token);
@@ -289,30 +289,30 @@ public class NoteWriterTests
     [Fact]
     public async Task RestoreFromTheTrashDoesNotOverwriteANewNote()
     {
-        await _writer.RemoveAsync(P("/Work/plan.md"), Writers.Dev, Ct);
+        await _writer.RemoveAsync(P("/Work/plan.md"), Ct);
         await Write("/Work/plan.md", "new\n", null);
 
         Assert.Equal(
             ShellResult.Error("restore: /Work/plan.md exists; to go back to an earlier version, give one from 'history /Work/plan.md'"),
-            await _writer.RestoreAsync(P("/Work/plan.md"), null, Writers.Dev, Ct));
+            await _writer.RestoreAsync(P("/Work/plan.md"), null, Ct));
     }
 
     [Fact]
     public async Task RestoreOfSomethingNotInTheTrash() => Assert.Equal(
         ShellResult.Error("restore: /Work/none.md is not in the trash ('trash' lists what is)"),
-        await _writer.RestoreAsync(P("/Work/none.md"), null, Writers.Dev, Ct));
+        await _writer.RestoreAsync(P("/Work/none.md"), null, Ct));
 
     [Theory]
     [InlineData("/Work/sub", "rm: /Work/sub: Is a directory (rm removes one note at a time)")]
     [InlineData("/Work/none.md", "rm: /Work/none.md: No such file or directory")]
     public async Task RemoveErrors(string path, string error) =>
-        Assert.Equal(ShellResult.Error(error), await _writer.RemoveAsync(P(path), Writers.Dev, Ct));
+        Assert.Equal(ShellResult.Error(error), await _writer.RemoveAsync(P(path), Ct));
 
     [Fact]
     public async Task AWriteRightAfterARestoreDoesNotSwallowIt()
     {
         var bad = (await Write("/Work/plan.md", "bad\n", V(Plan))).Version!.Token;
-        var restored = (await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Writers.Dev, Ct)).Version!.Token;
+        var restored = (await _writer.RestoreAsync(P("/Work/plan.md"), V(Plan), Ct)).Version!.Token;
         Assert.Equal("dev (restore)", (await Get("/Work/plan.md")).LastWriter);
 
         await Write("/Work/plan.md", "after\n", restored);

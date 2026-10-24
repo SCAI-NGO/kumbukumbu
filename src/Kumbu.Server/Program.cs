@@ -42,6 +42,8 @@ builder.Services.AddScoped<ICredential, BearerCredential>();
 builder.Services.AddScoped<EncryptedNoteStore>();
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
+// The caller is always the dev token for now; the request's own caller replaces it.
+builder.Services.AddScoped<ICaller>(_ => new FixedCaller(Writers.Dev));
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<Replacer>();

@@ -76,7 +76,7 @@ public class SearchTests
     {
         store ??= Store;
         var time = new FakeTimeProvider();
-        return new Shell(store, new NoteWriter(store, time), new NoteMover(store, time), search: index).RunAsync(line, CancellationToken.None);
+        return new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), search: index).RunAsync(line, CancellationToken.None);
     }
 
     private static FakeIndex Cosines(params (string Path, int Line, double Score)[] hits) =>
