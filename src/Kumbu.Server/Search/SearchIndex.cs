@@ -55,8 +55,9 @@ public sealed class SearchIndex : BackgroundService
         var otherModel = embeddings.Where(e => e.Value.Model != _embedder.Model && notes.ContainsKey(e.Key)).ToList();
         if (otherModel.Count > 0)
         {
-            _log.LogInformation("Vault {Name}: {Count} notes to embed with {New} (were {Old})",
-                vault.Name, otherModel.Count, _embedder.Model, string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
+            _log.LogInformation("Vault {Name}: {Count} {Notes} to embed with {New} (were {Old})",
+                vault.Name, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", _embedder.Model,
+                string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
         Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note)).Select(n => n.Key)
