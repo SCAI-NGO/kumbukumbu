@@ -23,11 +23,12 @@ sys.path.insert(0, str(HERE))
 from queries import QUERIES  # noqa: E402
 
 # --- chunking (Chunker.cs) -------------------------------------------------------------------------
-HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+MAX_CHARS = 2000  # Chunker.MaxChars
 
 
 def chunks_of(rel, text):
-    """Sections of a note. Heading-only sections stay in: the server ranks them too (it only hides them in the output)."""
+    """Sections of a note, split like Chunker.Split. Heading-only sections stay in: the server ranks them too (it only hides them in the output)."""
     lines = text.split("\n")
     start = 0
     if lines and lines[0].strip() == "---":
@@ -42,11 +43,20 @@ def chunks_of(rel, text):
             continue
         m = None if fence else HEADING.match(lines[i])
         if m:
-            heads.append((i, len(m.group(1)), m.group(2)))
+            heads.append((i, len(m.group(1)), (m.group(2) or "").strip()))
     title = pathlib.PurePath(rel).name[:-3]
     out = []
 
+    def emit(heading, ctx, a, b):
+        while b > a and not lines[b - 1].strip():
+            b -= 1
+        if a >= b:
+            return
+        text = "\n".join(lines[a:b])[:MAX_CHARS * 2]  # a single huge line is cut
+        out.append({"path": rel, "heading": heading, "text": text, "context": ctx, "lines": (a, b)})
+
     def add(heading, chain, a, b):
+        """Chunker.Add: a section over MAX_CHARS is split at the last blank line before the limit, else at the line."""
         while b > a and not lines[b - 1].strip():
             b -= 1
         while a < b and not lines[a].strip():
@@ -54,7 +64,21 @@ def chunks_of(rel, text):
         if a >= b:
             return
         ctx = title if heading is None else title + " > " + " > ".join(chain)
-        out.append({"path": rel, "heading": heading or "", "text": "\n".join(lines[a:b]), "context": ctx})
+        part, size, last_break = a, 0, -1
+        for i in range(a, b):
+            if size > 0 and size + len(lines[i]) + 1 > MAX_CHARS:
+                cut = last_break if last_break > part else i
+                emit(heading or "", ctx, part, cut)
+                part = cut
+                while part < b and not lines[part].strip():
+                    part += 1
+                size = sum(len(l) + 1 for l in lines[part:i])
+                last_break = -1
+            if not lines[i].strip():
+                last_break = i
+            size += len(lines[i]) + 1
+        if part < b:
+            emit(heading or "", ctx, part, b)
 
     add(None, [], start, heads[0][0] if heads else len(lines))
     stack = []
