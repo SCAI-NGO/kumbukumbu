@@ -197,7 +197,7 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
 7. Embeddings + hybrid search; first, the decisions and fixes from the phase 6b test (`docs/notes-test-phase6b.md`): a folder restore moves moved notes back and rewrites their links; `replace` warns about links that would lead to another note and names the note named after the old text; small fixes.
 8. Users, admin, invites, API keys.
-9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Chris builds the UI with Claude Design.
+9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
 10. OAuth authorization server for app connectors.
 11. Obsidian sync plugin.
 
