@@ -84,7 +84,9 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         var user = await Users.Find(u => u.Id == slot.User).FirstOrDefaultAsync(ct);
         // A password change or recovery deletes the sessions after it sets the new password; this catches the
         // ones a crash in between would have left behind, and those of a sign-in that read the old password.
-        if (user is null || !user.Active || slot.CreatedAt < user.CredentialsChangedAt)
+        // At most equal, not only earlier: MongoDB keeps milliseconds, so a read just before the change can
+        // carry the change's very time; a sign-in in the same millisecond merely has to sign in again.
+        if (user is null || !user.Active || slot.CreatedAt <= user.CredentialsChangedAt)
         {
             await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
             return null;

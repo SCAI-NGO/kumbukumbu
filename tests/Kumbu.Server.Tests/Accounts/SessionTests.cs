@@ -212,6 +212,8 @@ public sealed class SessionTests(MongoFixture fixture)
         Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+        // A sign-in in the very millisecond of the change is refused too (see the next test), so a moment later.
+        _time.Advance(TimeSpan.FromMilliseconds(1));
         var again = (await Users().TrySignInAsync("chris", NewPassword, Ct))!.Value;
         Assert.NotNull(await Sessions().ResolveAsync(await Sessions().StartAsync(again.User, again.UserKey, again.CredentialReadAt, Ct), Ct));
     }
@@ -266,6 +268,22 @@ public sealed class SessionTests(MongoFixture fixture)
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
         Assert.False(await Slots.Find(s => s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_sign_in_that_read_the_password_in_the_same_millisecond_as_a_change_is_refused()
+    {
+        var users = Users();
+        await users.CreateAsync("chris", Password, Roles.User, Ct);
+        var (user, key, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+
+        // The clock stands still: MongoDB keeps milliseconds only, so a read and a change within one look alike.
+        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
+
+        var changedAt = (await _db.GetCollection<UserDocument>("users").Find(u => u.Id == user.Id).SingleAsync(Ct)).CredentialsChangedAt;
+        Assert.Equal(readAt, changedAt);
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
     }
 
     [Fact]
