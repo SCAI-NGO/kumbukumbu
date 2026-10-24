@@ -102,6 +102,18 @@ public sealed class McpClientTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Semsearch_ranks_sections_by_words_and_meaning()
+    {
+        await ShAsync("ls /");
+        await app.IndexedAsync();
+
+        var result = Text(await ShAsync("semsearch -n 3 agents read through a shell"));
+
+        Assert.StartsWith("1. /Demo/welcome.md#Welcome to Kumbu²  lines 1-", result, StringComparison.Ordinal);
+        Assert.EndsWith("(ranked by words and meaning; cat \"path#Section\" reads one)", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Edit_replace_all_over_mcp()
     {
         var path = "/Demo/scratch-all.md";

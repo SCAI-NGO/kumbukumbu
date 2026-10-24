@@ -332,14 +332,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
                 var now = after.Resolve(note.Path, link.Target);
                 if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && before.Resolve(note.Path, link.Target).Kind == LinkKind.Note)
                 {
-                    found.Add($"{link.Raw} in {note.Path.Value}");
+                    found.Add($"{link.Raw} in {note.Path.Value} ({now.Candidates.Count} notes)");
                 }
             }
         }
 
         if (found.Count == 0) return "";
         var more = found.Count > AmbiguousShown ? $" and {found.Count - AmbiguousShown} more" : "";
-        return $"; note: {string.Join(", ", found.Take(AmbiguousShown))}{more} now match two notes ('links <note>' shows them; a longer path in the link, or mv, makes it unique again)";
+        return $"; note: now ambiguous: {string.Join(", ", found.Take(AmbiguousShown))}{more} ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)";
     }
 
     private async Task<ShellResult> ReplaceAsync(

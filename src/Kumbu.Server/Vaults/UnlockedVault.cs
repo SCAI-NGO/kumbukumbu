@@ -46,6 +46,12 @@ public sealed class UnlockedVault
 
     public ImmutableList<MoveRecord> Moves { get; set; } = [];
 
+    /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
+    public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
+
+    /// <summary>One note is indexed at a time per vault, so two updates of a note can't overtake each other.</summary>
+    public SemaphoreSlim IndexGate { get; } = new(1, 1);
+
     /// <summary>The named checkpoints; their notes' content stays in MongoDB until a command reads it.</summary>
     public ImmutableList<StoredCheckpoint> Checkpoints { get; set; } = [];
 
@@ -59,7 +65,7 @@ public sealed class UnlockedVault
 
     /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included).</summary>
     public long ApproxBytes =>
-        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note));
+        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length));
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
@@ -98,6 +104,39 @@ public sealed class UnlockedVault
     {
         var p = Open<MovePayload>($"move:{Id}:{doc.Id}", doc.Blob);
         return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt);
+    }
+
+    /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
+    public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
+        Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(
+            path.Value, embeddings.Version,
+            [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector))))]));
+
+    public (VaultPath Path, NoteEmbeddings Embeddings) OpenEmbeddings(SealedDocument doc)
+    {
+        var p = Open<EmbeddingsPayload>($"embeddings:{Id}:{Convert.ToBase64String(doc.PathId)}", doc.Blob);
+        var path = Payload.Path(p.Path);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PathId(path), doc.PathId))
+        {
+            throw new InvalidDataException($"Path id of embeddings {doc.Id} does not match its sealed path");
+        }
+
+        return (path, new NoteEmbeddings(p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector))))]));
+    }
+
+    /// <summary>Vectors are stored as 16-bit floats, half the size; search precision doesn't need more.</summary>
+    private static byte[] Halves(float[] vector)
+    {
+        var bytes = new byte[vector.Length * 2];
+        for (var i = 0; i < vector.Length; i++) BitConverter.TryWriteBytes(bytes.AsSpan(i * 2), (Half)vector[i]);
+        return bytes;
+    }
+
+    private static float[] Floats(byte[] bytes)
+    {
+        var vector = new float[bytes.Length / 2];
+        for (var i = 0; i < vector.Length; i++) vector[i] = (float)BitConverter.ToHalf(bytes, i * 2);
+        return vector;
     }
 
     /// <summary>A keyed hash of a checkpoint's name, for the unique index: names are unique per vault.</summary>
@@ -175,6 +214,16 @@ internal sealed record TrashPayload(NotePayload Note, long Revision, string Dele
 internal sealed record MovePayload(string From, string To, string MovedBy, DateTime MovedAt);
 
 internal sealed record VaultMeta(string Name);
+
+internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector);
+
+internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks);
+
+/// <summary>A chunk's vector, with the hash of the text it was made from, to reuse it while the text stays.</summary>
+public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector);
+
+/// <summary>The embeddings of one note at one version.</summary>
+public sealed record NoteEmbeddings(string Version, IReadOnlyList<EmbeddedChunk> Chunks);
 
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 

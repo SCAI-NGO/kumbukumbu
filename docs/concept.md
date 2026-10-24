@@ -211,8 +211,6 @@ v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, 
 
 v2 also brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Two groundworks belong in v1 because they are needed with or without the flag: markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv`, and writer identities in step 8 that tell humans from agents.
 
-v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. Open questions in §13.
-
 Each step = a chapter in `CONCEPTS.md`.
 
 ## 13. Open questions
@@ -238,14 +236,6 @@ Background and the full gap analysis: `docs/okf-gap-analysis.md`.
 - **Edge cases:** `mv` of a note without `type` into a bundle; `replace` across a bundle boundary; bundles nested in bundles; an existing `index.md` or `log.md` note that becomes reserved when the flag is set.
 - **`index.md` and `log.md` are synthesised on read and on export, not stored** (OKF allows it: "consumers MAY synthesize one on the fly"). Stored, they would be server-written content that the sync carries back to Obsidian.
 - Out of scope: Attested Computation (made for data catalogues; its attesters are code files, against text-only).
-
-### Kanban boards (v2)
-Decided: several boards; boards can be assigned to API keys. Everything else is open:
-- **A board as a note, or its own data model.** A note in the format of the Obsidian Kanban plugin (frontmatter `kanban-plugin: board`, a `##` heading per lane, a `- [ ]` item per card) would get history, changesets, checkpoints, search, links and the Obsidian sync for free, and stays text. Its own model would make card operations and per-card concurrency simpler, but would need all of that rebuilt. Leaning towards the note, to check against what the community asked for.
-- **What "assign a board to a key" means with encryption.** Access is a key slot per vault (§9), so a key can read a whole vault or nothing. A key that may see only some boards needs either boards in a vault of their own, or a permission layer on top of the slot inside a vault (weaker: the key can decrypt more than it may read). Ties into step 8 (users, API keys).
-- **Card operations for agents.** Plain `edit` on the board note, or commands of their own (`board`, moving a card between lanes, adding one) that don't need the whole note and its version token. Several agents on one board make conflicts on the board note likely; operations on single cards would avoid them.
-- **Cards and notes.** A card that is a `[[link]]` to a note, a card with its text inline, or both (as the Obsidian plugin allows); what `mv` and `rm` of a linked note do to the card.
-- **The web UI (step 9) shows boards**, with drag and drop; designed with the board format, so the UI and the Obsidian plugin don't fight over it.
 
 ### Resolved (Oct 21, 2026)
 - Token lifecycle vs. key slots → §9 "Tokens as key slots".

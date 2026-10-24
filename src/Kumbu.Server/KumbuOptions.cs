@@ -23,6 +23,20 @@ public sealed class KumbuOptions
     public RecoveryOptions Recovery { get; set; } = new();
 
     public VaultOptions Vaults { get; set; } = new();
+
+    public SearchOptions Search { get; set; } = new();
+}
+
+public sealed class SearchOptions
+{
+    /// <summary>Search by meaning (semsearch); without it, semsearch ranks by words only.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Where the embedding model is kept; downloaded there on the first start.</summary>
+    public string ModelPath { get; set; } = "models";
+
+    /// <summary>Threads for the model; 0 means half of the cores.</summary>
+    public int Threads { get; set; }
 }
 
 public sealed class RecoveryOptions

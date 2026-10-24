@@ -8,7 +8,7 @@ WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
-# Owned by the app user, so the named volume mounted here starts out writable for it.
-RUN mkdir -p /recovery && chown app:app /recovery && chmod 700 /recovery
+# Owned by the app user, so the named volumes mounted here start out writable for it.
+RUN mkdir -p /recovery /models && chown app:app /recovery /models && chmod 700 /recovery
 USER app
 ENTRYPOINT ["dotnet", "Kumbu.Server.dll"]

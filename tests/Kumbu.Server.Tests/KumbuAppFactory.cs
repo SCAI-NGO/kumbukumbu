@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 using Testcontainers.MongoDb;
@@ -40,7 +42,19 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.UseSetting("Kumbu:DevToken", Token);
         builder.UseSetting("Kumbu:Seed:Path", SamplesPath);
         builder.UseSetting("Kumbu:Recovery:Path", RecoveryPath);
+        // No download in tests: words hashed into vectors stand in for the model.
+        builder.UseSetting("Kumbu:Search:Enabled", "false");
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<Kumbu.Server.Search.IEmbedder>();
+            services.AddSingleton<Kumbu.Server.Search.IEmbedder>(Embedder);
+        });
     }
+
+    public Search.FakeEmbedder Embedder { get; } = new();
+
+    /// <summary>Waits until the notes written so far are indexed.</summary>
+    public Task IndexedAsync() => Services.GetRequiredService<Kumbu.Server.Search.SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
 
     /// <summary>Connects the official SDK client over the in-memory test server.</summary>
     public async Task<McpClient> ConnectAsync(string? token = Token)

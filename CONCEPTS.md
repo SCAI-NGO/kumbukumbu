@@ -386,3 +386,30 @@ A checkpoint is read like the current state: `ls`, `cat`, `rg` … with `--check
 
 Agents set and remove checkpoints only when the user asks; the manual says so. A checkpoint is a user's decision about what matters, and with 10 per vault, an agent setting them on its own would fill the slots the user wants.
 
+## 9. Search by words and by meaning
+
+### Two rankings, merged by rank
+
+`rg` answers "where does this text occur?" exactly and without ranking. `semsearch` answers "which sections are about this?", and needs two different signals:
+
+- **Words** (lexical): **BM25** scores a section by the query's terms. A term counts more the rarer it is in the vault (inverse document frequency), a repeated term counts less each time (saturation, `k1`), and long sections are not favoured for being long (length normalisation, `b`). Good for names, abbreviations and exact terms ("Hecate", "MCP"). Stop words ("the", "und") are left out: they match everywhere and say nothing.
+- **Meaning** (semantic): an **embedding model** turns a text into a vector, 768 numbers, so that texts about the same thing lie close together, also in other words or another language. The score is the dot product of the query's vector with a section's (both have length 1, so it is the cosine of the angle between them).
+
+The two scores aren't comparable: BM25 has no upper bound, a cosine lies between −1 and 1. **Reciprocal Rank Fusion** avoids the question by using ranks only: each list gives a section `1 / (60 + rank)`, and the sums decide. A section high in both lists wins; a section high in one still shows up. The 60 dampens the difference between rank 1 and rank 2, so one list alone doesn't dominate.
+
+### Chunks: sections with their context
+
+What gets ranked is a **section's own text**: from its heading to the next heading of any level, so a subsection is its own chunk and a result can be read with `cat "note.md#A#B"`. Long sections are split between paragraphs at about 512 tokens. Each chunk is embedded together with its context, the note's name and the heading path (`plan > Architecture > Gates`), since a section called "Risks" means little without it.
+
+### The model, in-process
+
+The model is `snowflake-arctic-embed-m-v2.0` (Apache-2.0), multilingual, run by **ONNX Runtime** inside the server process: no note leaves the server to be embedded (concept §6). It is a transformer, so text first becomes **tokens**, pieces of words from a vocabulary of 250,002. Its tokenizer is a **Unigram** model (SentencePiece): every piece has a probability, and a word is split into the most probable sequence of pieces, found by **Viterbi**, a dynamic programme over the positions in the word. Before that comes a normaliser (`nmt_nfkc`, stored as a compact trie that maps characters to their normalised form) and a split at whitespace with "▁" marking a word's start. Kumbu² implements these steps in C# from the model's `tokenizer.json`; a test compares its ids with Hugging Face's library on sample texts in many scripts.
+
+Queries get the model's query prompt (`query: `), sections don't: the model was trained that way, as an asymmetric search from a short question to a longer text. The model is downloaded on the first start, pinned to one revision and checked against SHA-256 checksums, and 16-bit (half the size of 32-bit, with almost the same vectors; an 8-bit version was faster but moved the vectors too far).
+
+### The index
+
+There is no vector database. A vault's embeddings are sealed in MongoDB like everything else (one document per note, the vectors as 16-bit floats), decrypted into the working set when the vault is unlocked, and a search is dot products over them: a personal vault has thousands of sections, which takes milliseconds.
+
+Indexing runs **in the background**, so a write isn't slowed down by it: each write queues its notes; a worker splits them into chunks and embeds only the chunks whose text changed (each chunk carries a hash of its text). When a vault is unlocked, it catches up with everything written while it was locked. A search says how many notes aren't indexed yet; those still count by words.
+

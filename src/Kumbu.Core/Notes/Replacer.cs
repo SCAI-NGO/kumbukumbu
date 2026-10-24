@@ -97,17 +97,32 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
     }
 
     /// <summary>
-    /// The replace is literal, also inside [[links]]. Names the changed links that would lead nowhere (or
-    /// to several notes) afterwards, since renaming a project usually means a note of that name too: moving
-    /// that note first rewrites its links, and the replace then leaves them alone.
+    /// The replace is literal, also inside [[links]], and blind to what it doesn't contain. Names the notes
+    /// named after the old text (renaming a project usually means its note too), the changed links that would
+    /// lead nowhere or be ambiguous afterwards, and those that would lead to another note: moving the note
+    /// first rewrites its links, and the replace then leaves them alone.
     /// </summary>
     private async Task<IEnumerable<string>> LinkWarningsAsync(
         VaultPath path, List<(Note Note, List<int> Matches)> affected, string oldText, string newText, CancellationToken ct)
     {
         var vault = path.Segments[0];
-        var resolver = new LinkResolver(vault, await store.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct));
+        var paths = await store.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct);
+        var resolver = new LinkResolver(vault, paths);
+        var output = new List<string>();
+
+        var named = paths
+            .Where(p => Matches(p.Name.EndsWith(".md", StringComparison.Ordinal) ? p.Name[..^3] : p.Name, oldText, word: true).Count > 0)
+            .Select(p => p.Value).Order(StringComparer.Ordinal).ToList();
+        if (named.Count > 0)
+        {
+            output.Add("");
+            output.Add($"Named after \"{oldText}\": {string.Join(", ", named)}");
+            output.Add("Read them before applying: a sentence can depend on the name without containing it. To rename one, mv it first.");
+        }
+
         var inLinks = 0;
         var broken = new List<string>();
+        var elsewhere = new List<string>();
         foreach (var (note, matches) in affected)
         {
             var lineStarts = LineStarts(note.Content);
@@ -121,26 +136,38 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
                 var raw = Replace(link.Raw, inside, oldText.Length, newText);
                 if (WikiLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
                 var after = resolver.Resolve(note.Path, changed.Target);
-                if (after.Kind is not (LinkKind.NotFound or LinkKind.Ambiguous)) continue;
-
                 var now = resolver.Resolve(note.Path, link.Target);
-                var why = after.Kind == LinkKind.Ambiguous
-                    ? $"ambiguous ({string.Join(", ", after.Candidates.Select(c => c.Value))})"
-                    : "no such note";
-                var was = now.Kind == LinkKind.Note ? $"; now it leads to {now.Target!.Value}" : "";
-                broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} → {raw}: {why}{was}");
+                var was = now.Kind == LinkKind.Note ? $"now {now.Target!.Value}" : "now it leads nowhere";
+                var where = $"  {note.Path.Value}:{link.Line + 1}: {link.Raw} → {raw}";
+                if (after.Kind == LinkKind.NotFound) broken.Add($"{where}: no such note ({was})");
+                else if (after.Kind == LinkKind.Ambiguous) broken.Add($"{where}: ambiguous, {string.Join(" or ", after.Candidates.Select(c => c.Value))} ({was})");
+                else if (after.Kind == LinkKind.Note && after.Target != now.Target) elsewhere.Add($"{where}: to {after.Target!.Value} ({was})");
             }
         }
 
-        if (inLinks == 0) return [];
-        if (broken.Count == 0) return ["", $"{Count(inLinks, "occurrence")} inside [[links]]; each still leads to a note afterwards."];
-        return
-        [
-            "",
-            $"{Count(inLinks, "occurrence")} inside [[links]]; after the replace, {Count(broken.Count, "link")} would lead nowhere:",
-            .. broken,
-            "To rename a note, mv it first: that rewrites its links, and this replace then leaves them alone.",
-        ];
+        if (inLinks == 0) return output;
+        output.Add("");
+        if (broken.Count == 0 && elsewhere.Count == 0)
+        {
+            output.Add($"{Count(inLinks, "occurrence")} inside [[links]]; each still leads to the same note afterwards.");
+            return output;
+        }
+
+        output.Add($"{Count(inLinks, "occurrence")} inside [[links]]; after the replace:");
+        if (broken.Count > 0)
+        {
+            output.Add($"{Count(broken.Count, "link")} would lead nowhere or be ambiguous:");
+            output.AddRange(broken);
+        }
+
+        if (elsewhere.Count > 0)
+        {
+            output.Add($"{Count(elsewhere.Count, "link")} would lead to another note:");
+            output.AddRange(elsewhere);
+        }
+
+        output.Add("To rename a note, mv it first: that rewrites its links, and this replace then leaves them alone.");
+        return output;
     }
 
     private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string writer, CancellationToken ct)

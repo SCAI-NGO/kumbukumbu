@@ -23,6 +23,13 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
     public Task<IReadOnlyList<string>> VaultsAsync(CancellationToken ct) => store.ListVaultsAsync(ct);
 
+    /// <summary>Whether a note exists at the path now (to tell "created since" from "no such note").</summary>
+    public async Task<bool> ExistsNowAsync(VaultPath path, CancellationToken ct) => await store.ReadAsync(path, ct) is not null;
+
+    /// <summary>The vaults that have a checkpoint of that name.</summary>
+    public async Task<IReadOnlyList<string>> VaultsWithAsync(string name, CancellationToken ct) =>
+        [.. (await store.ListCheckpointsAsync(VaultPath.Root, ct)).Where(c => c.Name == name).Select(c => c.Vault).Distinct()];
+
     public async Task<ShellResult> MakeAsync(VaultPath path, string name, string by, CancellationToken ct)
     {
         if (path.IsRoot) return ShellResult.Error("mkcp: a checkpoint covers a vault, a folder or a note, e.g. mkcp /Demo before-cleanup");
@@ -97,6 +104,11 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (path.IsRoot) return ShellResult.Error("rmcp: give a path in the checkpoint's vault: rmcp /Demo <name>");
         var vault = path.Segments[0];
         if (await FindAsync(vault, name, ct) is not { } checkpoint) return ShellResult.Error(Missing("rmcp", vault, name));
+        if (path.Segments.Count > 1 && !checkpoint.Covers(path))
+        {
+            return ShellResult.Error($"rmcp: checkpoint '{name}' covers {checkpoint.Scope}, not {path.Value}; give its path or the vault (rmcp /{vault} {name})");
+        }
+
         return await store.TryRemoveCheckpointAsync(vault, name, ct)
             ? ShellResult.Ok($"removed checkpoint '{name}' (of {checkpoint.Scope}); the notes themselves are unchanged")
             : ShellResult.Error(Missing("rmcp", vault, name));
@@ -122,28 +134,25 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     public static VaultPath? Scope(Checkpoint checkpoint, VaultPath path) =>
         checkpoint.Covers(path) ? path : checkpoint.Relates(path) ? checkpoint.Path : null;
 
-    /// <summary><c>diff &lt;folder&gt; --checkpoint name</c>: which notes changed, appeared or went since.</summary>
+    /// <summary><c>diff &lt;folder&gt; --checkpoint name</c>: which notes changed, appeared, went or moved since.</summary>
     public async Task<ShellResult> ChangesAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
-        var (then, now) = await BothAsync(view, scope, ct);
-        var rows = new List<string>();
-        foreach (var path in then.Keys.Union(now.Keys).OrderBy(p => p.Value, TextOrder.Default))
+        var work = await PlanAsync(view, scope, ct);
+        var rows = new List<(string Path, string Row)>();
+        foreach (var (path, (now, then)) in work.Changed) rows.Add((path.Value, $"changed  {path.Value}  {Delta(then, now.Content)}"));
+        foreach (var (path, then) in work.Back) rows.Add((path.Value, $"removed  {path.Value}  (-{TextDiff.Count(then, "").Removed})"));
+        foreach (var note in work.Trash) rows.Add((note.Path.Value, $"new      {note.Path.Value}  +{TextDiff.Count("", note.Content).Added}"));
+        foreach (var (to, (now, then)) in work.Moved)
         {
-            var before = then.GetValueOrDefault(path);
-            var after = now.GetValueOrDefault(path)?.Content;
-            if (before == after) continue;
-            var (added, removed) = TextDiff.Count(before ?? "", after ?? "");
-            rows.Add(before is null ? $"new      {path.Value}  +{added}"
-                : after is null ? $"removed  {path.Value}  (-{removed})"
-                : $"changed  {path.Value}  +{added} -{removed}");
+            rows.Add((to.Value, $"moved    {to.Value} → {now.Path.Value}{(then == now.Content ? "" : "  " + Delta(then, now.Content))}"));
         }
 
         var where = Where(checkpoint, scope);
         if (rows.Count == 0) return ShellResult.Ok($"(no changes in {where} since checkpoint '{checkpoint.Name}')");
         return ShellResult.Ok(Lines.Join([
             $"changes in {where} since checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {checkpoint.CreatedBy}):",
-            .. rows,
+            .. rows.OrderBy(r => r.Path, TextOrder.Default).Select(r => r.Row),
             $"diff <note> --checkpoint {checkpoint.Name} shows one note; restore --checkpoint {checkpoint.Name} <path> goes back",
         ]));
     }
@@ -205,35 +214,145 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
     }
 
-    private async Task<ShellResult> PreviewAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    /// <summary>
+    /// What a folder restore does. <see cref="Moved"/>: notes moved since the checkpoint (by the move records),
+    /// by their checkpoint path; they move back, keeping their history, and the links the move rewrote follow
+    /// them back (<see cref="Rewrites"/>, in notes outside the scope; notes inside get their content then).
+    /// <see cref="Broken"/>: links outside the scope that would lead nowhere afterwards.
+    /// </summary>
+    private sealed record RestoreWork(
+        Dictionary<VaultPath, (StoredNote Now, string Then)> Changed,
+        Dictionary<VaultPath, string> Back,
+        Dictionary<VaultPath, (StoredNote Now, string Then)> Moved,
+        List<StoredNote> Trash,
+        Dictionary<VaultPath, List<(Links.WikiLink Link, string Replacement)>> Rewrites,
+        List<string> Broken)
+    {
+        public bool IsEmpty => Changed.Count == 0 && Back.Count == 0 && Moved.Count == 0 && Trash.Count == 0;
+
+        /// <summary>Every note the apply depends on, at the version the preview saw.</summary>
+        public IEnumerable<(VaultPath Path, string Version)> Current(Dictionary<VaultPath, StoredNote> inScope) =>
+            inScope.Values.Concat(Moved.Values.Select(m => m.Now)).DistinctBy(n => n.Path)
+                .OrderBy(n => n.Path.Value, StringComparer.Ordinal).Select(n => (n.Path, n.Version));
+    }
+
+    private const int MaxMoveHops = 10;
+
+    private async Task<RestoreWork> PlanAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
         var (then, now) = await BothAsync(view, scope, ct);
-        var rows = new List<string>();
-        foreach (var path in then.Keys.Union(now.Keys).OrderBy(p => p.Value, TextOrder.Default))
+        var changed = new Dictionary<VaultPath, (StoredNote, string)>();
+        var back = new Dictionary<VaultPath, string>();
+        var moved = new Dictionary<VaultPath, (StoredNote Now, string Then)>();
+        foreach (var (path, content) in then)
         {
-            var before = now.GetValueOrDefault(path)?.Content;
-            var after = then.GetValueOrDefault(path);
-            if (before == after) continue;
-            var (added, removed) = TextDiff.Count(before ?? "", after ?? "");
-            rows.Add(before is null ? $"  back      {path.Value}"
-                : after is null ? $"  to trash  {path.Value}  (created since)"
-                : $"  changed   {path.Value}  +{added} -{removed}");
+            if (now.TryGetValue(path, out var existing))
+            {
+                if (existing.Content != content) changed[path] = (existing, content);
+            }
+            else if (await MovedToAsync(path, checkpoint, then, ct) is { } note && moved.Values.All(m => m.Now.Path != note.Path)) moved[path] = (note, content);
+            else back[path] = content;
         }
 
-        var where = Where(checkpoint, scope);
-        if (rows.Count == 0) return ShellResult.Ok($"{where} already matches checkpoint '{checkpoint.Name}'; nothing to restore");
+        var leaving = moved.Values.Select(m => m.Now.Path).ToHashSet();
+        var trash = now.Values.Where(n => !then.ContainsKey(n.Path) && !leaving.Contains(n.Path)).ToList();
 
-        var current = now.Values.OrderBy(n => n.Path.Value, StringComparer.Ordinal).Select(n => (n.Path, n.Version)).ToList();
-        var token = VersionToken.Of(string.Join('\n', [scope.Value, checkpoint.Name, checkpoint.CreatedAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), .. current.Select(c => $"{c.Path.Value} {c.Version}")]));
-        var text = Lines.Join([
+        var rewrites = new Dictionary<VaultPath, List<(Links.WikiLink, string)>>();
+        var broken = new List<string>();
+        var vault = VaultPath.Root.Child(scope.Segments[0]);
+        var notes = await store.ReadNotesUnderAsync(vault, ct);
+        bool Outside(VaultPath p) => !(p == scope || Checkpoint.IsBelow(p, scope)) && !leaving.Contains(p);
+        if (moved.Count > 0)
+        {
+            var map = moved.ToDictionary(m => m.Value.Now.Path, m => m.Key);
+            foreach (var (path, list) in NoteMover.Rewrites(notes, map))
+            {
+                if (Outside(path)) rewrites[path] = list;
+            }
+        }
+
+        // Links outside the scope that lead to a note now and nowhere after the restore.
+        var trashed = trash.Select(t => t.Path).ToHashSet();
+        var afterPaths = notes.Select(n => n.Path).Where(p => !trashed.Contains(p) && !leaving.Contains(p)).Concat(back.Keys).Concat(moved.Keys).Distinct().ToList();
+        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path));
+        var after = new Links.LinkResolver(vault.Segments[0], afterPaths);
+        foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
+        {
+            var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
+            foreach (var link in Links.WikiLink.Parse(content))
+            {
+                if (link.Target.Trim().Length == 0) continue;
+                var was = before.Resolve(note.Path, link.Target);
+                if (was.Kind != Links.LinkKind.Note || after.Resolve(note.Path, link.Target).Kind == Links.LinkKind.Note) continue;
+                var why = trashed.Contains(was.Target!) ? "going to the trash" : "gone after the restore";
+                broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} (now {was.Target!.Value}, {why})");
+            }
+        }
+
+        return new RestoreWork(changed, back, moved, trash, rewrites, broken);
+    }
+
+    /// <summary>The note a checkpoint path was moved to since the checkpoint, following later moves; null if it
+    /// wasn't moved, or the note there now is another one (in the checkpoint at its own path).</summary>
+    private async Task<StoredNote?> MovedToAsync(VaultPath path, Checkpoint checkpoint, Dictionary<VaultPath, string> then, CancellationToken ct)
+    {
+        var at = path;
+        var since = checkpoint.CreatedAt;
+        for (var hop = 0; hop < MaxMoveHops; hop++)
+        {
+            if (await store.FindMoveAsync(at, ct) is not { } move || move.MovedAt < since) return null;
+            at = move.To;
+            since = move.MovedAt;
+            if (await store.GetAsync(at, ct) is { } note) return then.ContainsKey(at) && checkpoint.Covers(at) ? null : note;
+        }
+
+        return null;
+    }
+
+    private async Task<ShellResult> PreviewAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    {
+        var checkpoint = view.Checkpoint;
+        var work = await PlanAsync(view, scope, ct);
+        var where = Where(checkpoint, scope);
+        if (work.IsEmpty) return ShellResult.Ok($"{where} already matches checkpoint '{checkpoint.Name}'; nothing to restore");
+
+        var rows = new List<(string Path, string Row)>();
+        foreach (var (path, (now, then)) in work.Changed) rows.Add((path.Value, $"  changed     {path.Value}  {Delta(now.Content, then)}"));
+        foreach (var path in work.Back.Keys) rows.Add((path.Value, $"  back        {path.Value}"));
+        foreach (var note in work.Trash) rows.Add((note.Path.Value, $"  to trash    {note.Path.Value}  (created since)"));
+        foreach (var (to, (now, then)) in work.Moved)
+        {
+            rows.Add((to.Value, $"  moved back  {now.Path.Value} → {to.Value}{(now.Content == then ? "" : "  " + Delta(now.Content, then))}"));
+        }
+
+        var lines = new List<string>
+        {
             $"restore {where} to checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {checkpoint.CreatedBy}):",
-            .. rows,
+        };
+        lines.AddRange(rows.OrderBy(r => r.Path, TextOrder.Default).Select(r => r.Row));
+        if (work.Rewrites.Count > 0)
+        {
+            var count = work.Rewrites.Values.Sum(l => l.Count);
+            lines.Add($"Links follow the notes moved back: {Count(count, "link")} rewritten in {string.Join(", ", work.Rewrites.Keys.Select(p => p.Value).Order(StringComparer.Ordinal))}.");
+        }
+
+        if (work.Broken.Count > 0)
+        {
+            lines.Add($"After the restore, {Count(work.Broken.Count, "link")} outside {where} would lead nowhere:");
+            lines.AddRange(work.Broken);
+        }
+
+        var (_, inScope) = await BothAsync(view, scope, ct);
+        var current = work.Current(inScope).ToList();
+        var token = VersionToken.Of(string.Join('\n', [scope.Value, checkpoint.Name, checkpoint.CreatedAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), .. current.Select(c => $"{c.Path.Value} {c.Version}")]));
+        lines.AddRange([
             "",
             $"plan: {token}",
             $"To apply: restore --checkpoint {checkpoint.Name} --plan {token} {SectionLookup.Quote(scope)}",
             "It changes exactly these notes, or nothing if one of them changed since. Notes going to the trash stay there for 30 days.",
         ]);
+        var text = Lines.Join(lines);
         if (text.Length > OutputLimit.MaxChars)
         {
             return ShellResult.Error($"restore: {Count(rows.Count, "note")} differ from checkpoint '{checkpoint.Name}', too many for one preview; restore a smaller folder");
@@ -254,41 +373,59 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             return ShellResult.Error("restore: this plan was made for another path or checkpoint; make the same call as the preview, with --plan");
         }
 
-        var (then, now) = await BothAsync(view, scope, ct);
+        var work = await PlanAsync(view, scope, ct);
+        var (_, inScope) = await BothAsync(view, scope, ct);
+        var current = work.Current(inScope).ToDictionary(c => c.Path, c => c.Version);
         var planned = plan.Current.ToDictionary(c => c.Path, c => c.Version);
-        var changed = now.Values.Where(n => planned.GetValueOrDefault(n.Path) != n.Version).Select(n => n.Path)
-            .Concat(planned.Keys.Where(p => !now.ContainsKey(p)))
-            .Select(p => p.Value).Order(StringComparer.Ordinal).ToList();
-        if (changed.Count > 0)
-        {
-            plans.Failed(token, $"{string.Join(", ", changed)} changed since the preview", at);
-            return ShellResult.Error($"restore: nothing was restored: {string.Join(", ", changed)} changed or appeared since the preview; preview again");
-        }
+        var changed = current.Where(c => planned.GetValueOrDefault(c.Key) != c.Value).Select(c => c.Key)
+            .Concat(planned.Keys.Where(p => !current.ContainsKey(p)))
+            .Select(p => p.Value).Distinct().Order(StringComparer.Ordinal).ToList();
+        if (changed.Count > 0) return Failed(token, string.Join(", ", changed), at);
 
         var label = $"{by} (restore)";
         var batch = new NoteBatch();
-        foreach (var (path, content) in then)
+        foreach (var (now1, then) in work.Changed.Values) batch.Replaces.Add((now1, NoteWriter.Next(now1, then, label, at, changeset: null, keepCurrent: true)));
+        foreach (var (path, then) in work.Back) batch.Creates.Add(new StoredNote(path, then, 1, label, at, []));
+        foreach (var (to, (moving, then)) in work.Moved)
         {
-            if (now.TryGetValue(path, out var existing))
-            {
-                if (existing.Content != content) batch.Replaces.Add((existing, NoteWriter.Next(existing, content, label, at, changeset: null, keepCurrent: true)));
-            }
-            else batch.Creates.Add(new StoredNote(path, content, 1, label, at, []));
+            var target = moving.Content == then
+                ? moving with { Path = to, Revision = moving.Revision + 1 }
+                : NoteWriter.Next(moving, then, label, at, changeset: null, keepCurrent: true) with { Path = to };
+            batch.Moves.Add((moving, target));
         }
 
-        batch.Trashes.AddRange(now.Values.Where(n => !then.ContainsKey(n.Path)));
+        foreach (var (path, list) in work.Rewrites)
+        {
+            if (await store.GetAsync(path, ct) is not { } linking || NoteMover.Apply(linking.Content, list) is not { } content) return Failed(token, path.Value, at);
+            batch.Replaces.Add((linking, NoteWriter.Next(linking, content, label, at, changeset: null, keepCurrent: true)));
+        }
+
+        batch.Trashes.AddRange(work.Trash);
         var conflicts = await store.TryCommitAsync(batch, label, at, ct);
-        if (conflicts.Count > 0)
+        if (conflicts.Count > 0) return Failed(token, string.Join(", ", conflicts.Select(c => c.Value)), at);
+
+        var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {work.Changed.Count} changed, "
+            + $"{work.Back.Count} back, {work.Moved.Count} moved back, {work.Trash.Count} to the trash";
+        if (work.Rewrites.Count > 0)
         {
-            var paths = string.Join(", ", conflicts.Select(c => c.Value));
-            plans.Failed(token, $"{paths} changed since the preview", at);
-            return ShellResult.Error($"restore: nothing was restored: {paths} changed or appeared since the preview; preview again");
+            message += $"; rewrote {Count(work.Rewrites.Values.Sum(l => l.Count), "link")} in {string.Join(", ", work.Rewrites.Keys.Select(p => p.Value).Order(StringComparer.Ordinal))}";
         }
 
-        var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {batch.Replaces.Count} changed, "
-            + $"{batch.Creates.Count} back, {batch.Trashes.Count} to the trash";
         plans.Applied(token, message, at);
         return ShellResult.Ok(message);
+    }
+
+    private ShellResult Failed(string token, string paths, DateTime at)
+    {
+        var reason = $"{paths} changed or appeared since the preview";
+        plans.Failed(token, reason, at);
+        return ShellResult.Error($"restore: nothing was restored: {reason}; preview again");
+    }
+
+    private static string Delta(string from, string to)
+    {
+        var (added, removed) = TextDiff.Count(from, to);
+        return $"+{added} -{removed}";
     }
 
     /// <summary>The notes in scope as the checkpoint holds them, and as they are now.</summary>

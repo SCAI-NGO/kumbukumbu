@@ -116,7 +116,7 @@ public class ReplacerTests
     }
 
     [Fact]
-    public async Task PreviewWarnsAboutLinksThatWouldLeadNowhere()
+    public async Task PreviewWarnsAboutLinksThatWouldLeadNowhereAndNamesTheNote()
     {
         var store = new InMemoryNoteStore(
             ("/Work/projects/Hecate.md", "# Hecate\n"),
@@ -127,23 +127,45 @@ public class ReplacerTests
 
         Assert.Contains(
             """
-            3 occurrences inside [[links]]; after the replace, 3 links would lead nowhere:
-              /Work/log.md:1: [[Hecate]] → [[Janus]]: no such note; now it leads to /Work/projects/Hecate.md
-              /Work/log.md:1: [[Hecate Retro#Bad|the retro]] → [[Janus Retro#Bad|the retro]]: no such note; now it leads to /Work/projects/Hecate Retro.md
-              /Work/log.md:1: [[Hecate|it]] → [[Janus|it]]: no such note; now it leads to /Work/projects/Hecate.md
+            Named after "Hecate": /Work/projects/Hecate Retro.md, /Work/projects/Hecate.md
+            Read them before applying: a sentence can depend on the name without containing it. To rename one, mv it first.
+
+            3 occurrences inside [[links]]; after the replace:
+            3 links would lead nowhere or be ambiguous:
+              /Work/log.md:1: [[Hecate]] → [[Janus]]: no such note (now /Work/projects/Hecate.md)
+              /Work/log.md:1: [[Hecate Retro#Bad|the retro]] → [[Janus Retro#Bad|the retro]]: no such note (now /Work/projects/Hecate Retro.md)
+              /Work/log.md:1: [[Hecate|it]] → [[Janus|it]]: no such note (now /Work/projects/Hecate.md)
             To rename a note, mv it first: that rewrites its links, and this replace then leaves them alone.
             """,
             preview.Output);
     }
 
     [Fact]
-    public async Task LinksThatStillResolveAreOnlyCounted()
+    public async Task PreviewWarnsAboutLinksThatWouldLeadToAnotherNote()
     {
-        var store = new InMemoryNoteStore(("/Work/Janus.md", "j\n"), ("/Work/log.md", "[[Hecate]] and [[x|Hecate]]\n"));
+        var store = new InMemoryNoteStore(
+            ("/Work/Hecate.md", "h\n"), ("/Work/myth/Janus.md", "the god\n"), ("/Work/log.md", "[[Hecate]] and [[x|Hecate]]\n"));
 
         var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
 
-        Assert.Contains("2 occurrences inside [[links]]; each still leads to a note afterwards.", preview.Output);
+        Assert.Contains(
+            """
+            2 occurrences inside [[links]]; after the replace:
+            1 link would lead to another note:
+              /Work/log.md:1: [[Hecate]] → [[Janus]]: to /Work/myth/Janus.md (now /Work/Hecate.md)
+            """,
+            preview.Output);
+    }
+
+    [Fact]
+    public async Task LinksThatStillLeadToTheSameNoteAreOnlyCounted()
+    {
+        var store = new InMemoryNoteStore(("/Work/x.md", "x\n"), ("/Work/log.md", "[[x|Hecate]] and [[x#Hecate]]\n"));
+
+        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+
+        Assert.Contains("2 occurrences inside [[links]]; each still leads to the same note afterwards.", preview.Output);
+        Assert.DoesNotContain("Named after", preview.Output);
     }
 
     [Fact]

@@ -75,7 +75,7 @@ public class CheckpointTests
     [InlineData("rmcp /Demo x", "rmcp: no checkpoint 'x' in Demo ('lscp /Demo' lists them)")]
     [InlineData("cat --checkpoint x /Demo/welcome.md", "cat: no checkpoint 'x' in Demo ('lscp /Demo' lists them)")]
     [InlineData("history --checkpoint x /Demo", "history: --checkpoint works with ls, cat, outline, rg, links, backlinks, head, tail, wc, sort, diff and restore")]
-    [InlineData("rg --checkpoint x Hecate", "rg: --checkpoint needs a path in the checkpoint's vault, e.g. rg --checkpoint x /Demo")]
+    [InlineData("rg --checkpoint x Hecate", "rg: --checkpoint needs a path in the checkpoint's vault, e.g. rg --checkpoint x Hecate /Demo")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
 
     [Fact]
@@ -200,9 +200,9 @@ public class CheckpointTests
         Assert.StartsWith(
             """
             restore /Demo/arbeit/ to checkpoint 'before' (2026-10-24 11:00 UTC, dev):
-              to trash  /Demo/arbeit/new.md  (created since)
-              changed   /Demo/arbeit/plan.md  +1 -1
-              back      /Demo/arbeit/sub/todo.md
+              to trash    /Demo/arbeit/new.md  (created since)
+              changed     /Demo/arbeit/plan.md  +1 -1
+              back        /Demo/arbeit/sub/todo.md
 
             plan:
             """,
@@ -211,7 +211,7 @@ public class CheckpointTests
 
         var applied = await Run($"restore --checkpoint before --plan {Plan(preview)} /Demo/arbeit");
 
-        Assert.Equal("restored /Demo/arbeit/ to checkpoint 'before': 1 changed, 1 back, 1 to the trash", applied.Output);
+        Assert.Equal("restored /Demo/arbeit/ to checkpoint 'before': 1 changed, 1 back, 0 moved back, 1 to the trash", applied.Output);
         Assert.Equal("# Plan\nHecate\n", await Content("/Demo/arbeit/plan.md"));
         Assert.Equal("- one\n", await Content("/Demo/arbeit/sub/todo.md"));
         Assert.Null(await Content("/Demo/arbeit/new.md"));
@@ -257,4 +257,91 @@ public class CheckpointTests
         Assert.Equal("restored /Demo/welcome.md from checkpoint 'w' (it had been removed)", (await Run("restore --checkpoint w /Demo/welcome.md")).Output);
         Assert.Equal("hi [[plan]]\n", await Content("/Demo/welcome.md"));
     }
+
+    [Fact]
+    public async Task AFolderRestoreMovesAMovedNoteBackAndItsLinksFollow()
+    {
+        await Run("mkcp /Demo/arbeit before");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await Run("mv /Demo/arbeit/plan.md /Demo/arbeit/plan2.md");
+        Assert.Equal("hi [[plan2]]\n", await Content("/Demo/welcome.md"));
+
+        var preview = await Run("restore --checkpoint before /Demo/arbeit");
+        Assert.StartsWith(
+            """
+            restore /Demo/arbeit/ to checkpoint 'before' (2026-10-24 11:00 UTC, dev):
+              moved back  /Demo/arbeit/plan2.md → /Demo/arbeit/plan.md
+            Links follow the notes moved back: 1 link rewritten in /Demo/welcome.md.
+            """,
+            preview.Output);
+
+        var applied = await Run($"restore --checkpoint before --plan {Plan(preview)} /Demo/arbeit");
+
+        Assert.Equal("restored /Demo/arbeit/ to checkpoint 'before': 0 changed, 0 back, 1 moved back, 0 to the trash; rewrote 1 link in /Demo/welcome.md", applied.Output);
+        Assert.Equal("hi [[plan]]\n", await Content("/Demo/welcome.md"));
+        Assert.Null(await Content("/Demo/arbeit/plan2.md"));
+        // The note itself moved back, with its history, rather than being created anew.
+        Assert.Equal(3L, (await _store.GetAsync(P("/Demo/arbeit/plan.md"), CancellationToken.None))!.Revision);
+        Assert.Contains("(no changes in /Demo/arbeit/", (await Run("diff --checkpoint before /Demo/arbeit")).Output);
+    }
+
+    [Fact]
+    public async Task DiffOfAFolderShowsAMoveAsOneRow()
+    {
+        await Run("mkcp /Demo/arbeit before");
+        await Run("mv /Demo/arbeit/sub/todo.md /Demo/arbeit/todo.md");
+
+        Assert.Contains("moved    /Demo/arbeit/sub/todo.md → /Demo/arbeit/todo.md", (await Run("diff --checkpoint before /Demo/arbeit")).Output);
+    }
+
+    [Fact]
+    public async Task APreviewNamesLinksOutsideThatWouldLeadNowhere()
+    {
+        await Run("mkcp /Demo/arbeit before");
+        await Write("/Demo/arbeit/new.md", "new\n");
+        await Write("/Demo/welcome.md", "hi [[plan]] and [[new]]\n");
+
+        var preview = await Run("restore --checkpoint before /Demo/arbeit");
+
+        Assert.Contains(
+            """
+            After the restore, 1 link outside /Demo/arbeit/ would lead nowhere:
+              /Demo/welcome.md:1: [[new]] (now /Demo/arbeit/new.md, going to the trash)
+            """,
+            preview.Output);
+    }
+
+    [Fact]
+    public async Task SmallMessagesAboutCheckpoints()
+    {
+        await Run("mkcp /Ideas base");
+        await Run("mkcp /Demo/arbeit/plan.md only-plan");
+        await Write("/Demo/arbeit/new.md", "new\n");
+        await Run("mkcp /Demo/arbeit cp");
+
+        Assert.Equal(ShellResult.Error("rg: --checkpoint needs a path in the checkpoint's vault, e.g. rg --checkpoint base -n 'two words' /Ideas"), await Run("rg --checkpoint base -n 'two words'"));
+        Assert.Equal(ShellResult.Error("cat: /Demo/arbeit/new.md is not in checkpoint 'only-plan' (it covers /Demo/arbeit/plan.md)"), await Run("cat --checkpoint only-plan /Demo/arbeit/new.md"));
+        await Write("/Demo/arbeit/newer.md", "newer\n");
+        Assert.Equal(ShellResult.Error("cat: /Demo/arbeit/newer.md is not in checkpoint 'cp' (created since)"), await Run("cat --checkpoint cp /Demo/arbeit/newer.md"));
+        Assert.Equal(
+            ShellResult.Error("rmcp: checkpoint 'only-plan' covers /Demo/arbeit/plan.md, not /Demo/welcome.md; give its path or the vault (rmcp /Demo only-plan)"),
+            await Run("rmcp /Demo/welcome.md only-plan"));
+        Assert.False((await Run("rmcp /Demo/arbeit/plan.md only-plan")).IsError);
+    }
+
+    [Fact]
+    public async Task FolderHistoryShowsWhatWentToTheTrash()
+    {
+        await Run("mkcp /Demo/arbeit before");
+        await Write("/Demo/arbeit/new.md", "new\n");
+        var plan = Plan(await Run("restore --checkpoint before /Demo/arbeit"));
+        await Run($"restore --checkpoint before --plan {plan} /Demo/arbeit");
+        await _writer.RemoveAsync(P("/Demo/welcome.md"), Writers.Dev, CancellationToken.None);
+
+        var rows = (await Run("history --since 1h /Demo")).Output.Split('\n');
+
+        Assert.Contains("2026-10-24 11:00 UTC  dev (restore)  /Demo/arbeit/new.md → trash", rows);
+        Assert.Contains("2026-10-24 11:00 UTC  dev            /Demo/welcome.md → trash", rows);
+    }
 }
+

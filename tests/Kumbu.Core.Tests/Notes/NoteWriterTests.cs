@@ -39,7 +39,7 @@ public class NoteWriterTests
         var result = await Write("/Work/other/sub/deep.md", "x\n", null);
 
         Assert.Equal(
-            "created /Work/other/sub/deep.md (1 line); note: [[deep]] in /Work/links.md, [[sub/deep]] in /Work/links.md now match two notes ('links <note>' shows them; a longer path in the link, or mv, makes it unique again)",
+            "created /Work/other/sub/deep.md (1 line); note: now ambiguous: [[deep]] in /Work/links.md (2 notes), [[sub/deep]] in /Work/links.md (2 notes) ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)",
             result.Output);
     }
 

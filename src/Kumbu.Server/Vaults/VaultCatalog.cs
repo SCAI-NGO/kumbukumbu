@@ -37,6 +37,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     internal IMongoCollection<SealedDocument> Moves { get; } = db.GetCollection<SealedDocument>("moves");
 
+    /// <summary>The embeddings of each note, one document per note under its path id.</summary>
+    internal IMongoCollection<SealedDocument> Embeddings { get; } = db.GetCollection<SealedDocument>("embeddings");
+
+    /// <summary>Raised when a vault is unlocked (or created), so the search index can catch up with it.</summary>
+    public event Action<UnlockedVault>? Unlocked;
+
     /// <summary>Named checkpoints: one document each, the name as a keyed hash in "pid".</summary>
     internal IMongoCollection<SealedDocument> Checkpoints { get; } = db.GetCollection<SealedDocument>("checkpoints");
 
@@ -108,6 +114,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
         var vault = new UnlockedVault(id, name, vaultKey, Now);
         _open[id] = vault;
+        Unlocked?.Invoke(vault);
         return vault;
     }
 
@@ -245,13 +252,18 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             vault.Moves = [.. (await Moves.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => TryOpen(vault, () => vault.OpenMove(d), d))
                 .OfType<MoveRecord>()];
+            vault.Embeddings = (await Embeddings.Find(n => n.Vault == id).ToListAsync(ct))
+                .Select(d => TryOpen(vault, () => (object)vault.OpenEmbeddings(d), d))
+                .OfType<(VaultPath Path, NoteEmbeddings Embeddings)>()
+                .ToImmutableDictionary(e => e.Path, e => e.Embeddings);
             vault.Checkpoints = [.. (await Checkpoints.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => TryOpen(vault, () => vault.OpenCheckpoint(d), d))
                 .OfType<StoredCheckpoint>()
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
 
             _open[id] = vault;
-            log.LogInformation("Unlocked vault {Vault} ({Notes} notes)", vault.Name, vault.Notes.Count);
+            log.LogInformation("Unlocked vault {Vault} ({Notes})", vault.Name, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
+            Unlocked?.Invoke(vault);
             return vault;
         }
         finally
@@ -333,6 +345,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.At), new CreateIndexOptions { ExpireAfter = Kumbu.Core.Notes.Moves.Retention }),
             ],
             ct);
+        await Embeddings.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
         await Checkpoints.Indexes.CreateOneAsync(
             new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
             cancellationToken: ct);
