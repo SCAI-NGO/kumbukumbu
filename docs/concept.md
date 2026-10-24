@@ -198,6 +198,8 @@ Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidia
 
 v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, to be designed with the same care as the text core, not added on the side.
 
+v2 also brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Two groundworks belong in v1 because they are needed with or without the flag: markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv`, and writer identities in step 8 that tell humans from agents.
+
 Each step = a chapter in `CONCEPTS.md`.
 
 ## 13. Open questions
@@ -215,6 +217,14 @@ Each step = a chapter in `CONCEPTS.md`.
   - Later: an OAuth login flow (§9) instead of pasting a key.
 - **Mounting as an alternative** (not planned): **WebDAV** (mountable without extra software; ETags and locks map onto version tokens), **SFTP** (true sshfs; server-side SSH libraries for .NET are scarce) or an **own FUSE client** over the API. A mount keeps a vault unlocked, which works against the idle TTL (§7).
 - To settle either way: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; sync needs a conflict strategy for offline edits. Plaintext on the server adds no new exposure, as search needs it already.
+
+### OKF bundles (v2, opt-in per directory)
+Background and the full gap analysis: `docs/okf-gap-analysis.md`.
+- **The flag is OKF's own marker:** a directory is a bundle when its `index.md` carries `okf_version` in its frontmatter (OKF §12). No Kumbu²-only metadata; the flag travels with export and the Obsidian sync, and the user sees and sets it in Obsidian. Leaning, not decided.
+- **What enforcement means.** Refuse (writes without `type` fail with a teaching error), warn (writes pass, `okf check <path>` reports), or mixed: refuse agent writes, only warn on writes from the Obsidian sync, as refused sync writes would surface as conflicts the user can't make sense of. Leaning towards mixed.
+- **Edge cases:** `mv` of a note without `type` into a bundle; `replace` across a bundle boundary; bundles nested in bundles; an existing `index.md` or `log.md` note that becomes reserved when the flag is set.
+- **`index.md` and `log.md` are synthesised on read and on export, not stored** (OKF allows it: "consumers MAY synthesize one on the fly"). Stored, they would be server-written content that the sync carries back to Obsidian.
+- Out of scope: Attested Computation (made for data catalogues; its attesters are code files, against text-only).
 
 ### Resolved (Oct 21, 2026)
 - Token lifecycle vs. key slots → §9 "Tokens as key slots".
