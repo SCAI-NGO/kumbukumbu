@@ -11,6 +11,8 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready) : IE
 
     public SemanticState State { get; private set; } = state;
 
+    public string Model => "arctic-m";
+
     public string? Reason => State == SemanticState.Ready ? null : "the embedding model is loading";
 
     public int Embedded { get; private set; }
@@ -32,7 +34,7 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready) : IE
         Embedded += texts.Count;
         return Task.FromResult(texts.Select(t =>
         {
-            var v = new float[ModelFiles.Dimensions];
+            var v = new float[ModelFiles.Get(Model).Dimensions];
             foreach (var term in Bm25.Terms(t)) v[(int)((uint)term.GetHashCode(StringComparison.Ordinal) % v.Length)] += 1;
             return Vectors.Normalized(v);
         }).ToArray());

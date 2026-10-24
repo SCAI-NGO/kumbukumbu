@@ -35,6 +35,9 @@ public sealed class SearchOptions
     /// <summary>Where the embedding model is kept; downloaded there on the first start.</summary>
     public string ModelPath { get; set; } = "models";
 
+    /// <summary>Key of the embedding model: <c>arctic-m</c> or <c>arctic-l</c> (see <c>ModelFiles.Catalogue</c>).</summary>
+    public string Model { get; set; } = "arctic-m";
+
     /// <summary>Threads for the model; 0 means half of the cores.</summary>
     public int Threads { get; set; }
 }

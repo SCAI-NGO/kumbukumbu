@@ -126,7 +126,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task The_real_model_ranks_by_meaning()
     {
         var dir = Environment.GetEnvironmentVariable("KUMBU_MODEL_DIR");
-        Assert.SkipUnless(dir is not null && File.Exists(Path.Combine(dir, ModelFiles.Model)), "KUMBU_MODEL_DIR with the model not set");
+        Assert.SkipUnless(dir is not null && File.Exists(Path.Combine(dir, ModelFiles.Default, ModelFiles.Model)), "KUMBU_MODEL_DIR with the model not set");
 
         var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { ModelPath = dir! } });
         using var embedder = new OnnxEmbedder(options, new NoHttp(), NullLogger<OnnxEmbedder>.Instance);

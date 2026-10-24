@@ -35,9 +35,10 @@ services:
       Kumbu__Recovery__Path: /recovery
       Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
-      # The embedding model for semsearch, downloaded here on the first start (about 630 MB).
+      # The embedding model for semsearch, downloaded here on the first start (about 630 MB for arctic-m, 1.1 GB for arctic-l).
       Kumbu__Search__ModelPath: /models
       Kumbu__Search__Enabled: ${KUMBU_SEARCH:-true}
+      Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro

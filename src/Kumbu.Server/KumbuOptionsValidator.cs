@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Server.Search;
 using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server;
@@ -25,6 +26,11 @@ public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
         if (options.Vaults.CheckpointLimit < 0)
         {
             failures.Add(CheckpointLimitMessage);
+        }
+
+        if (!ModelFiles.Catalogue.ContainsKey(options.Search.Model))
+        {
+            failures.Add($"Kumbu:Search:Model must be one of: {string.Join(", ", ModelFiles.Catalogue.Keys.Order())}");
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);

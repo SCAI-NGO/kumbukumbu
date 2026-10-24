@@ -19,10 +19,13 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
     private static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(10);
 
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private EmbeddingModel _model = ModelFiles.Get(ModelFiles.Default);
     private InferenceSession? _session;
     private UnigramTokenizer? _tokenizer;
 
     public SemanticState State { get; private set; } = SemanticState.Preparing;
+
+    public string Model => options.Value.Search.Model;
 
     public string? Reason { get; private set; } = "the embedding model is loading";
 
@@ -31,6 +34,7 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var o = options.Value.Search;
+        _model = ModelFiles.Get(o.Model);
         if (!o.Enabled)
         {
             (State, Reason) = (SemanticState.Off, "search by meaning is switched off on this server (Kumbu:Search:Enabled)");
@@ -41,11 +45,13 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
         {
             try
             {
-                await DownloadAsync(o.ModelPath, stoppingToken);
-                Load(o.ModelPath, o.Threads);
+                ModelFiles.AdoptStep7Layout(o.ModelPath);
+                var dir = ModelFiles.Directory(o.ModelPath, o.Model);
+                await DownloadAsync(_model, dir, stoppingToken);
+                Load(dir, o.Threads);
                 (State, Reason) = (SemanticState.Ready, null);
                 _ready.TrySetResult();
-                log.LogInformation("Embedding model loaded ({Repository} at {Revision})", ModelFiles.Repository, ModelFiles.Revision[..8]);
+                log.LogInformation("Embedding model loaded ({Key}: {Repository} at {Revision})", _model.Key, _model.Repository, _model.Revision[..8]);
                 return;
             }
             catch (Exception e) when (e is HttpRequestException or IOException or InvalidDataException or OnnxRuntimeException or TaskCanceledException && !stoppingToken.IsCancellationRequested)
@@ -57,19 +63,20 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
         }
     }
 
-    private async Task DownloadAsync(string dir, CancellationToken ct)
+    private async Task DownloadAsync(EmbeddingModel model, string dir, CancellationToken ct)
     {
         Directory.CreateDirectory(dir);
-        foreach (var (remote, local, size, sha) in ModelFiles.Files)
+        foreach (var file in model.Files)
         {
+            var (_, local, size, sha) = file;
             var path = Path.Combine(dir, local);
-            if (File.Exists(path) && new FileInfo(path).Length == size) continue;
+            if (ModelFiles.HasSize(path, size)) continue;
 
             (State, Reason) = (SemanticState.Preparing, $"the embedding model is being downloaded ({size / 1_000_000} MB, once)");
             log.LogInformation("Downloading {File} of the embedding model ({Megabytes} MB) into {Dir}", local, size / 1_000_000, dir);
             var part = path + ".part";
             using (var client = http.CreateClient(nameof(OnnxEmbedder)))
-            using (var response = await client.GetAsync(ModelFiles.Url(remote), HttpCompletionOption.ResponseHeadersRead, ct))
+            using (var response = await client.GetAsync(model.Url(file), HttpCompletionOption.ResponseHeadersRead, ct))
             {
                 response.EnsureSuccessStatusCode();
                 await using var source = await response.Content.ReadAsStreamAsync(ct);
@@ -111,27 +118,34 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
             // Leaves cores for answering requests while notes are indexed.
             IntraOpNumThreads = threads > 0 ? threads : Math.Max(1, Environment.ProcessorCount / 2),
         };
-        _session = new InferenceSession(Path.Combine(dir, ModelFiles.Model), sessionOptions);
+        var session = new InferenceSession(Path.Combine(dir, ModelFiles.Model), sessionOptions);
+        if (!session.OutputMetadata.TryGetValue("sentence_embedding", out var output) || output.Dimensions.Length != 2 || output.Dimensions[1] != _model.Dimensions)
+        {
+            session.Dispose();
+            throw new InvalidDataException($"{_model.Key} has no sentence_embedding output of {_model.Dimensions} values");
+        }
+
+        _session = session;
     }
 
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct)
     {
         if (_session is not { } session || _tokenizer is not { } tokenizer) throw new InvalidOperationException("The embedding model isn't loaded");
-        var tokens = texts.Select(t => tokenizer.Encode(query ? ModelFiles.QueryPrompt + t : t)).ToList();
+        var tokens = texts.Select(t => tokenizer.Encode(query ? _model.QueryPrompt + t : t)).ToList();
         var result = new float[texts.Count][];
         // Similar lengths together, so a batch pads little.
         var order = Enumerable.Range(0, texts.Count).OrderBy(i => tokens[i].Count).ToList();
         foreach (var batch in order.Chunk(BatchSize))
         {
             ct.ThrowIfCancellationRequested();
-            var vectors = await Task.Run(() => Run(session, [.. batch.Select(i => tokens[i])]), ct);
+            var vectors = await Task.Run(() => Run(session, _model.Dimensions, [.. batch.Select(i => tokens[i])]), ct);
             for (var k = 0; k < batch.Length; k++) result[batch[k]] = vectors[k];
         }
 
         return result;
     }
 
-    private static float[][] Run(InferenceSession session, List<List<int>> batch)
+    private static float[][] Run(InferenceSession session, int dimensions, List<List<int>> batch)
     {
         var length = batch.Max(t => t.Count);
         var ids = new DenseTensor<long>([batch.Count, length]);
@@ -152,7 +166,7 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
         var result = new float[batch.Count][];
         for (var b = 0; b < batch.Count; b++)
         {
-            var v = new float[ModelFiles.Dimensions];
+            var v = new float[dimensions];
             for (var d = 0; d < v.Length; d++) v[d] = embedding[b, d];
             result[b] = Vectors.Normalized(v);
         }
