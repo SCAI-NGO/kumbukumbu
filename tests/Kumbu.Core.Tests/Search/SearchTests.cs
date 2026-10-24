@@ -50,12 +50,10 @@ public class SearchTests
     }
 
     [Fact]
-    public void RrfRewardsItemsHighInBothLists()
+    public void ASingleDigitStaysAQueryTerm()
     {
-        var fused = Rrf.Fuse<string>([["a", "b", "c"], ["b", "c", "d"]]);
-
-        Assert.Equal(["b", "c", "a", "d"], fused.Select(f => f.Item));
-        Assert.Equal(1.0 / 62 + 1.0 / 61, fused[0].Score, 9);
+        Assert.Equal(["topic", "3"], Bm25.QueryTerms("topic 3"));
+        Assert.Empty(Bm25.QueryTerms("a b"));
     }
 
     private sealed class FakeIndex(SemanticResult result) : ISearchIndex
@@ -74,26 +72,30 @@ public class SearchTests
         ("/Demo/farm.md", "# Animals\nCats, dogs, hens and ducks live together.\n"),
         ("/Ideas/x.md", "rules elsewhere\n"));
 
-    private static Task<ShellResult> Run(string line, ISearchIndex index)
+    private static Task<ShellResult> Run(string line, ISearchIndex index, InMemoryNoteStore? store = null)
     {
+        store ??= Store;
         var time = new FakeTimeProvider();
-        return new Shell(Store, new NoteWriter(Store, time), new NoteMover(Store, time), search: index).RunAsync(line, CancellationToken.None);
+        return new Shell(store, new NoteWriter(store, time), new NoteMover(store, time), search: index).RunAsync(line, CancellationToken.None);
     }
 
+    private static FakeIndex Cosines(params (string Path, int Line, double Score)[] hits) =>
+        new(new SemanticResult(SemanticState.Ready, [.. hits.Select(h => new SemanticHit(P(h.Path), h.Line, h.Score))], 0));
+
     [Fact]
-    public async Task SemsearchMergesWordsAndMeaning()
+    public async Task SemsearchAddsAWordBonusToTheMeaningScore()
     {
-        // By meaning, the farm comes first; by words, only the gate has "rules".
+        // The farm's cosine is high enough to stay ahead; the gate gets half the word bonus ("rules" but not "door").
         var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.8), new(P("/Demo/gate.md"), 0, 0.5)], 0));
 
         var result = await Run("semsearch -n 2 rules at the door /Demo", index);
 
         Assert.Equal(
             """
-            1. /Demo/gate.md#Gate  lines 1-2
-               The service checks rules at the entrance.
-            2. /Demo/farm.md#Animals  lines 1-2
+            1. /Demo/farm.md#Animals  lines 1-2  score 0.80
                Cats, dogs, hens and ducks live together.
+            2. /Demo/gate.md#Gate  lines 1-2  score 0.55
+               The service checks rules at the entrance.
             (ranked by words and meaning; cat "path#Section" reads one)
             """,
             result.Output);
@@ -125,8 +127,59 @@ public class SearchTests
     public async Task SemsearchSaysWhatIsNotIndexedYet()
     {
         var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [], 2));
-        Assert.EndsWith("(ranked by words and meaning; 2 notes aren't indexed yet and count by words only; cat \"path#Section\" reads one)", (await Run("semsearch rules /Demo", index)).Output);
+        Assert.EndsWith("(ranked by words and meaning; 2 notes aren't indexed yet and aren't ranked by meaning; semsearch --words finds them)", (await Run("semsearch rules /Demo", index)).Output);
         Assert.EndsWith("(ranked by meaning; 2 notes aren't indexed yet and aren't ranked)", (await Run("semsearch --meaning rules /Demo", index)).Output);
+    }
+
+    [Fact]
+    public async Task PendingNotesAreNamedWithWords()
+    {
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [], 1));
+
+        Assert.EndsWith("1 note isn't indexed yet and isn't ranked by meaning; semsearch --words finds it)", (await Run("semsearch rules /Demo", index)).Output);
+    }
+
+    [Fact]
+    public async Task WordBonusLiftsASectionContainingTheQueryTerms()
+    {
+        // 0.35 + 0.1 beats 0.40: the farm section has both query terms.
+        var index = Cosines(("/Demo/gate.md", 0, 0.40), ("/Demo/farm.md", 0, 0.35));
+
+        var result = await Run("semsearch -n 1 cats ducks /Demo", index);
+
+        Assert.StartsWith("1. /Demo/farm.md#Animals  lines 1-2  score 0.45\n", result.Output);
+    }
+
+    [Fact]
+    public async Task NoQueryTermsRanksByCosineAlone()
+    {
+        var index = Cosines(("/Demo/farm.md", 0, 0.30), ("/Demo/gate.md", 0, 0.60));
+
+        var result = await Run("semsearch der die das /Demo", index);
+
+        Assert.StartsWith("1. /Demo/gate.md#Gate  lines 1-2  score 0.60\n", result.Output);
+        Assert.Contains("2. /Demo/farm.md#Animals  lines 1-2  score 0.30\n", result.Output);
+    }
+
+    [Fact]
+    public async Task ScoresArePrintedWithTwoDecimals()
+    {
+        var index = Cosines(("/Demo/farm.md", 0, 0.3456));
+
+        Assert.Contains("score 0.35\n", (await Run("semsearch -n 1 --meaning animals /Demo", index)).Output);
+        Assert.DoesNotContain("score", (await Run("semsearch --words cats /Demo", index)).Output);
+    }
+
+    [Fact]
+    public async Task HeadingOnlySectionsAreLeftOut()
+    {
+        var store = new InMemoryNoteStore(("/Demo/diary.md", "# Diary\n## Februar 2026\n## März 2026\nWir waren im Zoo.\n"));
+        var index = Cosines(("/Demo/diary.md", 1, 0.90), ("/Demo/diary.md", 2, 0.50));
+
+        var result = await Run("semsearch -n 1 --meaning Zoo /Demo", index, store);
+
+        Assert.StartsWith("1. /Demo/diary.md#Diary#März 2026", result.Output);
+        Assert.DoesNotContain("Februar", result.Output);
     }
 
     [Theory]
