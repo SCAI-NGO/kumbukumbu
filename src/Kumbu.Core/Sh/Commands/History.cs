@@ -106,11 +106,24 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         var moves = (await notes.ListMovesAsync(dir, ct)).Where(m => since is not { } s || m.MovedAt >= s);
         foreach (var group in moves.GroupBy(m => (m.MovedBy, m.MovedAt)))
         {
-            var list = group.ToList();
-            var what = list.Count == 1
-                ? $"{list[0].From.Value} → {list[0].To.Value}"
-                : $"{CommonFolder(list.Select(m => m.From))} → {CommonFolder(list.Select(m => m.To))}";
-            rows.Add((group.Key.MovedAt, $"{group.Key.MovedBy} (mv)", what, list.Count == 1 ? "" : $"{list.Count} notes"));
+            // "dev (restore)" already names the operation; a plain writer gets "(mv)".
+            var writer = group.Key.MovedBy.Contains(" (", StringComparison.Ordinal) ? group.Key.MovedBy : $"{group.Key.MovedBy} (mv)";
+
+            // A folder move keeps every path below the folder, so its records share the folders left
+            // after stripping that common tail. Records that share nothing with another one stand alone;
+            // a restore moves notes from unrelated places and must not be merged into an invented folder move.
+            foreach (var folderMove in group.GroupBy(m => FolderPair(m)))
+            {
+                var list = folderMove.ToList();
+                if (list.Count == 1)
+                {
+                    rows.Add((group.Key.MovedAt, writer, $"{list[0].From.Value} → {list[0].To.Value}", ""));
+                    continue;
+                }
+
+                var (from, to) = folderMove.Key;
+                rows.Add((group.Key.MovedAt, writer, $"{from} → {to}", $"{list.Count} notes"));
+            }
         }
 
         foreach (var trashed in await notes.ListTrashAsync(dir, ct))
@@ -132,12 +145,20 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             $"{Time(w.At)}  {w.Writer.PadRight(writerWidth)}  {(w.Tail.Length == 0 ? w.What : w.What.PadRight(whatWidth) + "  " + w.Tail)}")));
     }
 
-    /// <summary>The deepest folder that holds all <paramref name="paths"/>, ending in '/'.</summary>
-    private static string CommonFolder(IEnumerable<VaultPath> paths)
+    /// <summary>
+    /// The source and target folder of a move once the path below them (the longest tail both paths share) is
+    /// stripped: the folders of a folder move, or the whole paths when the note was renamed or moved alone.
+    /// </summary>
+    private static (string From, string To) FolderPair(MoveRecord move)
     {
-        var folders = paths.Select(p => p.Segments.SkipLast(1).ToList()).ToList();
-        var common = folders[0].TakeWhile((segment, i) => folders.All(f => f.Count > i && f[i] == segment)).ToList();
-        return "/" + string.Join('/', common) + "/";
+        var from = move.From.Segments;
+        var to = move.To.Segments;
+        var tail = 0;
+        while (tail < from.Count && tail < to.Count && from[^(tail + 1)] == to[^(tail + 1)]) tail++;
+        if (tail == 0) return (move.From.Value, move.To.Value);
+
+        string Folder(IReadOnlyList<string> segments) => "/" + string.Join('/', segments.Take(segments.Count - tail).Append("")).TrimStart('/');
+        return (Folder(from), Folder(to));
     }
 
     /// <summary>"30m", "2h", "1d", or a UTC time such as "2026-10-23 14:00" or "2026-10-23T14:00Z".</summary>

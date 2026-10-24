@@ -161,6 +161,41 @@ public class VersionCommandsTests
     }
 
     [Fact]
+    public async Task ARestoresMovesAreOneRowEach()
+    {
+        var store = new InMemoryNoteStore(("/W/r/x.md", "x\n"), ("/W/r/y.md", "y\n"));
+        var at = _time.GetUtcNow().UtcDateTime;
+        store.AddMove(new MoveRecord(Path("/W/elsewhere/x2.md"), Path("/W/r/x.md"), "dev (restore)", at));
+        store.AddMove(new MoveRecord(Path("/W/r/sub/z.md"), Path("/W/r/y.md"), "dev (restore)", at));
+        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+
+        var rows = (await sh.RunAsync("history --since 1h /W", CancellationToken.None)).Output.Split('\n');
+
+        Assert.Equal(2, rows.Count(r => r.Contains("→")));
+        Assert.Contains("2026-10-23 14:00 UTC  dev (restore)  /W/elsewhere/x2.md → /W/r/x.md", rows.Select(r => r.TrimEnd()));
+        Assert.Contains("2026-10-23 14:00 UTC  dev (restore)  /W/r/sub/z.md → /W/r/y.md", rows.Select(r => r.TrimEnd()));
+        Assert.DoesNotContain("(mv)", string.Join('\n', rows));
+    }
+
+    [Fact]
+    public async Task AFolderMoveAndASingleMoveAtOneInstantAreTwoRows()
+    {
+        var store = new InMemoryNoteStore(("/W/b/x.md", "x\n"), ("/W/b/deep/y.md", "y\n"), ("/W/d.md", "d\n"));
+        var at = _time.GetUtcNow().UtcDateTime;
+        store.AddMove(new MoveRecord(Path("/W/a/x.md"), Path("/W/b/x.md"), "dev", at));
+        store.AddMove(new MoveRecord(Path("/W/a/deep/y.md"), Path("/W/b/deep/y.md"), "dev", at));
+        store.AddMove(new MoveRecord(Path("/W/c.md"), Path("/W/d.md"), "dev", at));
+        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+
+        // The "what" column is padded to the longest entry, so the note count lines up.
+        Assert.Equal(
+            "2026-10-23 14:00 UTC  dev (mv)  /W/a/ → /W/b/      2 notes\n2026-10-23 14:00 UTC  dev (mv)  /W/c.md → /W/d.md",
+            (await sh.RunAsync("history --since 1h /W", CancellationToken.None)).Output);
+    }
+
+    private static VaultPath Path(string value) => VaultPath.TryParse(value, out var p) ? p : throw new ArgumentException(value);
+
+    [Fact]
     public async Task WritesCloseTogetherAreOneChangesetAcrossNotes()
     {
         await WritePlanV2();
