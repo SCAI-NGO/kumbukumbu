@@ -159,27 +159,50 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var vaultKey = VaultCrypto.NewKey();
 
-        // The slot goes first: its unique index is the arbiter of the name. A crash after it leaves a slot
-        // without a vault, which opening skips; a crash the other way round would leave a vault nobody owns.
+        // The slot goes first: its unique index is the arbiter of the name.
+        var slot = new SlotDocument
+        {
+            Vault = id,
+            Kind = SlotDocument.User,
+            Lookup = UserLookup(userKey, userId),
+            NameId = VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)),
+            Wrapped = VaultCrypto.Seal(UserKek(userKey, id), vaultKey, SlotContext(id, SlotDocument.User)),
+            CreatedAt = Now,
+        };
         try
         {
-            await Slots.InsertOneAsync(new SlotDocument
-            {
-                Vault = id,
-                Kind = SlotDocument.User,
-                Lookup = UserLookup(userKey, userId),
-                NameId = VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)),
-                Wrapped = VaultCrypto.Seal(UserKek(userKey, id), vaultKey, SlotContext(id, SlotDocument.User)),
-                CreatedAt = Now,
-            }, cancellationToken: ct);
+            await Slots.InsertOneAsync(slot, cancellationToken: ct);
         }
         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
-            throw new VaultNameTakenException(name);
+            // A slot whose vault document doesn't exist is an orphan of a create that failed half way: replace it.
+            // Only an old one: a young one may belong to a create that is still between its two inserts.
+            var holder = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
+                & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, slot.Lookup) & Builders<SlotDocument>.Filter.Eq(s => s.NameId, slot.NameId)).FirstOrDefaultAsync(ct);
+            if (holder is null || Now - holder.CreatedAt < OrphanGrace || await Vaults.Find(v => v.Id == holder.Vault).AnyAsync(ct)) throw new VaultNameTakenException(name);
+
+            await Slots.DeleteOneAsync(s => s.Id == holder.Id, ct);
+            try
+            {
+                await Slots.InsertOneAsync(slot, cancellationToken: ct);
+            }
+            catch (MongoWriteException e2) when (e2.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                throw new VaultNameTakenException(name);
+            }
         }
 
-        var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
-        await Vaults.InsertOneAsync(new VaultDocument { Id = id, Meta = meta, CreatedAt = Now }, cancellationToken: ct);
+        try
+        {
+            var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
+            await Vaults.InsertOneAsync(new VaultDocument { Id = id, Meta = meta, CreatedAt = Now }, cancellationToken: ct);
+        }
+        catch
+        {
+            // Don't leave a slot that blocks the name for a vault that doesn't exist.
+            await Slots.DeleteOneAsync(s => s.Id == slot.Id, CancellationToken.None);
+            throw;
+        }
 
         var vault = new UnlockedVault(id, name, vaultKey, Now);
         _open[id] = vault;
@@ -226,6 +249,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await EnsureReadyAsync(ct);
         return await Vaults.CountDocumentsAsync(FilterDefinition<VaultDocument>.Empty, cancellationToken: ct);
     }
+
+    private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(1);
 
     /// <summary>A vault used this recently is never locked: a request may still be working with it.</summary>
     public static readonly TimeSpan InUse = TimeSpan.FromMinutes(1);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Vaults;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using static Kumbu.Server.Tests.Vaults.VaultWorld;
@@ -144,5 +145,26 @@ public sealed class UserVaultTests(MongoFixture fixture)
 
         Assert.Equal("Dev", Assert.Single(viaToken).Name);
         Assert.Equal("Arbeit", Assert.Single(viaUser).Name);
+    }
+
+    [Fact]
+    public async Task An_orphan_slot_without_a_vault_does_not_block_its_name()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var time = new FakeTimeProvider();
+        var catalog = world.Catalog(time: time);
+        var key = VaultCrypto.NewKey();
+        await catalog.CreateForUserAsync("Arbeit", "u1", key, Ct);
+        var vaults = world.Db.GetCollection<BsonDocument>("vaults");
+        await vaults.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty, Ct);
+
+        // Just now it may still be a create between its two inserts, so the name stays taken.
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => catalog.CreateForUserAsync("Arbeit", "u1", key, Ct));
+        time.Advance(TimeSpan.FromMinutes(2));
+        var again = await catalog.CreateForUserAsync("Arbeit", "u1", key, Ct);
+
+        Assert.Equal(1, await world.Db.GetCollection<BsonDocument>("slots").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+        Assert.Equal(again.Id, Assert.Single(await world.Catalog().OpenForUserAsync("u1", key, Ct)).Id);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => catalog.CreateForUserAsync("Arbeit", "u1", key, Ct));
     }
 }
