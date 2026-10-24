@@ -83,7 +83,7 @@ Minor: `mv /Demo/q7/ /Demo/q7/` says `/Demo/q7/q7/ is inside /Demo/q7/` (the tar
 
 ## Suggested next step
 
-1. Implement the decisions on observations 1 (warn on links that would break) and 2 (changesets with ids, `replace` without its exception).
-2. Small fixes before or with step 7: 4, 7, 9; 5, 6 and 8 when convenient; 3 is an idea for later.
+1. **Build order step 6b** (added to concept §12): implement the decisions on observations 1 (warn on links that would break) and 2 (changesets with ids, `replace` without its exception), together with named checkpoints (concept §4).
+2. Small fixes in step 6b, or with step 7 at the latest: 4, 7, 9; 5, 6 and 8 when convenient; 3 is an idea for later.
 3. **A blind agent run for `replace`** (fresh session, setup as in the phase 4b notes): a vault with a project note `hecate.md`, ten notes linking `[[hecate]]` and mentioning Hecate in prose, and the neutral prompt "The project Hecate is now called Janus. Please update my notes." This shows whether an agent renames the note with `mv` before replacing, or breaks the links (observation 1), and is worth doing before and after the fix.
 4. Then build order step 7 (embeddings and hybrid search).

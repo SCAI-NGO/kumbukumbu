@@ -75,7 +75,8 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - **Named checkpoints** (v1, decided Oct 24, 2026): `mkcp <path> <name>` marks the current state of a note, a folder or a vault under a name; `lscp [path]` lists checkpoints; `rmcp <path> <name>` removes one. A checkpoint is kept until `rmcp`, never pushed out of the history and never expired, so it pins the content it points at beyond the 10 versions of the history. The manual tells agents to set or remove them **only when the user asks**. In Git terms a changeset is a commit and a checkpoint a tag: a named pointer to a state, set on purpose; unlike Git, which keeps every commit, Kumbu² keeps 10 versions, so a checkpoint must hold on to its content itself.
   - **Browse a checkpoint like the current state:** `--checkpoint <name>` on reading commands, as `--version` for one note, but also on `ls` and `rg` over folders, since a checkpoint covers a tree. `diff` against a checkpoint; `restore` to one, for a folder with a preview and plan token as `replace`.
   - **Web UI (step 9):** browse a checkpoint like the current state, as GitHub shows a repository at a commit, and **export** it (a zip of the notes as they were).
-  - Open: whether a vault needs a limit on checkpoints or their size; where in the build order (suggested: with the changeset work, before step 7, as both change how the history is stored).
+  - **Limit:** 10 named checkpoints per vault by default, configurable: `Kumbu:Vaults:CheckpointLimit`, in `.env` as `KUMBU_CHECKPOINT_LIMIT` (documented in `.env.example` and the README). `mkcp` beyond the limit fails and names `lscp` and `rmcp`.
+  - Built in step 6b, together with changesets.
 - `rm` is a soft delete into trash; **trash expiry 30 days**.
 
 ## 5. Agent interface (MCP) — three tools
@@ -193,13 +194,14 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 4. Heading index, sections, links, backlinks, link normalizer (unit-tested).
 5. Encryption: vaults, slots, HKDF/Argon2id, recovery key.
 6. Agent tools for larger changes: view and diff earlier versions, changes across many notes.
+6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
 7. Embeddings + hybrid search.
 8. Users, admin, invites, API keys.
 9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Chris builds the UI with Claude Design.
 10. OAuth authorization server for app connectors.
 11. Obsidian sync plugin.
 
-Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10.
+Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10. Step 6b was added on Oct 24, 2026 without renumbering, so step numbers stay stable from here on.
 
 v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, to be designed with the same care as the text core, not added on the side.
 
