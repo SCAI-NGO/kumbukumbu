@@ -145,6 +145,7 @@ Date: 2026-10-24, 15:16 to 15:18 UTC. Setup as in phase 6b (`mktemp -d /tmp/note
 ## Design questions for Chris
 
 1. **Fusion (observations 1, 3).** Replace RRF with the cosine plus a word bonus, which measured best for both the current and the large model? It also gives a score to print. The concept (§6) says RRF; the measurement says it hurts here.
+   **Decided by Chris (Oct 24, 2026): yes**, replace RRF with the cosine plus a word bonus.
 2. **Model (observation 1).** Stay with arctic-m-v2 (305M, 26 ms per section, about 1 GB of server memory), or switch to arctic-l-v2 or bge-m3 (568M, about 49 ms, roughly twice the memory; +8 points R@1, +5 R@3)? A switch re-embeds every note once. arctic-l-v2 is the same family (same prompt, an ONNX export to check) and was best on R@3.
    **Decided by Chris (Oct 24, 2026): configurable, both variants offered.** The deployer chooses. Proposal for the design, to settle in the next phase:
    - A fixed list of known models (`arctic-m`, `arctic-l`), each with a pinned revision, SHA-256 per file, prompt, pooling and dimension; chosen with `Kumbu:Search:Model` / `KUMBU_SEARCH_MODEL`. No free Hugging Face ids: the checksums keep a foreign model out, and the evaluation covers exactly what runs. Only the chosen model is downloaded.
@@ -152,10 +153,11 @@ Date: 2026-10-24, 15:16 to 15:18 UTC. Setup as in phase 6b (`mktemp -d /tmp/note
    - Vectors of two models are never mixed (different spaces, 768 and 1024 dimensions). Sections not yet re-embedded count as pending and are found by words only, with the existing `N notes aren't indexed yet` line.
    - Cost: about 49 ms per section with arctic-l on half the cores, so a vault of 10,000 sections takes about 8 minutes; the old vectors are dropped as the new ones arrive.
 3. **The evaluation in the repository (observation 8)?**
+   **Decided by Chris (Oct 24, 2026): yes**, it goes into the repository.
 4. **`instructions` on `initialize` (observation 6)?**
+   **Decided by Chris (Oct 24, 2026): yes.**
 
 ## Suggested next step
 
-1. Chris's decisions on the four questions above.
-2. A short follow-up to step 7: fusion and model as decided, observations 2–7, the evaluation in the repository; then step 8 (users, admin, invites, API keys).
-3. Housekeeping: the test notes in `/Ideas` (`t6b/`, `r10/`, `r11/`, `search/`, …), 7 checkpoints, and the agent's new section in the heat pump log; a `down -v` before the next phase resets everything (it removes the `models` volume too, so the next start downloads the model again).
+1. A short follow-up to step 7 (step 7b, built locally on Oct 24, 2026 while Chris is away): fusion and model as decided, observations 2–7, the evaluation in the repository; then step 8 (users, admin, invites, API keys).
+2. Housekeeping: the test notes in `/Ideas` (`t6b/`, `r10/`, `r11/`, `search/`, …), 7 checkpoints, and the agent's new section in the heat pump log; a `down -v` before the next phase resets everything (it removes the `models` volume too, so the next start downloads the model again).
