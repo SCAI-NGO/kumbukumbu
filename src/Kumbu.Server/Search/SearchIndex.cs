@@ -47,13 +47,23 @@ public sealed class SearchIndex : BackgroundService
         }
     }
 
-    /// <summary>Every note whose current version has no embeddings, and every embedding whose note is gone.</summary>
+    /// <summary>Every note whose current version has no embeddings of the current model, and every embedding whose
+    /// note is gone. Embeddings of another model count as missing: after a switch, the vault is embedded again.</summary>
     private void CatchUp(UnlockedVault vault)
     {
-        var notes = vault.Notes;
-        Enqueue(vault, notes.Where(n => vault.Embeddings.GetValueOrDefault(n.Key)?.Version != n.Value.Note.Version).Select(n => n.Key)
-            .Concat(vault.Embeddings.Keys.Where(p => !notes.ContainsKey(p))));
+        var (notes, embeddings) = (vault.Notes, vault.Embeddings);
+        var otherModel = embeddings.Where(e => e.Value.Model != _embedder.Model && notes.ContainsKey(e.Key)).ToList();
+        if (otherModel.Count > 0)
+        {
+            _log.LogInformation("Vault {Name}: {Count} notes to embed with {New} (were {Old})",
+                vault.Name, otherModel.Count, _embedder.Model, string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
+        }
+
+        Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note)).Select(n => n.Key)
+            .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p))));
     }
+
+    private bool IsCurrent(NoteEmbeddings? embeddings, StoredNote note) => embeddings?.Model == _embedder.Model && embeddings.Version == note.Version;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -94,10 +104,12 @@ public sealed class SearchIndex : BackgroundService
             }
 
             var note = entry.Note;
-            if (vault.Embeddings.GetValueOrDefault(path)?.Version == note.Version) return;
+            if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note)) return;
 
+            // Vectors are reused by the hash of their text, but only the current model's: the same text gives
+            // another vector under another model.
             var chunks = Chunker.Split(new Note(path, note.Content));
-            var known = vault.Embeddings.Values.SelectMany(e => e.Chunks).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
+            var known = vault.Embeddings.Values.Where(e => e.Model == _embedder.Model).SelectMany(e => e.Chunks).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).ToList();
             if (missing.Count > 0)
@@ -106,7 +118,7 @@ public sealed class SearchIndex : BackgroundService
                 for (var k = 0; k < missing.Count; k++) known[hashes[missing[k]]] = vectors[k];
             }
 
-            var embeddings = new NoteEmbeddings(note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
+            var embeddings = new NoteEmbeddings(_embedder.Model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update

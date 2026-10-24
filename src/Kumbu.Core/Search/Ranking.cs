@@ -14,8 +14,8 @@ public static partial class Bm25
 
     /// <summary>
     /// Words that say nothing about a topic, in the two languages of the notes so far. Without them, a question
-    /// like "animals on a farm" would rank every note containing "a" or "on" by words, and Reciprocal Rank
-    /// Fusion counts ranks, not how good a match is: such hits would push the right note down.
+    /// like "animals on a farm" would give every section containing "a" or "on" a word bonus, which would push the
+    /// right section down.
     /// </summary>
     private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
     {
@@ -28,9 +28,10 @@ public static partial class Bm25
         "vor", "war", "was", "wie", "wir", "wo", "zu", "zum", "zur",
     };
 
-    /// <summary>The terms of a query that can tell notes apart: no stop words, no single characters.</summary>
+    /// <summary>The terms of a query that can tell notes apart: no stop words, no single letters (a single digit
+    /// can: "topic 3").</summary>
     public static IReadOnlyList<string> QueryTerms(string query) =>
-        [.. Terms(query).Where(t => t.Length > 1 && !StopWords.Contains(t)).Distinct()];
+        [.. Terms(query).Where(t => (t.Length > 1 || char.IsDigit(t[0])) && !StopWords.Contains(t)).Distinct()];
 
     /// <summary>Indexes into <paramref name="documents"/> with a score above zero, best first.</summary>
     public static IReadOnlyList<(int Index, double Score)> Rank(IReadOnlyList<string> documents, string query)
@@ -68,27 +69,17 @@ public static partial class Bm25
 }
 
 /// <summary>
-/// Reciprocal Rank Fusion (concept §6): score = Σ 1 / (k + rank) over the lists an item is in, with ranks from 1.
-/// Uses ranks only, so BM25 scores and cosine similarities need no common scale.
+/// The hybrid score: the cosine similarity of a section to the query, plus a small bonus for the share of the
+/// query's words the section contains. Measured better than rank fusion, which loses how close a match is.
 /// </summary>
-public static class Rrf
+public static class Fusion
 {
-    public const int K = 60;
+    /// <summary>What a section containing every query term gains; enough to break ties between similar meanings.</summary>
+    public const double WordBonus = 0.1;
 
-    public static IReadOnlyList<(T Item, double Score)> Fuse<T>(IEnumerable<IReadOnlyList<T>> lists) where T : notnull
+    public static double Score(double cosine, IReadOnlyList<string> queryTerms, IReadOnlySet<string> chunkTerms)
     {
-        var scores = new Dictionary<T, double>();
-        var firstSeen = new Dictionary<T, int>();
-        var order = 0;
-        foreach (var list in lists)
-        {
-            for (var rank = 0; rank < list.Count; rank++)
-            {
-                scores[list[rank]] = scores.GetValueOrDefault(list[rank]) + 1.0 / (K + rank + 1);
-                firstSeen.TryAdd(list[rank], order++);
-            }
-        }
-
-        return [.. scores.OrderByDescending(s => s.Value).ThenBy(s => firstSeen[s.Key]).Select(s => (s.Key, s.Value))];
+        if (queryTerms.Count == 0) return cosine;
+        return cosine + WordBonus * queryTerms.Count(chunkTerms.Contains) / queryTerms.Count;
     }
 }

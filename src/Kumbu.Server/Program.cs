@@ -57,6 +57,7 @@ builder.Services.AddScoped<Shell>();
 builder.Services.AddMcpServer(o =>
     {
         o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() };
+        o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
     })
     .WithHttpTransport()

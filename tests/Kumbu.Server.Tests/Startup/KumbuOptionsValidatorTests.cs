@@ -49,6 +49,17 @@ public sealed class KumbuOptionsValidatorTests
     }
 
     [Fact]
+    public void UnknownSearchModelFails()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Search.Model = "gpt";
+
+        var failure = Assert.Single(Validate(options).Failures!);
+        Assert.Contains("arctic-m", failure);
+        Assert.Contains("arctic-l", failure);
+    }
+
+    [Fact]
     public void Reports_both_failures_together()
     {
         var result = Validate(Options("", ""));

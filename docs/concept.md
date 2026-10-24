@@ -107,10 +107,11 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - **Full-text:** `rg` over decrypted notes in RAM.
 - **Semantic:** `semsearch` — embeddings per section, heading path included as context.
 - **Hybrid ranking** for `semsearch` (`rg` stays plain, unranked regex):
-  - Lexical list (BM25 — exact terms, names, abbreviations) + vector list (meaning).
-  - Merged with **Reciprocal Rank Fusion**: `score(doc) = Σ 1 / (60 + rank_in_list)`. Uses ranks only, so incomparable scores (BM25 unbounded vs. cosine) need no normalization.
+  - Meaning decides, words add a bonus: `score = cosine + 0.1 × (share of the query's distinct terms found in the chunk)`. Without query terms, the cosine alone. BM25 still ranks in `--words` mode, but no longer feeds a second list to merge.
+  - Why not Reciprocal Rank Fusion: it counts ranks only, so a weak word list weighs as much as a strong meaning list. On the phase 7 evaluation RRF lowered R@1 from 0.81 (meaning alone) to 0.70, while cosine plus the word bonus reaches 0.84 (arctic-m). Details in `docs/notes-test-phase7.md`, "Fusion". The 0.1 was set once, not tuned.
+  - Results show their score. It is comparable within one search only: no absolute threshold separates queries with an answer from those without (measured).
 - **Chunks:** one section; long sections split by paragraph, cap ~512 tokens per chunk.
-- **Embedding model:** `snowflake-arctic-embed-m-v2.0`, 16-bit, **in-process via ONNX Runtime** (plaintext never leaves the process). Mind query vs. document prefixes; Matryoshka truncation available if storage matters.
+- **Embedding model:** a choice of two from a fixed catalogue, `arctic-m` (`snowflake-arctic-embed-m-v2.0`, default) and `arctic-l` (`-l-v2.0`), set with `Kumbu:Search:Model` / `KUMBU_SEARCH_MODEL`. Each has a pinned revision and SHA-256 per file; no free Hugging Face ids. **In-process via ONNX Runtime** (plaintext never leaves the process). Mind query vs. document prefixes. Each note's embeddings record their model; after a switch they count as missing and are re-embedded in the background when a vault is unlocked. Models are never mixed. A change to model, chunking or ranking is measured with `tools/search-eval`.
 - **No vector DB.** Vectors stored encrypted in MongoDB, decrypted into RAM on vault unlock; search = dot products. A personal vault has thousands of sections → milliseconds.
 - **Incremental indexing:** hash per section, re-embed only what changed, embedding runs async.
 
@@ -266,4 +267,4 @@ Open:
 - Static bearer headers for app connectors → moot, OAuth covers them.
 - Duplicate-heading disambiguation → §4 "Sections".
 - Sizes, versions, trash, working set → §4, §5, §7.
-- Hybrid ranking → Reciprocal Rank Fusion, §6.
+- Hybrid ranking → cosine plus a word bonus (not Reciprocal Rank Fusion), §6.

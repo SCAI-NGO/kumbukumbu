@@ -186,7 +186,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     /// <summary>Search by meaning over the embeddings of the credential's vaults: the query's vector against every
-    /// chunk's, in memory. Notes whose current version isn't indexed yet count as pending.</summary>
+    /// chunk's, in memory. Notes whose current version isn't indexed yet count as pending, and so do notes embedded
+    /// with another model: their vectors don't compare with the query's, so they are skipped until re-embedded.</summary>
     public async Task<Kumbu.Core.Search.SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct)
     {
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
@@ -203,7 +204,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             foreach (var (path, (_, note)) in vault.Notes)
             {
                 if (!scope.IsRoot && path != scope && !path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal)) continue;
-                if (!embeddings.TryGetValue(path, out var e)) { pending++; continue; }
+                if (!embeddings.TryGetValue(path, out var e) || e.Model != embedder.Model) { pending++; continue; }
                 if (e.Version != note.Version) pending++;
                 foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
             }

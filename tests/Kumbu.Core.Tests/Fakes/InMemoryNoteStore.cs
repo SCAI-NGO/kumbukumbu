@@ -23,6 +23,9 @@ public sealed class InMemoryNoteStore : INoteStore
         }
     }
 
+    /// <summary>Records a move directly, for tests that need a chosen writer and time.</summary>
+    public void AddMove(MoveRecord move) => _moves.Add(move);
+
     public void AddVault(string name) => _vaults.Add(name);
 
     /// <summary>Paths whose stored document doesn't open.</summary>

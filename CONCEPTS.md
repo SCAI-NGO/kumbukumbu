@@ -388,14 +388,20 @@ Agents set and remove checkpoints only when the user asks; the manual says so. A
 
 ## 9. Search by words and by meaning
 
-### Two rankings, merged by rank
+### Two signals, one score
 
 `rg` answers "where does this text occur?" exactly and without ranking. `semsearch` answers "which sections are about this?", and needs two different signals:
 
 - **Words** (lexical): **BM25** scores a section by the query's terms. A term counts more the rarer it is in the vault (inverse document frequency), a repeated term counts less each time (saturation, `k1`), and long sections are not favoured for being long (length normalisation, `b`). Good for names, abbreviations and exact terms ("Hecate", "MCP"). Stop words ("the", "und") are left out: they match everywhere and say nothing.
-- **Meaning** (semantic): an **embedding model** turns a text into a vector, 768 numbers, so that texts about the same thing lie close together, also in other words or another language. The score is the dot product of the query's vector with a section's (both have length 1, so it is the cosine of the angle between them).
+- **Meaning** (semantic): an **embedding model** turns a text into a vector (768 numbers for the default model), so that texts about the same thing lie close together, also in other words or another language. The score is the dot product of the query's vector with a section's (both have length 1, so it is the cosine of the angle between them).
 
-The two scores aren't comparable: BM25 has no upper bound, a cosine lies between −1 and 1. **Reciprocal Rank Fusion** avoids the question by using ranks only: each list gives a section `1 / (60 + rank)`, and the sums decide. A section high in both lists wins; a section high in one still shows up. The 60 dampens the difference between rank 1 and rank 2, so one list alone doesn't dominate.
+The two scores aren't comparable: BM25 has no upper bound, a cosine lies between −1 and 1. Step 7 first merged the two lists with **Reciprocal Rank Fusion** (RRF), which sidesteps the question by using ranks only: each list gives a section `1 / (60 + rank)`, and the sums decide. A section high in both lists wins; a section high in one still shows up. It is a well-known, robust recipe, and it lost here.
+
+**Why RRF lost.** Because it counts ranks only, a weak list weighs as much as a strong one. Think of two advisers, one who knows the subject and one who skims for keywords: RRF lets them vote equally, even when the second has nothing useful to say. BM25 nearly always returns *some* list. For „Warum ist die Datenbank im September ausgefallen?" it finds `September` in a heat pump log and `Datenbank` in a budget, and a section that is mediocre in both lists beats the incident note that is first by meaning and absent from the word list (the note is in English). On the evaluation of the phase 7 notes (40 queries, 39 notes), meaning alone found the right section first for 0.81 of the queries with an answer; RRF only for 0.70. Of the 7 queries the merge made worse, 6 were across languages or needed world knowledge, exactly where words can't help.
+
+**What replaced it.** The meaning decides, and the words add a small bonus: `cosine + 0.1 × (the share of the query's distinct terms found in the section)`. A section with all the terms gains 0.1, one with none gains nothing, and a strong match by meaning is never outvoted by a coincidence of words. On the same queries this found the right section first for 0.84 (0.70 with RRF); with the larger model it matches meaning alone. The 0.1 was set once, beforehand, not tuned on the queries. The measurement is in `docs/notes-test-phase7.md` ("Fusion"), and `tools/search-eval` repeats it, so a change to ranking, chunking or model is judged by numbers.
+
+**Scores are shown** after each result (`score 0.47`; not with `--words`, where BM25 scores mean nothing to a reader). They are comparable within one search, where they show how fast relevance falls off. They are not comparable across searches, and no absolute threshold works: the best cosine of a query *with* an answer was as low as 0.23, and the three queries *without* one scored 0.18, 0.26 and 0.42 ("Kubernetes autoscaling configuration"). A cut-off by score would drop right answers before wrong ones, so the list is not cut; the reader sees the drop instead.
 
 ### Chunks: sections with their context
 
@@ -403,9 +409,17 @@ What gets ranked is a **section's own text**: from its heading to the next headi
 
 ### The model, in-process
 
-The model is `snowflake-arctic-embed-m-v2.0` (Apache-2.0), multilingual, run by **ONNX Runtime** inside the server process: no note leaves the server to be embedded (concept §6). It is a transformer, so text first becomes **tokens**, pieces of words from a vocabulary of 250,002. Its tokenizer is a **Unigram** model (SentencePiece): every piece has a probability, and a word is split into the most probable sequence of pieces, found by **Viterbi**, a dynamic programme over the positions in the word. Before that comes a normaliser (`nmt_nfkc`, stored as a compact trie that maps characters to their normalised form) and a split at whitespace with "▁" marking a word's start. Kumbu² implements these steps in C# from the model's `tokenizer.json`; a test compares its ids with Hugging Face's library on sample texts in many scripts.
+The default model is `snowflake-arctic-embed-m-v2.0` (Apache-2.0), multilingual, run by **ONNX Runtime** inside the server process: no note leaves the server to be embedded (concept §6). It is a transformer, so text first becomes **tokens**, pieces of words from a vocabulary of 250,002. Its tokenizer is a **Unigram** model (SentencePiece): every piece has a probability, and a word is split into the most probable sequence of pieces, found by **Viterbi**, a dynamic programme over the positions in the word. Before that comes a normaliser (`nmt_nfkc`, stored as a compact trie that maps characters to their normalised form) and a split at whitespace with "▁" marking a word's start. Kumbu² implements these steps in C# from the model's `tokenizer.json`; a test compares its ids with Hugging Face's library on sample texts in many scripts.
 
 Queries get the model's query prompt (`query: `), sections don't: the model was trained that way, as an asymmetric search from a short question to a longer text. The model is downloaded on the first start, pinned to one revision and checked against SHA-256 checksums, and 16-bit (half the size of 32-bit, with almost the same vectors; an 8-bit version was faster but moved the vectors too far).
+
+### Choosing the model, and changing it
+
+The server doesn't take any model name from Hugging Face. It knows a short **catalogue** of two, `arctic-m` (default) and `arctic-l` (larger: better at questions in other words, about twice the memory and time per section), chosen with `Kumbu:Search:Model` / `KUMBU_SEARCH_MODEL`. Each entry pins a **revision** (like a Git commit hash, not a branch name that can move), a SHA-256 checksum per file, and the query prompt and vector size (both models export the pooled sentence vector the server reads). A free id would mean running whatever that name points to today, unmeasured and unchecked; with the catalogue, the checksums keep a foreign model out, and the evaluation covers exactly what runs. Only the chosen model is downloaded.
+
+Each note's embeddings **record which model made them**. Vectors of two models live in different spaces (768 and 1024 numbers): comparing one with the other is like comparing a position in metres on one map with a position on another map. So they are never mixed. After a switch, the old embeddings count as missing, and the indexer re-embeds them in the background, the same way it embeds a note that has none; sections not yet done are found by words only, and the search says how many notes aren't indexed yet. The old vectors are dropped as the new ones arrive.
+
+**Encryption at rest needs nothing new here.** Embedding needs the plain text, so it only happens in an unlocked vault, as it always did. A locked vault is re-embedded when it is next opened, and until then nobody can search it anyway.
 
 ### The index
 

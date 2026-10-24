@@ -110,7 +110,8 @@ public sealed class UnlockedVault
     public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
         Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(
             path.Value, embeddings.Version,
-            [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector))))]));
+            [.. embeddings.Chunks.Select(c => new EmbeddedChunkPayload(c.StartLine, c.Hash, Convert.ToBase64String(Halves(c.Vector))))],
+            embeddings.Model));
 
     public (VaultPath Path, NoteEmbeddings Embeddings) OpenEmbeddings(SealedDocument doc)
     {
@@ -121,7 +122,7 @@ public sealed class UnlockedVault
             throw new InvalidDataException($"Path id of embeddings {doc.Id} does not match its sealed path");
         }
 
-        return (path, new NoteEmbeddings(p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector))))]));
+        return (path, new NoteEmbeddings(p.Model ?? "arctic-m", p.Version, [.. p.Chunks.Select(c => new EmbeddedChunk(c.StartLine, c.Hash, Floats(Convert.FromBase64String(c.Vector))))]));
     }
 
     /// <summary>Vectors are stored as 16-bit floats, half the size; search precision doesn't need more.</summary>
@@ -217,13 +218,15 @@ internal sealed record VaultMeta(string Name);
 
 internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector);
 
-internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks);
+/// <remarks>Model is missing in embeddings written before step 7b; step 7 had only arctic-m.</remarks>
+internal sealed record EmbeddingsPayload(string Path, string Version, List<EmbeddedChunkPayload> Chunks, string? Model = null);
 
 /// <summary>A chunk's vector, with the hash of the text it was made from, to reuse it while the text stays.</summary>
 public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector);
 
-/// <summary>The embeddings of one note at one version.</summary>
-public sealed record NoteEmbeddings(string Version, IReadOnlyList<EmbeddedChunk> Chunks);
+/// <summary>The embeddings of one note at one version, made by one model (its key): vectors of different models
+/// don't compare.</summary>
+public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks);
 
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 

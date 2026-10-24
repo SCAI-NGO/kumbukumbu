@@ -12,7 +12,7 @@ The server offers four MCP tools. `sh` is a shell over your notes:
 - `cat <path>` prints a note, with its **version token** in a separate block; `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`)
 - `outline <path>` lists a note's headings with line ranges and sizes
 - `rg [options] <regex> [path...]` searches notes and prints `path:line:text`; without a path it searches every vault
-- `semsearch <query> [path]` finds the sections that best match a question or topic, ranked by words (BM25) and by meaning (embeddings, also across languages), merged with Reciprocal Rank Fusion; `--words` or `--meaning` uses one ranking only
+- `semsearch <query> [path]` finds the sections that best match a question or topic, ranked by words (BM25) and by meaning (embeddings, also across languages), combined into one score that each result shows; `--words` or `--meaning` uses one ranking only
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
 - `links <path>` shows where a note's `[[wikilinks]]` lead (`links <directory>` lists the broken ones), `backlinks <path>` which notes link to it
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
@@ -92,7 +92,7 @@ docker compose up --build -d     # rebuild the image; a plain restart keeps runn
 
 Then start a new client session. Without the rebuild, a restarted client loads the old server's tool descriptions; without the new session, the agent keeps working from the old command list.
 
-Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning. With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_CHECKPOINT_LIMIT` and `KUMBU_SEARCH` in `.env`.
+Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (required, at least 16 characters), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose), `Kumbu:Search:Model` (`arctic-m`, the default, or `arctic-l`: 613 MB and about 1 GB of memory at about 26 ms per section, or 1.13 GB and about 2 GB at about 49 ms; each is kept in its own folder below the model path, and switching re-embeds every note when its vault is next unlocked) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning. With Compose, set `KUMBU_DEV_TOKEN` and optionally `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_CHECKPOINT_LIMIT`, `KUMBU_SEARCH` and `KUMBU_SEARCH_MODEL` in `.env`.
 
 ## Development
 
@@ -104,7 +104,17 @@ dotnet test tests/Kumbu.Core.Tests # core only, no Docker
 KUMBU_MODEL_DIR=/path/to/models dotnet test   # also the tests against the real model and tokenizer
 ```
 
-Without `KUMBU_MODEL_DIR` the tests use a stand-in embedder and skip the two tests that need the real model files (`tokenizer.json`, `model_fp16.onnx`).
+`KUMBU_MODEL_DIR` holds one folder per model, as the server keeps them below `Kumbu:Search:ModelPath`:
+
+```
+$KUMBU_MODEL_DIR/
+  arctic-m/tokenizer.json
+  arctic-m/model_fp16.onnx
+  arctic-l/tokenizer.json
+  arctic-l/model_fp16.onnx
+```
+
+Without it the tests use a stand-in embedder and skip the three tests that need the real files: the tokenizer test of each model and the ranking test against arctic-m. A directory in the layout of step 7 (arctic-m's files directly in it) is moved into `arctic-m/` when the server starts (`ModelFiles.AdoptStep7Layout`); the tests don't move it and skip until then.
 
 ## More
 

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <None Update="Search/tokenizer-reference.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Search/tokenizer-reference-arctic-l.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

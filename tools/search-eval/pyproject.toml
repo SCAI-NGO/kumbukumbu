@@ -1,0 +1,18 @@
+[project]
+name = "kumbu-search-eval"
+version = "0.1.0"
+description = "Evaluation of Kumbu²'s search by meaning against a small corpus with gold sections"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+dependencies = [
+    "numpy",
+    "onnxruntime",
+    "tokenizers",
+]
+
+[project.optional-dependencies]
+# Only for --compare: other embedding models than the two of the server's catalogue.
+compare = [
+    "sentence-transformers",
+    "torch",
+]
