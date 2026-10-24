@@ -146,6 +146,11 @@ Date: 2026-10-24, 15:16 to 15:18 UTC. Setup as in phase 6b (`mktemp -d /tmp/note
 
 1. **Fusion (observations 1, 3).** Replace RRF with the cosine plus a word bonus, which measured best for both the current and the large model? It also gives a score to print. The concept (§6) says RRF; the measurement says it hurts here.
 2. **Model (observation 1).** Stay with arctic-m-v2 (305M, 26 ms per section, about 1 GB of server memory), or switch to arctic-l-v2 or bge-m3 (568M, about 49 ms, roughly twice the memory; +8 points R@1, +5 R@3)? A switch re-embeds every note once. arctic-l-v2 is the same family (same prompt, an ONNX export to check) and was best on R@3.
+   **Decided by Chris (Oct 24, 2026): configurable, both variants offered.** The deployer chooses. Proposal for the design, to settle in the next phase:
+   - A fixed list of known models (`arctic-m`, `arctic-l`), each with a pinned revision, SHA-256 per file, prompt, pooling and dimension; chosen with `Kumbu:Search:Model` / `KUMBU_SEARCH_MODEL`. No free Hugging Face ids: the checksums keep a foreign model out, and the evaluation covers exactly what runs. Only the chosen model is downloaded.
+   - Each embedding records its model. After a switch, embeddings of another model count as missing: the indexer re-embeds them in the background when a vault is unlocked, the same path that today embeds notes without embeddings. **Encryption at rest needs nothing new**: embedding needs the plain text, so it happens only in an open vault, as now; a locked vault is re-embedded when it is next opened, and until then nobody can search it anyway.
+   - Vectors of two models are never mixed (different spaces, 768 and 1024 dimensions). Sections not yet re-embedded count as pending and are found by words only, with the existing `N notes aren't indexed yet` line.
+   - Cost: about 49 ms per section with arctic-l on half the cores, so a vault of 10,000 sections takes about 8 minutes; the old vectors are dropped as the new ones arrive.
 3. **The evaluation in the repository (observation 8)?**
 4. **`instructions` on `initialize` (observation 6)?**
 
