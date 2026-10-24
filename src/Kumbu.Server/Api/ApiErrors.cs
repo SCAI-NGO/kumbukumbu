@@ -61,6 +61,13 @@ public static class ApiErrors
         }
     }
 
+    /// <summary>Declares the error responses in the OpenAPI document, all in the one <see cref="ApiError"/> shape.</summary>
+    internal static RouteHandlerBuilder Errors(this RouteHandlerBuilder builder, params int[] statuses)
+    {
+        foreach (var status in statuses) builder.Produces<ApiError>(status);
+        return builder;
+    }
+
     public static IResult Result(int status, string message) => TypedResults.Json(new ApiError(message), statusCode: status);
 
     public static void SetRetryAfter(HttpContext context, TimeSpan retryAfter) =>
@@ -84,9 +91,14 @@ public static class ApiErrors
             if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
             {
                 // Not e.Message: it names .NET parameter types, which tell a client nothing useful.
-                await context.Response.WriteAsJsonAsync(new ApiError(e.StatusCode == StatusCodes.Status415UnsupportedMediaType
-                    ? "Send the body as JSON (Content-Type: application/json)."
-                    : "The request body is missing, not JSON, or lacks a required field."));
+                await context.Response.WriteAsJsonAsync(new ApiError(e.StatusCode switch
+                {
+                    StatusCodes.Status415UnsupportedMediaType => "Send the body as JSON (Content-Type: application/json).",
+                    StatusCodes.Status413PayloadTooLarge => context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase)
+                        ? UploadApi.Limits
+                        : "The request body is too large.",
+                    _ => "The request body is missing, not JSON, or lacks a required field.",
+                }));
             }
         }
     }

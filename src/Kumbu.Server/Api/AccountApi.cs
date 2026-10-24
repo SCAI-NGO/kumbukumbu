@@ -103,13 +103,6 @@ public static class AccountApi
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
     }
 
-    /// <summary>Declares the error responses in the OpenAPI document, all in the one <see cref="ApiError"/> shape.</summary>
-    private static RouteHandlerBuilder Errors(this RouteHandlerBuilder builder, params int[] statuses)
-    {
-        foreach (var status in statuses) builder.Produces<ApiError>(status);
-        return builder;
-    }
-
     private static async Task<Ok<SessionView>> SignInAsync(
         SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
     {

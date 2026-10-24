@@ -150,6 +150,8 @@ app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
 app.MapMcp("/mcp");
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
+app.MapNoteApi();
+app.MapUploadApi();
 
 app.Run();
 return 0;
