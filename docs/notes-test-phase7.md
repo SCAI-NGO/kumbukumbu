@@ -99,7 +99,7 @@ With arctic-l-v2: meaning 0.89, RRF 0.76, cosine plus bonus 0.89.
 
 ### Thresholds
 
-The best cosine of a query with an answer: lowest 0.23, 10th percentile 0.28, median 0.48 (current model). Of a query with none: 0.18, 0.26, 0.42. **No absolute threshold separates them**; „Kubernetes autoscaling configuration" (no answer) scores 0.42 against the probes note. Cutting the list by a fixed score would drop right answers before it drops wrong ones.
+The best cosine of a query with an answer: lowest 0.23, 10th percentile 0.28, median 0.48 (current model). The three queries with none scored 0.18, 0.26 and 0.42. **No absolute threshold separates them**; „Kubernetes autoscaling configuration" (no answer) scores 0.42 against the probes note. Cutting the list by a fixed score would drop right answers before it drops wrong ones.
 
 ## Blind run: two questions in other words
 
