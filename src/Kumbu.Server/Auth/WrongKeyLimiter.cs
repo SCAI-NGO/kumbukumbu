@@ -28,16 +28,43 @@ public sealed class WrongKeyLimiter : IDisposable
             AutoReplenishment = true,
         }));
 
-    /// <summary>Null if <paramref name="ip"/> may present a key; else how long it has to wait.</summary>
-    public TimeSpan? RetryAfter(string ip)
+    // Keys being checked right now, per IP. Checking an API key waits for MongoDB; each check holds one of the
+    // IP's remaining permits meanwhile, so a burst sent at once can't all pass before any failure is counted.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _checking = new();
+
+    /// <summary>
+    /// Null if <paramref name="ip"/> may present a key: one of its permits is then held until
+    /// <see cref="Failed"/> uses it up or <see cref="Release"/> gives it back. Else how long it has to wait.
+    /// </summary>
+    public TimeSpan? TryReserve(string ip)
     {
+        var checking = _checking.AddOrUpdate(ip, 1, (_, n) => n + 1);
+        if (checking <= (_limiter.GetStatistics(ip)?.CurrentAvailablePermits ?? PermitLimit)) return null;
+
+        Release(ip);
         // Zero permits only asks whether any are left; it uses none up.
         using var probe = _limiter.AttemptAcquire(ip, 0);
-        if (probe.IsAcquired) return null;
+        if (probe.IsAcquired) return TimeSpan.FromSeconds(1); // all that are left are held by checks still running
         return probe.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) ? retryAfter : Window;
     }
 
-    public void Failed(string ip) => _limiter.AttemptAcquire(ip, 1).Dispose();
+    /// <summary>The reserved check failed: its permit is used up.</summary>
+    public void Failed(string ip)
+    {
+        // Counted before the reservation goes, so the permit is never free in between.
+        _limiter.AttemptAcquire(ip, 1).Dispose();
+        Release(ip);
+    }
+
+    /// <summary>The reserved check succeeded (or never finished): its permit is given back.</summary>
+    public void Release(string ip)
+    {
+        if (_checking.AddOrUpdate(ip, 0, (_, n) => n - 1) <= 0)
+        {
+            // Removes the entry only if it is still zero, so a reservation made meanwhile isn't lost.
+            _checking.TryRemove(new KeyValuePair<string, int>(ip, 0));
+        }
+    }
 
     /// <summary>
     /// The partition of a client address. IPv6 by its /64: one host usually gets a whole /64, and counting

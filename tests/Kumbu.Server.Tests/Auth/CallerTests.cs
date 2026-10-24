@@ -145,6 +145,7 @@ public sealed class CallerTests(KumbuAppFactory app)
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(app.Services.GetRequiredService<IOptions<KumbuOptions>>());
         builder.Services.AddSingleton(app.Services.GetRequiredService<Sessions>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<ApiKeys>());
         builder.Services.AddSingleton(app.Services.GetRequiredService<VaultCatalog>());
         builder.Services.AddSingleton(new WrongKeyLimiter());
         var minimal = builder.Build();

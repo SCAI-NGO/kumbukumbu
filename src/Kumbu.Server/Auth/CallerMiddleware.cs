@@ -10,7 +10,7 @@ namespace Kumbu.Server.Auth;
 
 /// <summary>
 /// Resolves every request that needs one to a <see cref="RequestCaller"/>: a bearer key (the dev token when
-/// configured; API keys from Task 6) or, under <c>/api</c> only, the session cookie. Which requests need one
+/// configured, or an API key) or, under <c>/api</c> only, the session cookie. Which requests need one
 /// fails closed:
 /// <list type="bullet">
 /// <item>every matched endpoint, unless it is marked <c>AllowAnonymous()</c> (<c>/healthz</c>; later
@@ -24,7 +24,7 @@ namespace Kumbu.Server.Auth;
 /// sees the request; never logs a key or a cookie.
 /// </summary>
 public sealed class CallerMiddleware(
-    RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, VaultCatalog catalog, WrongKeyLimiter wrongKeys)
+    RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -47,14 +47,25 @@ public sealed class CallerMiddleware(
         if (header.StartsWith(Scheme, StringComparison.OrdinalIgnoreCase))
         {
             var ip = WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
-            if (wrongKeys.RetryAfter(ip) is { } retryAfter)
+            if (wrongKeys.TryReserve(ip) is { } retryAfter)
             {
                 await TooManyAsync(context, retryAfter);
                 return;
             }
 
-            caller = ResolveBearer(header[Scheme.Length..]);
+            try
+            {
+                caller = await ResolveBearerAsync(header[Scheme.Length..], context.RequestAborted);
+            }
+            catch
+            {
+                // MongoDB unreachable or the request aborted: not a wrong key.
+                wrongKeys.Release(ip);
+                throw;
+            }
+
             if (caller is null) wrongKeys.Failed(ip);
+            else wrongKeys.Release(ip);
         }
         else if (IsUnder(context, "/api"))
         {
@@ -103,7 +114,7 @@ public sealed class CallerMiddleware(
     private static bool IsUnder(HttpContext context, string prefix) =>
         context.Request.Path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase);
 
-    private RequestCaller? ResolveBearer(string presented)
+    private async Task<RequestCaller?> ResolveBearerAsync(string presented, CancellationToken ct)
     {
         // Hashes of equal length, so that a key of the wrong length takes as long to refuse as one of the right length.
         if (_devToken is not null && CryptographicOperations.FixedTimeEquals(Hash(presented), _devTokenHash))
@@ -111,7 +122,11 @@ public sealed class CallerMiddleware(
             return RequestCaller.ForDevToken(_devToken, catalog);
         }
 
-        // Task 6: API keys (kumbu_…) are looked up here; until then any other bearer is a wrong key.
+        if (ApiKeys.LooksLikeKey(presented) && await apiKeys.ResolveAsync(presented, ct) is { } key)
+        {
+            return await RequestCaller.ForApiKeyAsync(key, presented, catalog, ct);
+        }
+
         return null;
     }
 

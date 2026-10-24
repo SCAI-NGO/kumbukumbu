@@ -39,6 +39,7 @@ builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
 builder.Services.AddSingleton<Sessions>();
+builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 
 // Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,

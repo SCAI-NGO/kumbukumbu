@@ -44,6 +44,13 @@ public sealed class SlotDocument
     [BsonElement("nameId"), BsonIgnoreIfNull]
     public byte[]? NameId { get; set; }
 
+    /// <summary>
+    /// Slots of an API key (kind <see cref="ApiKey"/>) only: the key's id. Such a slot seals the vault key together
+    /// with the key's right on the vault; the dev token's slots have none and seal the vault key alone.
+    /// </summary>
+    [BsonElement("apiKey"), BsonIgnoreIfNull]
+    public string? KeyId { get; set; }
+
     [BsonElement("wrapped")]
     public byte[] Wrapped { get; set; } = [];
 

@@ -2,7 +2,7 @@
 namespace Kumbu.Server.Vaults;
 
 /// <summary>
-/// How a caller opens vaults: through key slots of a secret (the dev token; API keys in Task 6), or through the
+/// How a caller opens vaults: through key slots of a secret (the dev token), through the slots of an API key, or through the
 /// user slots of a user key (a session). The store asks once per request.
 /// </summary>
 public interface ICredential
@@ -29,6 +29,29 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+}
+
+/// <summary>
+/// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
+/// request, so the rights <see cref="CanWrite"/> answers from are those of exactly the vaults the store sees.
+/// </summary>
+public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
+{
+    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+
+    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
+
+    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
+
+    // As for a session: the other vaults belong to someone else or weren't given to this key.
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+
+    /// <summary>Only for a vault opened with the right to write (named as the store names vaults, ordinally).
+    /// Fails closed: false before the vaults were opened, and for a vault this key doesn't have.</summary>
+    public bool CanWrite(string vault) =>
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
 }
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>

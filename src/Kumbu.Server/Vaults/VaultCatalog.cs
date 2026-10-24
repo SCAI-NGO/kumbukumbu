@@ -25,6 +25,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     private const string UserLookupLabel = "kumbu/v1/user-slot";
     private const string UserKekLabel = "kumbu/v1/user-slot-kek";
     private const string VaultNameLabel = "kumbu/v1/vault-name-id";
+    private const string ApiKeyKekLabel = "kumbu/v1/api-key-kek";
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
@@ -63,7 +64,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     {
         await EnsureReadyAsync(ct);
         var lookup = VaultCrypto.Derive(secret, LookupLabel, []);
-        var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup)).ToListAsync(ct);
+        var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey)
+            & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup) & Builders<SlotDocument>.Filter.Exists(s => s.KeyId, false)).ToListAsync(ct);
 
         var result = new List<UnlockedVault>();
         foreach (var slot in slots)
@@ -209,6 +211,88 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         Unlocked?.Invoke(vault);
         return vault;
     }
+
+    /// <summary>
+    /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
+    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
+    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
+    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction.
+    /// </summary>
+    internal async Task<IReadOnlyList<SlotDocument>> ApiKeySlotsAsync(
+        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var ids = vaults.Keys.ToList();
+        var userSlots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
+            & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(userKey, userId)) & Builders<SlotDocument>.Filter.In(s => s.Vault, ids)).ToListAsync(ct);
+        var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => v.Id).ToListAsync(ct)).ToHashSet();
+
+        var result = new List<SlotDocument>();
+        foreach (var (vaultId, right) in vaults)
+        {
+            byte[]? vaultKey = null;
+            foreach (var slot in userSlots.Where(s => s.Vault == vaultId))
+            {
+                try
+                {
+                    vaultKey = VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind));
+                    break;
+                }
+                catch (CryptographicException)
+                {
+                }
+            }
+
+            if (vaultKey is null || !existing.Contains(vaultId)) throw new ArgumentException("An API key can only be given vaults of your own.", nameof(vaults));
+            result.Add(new SlotDocument
+            {
+                Vault = vaultId,
+                Kind = SlotDocument.ApiKey,
+                KeyId = keyId,
+                Wrapped = VaultCrypto.Seal(
+                    ApiKeyKek(apiKey, vaultId), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKey, Accounts.KeyRights.ToText(right))), ApiKeySlotContext(vaultId, keyId)),
+                CreatedAt = Now,
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The vaults an API key has slots for, unlocked, each with the right sealed into its slot. As in
+    /// <see cref="OpenAsync"/>, every slot is opened, also for a vault in memory: a revoked key has no slots left,
+    /// and a slot that was changed in the database (its right, say) doesn't open and gives nothing.
+    /// </summary>
+    internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId)).ToListAsync(ct);
+
+        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        foreach (var slot in slots)
+        {
+            ApiKeySlotPayload payload;
+            Accounts.KeyRight right;
+            try
+            {
+                payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(ApiKeyKek(apiKey, slot.Vault), slot.Wrapped, ApiKeySlotContext(slot.Vault, keyId)))!;
+                right = Accounts.KeyRights.Parse(payload.Rights) ?? throw new JsonException("unknown right");
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("A slot of API key {KeyId} on vault {Vault} did not open", keyId, slot.Vault);
+                continue;
+            }
+
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add((vault, right));
+        }
+
+        return result;
+    }
+
+    /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
+    internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
+        Slots.DeleteManyAsync(session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), cancellationToken: ct);
 
     /// <summary>Opens every vault <paramref name="recoveryKeyText"/> belongs to and gives <paramref name="secret"/>
     /// a slot there, if it has none. Returns those vaults' names, and whether a slot was added.</summary>
@@ -402,6 +486,16 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 
+    private static byte[] ApiKeyKek(string apiKey, string vaultId) => VaultCrypto.Derive(apiKey, ApiKeyKekLabel, Encoding.UTF8.GetBytes(vaultId));
+
+    /// <summary>Also bound to the key's id, so a slot can't be moved to another key, nor read as a dev-token slot.</summary>
+    private static string ApiKeySlotContext(string vaultId, string keyId) => $"slot:{vaultId}:{SlotDocument.ApiKey}:{keyId}";
+
+    /// <summary>What an API key's slot seals: the vault key and the key's right on the vault, together.</summary>
+    private sealed record ApiKeySlotPayload(
+        [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
+        [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights);
+
     /// <summary>Creates the indexes, refuses a MongoDB without transactions and plaintext notes from before
     /// encryption, once per process. Lazy, so the server starts before MongoDB is reachable.</summary>
     private async Task EnsureReadyAsync(CancellationToken ct)
@@ -458,6 +552,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Vault)),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.KeyId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.KeyId) }),
                 // One vault name per user: only user slots carry a nameId.
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup).Ascending(s => s.NameId),

@@ -31,7 +31,7 @@ public sealed class RequestCaller : ICaller
 
     public CallerKind Kind { get; }
 
-    /// <summary>The signed-in user; null for the dev token.</summary>
+    /// <summary>The signed-in user, or the API key's owner; null for the dev token.</summary>
     public User? User { get; }
 
     public string Writer { get; }
@@ -39,8 +39,8 @@ public sealed class RequestCaller : ICaller
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
-    // Sessions and the dev token may write to every vault they open; API keys bring per-vault rights (Task 6).
-    public bool CanWrite(string vault) => true;
+    /// <summary>Sessions and the dev token may write to every vault they open; an API key only where its slot says so.</summary>
+    public bool CanWrite(string vault) => Credential is not ApiKeyCredential key || key.CanWrite(vault);
 
     public Task<IReadOnlyList<UnlockedVault>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
 
@@ -49,6 +49,14 @@ public sealed class RequestCaller : ICaller
 
     internal static RequestCaller ForSession(User user, byte[] userKey, VaultCatalog catalog) =>
         new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog);
+
+    /// <summary>An API key, its vaults already opened: <see cref="CanWrite"/> is asked before the store opens anything.</summary>
+    internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
+    {
+        var credential = new ApiKeyCredential(key.Id, apiKey);
+        await credential.OpenWithRightsAsync(catalog, ct);
+        return new(CallerKind.ApiKey, key.User, key.Name, credential, catalog);
+    }
 
     /// <summary>The caller of the current request. Fails closed: a service asking on a request without a
     /// caller (an anonymous endpoint) is a bug, never a reason to fall back to some default.</summary>
