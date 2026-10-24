@@ -17,8 +17,13 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
     private const int MaxUsernameLength = 64;
 
+    private const string UsernameRule = "A username has 1 to 64 characters: letters a-z, digits, '.', '-' or '_'.";
+
     /// <summary>Signing in as an unknown user runs Argon2 against this, so it takes as long as a wrong password.</summary>
     private static readonly byte[] DummySalt = RandomNumberGenerator.GetBytes(Argon2Kdf.SaltBytes);
+
+    /// <summary>No user has this id (ids are hex): the slot lookup for an unknown username runs against it.</summary>
+    private const string DummyId = "-";
 
     private volatile bool _ready;
 
@@ -35,8 +40,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     /// </summary>
     public async Task<(User User, string RecoveryKey)> CreateAsync(string username, string password, string role, CancellationToken ct)
     {
-        var name = NormaliseUsername(username) ?? throw new ArgumentException(
-            $"A username has 1 to {MaxUsernameLength} letters, digits, dots, dashes or underscores.", nameof(username));
+        var name = NormaliseUsername(username) ?? throw new ArgumentException(UsernameRule, nameof(username));
         if (!Roles.IsKnown(role)) throw new ArgumentException($"Unknown role '{role}'.", nameof(role));
         if (PasswordPolicy.Check(password) is { } reason) throw new ArgumentException(reason, nameof(password));
         await EnsureReadyAsync(ct);
@@ -52,7 +56,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         {
             Id = id,
             Username = name,
-            Display = username.Normalize(),
+            Display = username,
             Role = role,
             Active = true,
             KeyId = KeyId(userKey, id),
@@ -76,8 +80,10 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     public async Task<(User User, byte[] UserKey)?> TrySignInAsync(string username, string password, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var user = NormaliseUsername(username) is { } name ? await Users.Find(u => u.Username == name).FirstOrDefaultAsync(ct) : null;
-        var slot = user is null ? null : await FindSlotAsync(user.Id, UserSlotDocument.Password, ct);
+        // The same two lookups for every username, known, unknown or invalid, so the round trips don't tell either.
+        var name = NormaliseUsername(username) ?? "";
+        var user = await Users.Find(u => u.Username == name).FirstOrDefaultAsync(ct);
+        var slot = await FindSlotAsync(user?.Id ?? DummyId, UserSlotDocument.Password, ct);
         if (user is null || slot?.Salt is null)
         {
             kdf.Derive(password, DummySalt);
@@ -165,20 +171,16 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         return RecoveryKey.Format(recoveryKey);
     }
 
-    /// <summary>Lower case and NFC, or null if it isn't a username: 1 to 64 letters, digits, '.', '-' or '_'.</summary>
+    /// <summary>
+    /// Lower case, or null if it isn't a username: 1 to 64 ASCII letters, digits, '.', '-' or '_'. ASCII only,
+    /// so no two usernames look alike (a Cyrillic "а" in "аdmin") and no Unicode normalisation is needed.
+    /// </summary>
     private static string? NormaliseUsername(string username)
     {
-        string name;
-        try
-        {
-            name = username.Normalize().ToLowerInvariant();
-        }
-        catch (ArgumentException)
-        {
-            return null; // not well-formed UTF-16, e.g. a lone surrogate from an escaped JSON string
-        }
-
-        return name.Length is > 0 and <= MaxUsernameLength && name.All(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_') ? name : null;
+        var name = username.ToLowerInvariant();
+        return name.Length is > 0 and <= MaxUsernameLength && name.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c is '.' or '-' or '_')
+            ? name
+            : null;
     }
 
     private async Task SetPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
@@ -243,9 +245,21 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         await Users.Indexes.CreateOneAsync(
             new CreateIndexModel<UserDocument>(Builders<UserDocument>.IndexKeys.Ascending(u => u.Username), new CreateIndexOptions { Unique = true }),
             cancellationToken: ct);
-        await Slots.Indexes.CreateOneAsync(
-            new CreateIndexModel<UserSlotDocument>(Builders<UserSlotDocument>.IndexKeys.Ascending(s => s.User).Ascending(s => s.Kind)),
-            cancellationToken: ct);
+        var slotKeys = Builders<UserSlotDocument>.IndexKeys;
+        await Slots.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<UserSlotDocument>(slotKeys.Ascending(s => s.User)),
+
+                // One password and one recovery slot per user; sessions are many.
+                new CreateIndexModel<UserSlotDocument>(
+                    slotKeys.Ascending(s => s.User).Ascending(s => s.Kind),
+                    new CreateIndexOptions<UserSlotDocument>
+                    {
+                        Unique = true,
+                        PartialFilterExpression = Builders<UserSlotDocument>.Filter.In(s => s.Kind, [UserSlotDocument.Password, UserSlotDocument.Recovery]),
+                    }),
+            ],
+            ct);
         _ready = true;
     }
 }

@@ -186,6 +186,45 @@ public sealed class UserCatalogTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_password_typed_composed_or_decomposed_opens_the_same_account()
+    {
+        var users = Catalog();
+        const string composed = "Passw\u00f6rter-sind-toll";
+        const string decomposed = "Passwo\u0308rter-sind-toll";
+        var (user, _) = await users.CreateAsync("chris", composed, Roles.User, Ct);
+
+        Assert.Equal(user.Id, (await users.TrySignInAsync("chris", decomposed, Ct))?.User.Id);
+        Assert.Equal(user.Id, (await users.TrySignInAsync("chris", composed, Ct))?.User.Id);
+    }
+
+    [Theory]
+    [InlineData("\u0430dmin")] // Cyrillic a: looks like "admin"
+    [InlineData("j\u00fcrgen")]
+    [InlineData("chris smith")]
+    public async Task Usernames_are_ascii_only(string username)
+    {
+        var e = await Assert.ThrowsAsync<ArgumentException>(() => Catalog().CreateAsync(username, Password, Roles.User, Ct));
+        Assert.StartsWith("A username has 1 to 64 characters: letters a-z, digits, '.', '-' or '_'.", e.Message);
+    }
+
+    [Fact]
+    public async Task A_user_has_at_most_one_password_and_one_recovery_slot_but_many_sessions()
+    {
+        var db = fixture.NewDatabase();
+        var (user, _) = await Catalog(db).CreateAsync("chris", Password, Roles.User, Ct);
+        var slots = db.GetCollection<UserSlotDocument>("user_slots");
+
+        foreach (var kind in new[] { UserSlotDocument.Password, UserSlotDocument.Recovery })
+        {
+            var e = await Assert.ThrowsAsync<MongoWriteException>(() => slots.InsertOneAsync(new UserSlotDocument { User = user.Id, Kind = kind, Wrapped = [1] }, cancellationToken: Ct));
+            Assert.Equal(ServerErrorCategory.DuplicateKey, e.WriteError.Category);
+        }
+
+        await slots.InsertOneAsync(new UserSlotDocument { User = user.Id, Kind = UserSlotDocument.Session, Wrapped = [1] }, cancellationToken: Ct);
+        await slots.InsertOneAsync(new UserSlotDocument { User = user.Id, Kind = UserSlotDocument.Session, Wrapped = [2] }, cancellationToken: Ct);
+    }
+
+    [Fact]
     public async Task The_password_slots_salt_differs_per_user_even_for_the_same_password()
     {
         var db = fixture.NewDatabase();

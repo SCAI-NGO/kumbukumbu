@@ -24,10 +24,11 @@ public sealed class Argon2Kdf(Argon2Parameters? parameters = null)
     /// <summary>For tests: how often <see cref="Derive"/> ran, to check unknown usernames cost the same work.</summary>
     internal int Runs => _runs;
 
+    /// <summary>The key for <paramref name="password"/>, NFC-normalised first (see <see cref="PasswordPolicy.Normalise"/>).</summary>
     public byte[] Derive(string password, byte[] salt)
     {
         Interlocked.Increment(ref _runs);
-        using var argon = new Argon2id(Encoding.UTF8.GetBytes(password))
+        using var argon = new Argon2id(Encoding.UTF8.GetBytes(PasswordPolicy.Normalise(password)))
         {
             Salt = salt,
             MemorySize = Parameters.MemoryKiB,
