@@ -9,6 +9,10 @@ public interface INoteStore : INoteReader
 {
     Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct);
 
+    /// <summary>The changeset of <paramref name="writer"/>'s most recent write that is still a note's current
+    /// state in the vault, and when it was written; null if there is none.</summary>
+    Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct);
+
     /// <summary>Returns false if a note already exists at the path.</summary>
     Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct);
 
@@ -18,10 +22,11 @@ public interface INoteStore : INoteReader
 
     /// <summary>
     /// Writes every change of <paramref name="batch"/>, or none: each note must still be at the revision the
-    /// batch saw, and no move target may exist. Moves are recorded with <paramref name="movedBy"/> and
-    /// <paramref name="at"/>. Returns the paths that stood in the way; empty if it was written.
+    /// batch saw, and no move target or created note may exist. Moves and trashed notes are recorded with
+    /// <paramref name="by"/> and <paramref name="at"/>. Returns the paths that stood in the way; empty if it
+    /// was written.
     /// </summary>
-    Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string movedBy, DateTime at, CancellationToken ct);
+    Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct);
 
     /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>.</summary>
     Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct);
@@ -33,4 +38,16 @@ public interface INoteStore : INoteReader
     /// <paramref name="version"/>. Records <paramref name="writer"/> as its last writer. Returns null if
     /// there is no such note in the trash, or if a note exists at the path.</summary>
     Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct);
+
+    /// <summary>The named checkpoints of every vault (root) or of one vault, oldest first.</summary>
+    Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct);
+
+    /// <summary>Stores a checkpoint with the content of its notes; false if its vault has one of that name.</summary>
+    Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct);
+
+    /// <summary>Removes a checkpoint, and the content only it held; false if there is none of that name.</summary>
+    Task<bool> TryRemoveCheckpointAsync(string vault, string name, CancellationToken ct);
+
+    /// <summary>The notes of a checkpoint with their content then.</summary>
+    Task<IReadOnlyList<Note>> ReadCheckpointAsync(Checkpoint checkpoint, CancellationToken ct);
 }

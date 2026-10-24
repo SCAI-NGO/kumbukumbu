@@ -37,6 +37,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     internal IMongoCollection<SealedDocument> Moves { get; } = db.GetCollection<SealedDocument>("moves");
 
+    /// <summary>Named checkpoints: one document each, the name as a keyed hash in "pid".</summary>
+    internal IMongoCollection<SealedDocument> Checkpoints { get; } = db.GetCollection<SealedDocument>("checkpoints");
+
+    /// <summary>The content checkpoints hold, once per vault and text, the keyed hash of the content in "pid".</summary>
+    internal IMongoCollection<SealedDocument> CheckpointTexts { get; } = db.GetCollection<SealedDocument>("checkpoint_texts");
+
     internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>A session for one transaction over several documents.</summary>
@@ -239,6 +245,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             vault.Moves = [.. (await Moves.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => TryOpen(vault, () => vault.OpenMove(d), d))
                 .OfType<MoveRecord>()];
+            vault.Checkpoints = [.. (await Checkpoints.Find(n => n.Vault == id).ToListAsync(ct))
+                .Select(d => TryOpen(vault, () => vault.OpenCheckpoint(d), d))
+                .OfType<StoredCheckpoint>()
+                .OrderBy(c => c.Checkpoint.CreatedAt)];
 
             _open[id] = vault;
             log.LogInformation("Unlocked vault {Vault} ({Notes} notes)", vault.Name, vault.Notes.Count);
@@ -323,6 +333,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.At), new CreateIndexOptions { ExpireAfter = Kumbu.Core.Notes.Moves.Retention }),
             ],
             ct);
+        await Checkpoints.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        await CheckpointTexts.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),

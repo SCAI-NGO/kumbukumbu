@@ -25,9 +25,13 @@ public static class Manual
           mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
           rm <path>                       move a note to the trash (kept 30 days)
           trash [path]                    list removed notes
+          mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
+          lscp [path]                     list named checkpoints
+          rmcp <path> <name>              remove a checkpoint (only when the user asks)
           help [command]                  options and examples of a command
 
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
+        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too.
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
         '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.
@@ -83,6 +87,8 @@ public static class Manual
 
         path is a vault, a folder or one note (/Work, /Work/projects, /Work/plan.md). old_text matches
         literally, case-sensitive; with word, only as a whole word (Hecate, not Hecates). A plan is valid for
-        one hour and once. Every changed note keeps its earlier version (sh: history, diff, restore).
+        one hour and once. Each changed note keeps the state before this session in its history
+        (sh: history, diff, restore). The replace is literal, in [[links]] too: the preview names links that
+        would lead nowhere afterwards. To rename a note, mv it first (that rewrites its links), then replace.
         """;
 }

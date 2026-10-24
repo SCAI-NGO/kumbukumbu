@@ -55,6 +55,10 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await store.TryTrashAsync((await store.GetAsync(P("/Geheimprojekt/weg.md"), Ct))!, Writers.Dev, T0, Ct);
         var other = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
         await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv/Acme.md"), Revision = other.Revision + 1 });
+        var moved = (await store.GetAsync(P("/Geheimprojekt/Archiv/Acme.md"), Ct))!;
+        Assert.True(await store.TryAddCheckpointAsync(
+            new Checkpoint("vor-Acme-Kauf", P("/Geheimprojekt/Archiv"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]),
+            [new Note(moved.Path, moved.Content)], Ct));
 
         var everything = new StringBuilder();
         foreach (var name in await (await world.Db.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
@@ -74,6 +78,107 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         {
             Assert.DoesNotContain(secret, dump, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>
+        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), Writers.Dev, T0, [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]);
+
+    [Fact]
+    public async Task A_checkpoint_survives_a_restart_and_stores_each_text_once()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "same");
+        var b = New("/Work/b.md", "same");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+
+        Assert.True(await store.TryAddCheckpointAsync(Cp("one", "/Work", a, b), [new Note(a.Path, "same"), new Note(b.Path, "same")], Ct));
+        Assert.True(await store.TryAddCheckpointAsync(Cp("two", "/Work/a.md", a), [new Note(a.Path, "same")], Ct));
+        Assert.False(await store.TryAddCheckpointAsync(Cp("two", "/Work", a), [new Note(a.Path, "same")], Ct));
+
+        var texts = world.Db.GetCollection<BsonDocument>("checkpoint_texts");
+        Assert.Equal(1, await texts.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+
+        var later = Store(world.Catalog());
+        var listed = await later.ListCheckpointsAsync(P("/Work"), Ct);
+        Assert.Equal(["one", "two"], listed.Select(c => c.Name));
+        Assert.Equal([P("/Work/a.md"), P("/Work/b.md")], listed[0].Notes.Select(n => n.Path));
+        Assert.Equal(["same", "same"], (await later.ReadCheckpointAsync(listed[0], Ct)).Select(n => n.Content));
+    }
+
+    [Fact]
+    public async Task Removing_a_checkpoint_removes_only_the_texts_no_other_holds()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        var b = New("/Work/b.md", "b");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+        await store.TryAddCheckpointAsync(Cp("both", "/Work", a, b), [new Note(a.Path, "a"), new Note(b.Path, "b")], Ct);
+        await store.TryAddCheckpointAsync(Cp("only-a", "/Work/a.md", a), [new Note(a.Path, "a")], Ct);
+        var texts = world.Db.GetCollection<BsonDocument>("checkpoint_texts");
+
+        Assert.True(await store.TryRemoveCheckpointAsync("Work", "both", Ct));
+
+        Assert.Equal(1, await texts.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+        var later = Store(world.Catalog());
+        var left = Assert.Single(await later.ListCheckpointsAsync(P("/Work"), Ct));
+        Assert.Equal("a", Assert.Single(await later.ReadCheckpointAsync(left, Ct)).Content);
+        Assert.False(await store.TryRemoveCheckpointAsync("Work", "both", Ct));
+    }
+
+    [Fact]
+    public async Task A_tampered_checkpoint_text_refuses_the_whole_checkpoint()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryAddCheckpointAsync(Cp("cp", "/Work", a), [new Note(a.Path, "a")], Ct);
+        var texts = world.Db.GetCollection<BsonDocument>("checkpoint_texts");
+        var doc = await texts.Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct);
+        await texts.UpdateOneAsync(new BsonDocument("_id", doc["_id"]),
+            new BsonDocument("$set", new BsonDocument("blob", new BsonBinaryData([.. doc["blob"].AsByteArray.Take(40), .. new byte[20]]))), cancellationToken: Ct);
+
+        var later = Store(world.Catalog());
+        var checkpoint = Assert.Single(await later.ListCheckpointsAsync(P("/Work"), Ct));
+        await Assert.ThrowsAsync<VaultUnavailableException>(() => later.ReadCheckpointAsync(checkpoint, Ct));
+    }
+
+    [Fact]
+    public async Task A_batch_creates_and_trashes_in_one_transaction()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(New("/Work/taken.md", "t"), Ct);
+
+        // The trash goes through, then a create hits an existing note: nothing happens.
+        var failing = new NoteBatch { Trashes = { a }, Creates = { New("/Work/back.md", "b"), New("/Work/taken.md", "x") } };
+        Assert.Equal([P("/Work/taken.md")], await store.TryCommitAsync(failing, "dev (restore)", T0, Ct));
+        var later = Store(world.Catalog());
+        Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Null(await later.ReadAsync(P("/Work/back.md"), Ct));
+        Assert.Empty(await later.ListTrashAsync(P("/Work"), Ct));
+
+        var ok = new NoteBatch { Trashes = { a }, Creates = { New("/Work/back.md", "b"), New("/Work/a.md", "a again") } };
+        Assert.Empty(await store.TryCommitAsync(ok, "dev (restore)", T0, Ct));
+        later = Store(world.Catalog());
+        Assert.Equal("a again", await later.ReadAsync(P("/Work/a.md"), Ct));
+        Assert.Equal("b", await later.ReadAsync(P("/Work/back.md"), Ct));
+        Assert.Equal("dev (restore)", Assert.Single(await later.ListTrashAsync(P("/Work"), Ct)).DeletedBy);
+    }
+
+    [Fact]
+    public async Task A_changeset_survives_a_restart()
+    {
+        var (world, _, store) = await WorldAsync();
+        var changeset = Changeset.New(T0);
+        await store.TryCreateAsync(New("/Work/a.md", "a") with { Changeset = changeset }, Ct);
+
+        var later = Store(world.Catalog());
+        Assert.Equal(changeset, (await later.GetAsync(P("/Work/a.md"), Ct))!.Changeset);
+        Assert.Equal((changeset, T0), await later.LatestChangesetAsync("Work", Writers.Dev, Ct));
+        Assert.Null(await later.LatestChangesetAsync("Work", "someone-else", Ct));
     }
 
     [Fact]

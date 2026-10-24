@@ -220,7 +220,7 @@ Because a note's history is stored inside the note's document, the history moves
 
 Each note keeps its last 10 earlier states, newest first, with who wrote them and when (`history <path>`). `restore <path> <version>` makes one current again, and the state it replaces goes into the history, so a restore can be undone the same way.
 
-An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer within 10 minutes coalesce**: the state they replace is not kept again. What survives is the state before the session. Today every MCP call writes as `dev`; with API keys (step 8) each key is its own writer, so two agents never coalesce into each other.
+An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer close together in time coalesce**: the state they replace is not kept again. What survives is the state before the session. (Until step 6b this was "within 10 minutes on the same note"; chapter 8 makes it a changeset across notes.) Today every MCP call writes as `dev`; with API keys (step 8) each key is its own writer, so two agents never coalesce into each other.
 
 ### The trash
 
@@ -363,4 +363,26 @@ A change across many notes is the one place where an agent's mistake is expensiv
 Until step 6 every write touched one document, and a single-document write is atomic in MongoDB. A folder move or a `replace` touches many, and must not stop halfway. A **transaction** groups writes: they all become visible at once when it **commits**, or none do when it **aborts**. Kumbu² runs each change in one: every compare-and-swap, every insert, every move record. If one of them is refused (a note changed, a target exists), the transaction aborts and the working set in memory stays as it was. A cancelled request aborts too; before transactions, a cancellation between two writes needed special care.
 
 MongoDB offers transactions only on a **replica set**, because they are built on the replication log (the oplog). A replica set with a single member is still a replica set: no extra container, no extra cost. The trap is its configuration, which stores each member's host name. Docker's default host name is the container id, which changes when the container is recreated, and the node then no longer recognises itself as a member. `compose.yaml` therefore sets `hostname: mongo`, initiates the set with that name from the health check on first start, and the server connects with `directConnection=true`, so it talks to that one node without caring about names in the configuration.
+
+## 8. Changesets and named checkpoints
+
+### Changesets: one version per session, per note
+
+Chapter 3 coalesced writes per note: the same writer within 10 minutes of that note's last write. Two things didn't fit. Each tool decided for itself (`replace` and the link rewrites of `mv` always made a version of their own), so a series of ten renames on one glossary note filled its history with renames and pushed out the state before them. And "a session" was really about the writer, not one note.
+
+A **changeset** is everything one writer writes close together in time: it starts with a write and stays open while that writer writes again within 10 minutes, for an hour at most. Each note gets **one version per changeset**, whichever tool wrote it. The open changeset is derived from the notes themselves: every state carries its changeset's id and start time, and the writer's most recent write in the vault tells whether its changeset is still open. There is no session to keep track of, and a restart changes nothing.
+
+Each history entry records its changeset id. Today that shows in `history <folder>`, grouping a session's writes across notes; later it allows undoing a whole changeset at once.
+
+Two kinds of write never join a changeset: a **restore**, which is a deliberate step back and must stay undoable on its own, and **seeding**. In Git terms a changeset is a commit that is squashed while the session lasts.
+
+### Named checkpoints: a tag that holds its content
+
+The history keeps 10 versions per note, and that's the point: it is a safety net, not an archive. Sometimes a state should be kept for longer, "before the big cleanup". A **named checkpoint** (`mkcp /Demo before-cleanup`) is that state under a name, for a note, a folder or a whole vault, kept until `rmcp` removes it. In Git terms it is a tag. Git can keep a tag as a mere pointer, since it keeps every commit. Kumbu² keeps only 10 versions, so a checkpoint has to hold its content itself.
+
+It does so cheaply: each content is stored once per vault, under a keyed hash of the text (**content addressing**). Ten checkpoints of a vault where most notes never change cost little more than one. Removing a checkpoint removes the texts no other checkpoint still needs. Name, paths and texts are sealed like everything else (chapter 6). The id of a text is an HMAC of its content, which makes it tamper-evident: a changed text no longer matches its id, and the whole checkpoint refuses to open rather than silently missing a note.
+
+A checkpoint is read like the current state: `ls`, `cat`, `rg` … with `--checkpoint <name>` run unchanged on a read-only view of the checkpoint's notes. `diff --checkpoint` compares; `restore --checkpoint` goes back. For a folder, restoring means the folder matches the checkpoint exactly afterwards, so notes made since go to the trash. That changes many notes, so it uses the same preview and plan token as `replace` (chapter 7), applied in one transaction. The plan registry also remembers what became of each plan for its hour: a client that lost the answer to an apply learns that it was applied, instead of hearing "unknown".
+
+Agents set and remove checkpoints only when the user asks; the manual says so. A checkpoint is a user's decision about what matters, and with 10 per vault, an agent setting them on its own would fill the slots the user wants.
 

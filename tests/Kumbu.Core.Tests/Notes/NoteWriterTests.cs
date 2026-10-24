@@ -32,6 +32,18 @@ public class NoteWriterTests
         _writer.EditAsync(path, version, oldText, newText, writer, Ct);
 
     [Fact]
+    public async Task CreatingANoteSaysWhichLinksItMakesAmbiguous()
+    {
+        await _store.TryCreateAsync(new StoredNote(P("/Work/links.md"), "[[deep]] and [[sub/deep]] and [[plan]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), Ct);
+
+        var result = await Write("/Work/other/sub/deep.md", "x\n", null);
+
+        Assert.Equal(
+            "created /Work/other/sub/deep.md (1 line); note: [[deep]] in /Work/links.md, [[sub/deep]] in /Work/links.md now match two notes ('links <note>' shows them; a longer path in the link, or mv, makes it unique again)",
+            result.Output);
+    }
+
+    [Fact]
     public void TokenIsTwelveHexCharactersOfTheSha256() => Assert.Equal("2cf24dba5fb0", VersionToken.Of("hello"));
 
     // --- write: create ---

@@ -24,7 +24,7 @@ builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
-builder.Services.AddSingleton<ReplacePlans>();
+builder.Services.AddSingleton<Plans>();
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
@@ -35,6 +35,9 @@ builder.Services.AddScoped<INoteStore, EncryptedNoteStore>();
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<Replacer>();
+builder.Services.AddScoped(sp => new Checkpoints(
+    sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
+    sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
 builder.Services.AddScoped<Shell>();
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
