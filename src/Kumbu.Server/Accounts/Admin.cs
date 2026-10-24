@@ -44,9 +44,11 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
     }
 
     /// <summary>
-    /// Deactivates or reactivates a user; false if there is no such user. Deactivating ends every session and
-    /// revokes every API key of the user, in one transaction with the flag, and both directions stamp
-    /// <c>credentialsChangedAt</c>: reactivating revives no old key and no old session.
+    /// Deactivates or reactivates a user; false if there is no such user, true (and nothing done) if they already
+    /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
+    /// and revokes every API key of the user, in one transaction with the flag, and stamps
+    /// <c>credentialsChangedAt</c>. Revoking again on reactivation catches a key whose creation raced the
+    /// deactivation (its request's session resolved just before it): reactivating revives no key and no session.
     /// </summary>
     public async Task<bool> SetActiveAsync(User actor, string userId, bool active, CancellationToken ct)
     {
@@ -60,16 +62,18 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
         using (var session = await catalog.StartSessionAsync(ct))
         {
             session.StartTransaction();
-            // The role is checked again in the filter, in case it changed since the read above.
+            // The role is checked again in the filter, in case it changed since the read above; the state, so that
+            // only a real change revokes anything.
             var updated = await Users.UpdateOneAsync(
                 session,
-                u => u.Id == userId && u.Role != Roles.PrimaryAdmin,
+                u => u.Id == userId && u.Role != Roles.PrimaryAdmin && u.Active != active,
                 Builders<UserDocument>.Update.Set(u => u.Active, active).Set(u => u.CredentialsChangedAt, Now),
                 cancellationToken: ct);
             if (updated.MatchedCount == 0)
             {
+                // The user exists (read above) and can't have become primary admin, so they already are as asked.
                 await session.AbortTransactionAsync(CancellationToken.None);
-                return false;
+                return true;
             }
 
             await sessions.EndAllAsync(session, userId, ct);

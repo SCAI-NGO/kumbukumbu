@@ -171,6 +171,49 @@ public sealed class AdminTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Reactivating_an_active_user_changes_nothing_and_keeps_their_keys_and_sessions()
+    {
+        var admin = await UserAsync("anna", Roles.Admin);
+        var (lea, key, session) = await SignedInAsync("lea");
+        var vault = await Catalog().CreateForUserAsync("Notes", lea.Id, key, Ct);
+        var (laptop, _) = await Keys().CreateAsync(lea, key, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.True(await Admin().SetActiveAsync(admin, lea.Id, true, Ct));
+
+        Assert.NotNull(await Keys().ResolveAsync(laptop, Ct));
+        Assert.NotNull(await Sessions().ResolveAsync(session, Ct));
+    }
+
+    [Fact]
+    public async Task Deactivating_an_inactive_user_again_succeeds_and_changes_nothing()
+    {
+        var admin = await UserAsync("anna", Roles.Admin);
+        var lea = await UserAsync("lea", Roles.User);
+
+        Assert.True(await Admin().SetActiveAsync(admin, lea.Id, false, Ct));
+        Assert.True(await Admin().SetActiveAsync(admin, lea.Id, false, Ct));
+
+        Assert.False((await Admin().ListUsersAsync(admin, Ct)).Single(u => u.Username == "lea").Active);
+    }
+
+    [Fact]
+    public async Task A_key_created_while_the_user_was_inactive_is_revoked_on_reactivation()
+    {
+        // The race: a key-creation request whose session resolved just before the deactivation inserts its key after it.
+        var admin = await UserAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea");
+        var vault = await Catalog().CreateForUserAsync("Notes", lea.Id, key, Ct);
+        await Admin().SetActiveAsync(admin, lea.Id, false, Ct);
+        var (late, _) = await Keys().CreateAsync(lea, key, "late", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+
+        await Admin().SetActiveAsync(admin, lea.Id, true, Ct);
+
+        Assert.Null(await Keys().ResolveAsync(late, Ct));
+        Assert.Equal(0, await _db.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Kind == SlotDocument.ApiKey, cancellationToken: Ct));
+    }
+
+    [Fact]
     public async Task The_primary_admin_cant_be_deactivated_or_demoted_and_nobody_is_made_primary_admin()
     {
         var admin = await UserAsync("anna", Roles.Admin);

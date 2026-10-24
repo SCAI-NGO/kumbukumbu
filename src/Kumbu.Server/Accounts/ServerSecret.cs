@@ -12,6 +12,9 @@ namespace Kumbu.Server.Accounts;
 /// hashes are random and 256 bits long, so the hash is beyond reach without it anyway. It only makes a copy of
 /// the <c>invitations</c> collection alone, a backup of it say, useless for checking a guessed code. It lives in
 /// MongoDB, not in the configuration, so an instance needs no further secret set up; it is never logged.
+/// Because it sits next to what it keys, an HMAC under it protects only high-entropy values against a full
+/// database dump: never use it for low-entropy ones (names, emails, short codes), which such a dump would let
+/// anyone test guesses against.
 /// </summary>
 public sealed class ServerSecret(IMongoDatabase db)
 {

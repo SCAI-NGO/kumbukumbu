@@ -191,6 +191,34 @@ public sealed class InvitationTests(MongoFixture fixture)
         Assert.Equal("lea2", user.Username);
     }
 
+    /// <summary>Throws on the "Created user" log line, i.e. right after the user is inserted: a fault there
+    /// (a dropped connection, a cancelled request) must not hand the invitation out a second time.</summary>
+    private sealed class FailAfterInsert : Microsoft.Extensions.Logging.ILogger<UserCatalog>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            throw new IOException("connection lost");
+    }
+
+    [Fact]
+    public async Task A_fault_after_the_account_exists_leaves_the_invitation_used()
+    {
+        var admin = await AdminAsync();
+        var (code, _) = await Invitations().CreateAsync(admin, Roles.Admin, null, null, Ct);
+        var failing = new Invitations(
+            _db, new ServerSecret(_db), new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(1024, 1, 1)), _time, new FailAfterInsert()), _time, NullLogger<Invitations>.Instance);
+
+        await Assert.ThrowsAsync<IOException>(() => failing.RedeemAsync(code, "lea", Password, Ct));
+
+        Assert.NotNull(await Users().TrySignInAsync("lea", Password, Ct));
+        Assert.Equal(InvitationState.Used, (await Invitations().PeekAsync(code, Ct))!.State);
+        await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "mallory", Password, Ct));
+    }
+
     [Fact]
     public async Task Two_concurrent_redeems_of_one_code_create_exactly_one_account()
     {
@@ -259,10 +287,26 @@ public sealed class InvitationTests(MongoFixture fixture)
         await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
 
         await Invitations().RedeemAsync(first, "chris", Password, Ct);
+        // Redeeming revoked the other link too; undo that as well, to reach the index.
+        await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
 
         await Assert.ThrowsAsync<PrimaryAdminExistsException>(() => Invitations().RedeemAsync(second, "eve", Password, Ct));
         Assert.Equal(1, await _db.GetCollection<UserDocument>("users").CountDocumentsAsync(u => u.Role == Roles.PrimaryAdmin, cancellationToken: Ct));
         Assert.Null(await Users().TrySignInAsync("eve", Password, Ct));
+    }
+
+    [Fact]
+    public async Task Creating_the_primary_admin_revokes_every_other_open_bootstrap_link()
+    {
+        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
+        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
+
+        await Invitations().RedeemAsync(second, "chris", Password, Ct);
+
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(first, Ct))!.State);
+        Assert.Equal(InvitationState.Used, (await Invitations().PeekAsync(second, Ct))!.State);
     }
 
     [Theory]

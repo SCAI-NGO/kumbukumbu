@@ -83,12 +83,15 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
     internal async Task<(string Code, InvitationInfo Info)> CreateBootstrapAsync(TimeSpan validFor, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        await Docs.UpdateManyAsync(
+        await RevokeOpenBootstrapAsync(ct);
+        return await InsertAsync(Bootstrap, Roles.PrimaryAdmin, null, validFor, ct);
+    }
+
+    private Task RevokeOpenBootstrapAsync(CancellationToken ct) =>
+        Docs.UpdateManyAsync(
             d => d.CreatedBy == Bootstrap && d.UsedAt == null && d.RevokedAt == null,
             Builders<InvitationDocument>.Update.Set(d => d.RevokedAt, Now),
             cancellationToken: ct);
-        return await InsertAsync(Bootstrap, Roles.PrimaryAdmin, null, validFor, ct);
-    }
 
     /// <summary>The invitation behind a code, for the join page: role, expiry and whether it can be used, or why not.
     /// Null for a code that isn't one.</summary>
@@ -99,7 +102,8 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
     /// Creates the account an invitation is for and uses the invitation up. Only one redeem of a code can win: the
     /// invitation is claimed by a conditional update first (unused, unrevoked, unexpired), and if the account
     /// can't be created (a taken username, a refused password) the claim is given back, so a typo doesn't burn
-    /// the link. <see cref="InvitationUnusableException"/> if the code is unknown, used, expired or revoked; the
+    /// the link. Any other fault leaves it used. Redeeming the primary admin's invitation revokes the other
+    /// bootstrap links still open. <see cref="InvitationUnusableException"/> if the code is unknown, used, expired or revoked; the
     /// exceptions of <see cref="UserCatalog.CreateAsync"/> otherwise.
     /// </summary>
     public async Task<(User User, string RecoveryKey)> RedeemAsync(string code, string username, string password, CancellationToken ct)
@@ -122,12 +126,15 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
         (User User, string RecoveryKey) created;
         try
         {
-            created = await users.CreateAsync(username, password, claimed.Role, ct);
+            // Not cancellable once claimed: a request cancelled after the user insert would otherwise leave an
+            // account behind an invitation that looks unused.
+            created = await users.CreateAsync(username, password, claimed.Role, CancellationToken.None);
         }
-        catch
+        catch (Exception e) when (e is ArgumentException or UsernameTakenException or PrimaryAdminExistsException)
         {
-            // Nobody else can have claimed it meanwhile (usedAt is set), so this releases exactly our claim. A crash
-            // before this line leaves the invitation used by nobody: the admin sees that and invites again.
+            // Only these refusals give the claim back: they come before the user exists. Any other fault may come
+            // after it, and the invitation then stays used rather than opening the way to a second account.
+            // Nobody else can have claimed it meanwhile (usedAt is set), so this releases exactly our claim.
             await Docs.UpdateOneAsync(
                 d => d.Id == claimed.Id && d.UsedBy == null,
                 Builders<InvitationDocument>.Update.Unset(d => d.UsedAt),
@@ -136,6 +143,12 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
         }
 
         await Docs.UpdateOneAsync(d => d.Id == claimed.Id, Builders<InvitationDocument>.Update.Set(d => d.UsedBy, created.User.Id), cancellationToken: CancellationToken.None);
+        if (claimed.Role == Roles.PrimaryAdmin)
+        {
+            // Other bootstrap links still open would show as valid on the join page, though they can only fail now.
+            await RevokeOpenBootstrapAsync(CancellationToken.None);
+        }
+
         log.LogInformation("Invitation {InvitationId} was used by {Username} ({Role})", claimed.Id, created.User.Username, claimed.Role);
         return created;
     }
