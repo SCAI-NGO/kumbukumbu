@@ -17,7 +17,7 @@
 - Passwords: at least 12 characters; refused if in the bundled list of 10,000 most common passwords (`src/Kumbu.Server/Accounts/common-passwords.txt`, from SecLists `10k-most-common.txt`, MIT).
 - API keys: `kumbu_` + 32 random bytes in Base62; only HKDF-derived values stored; shown once.
 - Sessions: secret = 32 random bytes, Base64Url, cookie `kumbu_session`, `HttpOnly; Secure; SameSite=Strict; Path=/`; idle 30 minutes, absolute 12 hours.
-- Invitations: 32 random bytes Base64Url in the link `/join/{code}`, stored as HMAC-SHA256 under a server key; default expiry 7 days; single use; roles `user` or `admin`.
+- Invitations: 32 random bytes Base64Url in the link fragment `/join#{code}` (changed in Task 8's review: never in a URL path, so never in logs), stored as HMAC-SHA256 under a server key; default expiry 7 days; single use; roles `user` or `admin`.
 - Roles: `primary_admin` (exactly one; can't be removed, demoted or deactivated), `admin`, `user`.
 - Rate limits (in memory): sign-in 5 per minute per username and 20 per minute per IP; join and recovery 5 per minute per IP; wrong bearer keys 20 per minute per IP. Behind Traefik, the client IP comes from `X-Forwarded-For` only when `Kumbu:Proxy:Trusted` is set (`KUMBU_TRUSTED_PROXY`).
 - Nothing secret in logs, URLs (except the single-use invitation code) or responses after creation.
