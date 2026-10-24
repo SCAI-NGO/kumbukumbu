@@ -22,14 +22,15 @@ services:
     build: .
     ports:
       # Localhost only. To reach it from other machines, drop "127.0.0.1:" on purpose:
-      # traffic is plain HTTP and the only guard is the dev token.
+      # traffic is plain HTTP and the only guard is a key.
       - "127.0.0.1:${KUMBU_PORT:-8080}:8080"
     depends_on:
       mongo:
         condition: service_healthy
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
-      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
+      # Optional: empty, the dev token opens nothing (a public instance), and seeding is skipped.
+      Kumbu__DevToken: ${KUMBU_DEV_TOKEN:-}
       # Where users reach the server; invitation links (and `kumbu bootstrap-admin`) are built from it.
       Kumbu__PublicUrl: ${KUMBU_PUBLIC_URL:-}
       Kumbu__Seed__Path: /seed

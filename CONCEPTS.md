@@ -427,3 +427,75 @@ There is no vector database. A vault's embeddings are sealed in MongoDB like eve
 
 Indexing runs **in the background**, so a write isn't slowed down by it: each write queues its notes; a worker splits them into chunks and embeds only the chunks whose text changed (each chunk carries a hash of its text). When a vault is unlocked, it catches up with everything written while it was locked. A search says how many notes aren't indexed yet; those still count by words.
 
+
+## 10. Accounts: callers, the user key, sessions and API keys
+
+### Every request is one caller
+
+Chapter 6 ended with one credential, the dev token. Step 8 adds two more, and the server treats all three alike: a request under `/mcp` or `/api` is resolved to exactly one **caller**, or refused.
+
+- A **session**: the cookie `kumbu_session` of a signed-in person in the web app. Accepted under `/api` only. A cookie is something a browser sends on its own; on `/mcp` a page on a sibling subdomain could make the browser post a tool call with the user's session without the user noticing. MCP clients send a header they set themselves, which a web page can't forge.
+- An **API key** (`Authorization: Bearer kumbu_…`): a user's key for an agent or a script, with rights on chosen vaults.
+- The **dev token**, if the operator configured one: what step 5 had. On a public instance it is left out, and then it opens nothing.
+
+The point of "exactly one" is that everything after it asks the same question: *which vaults does this caller hold a slot for, and with which right?* The notes code doesn't know whether a person or an agent is asking. The middleware also fails closed: it guards every path under `/mcp` and `/api`, matched without regard to case, and a few endpoints (sign-in, joining, the OpenAPI document) are explicitly marked anonymous. A new endpoint is guarded unless someone marks it otherwise, not the other way round.
+
+Wrong bearer keys are counted per client network, 20 a minute. Only failures count, and once the budget is used up every bearer from that network is refused before it is checked, so a lucky guess can't be told from an unlucky one by the answer.
+
+### The user key: credentials and vaults, independent
+
+Chapter 6 wrapped each vault key in a slot per credential. That works for one token. With people it breaks: if a vault key were wrapped by the password, changing the password would mean re-wrapping every vault, and each new API key would need the password to be typed in.
+
+So there is a layer between: the **user key**, a random 32-byte key made when the account is. The vault keys of a user's vaults are wrapped by the user key (one slot per vault), and the user key itself is wrapped by each of the user's credentials: the password (through Argon2id, 64 MiB, three passes, four lanes; slow on purpose, since passwords are guessable) and the **recovery key** shown once at sign-up. Think of a key cabinet: the vault keys hang in the cabinet, the user key opens the cabinet, and the password and the recovery key are two copies of its key, each in its own safe.
+
+The reward is independence. A password change re-wraps one 32-byte key, not every vault. A new credential, a session or an API key, only needs the user key in hand to receive its own slot. And nothing but the user holds it: MongoDB has only wrapped copies, the server forgets the key after a request, and an admin has no credential that opens it. That is also why there is **no password reset**: a reset would be a way in that isn't the user's. The recovery key is the way back, and with neither password nor recovery key the vaults are gone. That is the point, as in chapter 6.
+
+Passwords are normalised to Unicode NFC before Argon2 runs (the same password typed on two devices that compose "ö" differently must give the same key), have at least 12 characters, and are checked against a list of the 10,000 most common ones. Signing in as an unknown user, with a wrong password and as an inactive user all give the same answer and all run Argon2, so neither the answer nor the time says which usernames exist.
+
+### Sessions are slots
+
+A session needs the user key on every request, yet the server must not keep it. The answer is to make the session a slot like the others. At sign-in the server makes a random 32-byte secret and puts it in the cookie. In MongoDB it stores a slot: the user key, wrapped by a key derived from that secret, found again by a second derivation (the lookup, as in chapter 6). The server keeps neither the secret nor the user key. A request brings the secret, the server finds the slot, unwraps the user key, uses it, and forgets it.
+
+Two things follow. A **server restart signs nobody out**, because the session lives in the database and the cookie carries the only secret that opens it; this differs from the unlocked vaults, which a restart does lock (chapter 6). And a **stolen database is no stolen session**: the slots are useless without cookies, which the database doesn't have.
+
+A session ends after 30 minutes idle or 12 hours in all. The check runs on every request. MongoDB's own expiry sweep runs only about once a minute, so it merely tidies up.
+
+**A sign-in racing a password change.** Sessions made before a password change must die with it, or a thief with the old password would stay signed in. Each user has a `credentialsChangedAt`; a session older than it is refused. But a sign-in takes a while (Argon2 runs for a good fraction of a second): it reads the password slot, hashes, and only then writes its session. If a password change lands in between, the new session would carry a user key unwrapped with the old password, yet look younger than the change. So the session's creation time is not the moment it is written, but the moment the **credential was read**, taken before Argon2. A change that lands meanwhile has a later time and refuses the session. The change stamps `credentialsChangedAt` both before and after it writes the new slot, to close the gap on both sides. Time stamps compare with "at most equal": MongoDB keeps milliseconds, and the harmless cost of a tie is signing in again.
+
+### API keys carry their rights in the slots
+
+An API key is `kumbu_` and 32 random bytes in Base62, shown **once**, when it is created. A user makes it for chosen vaults, each with *read* or *read and write*. For each of those vaults the key gets a slot, as the dev token does, with one difference: the slot seals the **vault key together with the right**, under a key derived from the API key.
+
+That is the reason the right sits inside the slot and not next to it. If the right were a plain field in the database ("this key may read"), anyone who can edit the database could turn read into write with one update. Sealed together, the right is as protected as the key: changing it means unwrapping the slot, which needs the API key. A database edit can only delete a slot (the key loses the vault) or break it (the key opens nothing). The server then enforces the right it unwrapped: a read-only key is refused every write, including `replace` and the preview of a folder `restore --checkpoint`, which would otherwise plan a write.
+
+MongoDB holds only values derived from the key: a lookup, the first eight characters as a **prefix** for the owner's list, and a sealed name and vault list that only the user key opens. The key's **name** is sealed once more under the API key itself, so that it can mark the key's writes in the history ("written by `claude-code`") without the server needing the user. A key's name therefore cannot be the username, `dev` or `seed` (their writes would look alike), contain " (" (the history writes the tool in brackets after the writer, as in "laptop (mv)", and a name must not fake that) or control characters.
+
+A key is created together with all its slots in one transaction, so it never exists with only some of its vaults. Revoking deletes its slots and nothing has to be re-encrypted: the vault key never changed.
+
+### Invitations: single use, and the code stays in the fragment
+
+New users come in through an **invitation**, a link `https://…/join#<code>`. The code is 32 random bytes; the server stores only a keyed hash of it (HMAC with a key derived from a server secret), so it can check a code without keeping it. An invitation has a role, an expiry (7 days by default, 30 at most), an optional note, and can be revoked until used. Joining uses it up: single use means a leaked link works for whoever is first, which is why the lifetime is short and an admin can see and revoke what is open.
+
+The code sits after the `#`, in the URL's **fragment**. A browser never sends the fragment to the server, so the code does not appear in the request line, in the proxy's access log, or in a `Referer` header. The page's script reads it and posts it in a request body. Logs get collected and kept; a bearer secret in a URL would be one of the things they keep. (Chapter 6 kept the recovery key out of the log for the same reason.)
+
+### The first admin: a command, not the log
+
+Someone has to make the first account, and it must not be the first stranger to find the server. A one-time code printed to the log at first start would be the obvious design, and a bad one: logs go to collectors, other people's dashboards and backups, and whoever reads the line becomes the primary admin.
+
+So the first admin comes from a **command** that only someone with a shell on the container can run: `docker compose exec kumbu kumbu bootstrap-admin`. It makes an invitation for the primary admin, prints the link on standard output only, and is valid for 24 hours; running it again replaces the link. Once a primary admin exists it refuses to run. It needs `KUMBU_PUBLIC_URL`, since the link is built from the address users reach the server at. This is the same idea as the recovery key's file in chapter 6: a secret goes to the one person entitled to it, not into a stream that others read.
+
+### What an admin can and can't do
+
+Admins list users (name, role, number of vaults, bytes stored), invite, revoke invitations, change roles and deactivate people. There is exactly one primary admin, who can't be demoted, deactivated, or made by anyone else.
+
+What they can't do is the other half of the design. They can't read a note: they hold no user key, and no vault is opened for the list; the figures come from what MongoDB shows in the clear. They can't reset a password (above). **Deactivating** a user ends their sessions and revokes their API keys in the same transaction as the flag; reactivating revokes once more, which catches a key that was being created at the moment of deactivation. Nothing comes back by itself: after reactivation the user signs in again and makes new keys.
+
+### What the `owner` field tells a database reader
+
+User slots carry the owner's user id **in the clear**, as the field `owner`. The admin's list needs to count each user's vaults and their bytes without any key, and MongoDB needs it for an index. So someone who reads the database (a dump, a backup, a curious operator) learns **which vaults belong to which user**, and with the sizes MongoDB shows anyway, how many vaults and how much storage each user has. They don't learn the vaults' names (those are sealed, and a user's vault names are kept unique by a keyed hash of the name) or anything in them.
+
+This is consistent with the threat model (concept §3): the leak the encryption is for, a copy of the database, shows structure (counts, sizes, times) but no content, and the running server's operator is trusted anyway. The alternative, hiding the owner, would make the admin screen impossible without opening vaults, which is the one thing admins are meant not to do.
+
+### Throttles that cost something
+
+Signing in costs an Argon2 run, 64 MiB of memory for a moment, which an attacker could use to exhaust the server instead of guessing. So the account endpoints are limited per minute: sign-in 5 per username and 20 per client network, joining and recovering 5 per network. Every attempt counts, successful or not. The trade-off is deliberate: someone who knows a username can lock that user out of *signing in* for a minute (keys and live sessions are untouched). IPv6 addresses count by their /64, since one host usually has a whole /64 and would otherwise get 2^64 times the attempts. And behind a reverse proxy the server sees the proxy's address for everyone unless `KUMBU_TRUSTED_PROXY` is set, in which case one attacker's wrong keys lock out all bearer users for a minute. The README lists these as security notes.

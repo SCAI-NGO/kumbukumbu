@@ -101,13 +101,17 @@ Reused from chatsundere (*call*, after the licence question in §8): the view/ed
 
 ### The REST API
 
-Shared later with the Obsidian plugin (concept §12 step 9), so designed as an OpenAPI document from the start (*call*). Paths, not ids; version tokens on every read and write; the same code paths as the `sh` commands, so the web app and agents see the same notes, links, history and search (concept; the spec's §7 corrected). Roughly:
+Shared later with the Obsidian plugin (concept §12 step 9), so designed as an OpenAPI document from the start (*call*). Paths, not ids; version tokens on every read and write; the same code paths as the `sh` commands, so the web app and agents see the same notes, links, history and search (concept; the spec's §7 corrected). Roughly (**updated after the build of step 8, Oct 25, 2026**: this is what exists under `/api`; `GET /api/openapi.json` is the authority):
 
-- `POST /api/session` (sign in), `DELETE /api/session`, `POST /api/join`, `GET/POST /api/vaults`
-- `GET /api/vaults/{vault}/tree`, `GET/PUT/DELETE /api/notes/{path}` (`PUT` with `version`, `409` on conflict), `POST /api/notes/{path}:move`
-- `GET /api/notes/{path}/backlinks`, `/history`, `/links`; `GET /api/search?q=&mode=hybrid|meaning|exact&path=`
-- `POST /api/upload` (a batch of files with their paths, the conflict policy per file)
-- `GET/POST/DELETE /api/keys`; `/api/admin/users`, `/api/admin/invitations`
+- `POST /api/session` (sign in), `GET/DELETE /api/session`, `POST /api/join`, `POST /api/invitations/peek` (what a join link offers, before the user commits), `POST /api/recover`; invitation links are `/join#{code}` (the code in the fragment)
+- `POST /api/password`, `POST /api/recovery-key`, `POST /api/sessions/end-others`
+- `GET/POST /api/vaults`, `GET /api/vaults/{vault}/tree`
+- `GET/PUT/DELETE /api/notes/{vault}/{**path}` (`PUT` with `version`, `409` on conflict), `POST /api/move` (note or folder, in the body)
+- `GET /api/links|backlinks|history/{vault}/{**path}`; `GET /api/search?q=&mode=hybrid|meaning|exact&path=&n=`; `GET /api/changes`
+- `POST /api/upload/{vault}/{**folder}` (a batch of files with their paths, the conflict policy in the body; at most 200 files and 5 MB of text per request)
+- `GET/POST /api/keys`, `DELETE /api/keys/{id}`; `GET /api/admin/users`, `PATCH /api/admin/users/{id}`; `GET/POST /api/admin/invitations`, `DELETE /api/admin/invitations/{id}`
+
+Bearer callers (API keys, the dev token) reach the notes, search, upload and `GET /api/vaults` endpoints; creating a vault, `GET /api/changes`, and the account, key and admin endpoints take a session only (`403` for others). Sign-in, join, peek, recover and the OpenAPI document are anonymous.
 
 ## 5. The document for the CTO
 
