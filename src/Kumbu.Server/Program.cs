@@ -6,6 +6,7 @@ using Kumbu.Core.Sh;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
 using Kumbu.Server.Search;
@@ -15,7 +16,14 @@ using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using MongoDB.Driver;
 
-var builder = WebApplication.CreateBuilder(args);
+// `kumbu bootstrap-admin` runs a command against the configured MongoDB instead of the server, then exits.
+var bootstrapCommand = args is [BootstrapAdmin.Command, ..];
+var builder = WebApplication.CreateBuilder(bootstrapCommand ? args[1..] : args);
+if (bootstrapCommand)
+{
+    // The command prints its link alone on stdout; the log goes to stderr.
+    builder.Logging.ClearProviders().AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+}
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
@@ -38,8 +46,14 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
+builder.Services.AddSingleton(_ => new Argon2Kdf());
+builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddSingleton<ServerSecret>();
+builder.Services.AddSingleton<Invitations>();
+builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 
 // Per request: CallerMiddleware resolves the caller; its credential decides which vaults the store can open,
@@ -74,6 +88,22 @@ builder.Services.AddMcpServer(o =>
 
 var app = builder.Build();
 
+if (bootstrapCommand)
+{
+    KumbuOptions options;
+    try
+    {
+        options = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value;
+    }
+    catch (OptionsValidationException e)
+    {
+        await Console.Error.WriteLineAsync(string.Join(Environment.NewLine, e.Failures));
+        return 2;
+    }
+
+    return await BootstrapAdmin.ExecuteAsync(app.Services.GetRequiredService<BootstrapAdmin>(), options.PublicUrl, Console.Out, Console.Error, CancellationToken.None);
+}
+
 // Without ICU (globalization-invariant mode, or an image without libicu) .NET compares by code point.
 if (!TextOrder.IsCultureAware)
 {
@@ -99,6 +129,7 @@ app.MapGet("/healthz", () => "ok").AllowAnonymous();
 app.MapMcp("/mcp");
 
 app.Run();
+return 0;
 
 static string ServerVersion()
 {

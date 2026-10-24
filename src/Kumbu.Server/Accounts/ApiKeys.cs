@@ -171,6 +171,24 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     }
 
     /// <summary>
+    /// Revokes every key of the user that isn't revoked yet, inside the caller's transaction (deactivating the
+    /// user): marked revoked, names freed and slots deleted, so reactivating the user revives none of them.
+    /// </summary>
+    internal async Task<int> RevokeAllAsync(IClientSessionHandle session, string userId, CancellationToken ct)
+    {
+        // No EnsureReadyAsync here: building an index while this transaction is open would wait for the transaction.
+        var ids = await Keys.Find(session, k => k.User == userId && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
+        if (ids.Count == 0) return 0;
+        await Keys.UpdateManyAsync(
+            session,
+            Builders<ApiKeyDocument>.Filter.In(k => k.Id, ids),
+            Builders<ApiKeyDocument>.Update.Set(k => k.RevokedAt, Now).Unset(k => k.NameId),
+            cancellationToken: ct);
+        foreach (var id in ids) await catalog.DeleteApiKeySlotsAsync(session, id, ct);
+        return ids.Count;
+    }
+
+    /// <summary>
     /// The key behind a presented bearer, or null if it isn't one, is unknown or revoked, or its user is inactive.
     /// Never logs anything of the key. The rights are not checked here: they live in the slots.
     /// </summary>

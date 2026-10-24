@@ -33,10 +33,14 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
+    /// <summary>The partial unique index that allows one <c>primary_admin</c> at most, whichever way users are created.</summary>
+    private const string OnePrimaryAdminIndex = "one_primary_admin";
+
     /// <summary>
     /// Creates a user with a new user key and returns the recovery key, formatted for humans. Throws
-    /// <see cref="ArgumentException"/> for an unusable username, role or password and
-    /// <see cref="UsernameTakenException"/> if the username exists, also when another create won a race for it.
+    /// <see cref="ArgumentException"/> for an unusable username, role or password,
+    /// <see cref="UsernameTakenException"/> if the username exists, also when another create won a race for it,
+    /// and <see cref="PrimaryAdminExistsException"/> for a second primary admin.
     /// </summary>
     public async Task<(User User, string RecoveryKey)> CreateAsync(string username, string password, string role, CancellationToken ct)
     {
@@ -69,6 +73,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
         {
             await Slots.DeleteManyAsync(s => s.User == id, ct);
+            if (e.WriteError.Message.Contains(OnePrimaryAdminIndex, StringComparison.Ordinal)) throw new PrimaryAdminExistsException();
             throw new UsernameTakenException(name);
         }
 
@@ -255,9 +260,19 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     private async Task EnsureReadyAsync(CancellationToken ct)
     {
         if (_ready) return;
-        await Users.Indexes.CreateOneAsync(
-            new CreateIndexModel<UserDocument>(Builders<UserDocument>.IndexKeys.Ascending(u => u.Username), new CreateIndexOptions { Unique = true }),
-            cancellationToken: ct);
+        await Users.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<UserDocument>(Builders<UserDocument>.IndexKeys.Ascending(u => u.Username), new CreateIndexOptions { Unique = true }),
+                new CreateIndexModel<UserDocument>(
+                    Builders<UserDocument>.IndexKeys.Ascending(u => u.Role),
+                    new CreateIndexOptions<UserDocument>
+                    {
+                        Name = OnePrimaryAdminIndex,
+                        Unique = true,
+                        PartialFilterExpression = Builders<UserDocument>.Filter.Eq(u => u.Role, Roles.PrimaryAdmin),
+                    }),
+            ],
+            ct);
         var slotKeys = Builders<UserSlotDocument>.IndexKeys;
         await Slots.Indexes.CreateManyAsync(
             [
@@ -278,3 +293,5 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
 }
 
 public sealed class UsernameTakenException(string username) : Exception($"The username '{username}' is taken.");
+
+public sealed class PrimaryAdminExistsException() : Exception("There is a primary admin already; there can only be one.");

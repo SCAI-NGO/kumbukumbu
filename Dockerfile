@@ -11,5 +11,7 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 # Owned by the app user, so the named volumes mounted here start out writable for it.
 RUN mkdir -p /recovery /models && chown app:app /recovery /models && chmod 700 /recovery
+# `docker compose exec kumbu kumbu bootstrap-admin`: commands run through the same binary and configuration.
+RUN printf '#!/bin/sh\nexec dotnet /app/Kumbu.Server.dll "$@"\n' > /usr/local/bin/kumbu && chmod 755 /usr/local/bin/kumbu
 USER app
 ENTRYPOINT ["dotnet", "Kumbu.Server.dll"]

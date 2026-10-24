@@ -19,6 +19,22 @@ public sealed class KumbuOptions
 
     public bool HasDevToken => !string.IsNullOrEmpty(DevToken);
 
+    /// <summary>
+    /// Where users reach this instance (<c>KUMBU_PUBLIC_URL</c>, e.g. <c>https://kumbu.tidesson.net</c>): an origin,
+    /// scheme, host and optional port, nothing more. Links (invitations) are built from it. Optional, but the
+    /// <c>bootstrap-admin</c> command refuses to run without it.
+    /// </summary>
+    public string? PublicUrl { get; set; }
+
+    /// <summary>True for an absolute http(s) URL that is only an origin: no path, query, fragment or user info.</summary>
+    public static bool IsUsablePublicUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+        && uri.AbsolutePath == "/"
+        && uri.Query == ""
+        && uri.Fragment == ""
+        && uri.UserInfo == "";
+
     public ProxyOptions Proxy { get; set; } = new();
 
     public MongoOptions Mongo { get; set; } = new();

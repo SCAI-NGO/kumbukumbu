@@ -132,6 +132,10 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         await Slots.DeleteManyAsync(sessions, ct);
     }
 
+    /// <summary>Ends every session of the user inside the caller's transaction (deactivating the user).</summary>
+    internal Task EndAllAsync(IClientSessionHandle session, string userId, CancellationToken ct) =>
+        Slots.DeleteManyAsync(session, s => s.User == userId && s.Kind == UserSlotDocument.Session, cancellationToken: ct);
+
     private static byte[]? Decode(string secret)
     {
         // Checked first: TryDecodeFromChars throws, rather than returning false, on a character outside Base64Url.

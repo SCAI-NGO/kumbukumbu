@@ -30,6 +30,8 @@ services:
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:?set KUMBU_DEV_TOKEN in .env}
+      # Where users reach the server; invitation links (and `kumbu bootstrap-admin`) are built from it.
+      Kumbu__PublicUrl: ${KUMBU_PUBLIC_URL:-}
       Kumbu__Seed__Path: /seed
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
       Kumbu__Recovery__Path: /recovery

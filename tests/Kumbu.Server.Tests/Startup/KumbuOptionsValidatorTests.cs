@@ -81,4 +81,32 @@ public sealed class KumbuOptionsValidatorTests
     {
         Assert.True(Validate(Options(token, ValidMongo)).Succeeded);
     }
+
+    [Theory]
+    [InlineData("kumbu.example.org")]
+    [InlineData("/join")]
+    [InlineData("ftp://kumbu.example.org")]
+    [InlineData("https://kumbu.example.org/?x=1")]
+    [InlineData("https://kumbu.example.org/kumbu")]
+    [InlineData("https://user@kumbu.example.org")]
+    public void Rejects_a_public_url_that_isnt_an_absolute_http_url(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.PublicUrl = url;
+
+        Assert.Equal([KumbuOptionsValidator.PublicUrlMessage], Validate(options).Failures);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("https://kumbu.example.org")]
+    [InlineData("http://localhost:8080/")]
+    public void Accepts_no_public_url_or_an_absolute_http_url(string? url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.PublicUrl = url;
+
+        Assert.True(Validate(options).Succeeded);
+    }
 }

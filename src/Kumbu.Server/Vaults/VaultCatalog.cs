@@ -167,6 +167,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             Vault = id,
             Kind = SlotDocument.User,
             Lookup = UserLookup(userKey, userId),
+            Owner = userId,
             NameId = VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)),
             Wrapped = VaultCrypto.Seal(UserKek(userKey, id), vaultKey, SlotContext(id, SlotDocument.User)),
             CreatedAt = Now,
@@ -289,6 +290,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
         return result;
     }
+
+    /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
+    internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections => [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts];
 
     /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
     internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
@@ -552,6 +556,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Vault)),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.Owner),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.Owner) }),
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.KeyId),
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.KeyId) }),
