@@ -76,10 +76,14 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         return (user.ToUser(), RecoveryKey.Format(recoveryKey));
     }
 
-    /// <summary>The user and their user key if the password is right and the user active; else null after the same work.</summary>
-    public async Task<(User User, byte[] UserKey)?> TrySignInAsync(string username, string password, CancellationToken ct)
+    /// <summary>
+    /// The user and their user key if the password is right and the user active; else null after the same work.
+    /// <c>CredentialReadAt</c> is taken before the password slot is read, for <see cref="Sessions.StartAsync"/>.
+    /// </summary>
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> TrySignInAsync(string username, string password, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
+        var readAt = Now;
         // The same two lookups for every username, known, unknown or invalid, so the round trips don't tell either.
         var name = NormaliseUsername(username) ?? "";
         var user = await Users.Find(u => u.Username == name).FirstOrDefaultAsync(ct);
@@ -99,7 +103,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             u => u.Id == user.Id,
             Builders<UserDocument>.Update.Set(u => u.LastSignInAt, now).Set(u => u.PreviousSignInAt, user.PreviousSignInAt),
             cancellationToken: ct);
-        return (user.ToUser(), userKey);
+        return (user.ToUser(), userKey, readAt);
     }
 
     /// <summary>
@@ -186,16 +190,22 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     private async Task SetPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
     {
         var slot = PasswordSlot(userId, userKey, password);
-        // Before the new slot: from here on, sessions of the old password are refused even if a crash leaves
-        // their slots behind (a crash before the slot write only leaves the old password in place, signed out).
-        await Users.UpdateOneAsync(u => u.Id == userId, Builders<UserDocument>.Update.Set(u => u.CredentialsChangedAt, slot.CreatedAt), cancellationToken: ct);
+        // Stamped before the new slot, so sessions of the old password are refused even if a crash leaves their
+        // slots behind (a crash before the slot write only leaves the old password in place, signed out) ...
+        await StampCredentialsChangedAsync(userId, ct);
         await Slots.UpdateOneAsync(
             s => s.User == userId && s.Kind == UserSlotDocument.Password,
             Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
             new UpdateOptions { IsUpsert = true },
             ct);
+        // ... and again after it: a sign-in may have read the old slot between the first stamp and the write,
+        // and its session's createdAt (the read time) is then before this one.
+        await StampCredentialsChangedAsync(userId, ct);
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);
     }
+
+    private Task StampCredentialsChangedAsync(string userId, CancellationToken ct) =>
+        Users.UpdateOneAsync(u => u.Id == userId, Builders<UserDocument>.Update.Set(u => u.CredentialsChangedAt, Now), cancellationToken: ct);
 
     private Task<UserSlotDocument?> FindSlotAsync(string userId, string kind, CancellationToken ct) =>
         Slots.Find(s => s.User == userId && s.Kind == kind).FirstOrDefaultAsync(ct)!;

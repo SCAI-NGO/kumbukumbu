@@ -26,8 +26,8 @@ public sealed class SessionTests(MongoFixture fixture)
 
     private Sessions Sessions() => new(_db, _time);
 
-    /// <summary>A user, signed in: the user and their user key.</summary>
-    private async Task<(User User, byte[] Key)> SignedInAsync(string username = "chris")
+    /// <summary>A user, signed in: the user, their user key and when the password slot was read.</summary>
+    private async Task<(User User, byte[] Key, DateTime ReadAt)> SignedInAsync(string username = "chris")
     {
         var users = Users();
         await users.CreateAsync(username, Password, Roles.User, Ct);
@@ -37,9 +37,9 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task A_started_session_resolves_to_the_user_and_their_user_key()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
 
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         var resolved = await Sessions().ResolveAsync(secret, Ct);
 
         Assert.NotNull(resolved);
@@ -51,11 +51,11 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task Two_sessions_have_different_secrets_and_each_opens_only_itself()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
         var sessions = Sessions();
 
-        var first = await sessions.StartAsync(user, key, Ct);
-        var second = await sessions.StartAsync(user, key, Ct);
+        var first = await sessions.StartAsync(user, key, readAt, Ct);
+        var second = await sessions.StartAsync(user, key, readAt, Ct);
         await sessions.EndAsync(first, Ct);
 
         Assert.NotEqual(first, second);
@@ -66,9 +66,9 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task An_ended_session_resolves_to_nothing()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
         var sessions = Sessions();
-        var secret = await sessions.StartAsync(user, key, Ct);
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
 
         await sessions.EndAsync(secret, Ct);
 
@@ -82,8 +82,8 @@ public sealed class SessionTests(MongoFixture fixture)
     [InlineData("AAAA")] // valid Base64Url, but 3 bytes and no session
     public async Task A_malformed_or_unknown_secret_resolves_to_nothing(string secret)
     {
-        var (user, key) = await SignedInAsync();
-        await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        await Sessions().StartAsync(user, key, readAt, Ct);
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
         Assert.Null(await Sessions().ResolveAsync(Base64Url.EncodeToString(new byte[32]), Ct));
@@ -92,9 +92,9 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task A_session_idle_for_31_minutes_is_refused_and_removed()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
         var sessions = Sessions();
-        var secret = await sessions.StartAsync(user, key, Ct);
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
 
         _time.Advance(TimeSpan.FromMinutes(29));
         Assert.NotNull(await sessions.ResolveAsync(secret, Ct));
@@ -107,9 +107,9 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task A_session_ends_after_12_hours_despite_activity()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
         var sessions = Sessions();
-        var secret = await sessions.StartAsync(user, key, Ct);
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
 
         // Used every 20 minutes, so it never goes idle.
         for (var minutes = 20; minutes < 12 * 60; minutes += 20)
@@ -125,8 +125,8 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task The_slot_expires_after_12_hours_through_a_ttl_index()
     {
-        var (user, key) = await SignedInAsync();
-        await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        await Sessions().StartAsync(user, key, readAt, Ct);
 
         var slot = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         Assert.Equal(_time.GetUtcNow().UtcDateTime.AddHours(12), slot.ExpiresAt);
@@ -140,9 +140,9 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task Last_used_is_written_at_most_once_a_minute()
     {
-        var (user, key) = await SignedInAsync();
+        var (user, key, readAt) = await SignedInAsync();
         var sessions = Sessions();
-        var secret = await sessions.StartAsync(user, key, Ct);
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
         var started = _time.GetUtcNow().UtcDateTime;
 
         async Task<DateTime?> LastUsedAsync() => (await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct)).LastUsedAt;
@@ -159,8 +159,8 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task A_deactivated_users_session_is_refused()
     {
-        var (user, key) = await SignedInAsync();
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
 
         await _db.GetCollection<UserDocument>("users").UpdateOneAsync(
             u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
@@ -171,12 +171,12 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task Ending_all_sessions_can_keep_the_current_one()
     {
-        var (user, key) = await SignedInAsync();
-        var (other, otherKey) = await SignedInAsync("other");
+        var (user, key, readAt) = await SignedInAsync();
+        var (other, otherKey, otherReadAt) = await SignedInAsync("other");
         var sessions = Sessions();
-        var current = await sessions.StartAsync(user, key, Ct);
-        var elsewhere = await sessions.StartAsync(user, key, Ct);
-        var someoneElses = await sessions.StartAsync(other, otherKey, Ct);
+        var current = await sessions.StartAsync(user, key, readAt, Ct);
+        var elsewhere = await sessions.StartAsync(user, key, readAt, Ct);
+        var someoneElses = await sessions.StartAsync(other, otherKey, otherReadAt, Ct);
 
         await sessions.EndAllAsync(user.Id, current, Ct);
 
@@ -193,8 +193,8 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task A_session_survives_a_server_restart()
     {
-        var (user, key) = await SignedInAsync();
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
 
         // A new process: new Sessions, new client, the same database.
         var restarted = new Sessions(new MongoClient(fixture.ConnectionString).GetDatabase(_db.DatabaseNamespace.DatabaseName), _time);
@@ -205,22 +205,22 @@ public sealed class SessionTests(MongoFixture fixture)
     [Fact]
     public async Task Changing_the_password_ends_every_session_and_a_new_sign_in_works()
     {
-        var (user, key) = await SignedInAsync();
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
         Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
         var again = (await Users().TrySignInAsync("chris", NewPassword, Ct))!.Value;
-        Assert.NotNull(await Sessions().ResolveAsync(await Sessions().StartAsync(again.User, again.UserKey, Ct), Ct));
+        Assert.NotNull(await Sessions().ResolveAsync(await Sessions().StartAsync(again.User, again.UserKey, again.CredentialReadAt, Ct), Ct));
     }
 
     [Fact]
     public async Task A_session_slot_left_over_from_before_a_password_change_is_refused()
     {
-        var (user, key) = await SignedInAsync();
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
@@ -236,8 +236,8 @@ public sealed class SessionTests(MongoFixture fixture)
     {
         var users = Users();
         var (_, recoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
-        var (user, key) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
@@ -248,10 +248,55 @@ public sealed class SessionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_sign_in_that_read_the_old_password_before_a_change_gets_a_session_that_is_refused()
+    {
+        var users = Users();
+        await users.CreateAsync("chris", Password, Roles.User, Ct);
+        // The sign-in reads the old password slot, then spends a while in Argon2 ...
+        var (user, key, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+        Assert.Equal(_time.GetUtcNow().UtcDateTime, readAt);
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        // ... while the victim changes the password, which ends every session there is so far ...
+        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        // ... and only then starts its session.
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
+
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+        Assert.False(await Slots.Find(s => s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_refused_session_of_a_deactivated_user_is_removed()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
+        await _db.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+        Assert.False(await Slots.Find(s => s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
+    }
+
+    [Fact]
+    public async Task The_session_expires_12_hours_after_it_started_not_after_the_credential_was_read()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        _time.Advance(TimeSpan.FromSeconds(2));
+        await Sessions().StartAsync(user, key, readAt, Ct);
+
+        var slot = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+        Assert.Equal(readAt, slot.CreatedAt);
+        Assert.Equal(_time.GetUtcNow().UtcDateTime.AddHours(12), slot.ExpiresAt);
+    }
+
+    [Fact]
     public async Task Neither_the_secret_nor_the_user_key_reaches_the_database()
     {
-        var (user, key) = await SignedInAsync();
-        var secret = await Sessions().StartAsync(user, key, Ct);
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
 
         var dump = string.Join('\n', (await _db.GetCollection<BsonDocument>("user_slots").Find(_ => true).ToListAsync(Ct)).Select(d => d.ToString()));
 

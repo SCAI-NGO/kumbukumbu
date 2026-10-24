@@ -33,8 +33,14 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
-    /// <summary>Starts a session for a user just signed in and returns its secret (Base64Url) for the cookie.</summary>
-    public async Task<string> StartAsync(User user, byte[] userKey, CancellationToken ct)
+    /// <summary>
+    /// Starts a session for a user just signed in and returns its secret (Base64Url) for the cookie.
+    /// <paramref name="userKey"/> must come from a verified credential (<see cref="UserCatalog.TrySignInAsync"/>):
+    /// nothing here checks it, and the session would hand on whatever key it got. <paramref name="credentialReadAt"/>
+    /// is when that credential was read, before Argon2; it becomes the session's <c>createdAt</c>, so a password
+    /// change that lands while the sign-in is still in Argon2 refuses the session too.
+    /// </summary>
+    public async Task<string> StartAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var secret = RandomNumberGenerator.GetBytes(SecretBytes);
@@ -46,7 +52,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
                 Kind = UserSlotDocument.Session,
                 Lookup = Lookup(secret),
                 Wrapped = VaultCrypto.Seal(Kek(secret, user.Id), userKey, SlotContext(user.Id)),
-                CreatedAt = now,
+                CreatedAt = credentialReadAt,
                 ExpiresAt = now + AbsoluteTimeout,
                 LastUsedAt = now,
             },
@@ -77,8 +83,12 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 
         var user = await Users.Find(u => u.Id == slot.User).FirstOrDefaultAsync(ct);
         // A password change or recovery deletes the sessions after it sets the new password; this catches the
-        // ones a crash in between would have left behind.
-        if (user is null || !user.Active || slot.CreatedAt < user.CredentialsChangedAt) return null;
+        // ones a crash in between would have left behind, and those of a sign-in that read the old password.
+        if (user is null || !user.Active || slot.CreatedAt < user.CredentialsChangedAt)
+        {
+            await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
+            return null;
+        }
 
         byte[] userKey;
         try

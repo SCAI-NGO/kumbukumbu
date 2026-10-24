@@ -89,6 +89,10 @@ public sealed class UserSlotDocument
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>
+    /// Sessions only. A TTL index (<see cref="Sessions"/>) makes MongoDB delete every slot that has this field
+    /// once the time has passed, so a slot of another kind must never set it.
+    /// </summary>
     [BsonElement("expiresAt"), BsonIgnoreIfNull]
     public DateTime? ExpiresAt { get; set; }
 
