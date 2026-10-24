@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json;
+using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Server.Search;
@@ -23,13 +25,15 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     private sealed record Setup(VaultWorld World, VaultCatalog Catalog, SearchIndex Index, EncryptedNoteStore Store, FakeEmbedder Embedder);
 
-    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null)
+    /// <summary>A server on <paramref name="world"/>'s database; with <paramref name="start"/> false the index
+    /// never runs, so whatever the unlock queues stays queued.</summary>
+    private async Task<Setup> StartAsync(VaultWorld? world = null, FakeEmbedder? embedder = null, bool start = true)
     {
         world ??= new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog();
         embedder ??= new FakeEmbedder();
         var index = new SearchIndex(catalog, embedder, NullLogger<SearchIndex>.Instance);
-        await index.StartAsync(Ct);
+        if (start) await index.StartAsync(Ct);
         if ((await catalog.OpenAsync(Token, Ct)).Count == 0) await catalog.CreateAsync("Work", Token, null, Ct);
         return new Setup(world, catalog, index, new EncryptedNoteStore(catalog, new FixedCredential(Token), index), embedder);
     }
@@ -119,6 +123,90 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
         var stranger = new EncryptedNoteStore(s.Catalog, new FixedCredential("another-token-0123456789abcdef"), s.Index);
         Assert.Empty((await stranger.SearchAsync(P("/"), "alpha", 10, Ct)).Hits);
+    }
+
+    private static async Task<List<NoteEmbeddings>> StoredEmbeddingsAsync(Setup s)
+    {
+        var vault = Assert.Single(await s.Catalog.OpenAsync(Token, Ct));
+        var docs = await s.World.Db.GetCollection<SealedDocument>("embeddings").Find(FilterDefinition<SealedDocument>.Empty).ToListAsync(Ct);
+        return [.. docs.Select(d => vault.OpenEmbeddings(d).Embeddings)];
+    }
+
+    [Fact]
+    public async Task SwitchingTheModelReEmbedsOnUnlock()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/farm.md", "Cats and dogs.\n"), Ct);
+        await IdleAsync(s);
+        Assert.Equal(3, s.Embedder.Embedded);
+
+        var later = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"));
+        await IdleAsync(later);
+
+        Assert.Equal(3, later.Embedder.Embedded);
+        var stored = await StoredEmbeddingsAsync(later);
+        Assert.Equal(2, stored.Count);
+        Assert.All(stored, e => Assert.Equal(("arctic-l", 1024), (e.Model, e.Chunks[0].Vector.Length)));
+        var result = await later.Store.SearchAsync(P("/Work"), "cats and dogs", 10, Ct);
+        Assert.Equal((0, P("/Work/farm.md")), (result.Pending, result.Hits[0].Path));
+    }
+
+    [Fact]
+    public async Task SearchSkipsVectorsOfAnotherModelAndCountsThemPending()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/a.md", "alpha\n"), Ct);
+        await s.Store.TryCreateAsync(New("/Work/b.md", "alpha beta\n"), Ct);
+        await IdleAsync(s);
+
+        // The index doesn't run: the catch-up stays queued, and only a.md is embedded with arctic-l. The two
+        // fakes' vectors differ in length, so a dot product across models would throw.
+        var later = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"), start: false);
+        var vault = Assert.Single(await later.Catalog.OpenAsync(Token, Ct));
+        await later.Index.IndexAsync(vault, P("/Work/a.md"), Ct);
+
+        var result = await later.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
+
+        Assert.Equal(SemanticState.Ready, result.State);
+        Assert.Equal(1, result.Pending);
+        Assert.Equal(P("/Work/a.md"), Assert.Single(result.Hits).Path);
+    }
+
+    [Fact]
+    public async Task SwitchingBackDoesNotReuseVectorsOfTheOtherModel()
+    {
+        var s = await StartAsync();
+        await s.Store.TryCreateAsync(New("/Work/plan.md", "# A\nalpha\n# B\nbeta\n"), Ct);
+        await IdleAsync(s);
+
+        var large = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"));
+        await IdleAsync(large);
+        Assert.Equal(2, large.Embedder.Embedded);
+
+        // Same texts, same hashes: only the model tells the arctic-l vectors apart from the ones arctic-m needs.
+        var back = await StartAsync(s.World, new FakeEmbedder(model: "arctic-m"));
+        await IdleAsync(back);
+        Assert.Equal(2, back.Embedder.Embedded);
+        Assert.All(await StoredEmbeddingsAsync(back), e => Assert.Equal(("arctic-m", 768), (e.Model, e.Chunks[0].Vector.Length)));
+    }
+
+    [Fact]
+    public void EmbeddingsWithoutAModelAreArcticM()
+    {
+        var vaultKey = VaultCrypto.NewKey();
+        var vault = new UnlockedVault("v1", "Work", vaultKey, T0);
+        var path = P("/Work/a.md");
+        var pathId = vault.PathId(path);
+
+        // The payload as step 7 wrote it: no model.
+        var step7 = new { Path = path.Value, Version = "v-1", Chunks = new[] { new { StartLine = 0, Hash = "h", Vector = Convert.ToBase64String(new byte[4]) } } };
+        var blob = VaultCrypto.Seal(
+            VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(step7), $"embeddings:v1:{Convert.ToBase64String(pathId)}");
+
+        var (opened, embeddings) = vault.OpenEmbeddings(new SealedDocument { Vault = "v1", PathId = pathId, Blob = blob });
+
+        Assert.Equal((path, "arctic-m", "v-1", 2), (opened, embeddings.Model, embeddings.Version, embeddings.Chunks[0].Vector.Length));
     }
 
     /// <summary>The real model, where it has been downloaded (KUMBU_MODEL_DIR): meaning across languages.</summary>
