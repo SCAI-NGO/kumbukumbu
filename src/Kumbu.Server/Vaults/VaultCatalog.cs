@@ -22,6 +22,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     private const string LookupLabel = "kumbu/v1/key-lookup";
     private const string KeyKekLabel = "kumbu/v1/key-kek";
     private const string RecoveryKekLabel = "kumbu/v1/recovery-kek";
+    private const string UserLookupLabel = "kumbu/v1/user-slot";
+    private const string UserKekLabel = "kumbu/v1/user-slot-kek";
+    private const string VaultNameLabel = "kumbu/v1/vault-name-id";
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
@@ -111,6 +114,72 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 CreatedAt = Now,
             }, cancellationToken: ct);
         }
+
+        var vault = new UnlockedVault(id, name, vaultKey, Now);
+        _open[id] = vault;
+        Unlocked?.Invoke(vault);
+        return vault;
+    }
+
+    /// <summary>The vaults of a user, unlocked with their user key. Opens slots as <see cref="OpenAsync"/> does.</summary>
+    public async Task<IReadOnlyList<UnlockedVault>> OpenForUserAsync(string userId, byte[] userKey, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var lookup = UserLookup(userKey, userId);
+        var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User) & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup)).ToListAsync(ct);
+
+        var result = new List<UnlockedVault>();
+        foreach (var slot in slots)
+        {
+            byte[] vaultKey;
+            try
+            {
+                vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("A user slot of vault {Vault} matched the user key but did not open", slot.Vault);
+                continue;
+            }
+
+            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(vault);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Creates a vault owned by a user: its key wrapped by <paramref name="userKey"/> and nothing else, so the
+    /// user's recovery key reaches it through the user key. Throws <see cref="VaultNameTakenException"/> if the
+    /// user has a vault of that name (compared case-insensitively), also when another create won a race.
+    /// </summary>
+    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        var vaultKey = VaultCrypto.NewKey();
+
+        // The slot goes first: its unique index is the arbiter of the name. A crash after it leaves a slot
+        // without a vault, which opening skips; a crash the other way round would leave a vault nobody owns.
+        try
+        {
+            await Slots.InsertOneAsync(new SlotDocument
+            {
+                Vault = id,
+                Kind = SlotDocument.User,
+                Lookup = UserLookup(userKey, userId),
+                NameId = VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)),
+                Wrapped = VaultCrypto.Seal(UserKek(userKey, id), vaultKey, SlotContext(id, SlotDocument.User)),
+                CreatedAt = Now,
+            }, cancellationToken: ct);
+        }
+        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            throw new VaultNameTakenException(name);
+        }
+
+        var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
+        await Vaults.InsertOneAsync(new VaultDocument { Id = id, Meta = meta, CreatedAt = Now }, cancellationToken: ct);
 
         var vault = new UnlockedVault(id, name, vaultKey, Now);
         _open[id] = vault;
@@ -300,6 +369,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     private static byte[] RecoveryKek(byte[] recoveryKey, string vaultId) =>
         VaultCrypto.Derive(recoveryKey, RecoveryKekLabel, Encoding.UTF8.GetBytes(vaultId));
 
+    private static byte[] UserLookup(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, UserLookupLabel, Encoding.UTF8.GetBytes(userId));
+
+    private static byte[] UserKek(byte[] userKey, string vaultId) => VaultCrypto.Derive(userKey, UserKekLabel, Encoding.UTF8.GetBytes(vaultId));
+
+    private static string NormaliseVaultName(string name) => name.Normalize(NormalizationForm.FormC).Trim().ToLowerInvariant();
+
     private static string SlotContext(string vaultId, string kind) => $"slot:{vaultId}:{kind}";
 
     /// <summary>Creates the indexes, refuses a MongoDB without transactions and plaintext notes from before
@@ -358,8 +433,19 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Vault)),
+                // One vault name per user: only user slots carry a nameId.
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup).Ascending(s => s.NameId),
+                    new CreateIndexOptions<SlotDocument>
+                    {
+                        Unique = true,
+                        PartialFilterExpression = new MongoDB.Bson.BsonDocument("nameId", new MongoDB.Bson.BsonDocument("$type", "binData")),
+                    }),
             ],
             ct);
         _ready = true;
     }
 }
+
+/// <summary>The user already has a vault of this name.</summary>
+public sealed class VaultNameTakenException(string name) : Exception($"You already have a vault named '{name}'.");
