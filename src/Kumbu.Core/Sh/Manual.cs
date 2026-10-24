@@ -12,6 +12,7 @@ public static class Manual
           outline <path>                  the headings of a note, with line ranges and sizes
           rg [options] <regex> [path...]  search notes, prints path:line:text; no path searches every vault
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
+          semsearch <query> [path]        ranked search by words and meaning; finds the best sections
           links <path>                    the [[wikilinks]] of a note and the notes they lead to
           backlinks <path>                the notes that link to a note, as path:line:text
           head [-n N] [path]              first lines (default 10)

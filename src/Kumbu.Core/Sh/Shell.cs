@@ -29,12 +29,13 @@ public sealed class Shell
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
     private readonly Checkpoints _checkpoints;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null)
     {
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         ICommand[] commands =
         [
             .. ReadingCommands(notes),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex()),
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints),
             new Mv(mover), new Rm(writer), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
@@ -147,7 +148,9 @@ public sealed class Shell
             .ToList();
         if (paths.Count == 0)
         {
-            return ShellResult.Error($"{name}: --checkpoint needs a path in the checkpoint's vault, e.g. {name} --checkpoint {checkpoint} /Demo");
+            var vault = (await _checkpoints.VaultsWithAsync(checkpoint, ct)).FirstOrDefault() ?? vaults.FirstOrDefault() ?? "Vault";
+            var example = string.Join(' ', [name, "--checkpoint", checkpoint, .. args.Select(a => a.Contains(' ') ? $"'{a}'" : a), "/" + vault]);
+            return ShellResult.Error($"{name}: --checkpoint needs a path in the checkpoint's vault, e.g. {example}");
         }
 
         var (view, error) = await _checkpoints.OpenAsync(name, paths[0].Segments[0], checkpoint, ct);
@@ -155,6 +158,14 @@ public sealed class Shell
         if (paths.FirstOrDefault(p => !view.Checkpoint.Relates(p)) is { } outside)
         {
             return ShellResult.Error($"{name}: {outside.Value} is not in checkpoint '{checkpoint}' (it covers {view.Checkpoint.Scope})");
+        }
+
+        foreach (var path in paths.Where(p => view.Checkpoint.Covers(p)))
+        {
+            if (await view.ReadAsync(path, ct) is null && (await view.ListNotesUnderAsync(path, ct)).Count == 0 && await _checkpoints.ExistsNowAsync(path, ct))
+            {
+                return ShellResult.Error($"{name}: {path.Value} is not in checkpoint '{checkpoint}' (created since)");
+            }
         }
 
         var command = ReadingCommands(view).Single(c => c.Name == name);

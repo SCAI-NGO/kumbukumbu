@@ -11,7 +11,8 @@ namespace Kumbu.Server.Vaults;
 /// unlocked working set; every write is one MongoDB transaction over sealed documents (compare-and-swap on
 /// the revision), and changes the working set only after MongoDB committed it.
 /// </summary>
-public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential) : INoteStore
+public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null)
+    : INoteStore, Kumbu.Core.Search.ISearchIndex
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
 
@@ -182,6 +183,33 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     {
         if (await VaultAsync(current.Path, ct) is not { } vault) return false;
         return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, ct), ct);
+    }
+
+    /// <summary>Search by meaning over the embeddings of the credential's vaults: the query's vector against every
+    /// chunk's, in memory. Notes whose current version isn't indexed yet count as pending.</summary>
+    public async Task<Kumbu.Core.Search.SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct)
+    {
+        if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
+        var embedder = index.Embedder;
+        if (embedder.State != Kumbu.Core.Search.SemanticState.Ready) return new(embedder.State, [], 0, embedder.Reason);
+
+        IEnumerable<UnlockedVault> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        var vector = (await embedder.EmbedAsync([query], query: true, ct))[0];
+        var hits = new List<Kumbu.Core.Search.SemanticHit>();
+        var pending = 0;
+        foreach (var vault in vaults)
+        {
+            var embeddings = vault.Embeddings;
+            foreach (var (path, (_, note)) in vault.Notes)
+            {
+                if (!scope.IsRoot && path != scope && !path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal)) continue;
+                if (!embeddings.TryGetValue(path, out var e)) { pending++; continue; }
+                if (e.Version != note.Version) pending++;
+                foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+            }
+        }
+
+        return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending);
     }
 
     public async Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct)
@@ -378,6 +406,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
+            index?.Enqueue(vault, paths);
             return true;
         }
         finally

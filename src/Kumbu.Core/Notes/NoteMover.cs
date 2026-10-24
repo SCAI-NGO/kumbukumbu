@@ -223,7 +223,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
     }
 
     /// <summary>Replaces each link at its exact position; null if the text there is no longer that link.</summary>
-    private static string? Apply(string content, List<(WikiLink Link, string Replacement)> links)
+    public static string? Apply(string content, List<(WikiLink Link, string Replacement)> links)
     {
         var lines = Lines.Split(content).ToArray();
         foreach (var group in links.GroupBy(l => l.Link.Line))

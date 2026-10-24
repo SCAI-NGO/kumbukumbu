@@ -30,8 +30,8 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         history [--since T] <directory>
           The latest writes below a directory or vault (or / for every vault), newest first: time,
           writer, note, version, lines added and removed, and the changeset: writes by one writer
-          close together in time, which count as one version per note. Moves get a row of their own
-          (a folder move one row). --since takes 30m, 2h, 1d or a UTC time;
+          close together in time, which count as one version per note. Moves and removals (to the
+          trash) get a row of their own (a folder move one row). --since takes 30m, 2h, 1d or a UTC time;
           without it, the last 50. Only what the histories still hold (10 versions per note, one per
           changeset). Then 'diff <note> <version>' shows a change.
 
@@ -111,6 +111,12 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
                 ? $"{list[0].From.Value} → {list[0].To.Value}"
                 : $"{CommonFolder(list.Select(m => m.From))} → {CommonFolder(list.Select(m => m.To))}";
             rows.Add((group.Key.MovedAt, $"{group.Key.MovedBy} (mv)", what, list.Count == 1 ? "" : $"{list.Count} notes"));
+        }
+
+        foreach (var trashed in await notes.ListTrashAsync(dir, ct))
+        {
+            if (since is { } s && trashed.DeletedAt < s) continue;
+            rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{trashed.Note.Path.Value} → trash", ""));
         }
 
         var shown = rows.OrderByDescending(w => w.At).ThenBy(w => w.What, TextOrder.Default).ToList();

@@ -11,7 +11,8 @@ namespace Kumbu.Server.Notes;
 /// empty. A vault that already holds notes, or trash, is left alone (decided by Chris, 2026-10-23): seeding
 /// means starting from scratch, and agents' changes live only in the database.
 /// </summary>
-public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog, TimeProvider time, ILogger<Seeder> log) : IHostedService
+public sealed class Seeder(
+    IOptions<KumbuOptions> options, VaultCatalog catalog, TimeProvider time, ILogger<Seeder> log, Search.SearchIndex? index = null) : IHostedService
 {
     /// <summary>How the setting is named with Compose and directly.</summary>
     private const string RecoveryKeysSetting = "KUMBU_RECOVERY_KEYS from .env (Kumbu__Recovery__Keys)";
@@ -64,7 +65,7 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
         }
 
         var scan = SeedScanner.Scan(seedPath);
-        var store = new EncryptedNoteStore(catalog, new FixedCredential(devToken));
+        var store = new EncryptedNoteStore(catalog, new FixedCredential(devToken), index);
         var existing = await store.ListVaultsAsync(ct);
         int seeded = 0, filled = 0, left = 0, refused = 0;
         foreach (var name in scan.Vaults)
@@ -99,7 +100,7 @@ public sealed class Seeder(IOptions<KumbuOptions> options, VaultCatalog catalog,
 
                 // An empty folder becomes an empty vault too, ready for 'write'.
                 if (!await CreateVaultAsync(name, devToken, ct)) { refused++; continue; }
-                store = new EncryptedNoteStore(catalog, new FixedCredential(devToken));
+                store = new EncryptedNoteStore(catalog, new FixedCredential(devToken), index);
             }
 
             filled++;

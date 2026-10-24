@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Reflection;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
 using Kumbu.Server;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
+using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
@@ -25,13 +27,21 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<OnnxEmbedder>();
+builder.Services.AddSingleton<IEmbedder>(sp => sp.GetRequiredService<OnnxEmbedder>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
+builder.Services.AddSingleton<SearchIndex>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
 
 // Per request: the request's credential decides which vaults the store can open.
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICredential, BearerCredential>();
-builder.Services.AddScoped<INoteStore, EncryptedNoteStore>();
+builder.Services.AddScoped<EncryptedNoteStore>();
+builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
+builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<Replacer>();
