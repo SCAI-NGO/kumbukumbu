@@ -2,16 +2,18 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Kumbu.Core.Search;
 
 /// <summary>
 /// The tokenizer of the embedding model, read from its Hugging Face <c>tokenizer.json</c>: SentencePiece's
-/// precompiled normalizer (nmt_nfkc), whitespace split with a "▁" before each word, a Unigram model
+/// precompiled normalizer (nmt_nfkc), optionally followed by a collapse of runs of spaces; a "▁" before each
+/// word, either by whitespace split (arctic-m) or by Metaspace alone (arctic-l); a Unigram model
 /// (the most probable split of each word, by Viterbi), and &lt;s&gt; … &lt;/s&gt; around it. It follows
 /// the Hugging Face implementation step by step, so the ids are the ones the model was trained with.
 /// </summary>
-public sealed class UnigramTokenizer
+public sealed partial class UnigramTokenizer
 {
     private const char Space = '▁';
     private const double UnkPenalty = 10.0;
@@ -22,8 +24,14 @@ public sealed class UnigramTokenizer
     private readonly double _unkScore;
     private readonly int _unkId;
     private readonly PrecompiledNormalizer? _normalizer;
+    private readonly bool _collapseSpaces;
+    private readonly bool _metaspaceOnly;
 
-    public UnigramTokenizer(IReadOnlyList<(string Piece, double Score)> vocab, int unkId, byte[]? precompiledCharsMap)
+    /// <param name="collapseSpaces">The Replace normalizer " {2,}" to " ", applied after the precompiled map.</param>
+    /// <param name="metaspaceOnly">Metaspace without WhitespaceSplit: only spaces separate words, and a trailing
+    /// space leaves a "▁" of its own.</param>
+    public UnigramTokenizer(IReadOnlyList<(string Piece, double Score)> vocab, int unkId, byte[]? precompiledCharsMap,
+        bool collapseSpaces = false, bool metaspaceOnly = false)
     {
         _pieces = new Dictionary<string, (int, double)>(vocab.Count, StringComparer.Ordinal);
         for (var id = 0; id < vocab.Count; id++) _pieces.TryAdd(vocab[id].Piece, (id, vocab[id].Score));
@@ -32,6 +40,8 @@ public sealed class UnigramTokenizer
         _unkScore = vocab.Min(v => v.Score) - UnkPenalty;
         _unkId = unkId;
         _normalizer = precompiledCharsMap is null ? null : new PrecompiledNormalizer(precompiledCharsMap);
+        _collapseSpaces = collapseSpaces;
+        _metaspaceOnly = metaspaceOnly;
     }
 
     public const int BosId = 0;
@@ -47,13 +57,54 @@ public sealed class UnigramTokenizer
             .Select(e => (e[0].GetString()!, e[1].GetDouble()))
             .ToList();
         byte[]? charsMap = null;
-        if (doc.RootElement.TryGetProperty("normalizer", out var normalizer) && normalizer.ValueKind == JsonValueKind.Object
-            && normalizer.GetProperty("type").GetString() == "Precompiled")
+        var collapseSpaces = false;
+        if (doc.RootElement.TryGetProperty("normalizer", out var normalizer) && normalizer.ValueKind == JsonValueKind.Object)
         {
-            charsMap = Convert.FromBase64String(normalizer.GetProperty("precompiled_charsmap").GetString()!);
+            var steps = normalizer.GetProperty("type").GetString() == "Sequence"
+                ? normalizer.GetProperty("normalizers").EnumerateArray().ToList()
+                : [normalizer];
+            foreach (var step in steps)
+            {
+                switch (step.GetProperty("type").GetString())
+                {
+                    case "Precompiled":
+                        charsMap = Convert.FromBase64String(step.GetProperty("precompiled_charsmap").GetString()!);
+                        break;
+                    case "Replace" when IsSpaceCollapse(step):
+                        collapseSpaces = true;
+                        break;
+                    case var other:
+                        throw new InvalidDataException($"Unsupported normalizer: {other}");
+                }
+            }
         }
 
-        return new UnigramTokenizer(vocab, model.GetProperty("unk_id").GetInt32(), charsMap);
+        var metaspaceOnly = false;
+        if (doc.RootElement.TryGetProperty("pre_tokenizer", out var pre) && pre.ValueKind == JsonValueKind.Object)
+        {
+            var type = pre.GetProperty("type").GetString();
+            if (type == "Metaspace") metaspaceOnly = CheckMetaspace(pre);
+            else if (type == "Sequence"
+                && pre.GetProperty("pretokenizers").EnumerateArray().Select(p => p.GetProperty("type").GetString()).SequenceEqual(["WhitespaceSplit", "Metaspace"]))
+                CheckMetaspace(pre.GetProperty("pretokenizers")[1]);
+            else throw new InvalidDataException($"Unsupported pre-tokenizer: {type}");
+        }
+
+        return new UnigramTokenizer(vocab, model.GetProperty("unk_id").GetInt32(), charsMap, collapseSpaces, metaspaceOnly);
+    }
+
+    private static bool IsSpaceCollapse(JsonElement replace) =>
+        replace.GetProperty("pattern").TryGetProperty("Regex", out var regex) && regex.GetString() == " {2,}"
+        && replace.GetProperty("content").GetString() == " ";
+
+    /// <summary>Only the settings this class implements: "▁", always a prefix, and the default split.</summary>
+    private static bool CheckMetaspace(JsonElement metaspace)
+    {
+        if (metaspace.GetProperty("replacement").GetString() != "▁"
+            || metaspace.TryGetProperty("prepend_scheme", out var scheme) && scheme.GetString() != "always"
+            || metaspace.TryGetProperty("split", out var split) && !split.GetBoolean())
+            throw new InvalidDataException("Unsupported Metaspace settings");
+        return true;
     }
 
     /// <summary>The ids of <paramref name="text"/>, with &lt;s&gt; and &lt;/s&gt;, at most <paramref name="maxLength"/> in all.</summary>
@@ -61,9 +112,10 @@ public sealed class UnigramTokenizer
     {
         var ids = new List<int> { BosId };
         var normalized = _normalizer?.Normalize(text) ?? text;
-        foreach (var word in Words(normalized))
+        if (_collapseSpaces) normalized = SpaceRuns().Replace(normalized, " ");
+        foreach (var word in _metaspaceOnly ? MetaspaceWords(normalized) : Words(normalized).Select(w => Space + w))
         {
-            EncodeWord(Space + word, ids);
+            EncodeWord(word, ids);
             if (ids.Count >= maxLength - 1) break;
         }
 
@@ -89,6 +141,27 @@ public sealed class UnigramTokenizer
 
         if (start >= 0) yield return text[start..];
     }
+
+    /// <summary>Metaspace alone: spaces become "▁", one is put in front unless the text starts with one, and the
+    /// text is cut before each "▁" (split, merged with the next), so a trailing space is a word of its own. Empty text has no words.</summary>
+    private static IEnumerable<string> MetaspaceWords(string text)
+    {
+        if (text.Length == 0) yield break;
+        var marked = text.Replace(' ', Space);
+        if (!marked.StartsWith(Space)) marked = Space + marked;
+        var start = 0;
+        for (var i = 1; i < marked.Length; i++)
+        {
+            if (marked[i] != Space) continue;
+            yield return marked[start..i];
+            start = i;
+        }
+
+        yield return marked[start..];
+    }
+
+    [GeneratedRegex(" {2,}")]
+    private static partial Regex SpaceRuns();
 
     /// <summary>Viterbi over the pieces, as Hugging Face's encode_optimized: unknown characters get the lowest
     /// score minus a penalty, and consecutive unknowns become one &lt;unk&gt;.</summary>
