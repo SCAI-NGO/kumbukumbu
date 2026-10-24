@@ -195,13 +195,16 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 5. Encryption: vaults, slots, HKDF/Argon2id, recovery key.
 6. Agent tools for larger changes: view and diff earlier versions, changes across many notes.
 6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
+6c. The decisions and fixes from the phase 6b test (`docs/notes-test-phase6b.md`): a folder restore moves moved notes back and rewrites their links; `replace` warns about links that would lead to another note and names the note named after the old text; small fixes.
 7. Embeddings + hybrid search.
 8. Users, admin, invites, API keys.
 9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Chris builds the UI with Claude Design.
 10. OAuth authorization server for app connectors.
 11. Obsidian sync plugin.
 
-Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10. Step 6b was added on Oct 24, 2026 without renumbering, so step numbers stay stable from here on.
+Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10. Step 6b was added on Oct 24, 2026 without renumbering, so step numbers stay stable from here on; step 6c the same day.
+
+**A plugin package for the user's agent** (decided by Chris, Oct 24, 2026) handles what the tools can't judge: changes that need context, like renaming a project whose notes describe the name without containing it (`docs/notes-test-phase6b.md`). Its skills, a rename skill first, read before they replace and ask where the user's intent is unclear. It lives in its own repository and is distributed through a plugin marketplace; with the Obsidian sync plugin, Kumbu² then spans three repositories.
 
 v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, to be designed with the same care as the text core, not added on the side.
 

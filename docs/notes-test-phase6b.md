@@ -133,6 +133,12 @@ Date: 2026-10-24, 12:50 to 12:53 UTC. The rerun the phase 6 notes suggested, on 
 - **`replace` lets an agent change notes it never read.** The first run read and edited note by note and wrote a sentence on the old name. This run took the shortcut the literal prompt offered and missed a sentence that depends on the name without containing it. That's not a tool bug, but the tool makes it easy: a preview line is cut at about 50 characters, and nothing suggests reading the main note.
 - **The excerpt limit decided the goddess case by luck.** `namensideen.md` was first alphabetically. As note six, the agent would only have seen `2` in the count table, though it had `rg` output from step 1 too.
 
+### Afterwards: rotating the dev token
+
+The first, failed blind attempt printed the dev token into its transcript, so the token was rotated: a new one in `.env` and in the client's MCP entry, `docker compose up -d`. As designed (phase 5), the vaults then didn't open (`3 vaults in the database don't open with the dev token. If it was changed, start once with the recovery keys …`, and no vault created from the seed folders). Following the README: the three recovery keys from the `recovery-keys` volume into `KUMBU_RECOVERY_KEYS`, one start (`Recovery key opened vault Demo; the dev token now has a slot there`, for each vault), the keys removed from `.env`, another start. Notes, history and checkpoints all there; the old token gets `401`. The first real use of the recovery path, and it worked as the README describes.
+
+Two things to keep in mind: the old token's slots stay in the database until revoking comes with step 8 (only the server's token check keeps it out), and the log says `Unlocked vault Technik (1 notes)`.
+
 ## Observations from the agent's side
 
 1. **A folder restore breaks links outside the folder without a word.** `restore --checkpoint` of a folder in which a note was moved since: the preview lists the moved note as `to trash (created since)` and the old path as `back`. Links outside the folder, rewritten by the `mv` to the new name, lead nowhere after the apply. `rm` reports exactly this case (`3 links … now lead nowhere`); the restore, which may trash many notes at once, doesn't. Suggest: the preview names the links outside the scope that would lead nowhere afterwards, as `replace` does, and recognises a move (the `moves` collection knows it): `moved  /Ideas/t6b/beta.md ← /Ideas/t6b/beta2.md (moved since; 2 links outside the folder lead to the new name)`. Whether the restore then also rewrites those links back is a design question (see below).
@@ -148,12 +154,17 @@ Minor: `diff --checkpoint` on a folder lists a moved note as `removed` plus `new
 ## Design questions for Chris
 
 1. **Folder restore and moves (observation 1).** When a note was moved since the checkpoint, should the restore (a) only warn and list it as `moved`, (b) also move it back and rewrite the links that the `mv` rewrote, or (c) leave a moved note where it is? (b) is the true "back to the checkpoint" and the `moves` collection has what it needs; (a) is the small step.
+   **Decided by Chris (Oct 24, 2026): (b).** A folder restore moves a note that was moved since back to its checkpoint path (with its history, instead of trashing it and creating the old path anew) and rewrites the links the move rewrote, all in the restore's transaction. The preview lists such notes as `moved back`, with the links it rewrites; links that would still lead nowhere afterwards are named, as in `replace`.
 2. **`replace` and links to another note (observation 2).** Warn about these too, as a third group? I'd say yes: it is the more dangerous case, since `links` afterwards shows nothing wrong.
+   **Decided by Chris (Oct 24, 2026): warn.** A third group in the preview: links that would lead to another existing note, with where they lead now and afterwards.
 3. **The preview pointing at a note named after the text (observation 3).** Worth doing in step 7, or leave it to the agent?
+   **Decided by Chris (Oct 24, 2026): in.** When the old text names a note (`Hecate` and `…/Hecate.md`), the preview names it: read it before applying, and `mv` it first to rename it.
+
+**Contextual changes are the plugin package's job** (Chris, Oct 24, 2026). The goddess sentence in `Janus.md` shows the limit of any server-side check: a sentence that depends on a name without containing it. Kumbu² won't try to catch that in the tools. Users get a plugin package for their agent anyway, and its skills handle such cases, for example a rename skill that reads the notes named after the term and the notes that link to them, asks about historical records, and only then replaces. The package is its own repository, distributed through a plugin marketplace, next to this repository and the Obsidian sync plugin.
 
 ## Suggested next step
 
-1. Small fixes, in step 7 or a short step 6c: observations 4, 5, 6, 7.
-2. Observations 1 and 2 after Chris's decisions above.
-3. Then build order step 7 (embeddings and hybrid search).
+1. A short step 6c before step 7: the decisions on observations 1, 2 and 3 above, and the small fixes 4, 5, 6, 7.
+2. Then build order step 7 (embeddings and hybrid search).
+3. The plugin package (rename skill and others) is planned in its own repository; not part of the server's build order.
 4. Housekeeping: the test notes in `/Ideas` (`t6b/`, `a/`, `b/`, `zz/`, `outside.md`, changes to `retrofuturism.md`) and 7 checkpoints are still there; a `down -v` before the next phase resets everything.
