@@ -7,9 +7,13 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
@@ -58,24 +62,104 @@ public sealed class CallerTests(KumbuAppFactory app)
     [Fact]
     public async Task A_session_cookie_opens_exactly_the_users_vaults()
     {
-        var (_, session) = await SignedInWithVaultAsync("Mine");
+        var (user, session) = await SignedInWithVaultAsync("Mine");
         await SignedInWithVaultAsync("Theirs");
+        await using var app2 = await MinimalAppAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/whoami");
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
 
-        await using var client = await app.ConnectAsync(token: null, session: session);
+        using var response = await app2.GetTestClient().SendAsync(request, Ct);
 
-        Assert.Equal("Mine/", Text(await ShAsync(client, "ls /")).Trim());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal($"Session {user.Username}: Mine", await response.Content.ReadAsStringAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_session_cookie_gets_past_the_caller_on_api()
+    {
+        var (_, session) = await SignedInWithVaultAsync("Mine");
+        using var http = app.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/nothing-here");
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
+
+        using var response = await http.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    // MCP clients send bearer keys only. A cookie there would let a page on a sibling subdomain (same site, so
+    // SameSite=Strict doesn't help) post a blind no-cors tools/call, e.g. rm, with the user's session.
+    [Theory]
+    [InlineData("/mcp")]
+    [InlineData("/MCP")]
+    public async Task A_valid_session_cookie_is_refused_on_mcp(string path)
+    {
+        var (_, session) = await SignedInWithVaultAsync("Mine");
+        using var http = app.CreateClient();
+        using var request = Initialize();
+        request.RequestUri = new Uri(path, UriKind.Relative);
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
+
+        using var response = await http.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("Bearer", Assert.Single(response.Headers.WwwAuthenticate).Scheme);
     }
 
     [Fact]
     public async Task A_session_writes_as_the_users_username()
     {
-        var (user, session) = await SignedInWithVaultAsync("Journal");
-        await using var client = await app.ConnectAsync(token: null, session: session);
+        var (user, _) = await SignedInWithVaultAsync("Journal");
+        var users = new UserCatalog(
+            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), TimeProvider.System, NullLogger<UserCatalog>.Instance);
+        var (_, key, _) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
+        var caller = RequestCaller.ForSession(user, key, app.Services.GetRequiredService<VaultCatalog>());
 
-        await client.CallToolAsync(
-            "write", new Dictionary<string, object?> { ["path"] = "/Journal/today.md", ["content"] = "# Today\n" }, cancellationToken: Ct);
+        Assert.Equal(CallerKind.Session, caller.Kind);
+        Assert.Equal(user.Username, caller.Writer);
+        Assert.Equal(["Journal"], (await caller.OpenVaultsAsync(Ct)).Select(v => v.Name));
+    }
 
-        Assert.Contains(user.Username, Text(await ShAsync(client, "history /Journal/today.md")), StringComparison.Ordinal);
+    // The web app will add MapFallbackToFile("index.html").AllowAnonymous(): it matches unmapped /api and /mcp
+    // paths too, and must not answer them without a caller.
+    [Theory]
+    [InlineData("/api/nope", HttpStatusCode.Unauthorized)]
+    [InlineData("/Api/nope", HttpStatusCode.Unauthorized)]
+    [InlineData("/mcp/nope", HttpStatusCode.Unauthorized)]
+    [InlineData("/api/open", HttpStatusCode.OK)]
+    [InlineData("/some/page", HttpStatusCode.OK)]
+    public async Task An_anonymous_fallback_does_not_open_api_or_mcp(string path, HttpStatusCode expected)
+    {
+        await using var app2 = await MinimalAppAsync();
+
+        using var response = await app2.GetTestClient().GetAsync(path, Ct);
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    /// <summary>The caller middleware in a pipeline of test endpoints, over the app's services: an anonymous
+    /// fallback as the web app will have, an anonymous /api endpoint, and one that shows the caller.</summary>
+    private async Task<WebApplication> MinimalAppAsync()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton(app.Services.GetRequiredService<IOptions<KumbuOptions>>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<Sessions>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<VaultCatalog>());
+        builder.Services.AddSingleton(new WrongKeyLimiter());
+        var minimal = builder.Build();
+        minimal.UseRouting();
+        minimal.UseMiddleware<CallerMiddleware>();
+        minimal.MapGet("/api/open", () => "open").AllowAnonymous();
+        minimal.MapGet("/api/whoami", async (HttpContext context) =>
+        {
+            var caller = context.Features.Get<RequestCaller>()!;
+            var vaults = await caller.OpenVaultsAsync(context.RequestAborted);
+            return $"{caller.Kind} {caller.Writer}: {string.Join(",", vaults.Select(v => v.Name).Order())}";
+        });
+        minimal.MapFallback(() => "page").AllowAnonymous();
+        await minimal.StartAsync(Ct);
+        return minimal;
     }
 
     [Fact]
