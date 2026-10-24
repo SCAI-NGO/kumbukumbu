@@ -51,6 +51,10 @@ public sealed class UserDocument
     [BsonElement("previousSignInAt"), BsonIgnoreIfNull]
     public DateTime? PreviousSignInAt { get; set; }
 
+    /// <summary>When the password last changed (also by recovery); sessions started before it are refused.</summary>
+    [BsonElement("credentialsChangedAt"), BsonIgnoreIfNull]
+    public DateTime? CredentialsChangedAt { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

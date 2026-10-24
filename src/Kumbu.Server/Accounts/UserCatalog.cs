@@ -186,6 +186,9 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     private async Task SetPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
     {
         var slot = PasswordSlot(userId, userKey, password);
+        // Before the new slot: from here on, sessions of the old password are refused even if a crash leaves
+        // their slots behind (a crash before the slot write only leaves the old password in place, signed out).
+        await Users.UpdateOneAsync(u => u.Id == userId, Builders<UserDocument>.Update.Set(u => u.CredentialsChangedAt, slot.CreatedAt), cancellationToken: ct);
         await Slots.UpdateOneAsync(
             s => s.User == userId && s.Kind == UserSlotDocument.Password,
             Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
