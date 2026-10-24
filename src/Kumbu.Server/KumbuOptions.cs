@@ -42,6 +42,9 @@ public sealed class VaultOptions
 
     /// <summary>Unlocked vaults are locked, least recently used first, above this much memory.</summary>
     public int MemoryLimitMegabytes { get; set; } = 512;
+
+    /// <summary>Named checkpoints a vault keeps at most (concept §4); mkcp beyond it fails.</summary>
+    public int CheckpointLimit { get; set; } = Kumbu.Core.Notes.Checkpoints.DefaultLimit;
 }
 
 public sealed class MongoOptions

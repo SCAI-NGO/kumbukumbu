@@ -28,6 +28,15 @@ public sealed class KumbuOptionsValidatorTests
             KumbuOptions.DevTokenMessage);
     }
 
+    [Fact]
+    public void Rejects_a_negative_checkpoint_limit()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Vaults.CheckpointLimit = -1;
+
+        Assert.Equal(["Kumbu:Vaults:CheckpointLimit must be 0 or more"], Validate(options).Failures);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("  ")]

@@ -116,6 +116,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         var rewrites = rewriteLinks ? Rewrites(notes, map) : [];
         var now = time.GetUtcNow().UtcDateTime;
         var marked = $"{writer} (mv)";
+        // Link rewrites join the writer's changeset like any write.
+        var changeset = await Changeset.ForAsync(store, vault.Segments[0], writer, now, ct);
         var batch = new NoteBatch();
         var links = 0;
         var changed = new List<VaultPath>();
@@ -127,7 +129,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
             if (rewrites.TryGetValue(to, out var own))
             {
                 if (Apply(current.Content, own) is not { } content) return Changed(from);
-                moved = NoteWriter.Next(current, content, marked, now, keepCurrent: true) with { Path = to };
+                moved = NoteWriter.Next(current, content, marked, now, changeset) with { Path = to };
                 links += own.Count;
                 changed.Add(to);
             }
@@ -139,7 +141,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time)
         {
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, now, keepCurrent: true)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, now, changeset)));
             links += list.Count;
             changed.Add(path);
         }

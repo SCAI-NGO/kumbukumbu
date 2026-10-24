@@ -15,21 +15,22 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
 {
     public const int MaxBytes = 1_048_576;
     public const int HistoryLimit = 10;
-    public static readonly TimeSpan CoalesceWindow = TimeSpan.FromMinutes(10);
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);
 
     /// <summary>
-    /// The note after a write. The state it replaces goes into the history, unless the same writer wrote
-    /// it less than <see cref="CoalesceWindow"/> ago: then it was an intermediate step of the same session.
+    /// The note after a write in <paramref name="changeset"/>. The state it replaces goes into the history,
+    /// unless it belongs to the same changeset: then it was an intermediate step of the same session.
+    /// Without a changeset (a restore), the new state joins none, so it stays a version of its own.
     /// </summary>
-    public static StoredNote Next(StoredNote current, string content, string writer, DateTime now, bool keepCurrent = false)
+    public static StoredNote Next(
+        StoredNote current, string content, string writer, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
     {
-        var coalesce = !keepCurrent && current.LastWriter == writer && now - current.LastWriteAt < CoalesceWindow;
+        var coalesce = !keepCurrent && changeset is not null && current.Changeset?.Id == changeset.Id;
         // A state already on top of the history (after a restore, say) is not kept twice.
         var duplicate = current.History.Count > 0 && current.History[0].Content == current.Content;
         IReadOnlyList<HistoryEntry> history = coalesce || duplicate
             ? current.History
-            : [.. new[] { new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt) }
+            : [.. new[] { new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset) }
                 .Concat(current.History).Take(HistoryLimit)];
         return current with
         {
@@ -38,8 +39,13 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             LastWriter = writer,
             LastWriteAt = now,
             History = history,
+            Changeset = changeset,
         };
     }
+
+    /// <summary>The changeset a write by <paramref name="writer"/> in the vault of <paramref name="path"/> joins now.</summary>
+    public Task<Changeset> ChangesetAsync(VaultPath path, string writer, CancellationToken ct) =>
+        Changeset.ForAsync(store, path.Segments[0], writer, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
     public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, string writer, CancellationToken ct)
@@ -66,13 +72,13 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
 
-            var note = new StoredNote(path, content, 1, writer, Now, []);
+            var note = new StoredNote(path, content, 1, writer, Now, [], Changeset: await ChangesetAsync(path, writer, ct));
             if (!await store.TryCreateAsync(note, ct))
             {
                 return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again");
             }
 
-            return Written($"created {path.Value} ({Lines.Count(content)})", note);
+            return Written($"created {path.Value} ({Lines.Count(content)}){await NewlyAmbiguousAsync(path, ct)}", note);
         }
 
         if (existing is null) return await MissingAsync(tool, path, ct);
@@ -296,8 +302,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
                 : $"restore: {path.Value} has no version {version} ('history {Quote(path)}' lists them)");
         }
 
-        // Marked, so the next write by the same writer doesn't coalesce into it: a restore is a checkpoint.
-        var next = Next(existing, entry.Content, $"{writer} (restore)", Now, keepCurrent: true);
+        // In no changeset, so the next write doesn't coalesce into it: a restore is a checkpoint.
+        var next = Next(existing, entry.Content, $"{writer} (restore)", Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to version {version}", next)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
@@ -305,10 +311,41 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time)
 
     public DateTime Now => time.GetUtcNow().UtcDateTime;
 
+    private const int AmbiguousShown = 5;
+
+    /// <summary>
+    /// Links that led to one note and, with <paramref name="created"/> there too, now match two. Nothing is
+    /// rewritten (links resolve at read time, as in Obsidian); the hint says where to look.
+    /// </summary>
+    private async Task<string> NewlyAmbiguousAsync(VaultPath created, CancellationToken ct)
+    {
+        var vault = created.Segments[0];
+        var notes = await store.ReadNotesUnderAsync(VaultPath.Root.Child(vault), ct);
+        var after = new LinkResolver(vault, notes.Select(n => n.Path));
+        var before = new LinkResolver(vault, notes.Select(n => n.Path).Where(p => p != created));
+        var found = new List<string>();
+        foreach (var note in notes.Where(n => n.Path != created).OrderBy(n => n.Path.Value, TextOrder.Default))
+        {
+            foreach (var link in WikiLink.Parse(note.Content))
+            {
+                if (link.Target.Trim().Length == 0) continue;
+                var now = after.Resolve(note.Path, link.Target);
+                if (now.Kind == LinkKind.Ambiguous && now.Candidates.Contains(created) && before.Resolve(note.Path, link.Target).Kind == LinkKind.Note)
+                {
+                    found.Add($"{link.Raw} in {note.Path.Value}");
+                }
+            }
+        }
+
+        if (found.Count == 0) return "";
+        var more = found.Count > AmbiguousShown ? $" and {found.Count - AmbiguousShown} more" : "";
+        return $"; note: {string.Join(", ", found.Take(AmbiguousShown))}{more} now match two notes ('links <note>' shows them; a longer path in the link, or mv, makes it unique again)";
+    }
+
     private async Task<ShellResult> ReplaceAsync(
         string tool, StoredNote existing, string content, string writer, string message, CancellationToken ct)
     {
-        var next = Next(existing, content, writer, Now);
+        var next = Next(existing, content, writer, Now, await ChangesetAsync(existing.Path, writer, ct));
         if (!await store.TryReplaceAsync(existing, next, ct))
         {
             var now = await store.GetAsync(existing.Path, ct);

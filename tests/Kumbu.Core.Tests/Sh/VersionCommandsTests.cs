@@ -123,21 +123,107 @@ public class VersionCommandsTests
     [Theory]
     [InlineData("diff /Demo/plan.md", "diff: /Demo/plan.md has no earlier version ('history /Demo/plan.md')")]
     [InlineData("diff /Demo/plan.md 000000000000", "diff: /Demo/plan.md has no version 000000000000 ('history /Demo/plan.md' lists them)")]
+    [InlineData("diff --version 000000000000 /Demo/plan.md", "diff: takes versions as arguments: diff <path> <version> [<version>]")]
     [InlineData("diff /Demo/plan.md#Goals", "diff: compares whole notes; to look at one section, cat it with --version")]
     [InlineData("diff", "diff: missing operand")]
     public async Task DiffErrors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
 
     // --- history of a directory ---
 
+    private async Task<string> PlanChangeset() =>
+        (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!.Changeset!.Short;
+
+    [Fact]
+    public async Task HistoryOfAFolderShowsMovesAsOneRow()
+    {
+        await Run("mv /Demo/sub/ /Demo/moved/");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await Run("mv /Demo/old.md /Demo/older.md");
+
+        var rows = (await Run("history --since 1h /Demo")).Output.Split('\n');
+
+        // The link to old.md in plan.md was rewritten too: a row of its own, with its changeset.
+        Assert.Contains(rows, r => r.StartsWith("2026-10-23 14:01 UTC  dev (mv)  /Demo/plan.md ", StringComparison.Ordinal) && r.Contains("changeset"));
+        Assert.Contains("2026-10-23 14:01 UTC  dev (mv)  /Demo/old.md → /Demo/older.md", rows);
+        Assert.Contains("2026-10-23 14:00 UTC  dev (mv)  /Demo/sub/x.md → /Demo/moved/x.md", rows);
+    }
+
+    [Fact]
+    public async Task AFolderMoveIsOneRowWithItsNoteCount()
+    {
+        var store = new InMemoryNoteStore(("/Demo/a/x.md", "x\n"), ("/Demo/a/deep/y.md", "y\n"));
+        var sh = new Shell(store, new NoteWriter(store, _time), new NoteMover(store, _time));
+        await sh.RunAsync("mv /Demo/a/ /Demo/b/", CancellationToken.None);
+
+        Assert.Equal(
+            "2026-10-23 14:00 UTC  dev (mv)  /Demo/a/ → /Demo/b/  2 notes",
+            (await sh.RunAsync("history --since 1h /Demo", CancellationToken.None)).Output);
+    }
+
+    [Fact]
+    public async Task WritesCloseTogetherAreOneChangesetAcrossNotes()
+    {
+        await WritePlanV2();
+        _time.Advance(TimeSpan.FromMinutes(9));
+        Assert.False((await _writer.WriteAsync("/Demo/old.md", "o2\n", V("o\n"), Writers.Dev, CancellationToken.None)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(9));
+        // 18 minutes after the first write, but never 10 minutes without one: still the same changeset.
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V1, V(V2), Writers.Dev, CancellationToken.None)).IsError);
+
+        var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
+        var old = (await _store.GetAsync(VaultPath.TryParse("/Demo/old.md", out var o) ? o : null!, CancellationToken.None))!;
+        Assert.Equal(plan.Changeset, old.Changeset);
+        // One version per note in the changeset: the seeded state is kept, the intermediate V2 is not.
+        Assert.Equal([V1], plan.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task AChangesetEndsAfterTenIdleMinutesOrAnHour()
+    {
+        await WritePlanV2();
+        _time.Advance(TimeSpan.FromMinutes(11));
+        await _writer.WriteAsync("/Demo/plan.md", "v3\n", V(V2), Writers.Dev, CancellationToken.None);
+        var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
+        Assert.Equal([V2, V1], plan.History.Select(h => h.Content));
+
+        var started = plan.Changeset!;
+        var version = "v3\n";
+        for (var i = 0; i < 7; i++)
+        {
+            _time.Advance(TimeSpan.FromMinutes(9));
+            var next = $"v{i + 4}\n";
+            await _writer.WriteAsync("/Demo/plan.md", next, V(version), Writers.Dev, CancellationToken.None);
+            version = next;
+        }
+
+        plan = (await _store.GetAsync(p!, CancellationToken.None))!;
+        Assert.NotEqual(started.Id, plan.Changeset!.Id);
+        Assert.True(plan.Changeset.Started - started.Started >= Changeset.MaxLength);
+    }
+
+    [Fact]
+    public async Task ARestoreJoinsNoChangeset()
+    {
+        await WritePlanV2();
+        await Run($"restore /Demo/plan.md {V(V1)}");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await _writer.WriteAsync("/Demo/plan.md", "after\n", V(V1), Writers.Dev, CancellationToken.None);
+
+        var plan = (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!;
+        Assert.Equal([V1, V2, V1], plan.History.Select(h => h.Content));
+        Assert.Null(plan.History[0].Changeset);
+    }
+
     [Fact]
     public async Task HistoryOfAVaultListsTheLatestWritesWithTheirSize()
     {
         _time.Advance(TimeSpan.FromHours(1));
         await WritePlanV2();
+        var cs = await PlanChangeset();
 
         Assert.Equal(
             $"""
-            2026-10-23 15:00 UTC  dev   /Demo/plan.md   {V(V2)}  +1 -1
+            2026-10-23 15:00 UTC  dev   /Demo/plan.md   {V(V2)}  +1 -1  changeset {cs}
             2026-10-01 12:00 UTC  seed  /Demo/old.md    {V("o\n")}  +1 -0
             2026-10-01 12:00 UTC  seed  /Demo/plan.md   {V(V1)}  +4 -0
             2026-10-01 12:00 UTC  seed  /Demo/sub/x.md  {V("x\n")}  +1 -0
@@ -150,9 +236,10 @@ public class VersionCommandsTests
     {
         _time.Advance(TimeSpan.FromHours(1));
         await WritePlanV2();
+        var cs = await PlanChangeset();
 
-        Assert.Equal($"2026-10-23 15:00 UTC  dev  /Demo/plan.md  {V(V2)}  +1 -1", (await Run("history --since 2h /")).Output);
-        Assert.Equal($"2026-10-23 15:00 UTC  dev  /Demo/plan.md  {V(V2)}  +1 -1", (await Run("history /Demo --since '2026-10-23 14:30'")).Output);
+        Assert.Equal($"2026-10-23 15:00 UTC  dev  /Demo/plan.md  {V(V2)}  +1 -1  changeset {cs}", (await Run("history --since 2h /")).Output);
+        Assert.Equal($"2026-10-23 15:00 UTC  dev  /Demo/plan.md  {V(V2)}  +1 -1  changeset {cs}", (await Run("history /Demo --since '2026-10-23 14:30'")).Output);
         Assert.Equal("(no writes below /Ideas since 2026-10-23 14:30 UTC)", (await Run("history --since 30m /Ideas")).Output);
     }
 

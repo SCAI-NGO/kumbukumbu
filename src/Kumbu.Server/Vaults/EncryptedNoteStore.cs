@@ -33,6 +33,14 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
         await VaultAsync(from, ct) is { } v ? v.Moves.Where(m => m.From == from).MaxBy(m => m.MovedAt) : null;
 
+    public async Task<IReadOnlyList<MoveRecord>> ListMovesAsync(VaultPath dir, CancellationToken ct)
+    {
+        IEnumerable<UnlockedVault> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
+        var prefix = dir.IsRoot ? "/" : dir.Value + "/";
+        return [.. vaults.SelectMany(v => v.Moves)
+            .Where(m => m.From.Value.StartsWith(prefix, StringComparison.Ordinal) || m.To.Value.StartsWith(prefix, StringComparison.Ordinal))];
+    }
+
     /// <summary>Only the marker: <see cref="GetAsync"/>, which every command reads a note with first, already
     /// checked a damaged path against MongoDB again.</summary>
     public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) =>
@@ -45,6 +53,16 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => catalog.CountLockedAsync(credential.Secret, ct);
+
+    public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
+        await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
+            ? v.Notes.Values
+                .Select(n => n.Note)
+                .Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer)
+                .OrderByDescending(n => n.LastWriteAt)
+                .Select(n => ((Changeset, DateTime)?)(n.Changeset!, n.LastWriteAt))
+                .FirstOrDefault()
+            : null;
 
     /// <summary>A path marked damaged is read from MongoDB again first, so a repair or removal in the database
     /// counts on the first access, without restarting the server.</summary>
@@ -82,14 +100,15 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, current.LastWriter, current.LastWriteAt, ct)).Count == 0;
 
     /// <summary>
-    /// One transaction: replaces (compare-and-swap on the revision), then the sources of all moves are deleted
-    /// (same check) before their targets are inserted, so a note may move to where another one just left. The
-    /// unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
+    /// One transaction: replaces (compare-and-swap on the revision), notes to the trash, then the sources of all
+    /// moves are deleted (same check) before created notes and move targets are inserted, so a note may move to
+    /// where another one just left. The unique index refuses a target that exists. Any refusal aborts the
+    /// transaction: nothing is written.
     /// </summary>
-    public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string movedBy, DateTime at, CancellationToken ct)
+    public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
     {
         if (batch.IsEmpty) return [];
-        var paths = batch.Replaces.Select(r => r.Current.Path).Concat(batch.Moves.SelectMany(m => new[] { m.Current.Path, m.Target.Path })).Distinct().ToList();
+        var paths = batch.Paths.ToList();
         if (paths.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));
         if (await VaultAsync(paths[0], ct) is not { } vault) return paths;
 
@@ -108,6 +127,12 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 apply.Add(() => vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next)));
             }
 
+            foreach (var current in batch.Trashes)
+            {
+                if (await TrashInAsync(session, vault, current, by, at, ct) is not { } trashed) return Refuse(current.Path);
+                apply.Add(trashed);
+            }
+
             foreach (var (current, _) in batch.Moves)
             {
                 if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
@@ -116,12 +141,19 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
             }
 
+            foreach (var created in batch.Creates)
+            {
+                var id = ObjectId.GenerateNewId();
+                if (!await InsertNoteAsync(session, vault, id, created, ct)) return Refuse(created.Path);
+                apply.Add(() => vault.Notes = vault.Notes.SetItem(created.Path, (id, created)));
+            }
+
             foreach (var (current, target) in batch.Moves)
             {
                 var id = ObjectId.GenerateNewId();
                 if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
 
-                var move = new MoveRecord(current.Path, target.Path, movedBy, at);
+                var move = new MoveRecord(current.Path, target.Path, by, at);
                 var moveId = ObjectId.GenerateNewId();
                 await catalog.Moves.InsertOneAsync(
                     session,
@@ -149,24 +181,125 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
         if (await VaultAsync(current.Path, ct) is not { } vault) return false;
-        return await WriteAsync(vault, [current.Path], async session =>
+        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, ct), ct);
+    }
+
+    public async Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct)
+    {
+        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
+        return [.. vaults.SelectMany(v => v.Checkpoints).Select(c => c.Checkpoint).OrderBy(c => c.Vault, StringComparer.Ordinal).ThenBy(c => c.CreatedAt).ThenBy(c => c.Name, StringComparer.Ordinal)];
+    }
+
+    /// <summary>One transaction: the checkpoint's document, and each content it holds that the vault doesn't
+    /// store yet (an upsert on the content's keyed hash, so equal texts are stored once).</summary>
+    public async Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
+    {
+        if (await VaultAsync(checkpoint.Path, ct) is not { } vault) return false;
+        var textIds = notes.ToDictionary(n => n.Path, n => vault.TextId(n.Content));
+        return await WriteAsync(vault, [], async session =>
         {
-            if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
-            var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+            var id = ObjectId.GenerateNewId();
+            try
+            {
+                await catalog.Checkpoints.InsertOneAsync(
+                    session,
+                    new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.NameId(checkpoint.Name), At = checkpoint.CreatedAt, Blob = vault.SealCheckpoint(id, checkpoint, textIds) },
+                    cancellationToken: ct);
+            }
+            catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                return null;
+            }
+
+            foreach (var note in notes.DistinctBy(n => n.Content))
+            {
+                var textId = textIds[note.Path];
+                await catalog.CheckpointTexts.UpdateOneAsync(
+                    session,
+                    F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.PathId, textId),
+                    Builders<SealedDocument>.Update.SetOnInsert(d => d.Blob, vault.SealText(textId, note.Content)),
+                    new UpdateOptions { IsUpsert = true },
+                    ct);
+            }
+
+            var stored = new StoredCheckpoint(id, checkpoint, textIds);
+            return () => vault.Checkpoints = vault.Checkpoints.Add(stored);
+        }, ct);
+    }
+
+    /// <summary>One transaction: the checkpoint's document, and the texts no other checkpoint holds.</summary>
+    public async Task<bool> TryRemoveCheckpointAsync(string vaultName, string name, CancellationToken ct)
+    {
+        if (await VaultAsync(VaultPath.Root.Child(vaultName), ct) is not { } vault) return false;
+        return await WriteAsync(vault, [], async session =>
+        {
+            if (vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == name) is not { } stored) return null;
+            var deleted = await catalog.Checkpoints.DeleteOneAsync(session, F.Eq(d => d.Id, stored.Id), cancellationToken: ct);
             if (deleted.DeletedCount == 0) return null;
 
-            var trashed = new TrashedNote(current, deletedBy, deletedAt);
-            var trashId = ObjectId.GenerateNewId();
-            await catalog.Trash.InsertOneAsync(
-                session,
-                new SealedDocument { Id = trashId, Vault = vault.Id, PathId = vault.PathId(current.Path), DeletedAt = deletedAt, Blob = vault.SealTrash(trashId, trashed) },
-                cancellationToken: ct);
-            return () =>
+            var kept = vault.Checkpoints.Where(c => c.Id != stored.Id).SelectMany(c => c.TextIds.Values).Select(Convert.ToBase64String).ToHashSet();
+            var unused = stored.TextIds.Values.DistinctBy(Convert.ToBase64String).Where(t => !kept.Contains(Convert.ToBase64String(t))).ToList();
+            if (unused.Count > 0)
             {
-                vault.Notes = vault.Notes.Remove(current.Path);
-                vault.Trash = vault.Trash.Add((trashId, trashed));
-            };
+                await catalog.CheckpointTexts.DeleteManyAsync(session, F.Eq(d => d.Vault, vault.Id) & F.In(d => d.PathId, unused), cancellationToken: ct);
+            }
+
+            return () => vault.Checkpoints = vault.Checkpoints.Remove(stored);
         }, ct);
+    }
+
+    public async Task<IReadOnlyList<Note>> ReadCheckpointAsync(Checkpoint checkpoint, CancellationToken ct)
+    {
+        if (await VaultAsync(checkpoint.Path, ct) is not { } vault
+            || vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == checkpoint.Name) is not { } stored)
+        {
+            return [];
+        }
+
+        var ids = stored.TextIds.Values.DistinctBy(Convert.ToBase64String).ToList();
+        var texts = new Dictionary<string, string>();
+        foreach (var doc in await catalog.CheckpointTexts.Find(F.Eq(d => d.Vault, vault.Id) & F.In(d => d.PathId, ids)).ToListAsync(ct))
+        {
+            try
+            {
+                texts[Convert.ToBase64String(doc.PathId)] = vault.OpenText(doc);
+            }
+            catch (Exception e) when (e is System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException or InvalidDataException)
+            {
+                // Skipping it would make a restore move the note to the trash: refuse the whole checkpoint instead.
+                break;
+            }
+        }
+
+        if (stored.TextIds.Values.Any(t => !texts.ContainsKey(Convert.ToBase64String(t))))
+        {
+            throw new VaultUnavailableException(
+                $"checkpoint '{checkpoint.Name}' doesn't open: content it holds is missing, or was changed or damaged outside Kumbu²");
+        }
+
+        return [.. stored.TextIds.Select(t => new Note(t.Key, texts[Convert.ToBase64String(t.Value)]))];
+    }
+
+    /// <summary>Within a transaction: deletes the note if it is still at <c>current.Revision</c> and keeps it in
+    /// the trash. Returns the change to the working set, or null if the note changed.</summary>
+    private async Task<Action?> TrashInAsync(
+        IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
+    {
+        if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
+        var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+        if (deleted.DeletedCount == 0) return null;
+
+        var trashed = new TrashedNote(current, deletedBy, deletedAt);
+        var trashId = ObjectId.GenerateNewId();
+        await catalog.Trash.InsertOneAsync(
+            session,
+            new SealedDocument { Id = trashId, Vault = vault.Id, PathId = vault.PathId(current.Path), DeletedAt = deletedAt, Blob = vault.SealTrash(trashId, trashed) },
+            cancellationToken: ct);
+        return () =>
+        {
+            vault.Notes = vault.Notes.Remove(current.Path);
+            vault.Trash = vault.Trash.Add((trashId, trashed));
+        };
     }
 
     public async Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct)
@@ -192,7 +325,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             if (latest.Trashed is null) return null;
 
             var note = latest.Trashed.Note;
-            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at };
+            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null };
             var id = ObjectId.GenerateNewId();
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
             var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id), cancellationToken: ct);

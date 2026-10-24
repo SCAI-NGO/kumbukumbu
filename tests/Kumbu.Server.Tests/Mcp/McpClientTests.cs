@@ -75,6 +75,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
     {
         await CallAsync("write", new() { ["path"] = "/Demo/rename/a.md", ["content"] = "Project Hecate starts.\n" });
         await CallAsync("write", new() { ["path"] = "/Demo/rename/b.md", ["content"] = "Hecate, again: Hecate.\n" });
+        Assert.StartsWith("checkpoint 'before-rename' of /Demo/rename/ (2 notes)", Text(await ShAsync("mkcp /Demo/rename before-rename")), StringComparison.Ordinal);
         var args = new Dictionary<string, object?> { ["path"] = "/Demo/rename", ["old_text"] = "Hecate", ["new_text"] = "Selene" };
 
         var preview = await CallAsync("replace", args);
@@ -86,9 +87,17 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.Equal("replaced 3 occurrences in 2 notes", Text(applied));
         Assert.Equal("Selene, again: Selene.\n", Text(await ShAsync("cat /Demo/rename/b.md")));
 
-        var diff = Text(await ShAsync("diff --word /Demo/rename/a.md"));
+        // Written and replaced in one changeset: one version. The checkpoint still has the state before.
+        var diff = Text(await ShAsync("diff --word --checkpoint before-rename /Demo/rename/a.md"));
         Assert.Contains("dev (replace)", diff, StringComparison.Ordinal);
         Assert.Contains("[-Hecate-]{+Selene+}", diff, StringComparison.Ordinal);
+        Assert.Equal("Hecate, again: Hecate.\n", Text(await ShAsync("cat --checkpoint before-rename /Demo/rename/b.md")));
+
+        var restorePreview = Text(await ShAsync("restore --checkpoint before-rename /Demo/rename"));
+        var restorePlan = restorePreview.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))[6..];
+        Assert.StartsWith("restored /Demo/rename/ to checkpoint 'before-rename': 2 changed", Text(await ShAsync($"restore --checkpoint before-rename --plan {restorePlan} /Demo/rename")), StringComparison.Ordinal);
+        Assert.Equal("Project Hecate starts.\n", Text(await ShAsync("cat /Demo/rename/a.md")));
+        Assert.StartsWith("removed checkpoint 'before-rename'", Text(await ShAsync("rmcp /Demo before-rename")), StringComparison.Ordinal);
         Assert.Contains("/Demo/rename/b.md", Text(await ShAsync("history /Demo/rename --since 1h")), StringComparison.Ordinal);
     }
 

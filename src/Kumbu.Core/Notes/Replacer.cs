@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Collections.Concurrent;
+using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
 using Kumbu.Core.Sh;
@@ -9,35 +9,12 @@ namespace Kumbu.Core.Notes;
 /// <summary>A previewed replace: the call that made it and the notes, at their versions, it covers.</summary>
 public sealed record ReplacePlan(string Path, string OldText, string NewText, bool Word, IReadOnlyList<(VaultPath Path, string Version)> Notes, DateTime Created);
 
-/// <summary>Previews made in this process, by token, for an hour. Not kept across a restart: preview again.</summary>
-public sealed class ReplacePlans
-{
-    public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
-
-    private readonly ConcurrentDictionary<string, ReplacePlan> _plans = new();
-
-    public void Add(string token, ReplacePlan plan, DateTime now)
-    {
-        foreach (var (key, old) in _plans)
-        {
-            if (now - old.Created > Lifetime) _plans.TryRemove(key, out _);
-        }
-
-        _plans[token] = plan;
-    }
-
-    public ReplacePlan? Take(string token, DateTime now) =>
-        _plans.TryRemove(token, out var plan) && now - plan.Created <= Lifetime ? plan : null;
-
-    public void Return(string token, ReplacePlan plan) => _plans.TryAdd(token, plan);
-}
-
 /// <summary>
 /// The <c>replace</c> tool: one literal text replaced in every note of a folder, a vault or one note. A
 /// preview lists every affected note and returns a plan token; the apply, with that token, changes exactly
 /// those notes at exactly those versions in one batch, or nothing.
 /// </summary>
-public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans plans)
+public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans)
 {
     private const int ExcerptNotes = 5;
     private const int ExcerptsPerNote = 3;
@@ -93,7 +70,13 @@ public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans p
             foreach (var at in matches.Take(ExcerptsPerNote)) output.Add(Excerpt(note, at, oldText, newText));
         }
 
-        if (affected.Count > ExcerptNotes) output.Add($"… excerpts of the first {ExcerptNotes} notes only");
+        if (affected.Count > ExcerptNotes)
+        {
+            output.Add($"… excerpts of the first {ExcerptNotes} notes only; every line: rg -n -F{(word ? " -w" : "")} {Quote(oldText)} {SectionLookup.Quote(path)}");
+        }
+
+        output.AddRange(await LinkWarningsAsync(path, affected, oldText, newText, ct));
+
         var versions = new List<(VaultPath, string)>();
         foreach (var (note, _) in affected) versions.Add((note.Path, VersionToken.Of(note.Content)));
 
@@ -108,25 +91,71 @@ public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans p
             return ShellResult.Error($"replace: {Count(total, "match", "matches")} in {Count(affected.Count, "note")}, too many for one preview; narrow the path");
         }
 
-        plans.Add(token, new ReplacePlan(path.Value, oldText, newText, word, versions, time.GetUtcNow().UtcDateTime), time.GetUtcNow().UtcDateTime);
+        var now = time.GetUtcNow().UtcDateTime;
+        plans.Add(token, new ReplacePlan(path.Value, oldText, newText, word, versions, now), now);
         return ShellResult.Ok(text);
+    }
+
+    /// <summary>
+    /// The replace is literal, also inside [[links]]. Names the changed links that would lead nowhere (or
+    /// to several notes) afterwards, since renaming a project usually means a note of that name too: moving
+    /// that note first rewrites its links, and the replace then leaves them alone.
+    /// </summary>
+    private async Task<IEnumerable<string>> LinkWarningsAsync(
+        VaultPath path, List<(Note Note, List<int> Matches)> affected, string oldText, string newText, CancellationToken ct)
+    {
+        var vault = path.Segments[0];
+        var resolver = new LinkResolver(vault, await store.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct));
+        var inLinks = 0;
+        var broken = new List<string>();
+        foreach (var (note, matches) in affected)
+        {
+            var lineStarts = LineStarts(note.Content);
+            foreach (var link in WikiLink.Parse(note.Content))
+            {
+                var start = lineStarts[link.Line] + link.Start;
+                var inside = matches.Where(m => m >= start && m + oldText.Length <= start + link.Raw.Length).Select(m => m - start).ToList();
+                if (inside.Count == 0) continue;
+                inLinks += inside.Count;
+
+                var raw = Replace(link.Raw, inside, oldText.Length, newText);
+                if (WikiLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
+                var after = resolver.Resolve(note.Path, changed.Target);
+                if (after.Kind is not (LinkKind.NotFound or LinkKind.Ambiguous)) continue;
+
+                var now = resolver.Resolve(note.Path, link.Target);
+                var why = after.Kind == LinkKind.Ambiguous
+                    ? $"ambiguous ({string.Join(", ", after.Candidates.Select(c => c.Value))})"
+                    : "no such note";
+                var was = now.Kind == LinkKind.Note ? $"; now it leads to {now.Target!.Value}" : "";
+                broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} → {raw}: {why}{was}");
+            }
+        }
+
+        if (inLinks == 0) return [];
+        if (broken.Count == 0) return ["", $"{Count(inLinks, "occurrence")} inside [[links]]; each still leads to a note afterwards."];
+        return
+        [
+            "",
+            $"{Count(inLinks, "occurrence")} inside [[links]]; after the replace, {Count(broken.Count, "link")} would lead nowhere:",
+            .. broken,
+            "To rename a note, mv it first: that rewrites its links, and this replace then leaves them alone.",
+        ];
     }
 
     private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, string writer, CancellationToken ct)
     {
         var now = time.GetUtcNow().UtcDateTime;
-        if (plans.Take(token, now) is not { } plan)
-        {
-            return ShellResult.Error($"replace: unknown or expired plan {token} (a plan lasts an hour, and not across a server restart); preview again");
-        }
+        if (plans.Take<ReplacePlan>(token, now) is not { } plan) return ShellResult.Error(plans.Unavailable("replace", token, now));
 
         if (plan.Path != path.Value || plan.OldText != oldText || plan.NewText != newText || plan.Word != word)
         {
-            plans.Return(token, plan);
+            plans.Return(token, plan, plan.Created);
             return ShellResult.Error("replace: this plan was made for a call with another path, old_text, new_text or word; make the same call as the preview");
         }
 
         var batch = new NoteBatch();
+        var changeset = await Changeset.ForAsync(store, path.Segments[0], writer, now, ct);
         var changed = new List<string>();
         var total = 0;
         foreach (var (notePath, version) in plan.Notes)
@@ -143,11 +172,13 @@ public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans p
             var content = Replace(current.Content, matches, oldText.Length, newText);
             if (System.Text.Encoding.UTF8.GetByteCount(content) > NoteWriter.MaxBytes)
             {
-                return ShellResult.Error($"replace: nothing was replaced: {notePath.Value} would be larger than {NoteWriter.MaxBytes} bytes (1 MiB)");
+                var tooLarge = $"{notePath.Value} would be larger than {NoteWriter.MaxBytes} bytes (1 MiB)";
+                plans.Failed(token, tooLarge, now);
+                return ShellResult.Error($"replace: nothing was replaced: {tooLarge}");
             }
 
-            // Its own history entry, marked, so each note can be restored on its own.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", now, keepCurrent: true)));
+            // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", now, changeset)));
         }
 
         if (changed.Count == 0)
@@ -158,10 +189,13 @@ public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans p
 
         if (changed.Count > 0)
         {
+            plans.Failed(token, $"{string.Join(", ", changed)} changed since the preview", now);
             return ShellResult.Error($"replace: nothing was replaced: {string.Join(", ", changed)} changed since the preview; preview again");
         }
 
-        return ShellResult.Ok($"replaced {Count(total, "occurrence")} in {Count(batch.Replaces.Count, "note")}");
+        var message = $"replaced {Count(total, "occurrence")} in {Count(batch.Replaces.Count, "note")}";
+        plans.Applied(token, message, now);
+        return ShellResult.Ok(message);
     }
 
     /// <summary>Start indexes of the non-overlapping occurrences; with <paramref name="word"/>, only where
@@ -205,6 +239,20 @@ public sealed class Replacer(INoteStore store, TimeProvider time, ReplacePlans p
         var after = note.Content[(at + oldText.Length)..Math.Max(to, at + oldText.Length)] + (to < lineEnd ? "…" : "");
         return $"{note.Path.Value}:{line}: {before}[-{oldText}-]{{+{newText}+}}{after}".Replace("\n", "⏎", StringComparison.Ordinal);
     }
+
+    private static int[] LineStarts(string text)
+    {
+        var starts = new List<int> { 0 };
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n') starts.Add(i + 1);
+        }
+
+        return [.. starts];
+    }
+
+    /// <summary>Single quotes for the shell, as sh's tokenizer reads them.</summary>
+    private static string Quote(string text) => "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private static string Where(VaultPath path, int notes) => notes == 1 && path.IsNote ? $"in {path.Value}" : $"below {path.Value}";
 

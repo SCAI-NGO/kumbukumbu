@@ -6,13 +6,13 @@ using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class DiffCommand(INoteStore notes) : ICommand
+public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICommand
 {
-    private static readonly Option[] Spec = [new(null, "word")];
+    private static readonly Option[] Spec = [new(null, "word"), new(null, "checkpoint", TakesValue: true)];
 
     public string Name => "diff";
 
-    public string Usage => "diff [--word] <path> [from [to]]";
+    public string Usage => "diff [--word] <path> [from [to]] | diff --checkpoint <name> <path>";
 
     public string Summary => "what changed between versions of a note, or between two notes";
 
@@ -25,6 +25,9 @@ public sealed class DiffCommand(INoteStore notes) : ICommand
           The header names each side: path, version, time and writer.
         diff [--word] <path> <path>
           Two notes against each other, e.g. near-duplicates.
+        diff [--word] --checkpoint <name> <path>
+          A note: its state in the named checkpoint ('lscp') against the current one. A folder or
+          vault: which notes changed, are new or were removed since the checkpoint.
           --word   show changes inside lines as [-old-]{+new+}, as git diff --word-diff does; best for
                    Markdown paragraphs, which are often single long lines
 
@@ -34,14 +37,21 @@ public sealed class DiffCommand(INoteStore notes) : ICommand
 
     public bool ReadsInput => false;
 
-    private sealed record Side(VaultPath Path, string Content, string Writer, DateTime At)
+    /// <param name="Absent">What stands in for a note that isn't there on this side, e.g. "(removed since)".</param>
+    private sealed record Side(VaultPath Path, string Content, string Writer, DateTime At, string? Origin = null, string? Absent = null)
     {
-        public string Header(char marker) =>
-            $"{new string(marker, 3)} {Path.Value}  {VersionToken.Of(Content)}  {History.Time(At)}  {Writer}";
+        public string Header(char marker) => Absent is not null
+            ? $"{new string(marker, 3)} {Path.Value}  {Absent}"
+            : $"{new string(marker, 3)} {Path.Value}  {VersionToken.Of(Content)}  {Origin}{History.Time(At)}  {Writer}";
     }
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
+        if (args.TakeWhile(a => a != "--").Any(a => a == "--version" || a.StartsWith("--version=", StringComparison.Ordinal)))
+        {
+            return ShellResult.Error("diff: takes versions as arguments: diff <path> <version> [<version>]");
+        }
+
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
         var operands = options.Operands;
         if (operands.Count == 0) return ShellResult.Error("diff: missing operand");
@@ -52,6 +62,12 @@ public sealed class DiffCommand(INoteStore notes) : ICommand
         }
 
         if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
+        if (options.Value("checkpoint") is { } checkpoint)
+        {
+            if (operands.Count > 1) return ShellResult.Error("diff: --checkpoint compares one path with the checkpoint; give no versions or second path");
+            return await AgainstCheckpointAsync(path, checkpoint, options.Has("word"), ct);
+        }
+
         var note = await notes.GetAsync(path, ct);
         if (note is null) return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
 
@@ -88,10 +104,44 @@ public sealed class DiffCommand(INoteStore notes) : ICommand
             }
         }
 
-        var hunks = TextDiff.Hunks(from.Content, to.Content, options.Has("word"));
+        return Compare(from, to, options.Has("word"));
+    }
+
+    private static ShellResult Compare(Side from, Side to, bool words)
+    {
+        var hunks = TextDiff.Hunks(from.Content, to.Content, words);
         return hunks.Count == 0
             ? ShellResult.Ok($"(no differences between {VersionToken.Of(from.Content)} and {VersionToken.Of(to.Content)})")
             : ShellResult.Ok(Lines.Join([from.Header('-'), to.Header('+'), .. hunks]));
+    }
+
+    private async Task<ShellResult> AgainstCheckpointAsync(VaultPath path, string name, bool words, CancellationToken ct)
+    {
+        if (path.IsRoot) return ShellResult.Error($"diff: give a path in the checkpoint's vault, e.g. diff --checkpoint {name} /Demo");
+        var (view, error) = await checkpoints.OpenAsync(Name, path.Segments[0], name, ct);
+        if (view is null) return error!;
+        var checkpoint = view.Checkpoint;
+        if (Checkpoints.Scope(checkpoint, path) is not { } scope)
+        {
+            return ShellResult.Error($"diff: {path.Value} is not in checkpoint '{name}' (it covers {checkpoint.Scope})");
+        }
+
+        var then = await view.ReadAsync(scope, ct);
+        var now = await notes.GetAsync(scope, ct);
+        if (then is null && now is null)
+        {
+            if (await notes.IsDamagedAsync(scope, ct)) return ShellResult.Error(Damage.Message(Name, scope));
+            if (scope.IsNote) return ShellResult.Error($"diff: {scope.Value}: No such file or directory, now or in checkpoint '{name}'");
+            return await checkpoints.ChangesAsync(view, scope, ct);
+        }
+
+        var origin = $"checkpoint '{name}'  ";
+        var from = then is null
+            ? new Side(scope, "", "", default, Absent: $"(not in checkpoint '{name}')")
+            : new Side(scope, then, checkpoint.CreatedBy, checkpoint.CreatedAt, origin);
+        var to = now is null ? new Side(scope, "", "", default, Absent: "(removed since)") : Current(now);
+        if (then is not null && now is not null && then == now.Content) return ShellResult.Ok($"(no differences: {scope.Value} is as in checkpoint '{name}')");
+        return Compare(from, to, words);
     }
 
     private static Side Current(StoredNote note) => new(note.Path, note.Content, note.LastWriter, note.LastWriteAt);

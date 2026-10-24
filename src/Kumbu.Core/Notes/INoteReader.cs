@@ -29,6 +29,9 @@ public interface INoteReader
     /// <summary>The most recent move away from <paramref name="from"/>, or null.</summary>
     Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct);
 
+    /// <summary>The moves still on record from or to a path below <paramref name="dir"/> (the root: all).</summary>
+    Task<IReadOnlyList<MoveRecord>> ListMovesAsync(VaultPath dir, CancellationToken ct);
+
     /// <summary>Whether a stored note at this path exists but doesn't open (changed or damaged outside Kumbu²).</summary>
     Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct);
 

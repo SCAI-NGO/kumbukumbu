@@ -17,7 +17,7 @@ public class ReplacerTests
         ("/Ideas/d.md", "Hecate elsewhere\n"));
 
     private readonly FakeTimeProvider _time = new(InMemoryNoteStore.Seeded.AddDays(1));
-    private readonly ReplacePlans _plans = new();
+    private readonly Plans _plans = new();
     private readonly Replacer _replacer;
 
     public ReplacerTests() => _replacer = new Replacer(_store, _time, _plans);
@@ -72,6 +72,7 @@ public class ReplacerTests
         Assert.Equal("Hecate elsewhere\n", await Content("/Ideas/d.md"));
         var note = (await _store.GetAsync(P("/Work/a.md"), Ct))!;
         Assert.Equal("dev (replace)", note.LastWriter);
+        Assert.NotNull(note.Changeset);
         Assert.Equal("Hecate is the plan.\nHecates are many. Hecate!\n", note.History[0].Content);
     }
 
@@ -81,7 +82,78 @@ public class ReplacerTests
         var plan = Plan(await Run("/Work/sub/b.md", "Hecate", "Selene"));
         Assert.False((await Run("/Work/sub/b.md", "Hecate", "Selene", plan: plan)).IsError);
 
-        Assert.StartsWith("replace: unknown or expired plan", (await Run("/Work/sub/b.md", "Hecate", "Selene", plan: plan)).Output);
+        Assert.Equal(
+            ShellResult.Error($"replace: plan {plan} was already applied at 12:00 UTC (replaced 1 occurrence in 1 note); a plan is applied once"),
+            await Run("/Work/sub/b.md", "Hecate", "Selene", plan: plan));
+    }
+
+    [Fact]
+    public async Task AFailedPlanSaysWhyAndStaysUsed()
+    {
+        var plan = Plan(await Run("/Work", "Hecate", "Selene"));
+        var b = (await _store.GetAsync(P("/Work/sub/b.md"), Ct))!;
+        await _store.TryReplaceAsync(b, NoteWriter.Next(b, "About Hecate, changed.\n", "other", _time.GetUtcNow().UtcDateTime), Ct);
+        await Run("/Work", "Hecate", "Selene", plan: plan);
+
+        Assert.Equal(
+            ShellResult.Error($"replace: plan {plan} failed at 12:00 UTC: /Work/sub/b.md changed since the preview; preview again"),
+            await Run("/Work", "Hecate", "Selene", plan: plan));
+    }
+
+    [Fact]
+    public async Task ASeriesOfReplacesKeepsTheStateBeforeThem()
+    {
+        foreach (var (from, to) in new[] { ("Hecate", "Selene"), ("Selene", "Luna"), ("Luna", "Janus") })
+        {
+            var plan = Plan(await Run("/Work/sub/b.md", from, to));
+            Assert.False((await Run("/Work/sub/b.md", from, to, plan: plan)).IsError);
+            _time.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        var note = (await _store.GetAsync(P("/Work/sub/b.md"), Ct))!;
+        Assert.Equal("About Janus.\n", note.Content);
+        Assert.Equal(["About Hecate.\n"], note.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task PreviewWarnsAboutLinksThatWouldLeadNowhere()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/projects/Hecate.md", "# Hecate\n"),
+            ("/Work/projects/Hecate Retro.md", "# Retro\n"),
+            ("/Work/log.md", "See [[Hecate]], [[Hecate Retro#Bad|the retro]] and [[Hecate|it]].\nHecate shipped.\n"));
+
+        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+
+        Assert.Contains(
+            """
+            3 occurrences inside [[links]]; after the replace, 3 links would lead nowhere:
+              /Work/log.md:1: [[Hecate]] → [[Janus]]: no such note; now it leads to /Work/projects/Hecate.md
+              /Work/log.md:1: [[Hecate Retro#Bad|the retro]] → [[Janus Retro#Bad|the retro]]: no such note; now it leads to /Work/projects/Hecate Retro.md
+              /Work/log.md:1: [[Hecate|it]] → [[Janus|it]]: no such note; now it leads to /Work/projects/Hecate.md
+            To rename a note, mv it first: that rewrites its links, and this replace then leaves them alone.
+            """,
+            preview.Output);
+    }
+
+    [Fact]
+    public async Task LinksThatStillResolveAreOnlyCounted()
+    {
+        var store = new InMemoryNoteStore(("/Work/Janus.md", "j\n"), ("/Work/log.md", "[[Hecate]] and [[x|Hecate]]\n"));
+
+        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work/log.md", "Hecate", "Janus", false, null, Writers.Dev, Ct);
+
+        Assert.Contains("2 occurrences inside [[links]]; each still leads to a note afterwards.", preview.Output);
+    }
+
+    [Fact]
+    public async Task MoreThanFiveNotesNameTheWayToEveryLine()
+    {
+        var store = new InMemoryNoteStore([.. Enumerable.Range(0, 7).Select(i => ($"/Work/n{i}.md", "it's here\n"))]);
+
+        var preview = await new Replacer(store, _time, _plans).RunAsync("/Work", "it's", "it is", true, null, Writers.Dev, Ct);
+
+        Assert.Contains("… excerpts of the first 5 notes only; every line: rg -n -F -w 'it'\\''s' /Work", preview.Output);
     }
 
     [Fact]

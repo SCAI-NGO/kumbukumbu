@@ -18,17 +18,22 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
     public string Help => $"""
         history <path>
           List the versions of a note, newest first: version, time written (UTC), writer, lines.
-          The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept; writes by the
-          same writer within {NoteWriter.CoalesceWindow.TotalMinutes} minutes count as one, so the state before a session survives.
-          'restore <path> <version>' makes an earlier version current again.
+          The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept. Writes by one
+          writer close together in time form a changeset (it ends after {Changeset.Idle.TotalMinutes} minutes without a write, or
+          after {Changeset.MaxLength.TotalHours} hour), and a changeset gives each note one version, whatever tool wrote it, so
+          the state before a session survives. A restore is a version of its own.
+          'restore <path> <version>' makes an earlier version current again; to keep a state for longer,
+          ask the user about a named checkpoint ('help mkcp').
           The version is computed from the text, so the same version can appear twice (after a restore,
           or after changing a text back); either line restores the same text.
 
         history [--since T] <directory>
           The latest writes below a directory or vault (or / for every vault), newest first: time,
-          writer, note, version, lines added and removed. --since takes 30m, 2h, 1d or a UTC time;
-          without it, the last 50. Only what the histories still hold (10 versions per note, writes
-          within 10 minutes by one writer count as one). Then 'diff <note> <version>' shows a change.
+          writer, note, version, lines added and removed, and the changeset: writes by one writer
+          close together in time, which count as one version per note. Moves get a row of their own
+          (a folder move one row). --since takes 30m, 2h, 1d or a UTC time;
+          without it, the last 50. Only what the histories still hold (10 versions per note, one per
+          changeset). Then 'diff <note> <version>' shows a change.
 
           history /Demo/welcome.md
           history /Demo --since 2h
@@ -76,25 +81,39 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
 
     private const int DefaultLimit = 50;
 
-    /// <summary>Every write the history still holds below a directory, newest first: one per state of a note.</summary>
+    /// <summary>
+    /// Every write the history still holds below a directory, newest first: one row per state of a note,
+    /// with its changeset, and one per move on record (a folder move as one row).
+    /// </summary>
     private async Task<ShellResult> WritesBelowAsync(VaultPath dir, DateTime? since, CancellationToken ct)
     {
-        var writes = new List<(DateTime At, string Writer, string Path, string Version, int Added, int Removed)>();
+        var rows = new List<(DateTime At, string Writer, string What, string Tail)>();
         foreach (var path in await notes.ListNotesUnderAsync(dir, ct))
         {
             if (await notes.GetAsync(path, ct) is not { } note) continue;
-            var states = new List<(string Content, string Writer, DateTime At)> { (note.Content, note.LastWriter, note.LastWriteAt) };
-            states.AddRange(note.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt)));
+            var states = new List<(string Content, string Writer, DateTime At, Changeset? Changeset)> { (note.Content, note.LastWriter, note.LastWriteAt, note.Changeset) };
+            states.AddRange(note.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt, h.Changeset)));
             for (var i = 0; i < states.Count; i++)
             {
-                var (content, writer, at) = states[i];
+                var (content, writer, at, changeset) = states[i];
                 if (since is { } from && at < from) continue;
                 var (added, removed) = TextDiff.Count(i + 1 < states.Count ? states[i + 1].Content : "", content);
-                writes.Add((at, writer, path.Value, VersionToken.Of(content), added, removed));
+                var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
+                rows.Add((at, writer, path.Value, $"{VersionToken.Of(content)}  +{added} -{removed}{cs}"));
             }
         }
 
-        var shown = writes.OrderByDescending(w => w.At).ThenBy(w => w.Path, TextOrder.Default).ToList();
+        var moves = (await notes.ListMovesAsync(dir, ct)).Where(m => since is not { } s || m.MovedAt >= s);
+        foreach (var group in moves.GroupBy(m => (m.MovedBy, m.MovedAt)))
+        {
+            var list = group.ToList();
+            var what = list.Count == 1
+                ? $"{list[0].From.Value} → {list[0].To.Value}"
+                : $"{CommonFolder(list.Select(m => m.From))} → {CommonFolder(list.Select(m => m.To))}";
+            rows.Add((group.Key.MovedAt, $"{group.Key.MovedBy} (mv)", what, list.Count == 1 ? "" : $"{list.Count} notes"));
+        }
+
+        var shown = rows.OrderByDescending(w => w.At).ThenBy(w => w.What, TextOrder.Default).ToList();
         if (since is null && shown.Count > DefaultLimit) shown = shown[..DefaultLimit];
         if (shown.Count == 0)
         {
@@ -102,9 +121,17 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         }
 
         var writerWidth = shown.Max(w => w.Writer.Length);
-        var pathWidth = shown.Max(w => w.Path.Length);
+        var whatWidth = shown.Max(w => w.What.Length);
         return ShellResult.Ok(Lines.Join(shown.Select(w =>
-            $"{Time(w.At)}  {w.Writer.PadRight(writerWidth)}  {w.Path.PadRight(pathWidth)}  {w.Version}  +{w.Added} -{w.Removed}")));
+            $"{Time(w.At)}  {w.Writer.PadRight(writerWidth)}  {(w.Tail.Length == 0 ? w.What : w.What.PadRight(whatWidth) + "  " + w.Tail)}")));
+    }
+
+    /// <summary>The deepest folder that holds all <paramref name="paths"/>, ending in '/'.</summary>
+    private static string CommonFolder(IEnumerable<VaultPath> paths)
+    {
+        var folders = paths.Select(p => p.Segments.SkipLast(1).ToList()).ToList();
+        var common = folders[0].TakeWhile((segment, i) => folders.All(f => f.Count > i && f[i] == segment)).ToList();
+        return "/" + string.Join('/', common) + "/";
     }
 
     /// <summary>"30m", "2h", "1d", or a UTC time such as "2026-10-23 14:00" or "2026-10-23T14:00Z".</summary>

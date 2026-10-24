@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 using Kumbu.Core.Sh.Commands;
 
 namespace Kumbu.Core.Sh;
@@ -26,15 +27,17 @@ public sealed class Shell
 
     // Insertion order is the order of the help list.
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
+    private readonly Checkpoints _checkpoints;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null)
     {
+        _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         ICommand[] commands =
         [
-            new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
-            new LinksCommand(notes), new Backlinks(notes),
-            new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
-            new History(notes, () => writer.Now), new DiffCommand(notes), new Restore(writer), new Mv(mover), new Rm(writer), new Trash(notes),
+            .. ReadingCommands(notes),
+            new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints),
+            new Mv(mover), new Rm(writer), new Trash(notes),
+            new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
             new Help(_commands),
         ];
         foreach (var command in commands)
@@ -42,6 +45,16 @@ public sealed class Shell
             _commands[command.Name] = command;
         }
     }
+
+    private static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "head", "tail", "wc", "sort"];
+
+    /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
+    private static ICommand[] ReadingCommands(INoteReader notes) =>
+    [
+        new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
+        new LinksCommand(notes), new Backlinks(notes),
+        new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
+    ];
 
     public async Task<ShellResult> RunAsync(string commandLine, CancellationToken ct)
     {
@@ -72,9 +85,12 @@ public sealed class Shell
 
             var args = stage.Skip(1).ToList();
             // "rg -- --help" searches for "--help"; only an option before "--" asks for help.
-            result = args.TakeWhile(a => a != "--").Contains("--help")
-                ? ShellResult.Ok(command.Help)
-                : await command.RunAsync(args, input, ct);
+            if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(command.Help);
+            else if (command is not (DiffCommand or Restore) && TakeCheckpoint(name, args, out var checkpoint, out var rest, out var optionError))
+            {
+                result = optionError ?? await RunInCheckpointAsync(name, checkpoint!, rest, input, ct);
+            }
+            else result = await command.RunAsync(args, input, ct);
             if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
@@ -85,5 +101,65 @@ public sealed class Shell
         }
 
         return OutputLimit.Apply(result.IsError ? result : result with { Version = version });
+    }
+
+    /// <summary>Takes "--checkpoint NAME" or "--checkpoint=NAME" (before "--") out of the arguments.</summary>
+    private static bool TakeCheckpoint(string command, List<string> args, out string? name, out List<string> rest, out ShellResult? error)
+    {
+        name = null;
+        error = null;
+        rest = [];
+        var options = true;
+        for (var i = 0; i < args.Count; i++)
+        {
+            if (args[i] == "--") options = false;
+            if (options && args[i] == "--checkpoint")
+            {
+                if (i + 1 >= args.Count) error = ShellResult.Error($"{command}: option '--checkpoint' requires an argument (a name from 'lscp')");
+                else name = args[++i];
+            }
+            else if (options && args[i].StartsWith("--checkpoint=", StringComparison.Ordinal)) name = args[i]["--checkpoint=".Length..];
+            else rest.Add(args[i]);
+        }
+
+        return name is not null || error is not null;
+    }
+
+    /// <summary>
+    /// Runs a reading command on a checkpoint instead of the current state. The checkpoint is found in the
+    /// vault of the first path argument. No version block: what a checkpoint holds can be restored, not edited.
+    /// </summary>
+    private async Task<ShellResult> RunInCheckpointAsync(string name, string checkpoint, List<string> args, string? input, CancellationToken ct)
+    {
+        if (!Readers.Contains(name)) return ShellResult.Error($"{name}: --checkpoint works with {string.Join(", ", Readers)}, diff and restore");
+
+        if (input is not null) return ShellResult.Error($"{name}: --checkpoint reads notes from a checkpoint; right of a pipe there are none to read");
+        if (args.Any(a => a == "--version" || a.StartsWith("--version=", StringComparison.Ordinal)))
+        {
+            return ShellResult.Error($"{name}: --checkpoint and --version can't go together; a checkpoint holds one version of each note");
+        }
+
+        var vaults = await _checkpoints.VaultsAsync(ct);
+        var paths = args.Where(a => a.StartsWith('/'))
+            .Select(a => VaultPath.TryParse(Sections.SectionAddress.Split(a).Path, out var p) ? p : null)
+            .OfType<VaultPath>()
+            .Where(p => !p.IsRoot && vaults.Contains(p.Segments[0]))
+            .ToList();
+        if (paths.Count == 0)
+        {
+            return ShellResult.Error($"{name}: --checkpoint needs a path in the checkpoint's vault, e.g. {name} --checkpoint {checkpoint} /Demo");
+        }
+
+        var (view, error) = await _checkpoints.OpenAsync(name, paths[0].Segments[0], checkpoint, ct);
+        if (view is null) return error!;
+        if (paths.FirstOrDefault(p => !view.Checkpoint.Relates(p)) is { } outside)
+        {
+            return ShellResult.Error($"{name}: {outside.Value} is not in checkpoint '{checkpoint}' (it covers {view.Checkpoint.Scope})");
+        }
+
+        var command = ReadingCommands(view).Single(c => c.Name == name);
+        var result = await command.RunAsync(args, null, ct);
+        if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
+        return result with { Version = null };
     }
 }

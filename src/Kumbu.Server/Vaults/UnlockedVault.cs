@@ -16,6 +16,7 @@ public sealed class UnlockedVault
 {
     private readonly byte[] _contentKey;
     private readonly byte[] _pathKey;
+    private readonly byte[] _textKey;
     private long _lastUsed;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now)
@@ -25,6 +26,7 @@ public sealed class UnlockedVault
         _contentKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []);
         KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
+        _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
         Touch(now);
     }
 
@@ -43,6 +45,9 @@ public sealed class UnlockedVault
     public ImmutableList<(ObjectId Id, TrashedNote Trashed)> Trash { get; set; } = [];
 
     public ImmutableList<MoveRecord> Moves { get; set; } = [];
+
+    /// <summary>The named checkpoints; their notes' content stays in MongoDB until a command reads it.</summary>
+    public ImmutableList<StoredCheckpoint> Checkpoints { get; set; } = [];
 
     /// <summary>Path ids of notes whose documents don't open. Their paths are sealed, so the path id is all
     /// that's known; it is enough to tell a request that asks for that path.</summary>
@@ -95,6 +100,46 @@ public sealed class UnlockedVault
         return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt);
     }
 
+    /// <summary>A keyed hash of a checkpoint's name, for the unique index: names are unique per vault.</summary>
+    public byte[] NameId(string name) => VaultCrypto.Mac(_pathKey, "checkpoint:" + name);
+
+    /// <summary>A keyed hash of a note's content. Checkpoints store each content once per vault under it.</summary>
+    public byte[] TextId(string content) => VaultCrypto.Mac(_textKey, content);
+
+    public byte[] SealCheckpoint(ObjectId docId, Checkpoint checkpoint, IReadOnlyDictionary<VaultPath, byte[]> textIds) =>
+        Seal($"checkpoint:{Id}:{docId}", new CheckpointPayload(
+            checkpoint.Name, checkpoint.Path.Value, checkpoint.Folder, checkpoint.CreatedBy, checkpoint.CreatedAt,
+            [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))]));
+
+    /// <summary>Opens a checkpoint and checks its name against the document's name id, as for notes and paths.</summary>
+    public StoredCheckpoint OpenCheckpoint(SealedDocument doc)
+    {
+        var p = Open<CheckpointPayload>($"checkpoint:{Id}:{doc.Id}", doc.Blob);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(NameId(p.Name), doc.PathId))
+        {
+            throw new InvalidDataException($"Name id of checkpoint {doc.Id} does not match its sealed name");
+        }
+
+        var checkpoint = new Checkpoint(
+            p.Name, Payload.Path(p.Path), p.Folder, p.CreatedBy, DateTime.SpecifyKind(p.CreatedAt, DateTimeKind.Utc),
+            [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))]);
+        return new StoredCheckpoint(doc.Id, checkpoint, p.Notes.ToDictionary(n => Payload.Path(n.Path), n => Convert.FromBase64String(n.TextId)));
+    }
+
+    public byte[] SealText(byte[] textId, string content) => Seal($"cptext:{Id}:{Convert.ToBase64String(textId)}", new TextPayload(content));
+
+    /// <summary>Opens a checkpoint's text; its id is the keyed hash of the content, so a changed text doesn't open.</summary>
+    public string OpenText(SealedDocument doc)
+    {
+        var content = Open<TextPayload>($"cptext:{Id}:{Convert.ToBase64String(doc.PathId)}", doc.Blob).Content;
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(TextId(content), doc.PathId))
+        {
+            throw new InvalidDataException($"Text {doc.Id} does not match its id");
+        }
+
+        return content;
+    }
+
     private byte[] Seal<T>(string context, T payload) =>
         VaultCrypto.Seal(_contentKey, JsonSerializer.SerializeToUtf8Bytes(payload), context);
 
@@ -105,15 +150,24 @@ public sealed class UnlockedVault
     private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length));
 }
 
-internal sealed record HistoryPayload(string Content, string WrittenBy, DateTime WrittenAt);
+internal sealed record ChangesetPayload(string Id, DateTime Started)
+{
+    public static ChangesetPayload? From(Changeset? c) => c is null ? null : new(c.Id, c.Started);
 
+    public Changeset ToChangeset() => new(Id, DateTime.SpecifyKind(Started, DateTimeKind.Utc));
+}
+
+internal sealed record HistoryPayload(string Content, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset = null);
+
+/// <remarks>Changeset is missing in notes written before step 6b; such a state joins no changeset.</remarks>
 internal sealed record NotePayload(
-    string Path, string Content, string LastWriter, DateTime LastWriteAt, List<HistoryPayload> History, string? SeedContent)
+    string Path, string Content, string LastWriter, DateTime LastWriteAt, List<HistoryPayload> History, string? SeedContent,
+    ChangesetPayload? Changeset = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
-        [.. History.Select(h => new HistoryEntry(h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc)))],
-        SeedContent);
+        [.. History.Select(h => new HistoryEntry(h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset()))],
+        SeedContent, Changeset?.ToChangeset());
 }
 
 internal sealed record TrashPayload(NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt);
@@ -122,11 +176,21 @@ internal sealed record MovePayload(string From, string To, string MovedBy, DateT
 
 internal sealed record VaultMeta(string Name);
 
+internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
+
+internal sealed record CheckpointPayload(string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes);
+
+internal sealed record TextPayload(string Content);
+
+/// <summary>A checkpoint as the working set holds it: its document and where each note's content is.</summary>
+public sealed record StoredCheckpoint(ObjectId Id, Checkpoint Checkpoint, IReadOnlyDictionary<VaultPath, byte[]> TextIds);
+
 internal static class Payload
 {
     public static NotePayload From(StoredNote n) => new(
         n.Path.Value, n.Content, n.LastWriter, n.LastWriteAt,
-        [.. n.History.Select(h => new HistoryPayload(h.Content, h.WrittenBy, h.WrittenAt))], n.SeedContent);
+        [.. n.History.Select(h => new HistoryPayload(h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset)))], n.SeedContent,
+        ChangesetPayload.From(n.Changeset));
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");

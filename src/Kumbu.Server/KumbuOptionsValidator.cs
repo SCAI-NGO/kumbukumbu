@@ -7,6 +7,7 @@ namespace Kumbu.Server;
 public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
 {
     public const string MongoMessage = "Kumbu:Mongo:ConnectionString must be set";
+    public const string CheckpointLimitMessage = "Kumbu:Vaults:CheckpointLimit must be 0 or more";
 
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
@@ -19,6 +20,11 @@ public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
         if (string.IsNullOrWhiteSpace(options.Mongo.ConnectionString))
         {
             failures.Add(MongoMessage);
+        }
+
+        if (options.Vaults.CheckpointLimit < 0)
+        {
+            failures.Add(CheckpointLimitMessage);
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);

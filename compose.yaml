@@ -34,6 +34,7 @@ services:
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
       Kumbu__Recovery__Path: /recovery
       Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
+      Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro
