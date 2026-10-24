@@ -70,7 +70,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 ### Versions & trash
 - Every read returns a **version token** (ETag-like), kept separate from content.
 - Every write must send it → optimistic concurrency.
-- **Coalescing:** edits by the same key within 10 minutes merge into one version; the last **10** versions per note are kept (encrypted) → `history`, `restore`. "State before this agent session" is always recoverable.
+- **Coalescing:** edits by the same key within 10 minutes merge into one version, whichever tool wrote them; such a group of writes is a **changeset**, and each history entry records its changeset id (decided Oct 24, 2026, after the phase 6 test; undoing a changeset across notes may come later); the last **10** versions per note are kept (encrypted) → `history`, `restore`. "State before this agent session" is always recoverable.
 - `rm` is a soft delete into trash; **trash expiry 30 days**.
 
 ## 5. Agent interface (MCP) — three tools
