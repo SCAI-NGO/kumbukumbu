@@ -17,7 +17,8 @@ public static class Security
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
     /// <summary>
-    /// The security headers, on every response (API, MCP, static files and errors alike). Added when the response
+    /// The security headers, on every response (API, MCP, static files and errors alike), and
+    /// <c>Cache-Control: no-store</c> on the API's. Added when the response
     /// starts, so that a handler clearing the response doesn't drop them. HSTS only when users reach the instance
     /// over https: on plain http a browser ignores it, and on localhost it would pin https for every local port.
     /// </summary>
@@ -33,6 +34,9 @@ public static class Security
                 headers["Referrer-Policy"] = "same-origin";
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
                 if (hsts) headers.StrictTransportSecurity = "max-age=31536000";
+                // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
+                // no browser or proxy cache may keep them.
+                if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";
                 return Task.CompletedTask;
             });
             return next(context);

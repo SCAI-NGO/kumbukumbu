@@ -249,8 +249,9 @@ public sealed class InvitationTests(MongoFixture fixture)
     {
         var link = await Bootstrap().RunAsync(BaseUrl + "/", Ct);
 
-        Assert.StartsWith(BaseUrl + "/join/", link);
-        var code = link[(BaseUrl + "/join/").Length..];
+        // A fragment: the browser never sends it, so the code is in no request line or access log.
+        Assert.StartsWith(BaseUrl + "/join#", link);
+        var code = link[(BaseUrl + "/join#").Length..];
         Assert.Equal(Roles.PrimaryAdmin, (await Invitations().PeekAsync(code, Ct))!.Role);
 
         var (user, _) = await Invitations().RedeemAsync(code, "chris", Password, Ct);
@@ -261,7 +262,7 @@ public sealed class InvitationTests(MongoFixture fixture)
     public async Task Bootstrap_is_refused_once_a_primary_admin_exists()
     {
         var link = await Bootstrap().RunAsync(BaseUrl, Ct);
-        await Invitations().RedeemAsync(link.Split('/')[^1], "chris", Password, Ct);
+        await Invitations().RedeemAsync(link.Split('#')[^1], "chris", Password, Ct);
 
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => Bootstrap().RunAsync(BaseUrl, Ct));
         Assert.Contains("primary admin", refused.Message);
@@ -270,8 +271,8 @@ public sealed class InvitationTests(MongoFixture fixture)
     [Fact]
     public async Task Running_bootstrap_again_before_the_link_is_used_revokes_the_earlier_link()
     {
-        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
-        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
+        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
 
         Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(first, Ct))!.State);
         Assert.True((await Invitations().PeekAsync(second, Ct))!.Valid);
@@ -281,9 +282,9 @@ public sealed class InvitationTests(MongoFixture fixture)
     public async Task There_is_never_a_second_primary_admin_even_from_two_bootstrap_links()
     {
         // Two links open at once (two bootstraps racing past the revocation): the unique index decides.
-        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
         await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
-        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
         await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
 
         await Invitations().RedeemAsync(first, "chris", Password, Ct);
@@ -298,9 +299,9 @@ public sealed class InvitationTests(MongoFixture fixture)
     [Fact]
     public async Task Creating_the_primary_admin_revokes_every_other_open_bootstrap_link()
     {
-        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        var first = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
         await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
-        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('/')[^1];
+        var second = (await Bootstrap().RunAsync(BaseUrl, Ct)).Split('#')[^1];
         await InvitationDocs.UpdateManyAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Unset("revokedAt"), cancellationToken: Ct);
 
         await Invitations().RedeemAsync(second, "chris", Password, Ct);
@@ -331,7 +332,7 @@ public sealed class InvitationTests(MongoFixture fixture)
         var exit = await BootstrapAdmin.ExecuteAsync(Bootstrap(), BaseUrl, stdout, stderr, Ct);
 
         Assert.Equal(0, exit);
-        Assert.Matches(@"^https://kumbu\.example\.org/join/[A-Za-z0-9_-]{43}\r?\n$", stdout.ToString());
-        Assert.DoesNotContain("/join/", stderr.ToString());
+        Assert.Matches(@"^https://kumbu\.example\.org/join#[A-Za-z0-9_-]{43}\r?\n$", stdout.ToString());
+        Assert.DoesNotContain("/join#", stderr.ToString());
     }
 }

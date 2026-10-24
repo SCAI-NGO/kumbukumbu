@@ -17,7 +17,7 @@ public sealed class BootstrapAdmin(IMongoDatabase db, Invitations invitations)
     /// running the command again gives a new link.</summary>
     public static readonly TimeSpan Expiry = TimeSpan.FromHours(24);
 
-    /// <summary>A new link <c>{baseUrl}/join/{code}</c>; any earlier one still open stops working.
+    /// <summary>A new link <c>{baseUrl}/join#{code}</c>; any earlier one still open stops working.
     /// <see cref="InvalidOperationException"/> if a primary admin exists.</summary>
     public async Task<string> RunAsync(string baseUrl, CancellationToken ct)
     {
@@ -27,7 +27,7 @@ public sealed class BootstrapAdmin(IMongoDatabase db, Invitations invitations)
         }
 
         var (code, _) = await invitations.CreateBootstrapAsync(Expiry, ct);
-        return $"{baseUrl.TrimEnd('/')}/join/{code}";
+        return Invitations.Link(baseUrl, code);
     }
 
     /// <summary>The command: the link alone on <paramref name="stdout"/> (so it can be piped), everything else on

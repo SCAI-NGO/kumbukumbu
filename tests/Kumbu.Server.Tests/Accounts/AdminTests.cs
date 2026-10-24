@@ -69,13 +69,13 @@ public sealed class AdminTests(MongoFixture fixture)
         Assert.Equal(Roles.User, row.Role);
         Assert.True(row.Active);
         Assert.Equal(lea.CreatedAt, row.CreatedAt);
-        Assert.Equal(_time.GetUtcNow().UtcDateTime, row.LastSeenAt);
+        Assert.Equal(_time.GetUtcNow().UtcDateTime, row.LastSignInAt);
         Assert.Equal(2, row.Vaults);
         Assert.True(row.BytesStored > 0);
         var anna = users.Single(u => u.Username == "anna");
         Assert.Equal(0, anna.Vaults);
         Assert.Equal(0, anna.BytesStored);
-        Assert.Null(anna.LastSeenAt);
+        Assert.Null(anna.LastSignInAt);
 
         var json = JsonSerializer.Serialize(users);
         Assert.DoesNotContain("Geheimprojekt", json);

@@ -32,7 +32,7 @@ public sealed record InvitationInfo(
 }
 
 /// <summary>
-/// Invitations (accounts design, "Sign-up with an invitation"): a single-use link <c>/join/{code}</c> with 32 random
+/// Invitations (accounts design, "Sign-up with an invitation"): a single-use link <c>/join#{code}</c> with 32 random
 /// bytes as its code, a role, an expiry and an optional note, revocable until used. MongoDB holds only an HMAC of
 /// the code under a key derived from the <see cref="ServerSecret"/>, so a code is checked without being stored.
 /// </summary>
@@ -49,6 +49,13 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
     private const string CodeKeyLabel = "kumbu/v1/invitation-code";
 
     private volatile bool _ready;
+
+    /// <summary>
+    /// The link to the join page. The code goes in the fragment, which a browser never sends: so it appears in
+    /// no request line, no proxy's access log and no Referer, and the web app hands it to the API in a body.
+    /// Without <paramref name="baseUrl"/> the link is relative, and the web app puts its own origin in front.
+    /// </summary>
+    public static string Link(string? baseUrl, string code) => $"{baseUrl?.TrimEnd('/')}/join#{code}";
 
     private IMongoCollection<InvitationDocument> Docs { get; } = db.GetCollection<InvitationDocument>("invitations");
 

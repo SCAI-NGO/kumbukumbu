@@ -26,6 +26,10 @@ if (bootstrapCommand)
     builder.Logging.ClearProviders().AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 }
 
+// ASP.NET logs every request line at Information ("Request starting POST /api/..."), endpoint matches and
+// results: nothing an operator needs, and a URL may carry something secret. Warnings and errors stay.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
     .ValidateOnStart();

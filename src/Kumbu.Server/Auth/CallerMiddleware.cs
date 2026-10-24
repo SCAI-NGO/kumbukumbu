@@ -14,7 +14,7 @@ namespace Kumbu.Server.Auth;
 /// fails closed:
 /// <list type="bullet">
 /// <item>every matched endpoint, unless it is marked <c>AllowAnonymous()</c> (<c>/healthz</c>,
-/// <c>/api/openapi.json</c>, <c>POST /api/session</c>, <c>POST /api/join</c>, <c>GET /api/invitations/{code}</c>,
+/// <c>/api/openapi.json</c>, <c>POST /api/session</c>, <c>POST /api/join</c>, <c>POST /api/invitations/peek</c>,
 /// <c>POST /api/recover</c>),
 /// so a path spelled differently but routed to <c>MapMcp</c> is still guarded;</item>
 /// <item>every path under <c>/mcp</c> or <c>/api</c> (case-insensitively: endpoint routing matches literal

@@ -13,6 +13,9 @@ public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
     public const string PublicUrlMessage =
         "Kumbu:PublicUrl (KUMBU_PUBLIC_URL) must be an absolute http or https URL without a path, e.g. https://kumbu.example.org";
 
+    public const string ProxyNeedsPublicUrlMessage =
+        "Kumbu:Proxy:Trusted (KUMBU_TRUSTED_PROXY) needs Kumbu:PublicUrl (KUMBU_PUBLIC_URL): behind a proxy that terminates TLS, the web app's requests are checked against it";
+
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
         var failures = new List<string>();
@@ -29,6 +32,11 @@ public sealed class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
         if (!string.IsNullOrEmpty(options.PublicUrl) && !KumbuOptions.IsUsablePublicUrl(options.PublicUrl))
         {
             failures.Add(PublicUrlMessage);
+        }
+
+        if (options.Proxy.Trusted && string.IsNullOrEmpty(options.PublicUrl))
+        {
+            failures.Add(ProxyNeedsPublicUrlMessage);
         }
 
         if (options.Vaults.CheckpointLimit < 0)

@@ -234,7 +234,7 @@ public sealed class CallerTests(KumbuAppFactory app)
     [Fact]
     public async Task Twenty_one_wrong_keys_in_a_minute_from_one_ip_are_429()
     {
-        await using var proxied = app.WithWebHostBuilder(b => b.UseSetting("Kumbu:Proxy:Trusted", "true"));
+        await using var proxied = app.WithWebHostBuilder(b => b.UseSetting("Kumbu:Proxy:Trusted", "true").UseSetting("Kumbu:PublicUrl", KumbuAppFactory.PublicUrl));
         using var http = proxied.CreateClient();
         const string ip = "203.0.113.7";
 

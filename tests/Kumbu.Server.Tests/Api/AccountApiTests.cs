@@ -8,8 +8,11 @@ using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
+using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -79,6 +82,37 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         return SessionOf(response);
     }
 
+    private Task<HttpResponseMessage> PeekAsync(string code, HttpClient? http = null) =>
+        SendAsync(HttpMethod.Post, "/api/invitations/peek", new { code }, http: http);
+
+    private async Task<string> InvitationCodeAsync(string role = "user")
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role }, session: admin);
+        return (await JsonAsync(created))["code"]!.GetValue<string>();
+    }
+
+    private sealed class CapturedLog : ILoggerProvider
+    {
+        public ConcurrentQueue<string> Lines { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Lines);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Logger(string category, ConcurrentQueue<string> lines) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+                lines.Enqueue($"{logLevel} {category}: {formatter(state, exception)} {exception}");
+        }
+    }
+
     private static string NewIp() => $"198.19.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
 
     [Fact]
@@ -89,10 +123,10 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var invitation = await JsonAsync(created);
         var code = invitation["code"]!.GetValue<string>();
-        Assert.Equal($"{Origin}/join/{code}", invitation["link"]!.GetValue<string>());
+        Assert.Equal($"{Origin}/join#{code}", invitation["link"]!.GetValue<string>());
 
         // The join page sees role, expiry and validity, nothing about who made it or for whom.
-        using var peek = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}");
+        using var peek = await PeekAsync(code);
         Assert.Equal(HttpStatusCode.OK, peek.StatusCode);
         var peeked = (await JsonAsync(peek)).AsObject();
         Assert.Equal(["expiresAt", "role", "valid"], peeked.Select(p => p.Key).Order());
@@ -115,7 +149,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(username, meJson["user"]!["username"]!.GetValue<string>());
         Assert.DoesNotContain(recoveryKey, meJson.ToJsonString(), StringComparison.Ordinal);
 
-        using var used = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}");
+        using var used = await PeekAsync(code);
         var usedJson = await JsonAsync(used);
         Assert.False(usedJson["valid"]!.GetValue<bool>());
         Assert.Equal("used", usedJson["reason"]!.GetValue<string>());
@@ -126,9 +160,37 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task No_invitation_code_reaches_the_log()
+    {
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        using var http = Client(logged);
+        var code = await InvitationCodeAsync();
+
+        using var peek = await PeekAsync(code, http);
+        using var join = await SendAsync(HttpMethod.Post, "/api/join", new { code, username = NewUsername(), password = Password }, http: http);
+        // A code in a path (an old-style link pasted somewhere) must not be logged either.
+        using var inPath = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}", http: http);
+
+        Assert.Equal(HttpStatusCode.OK, join.StatusCode);
+        Assert.Contains(log.Lines, l => l.Contains("was used by", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains(code, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_invitation_code_is_never_part_of_an_api_path()
+    {
+        var code = await InvitationCodeAsync();
+
+        using var old = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}");
+
+        Assert.NotEqual(HttpStatusCode.OK, old.StatusCode);
+    }
+
+    [Fact]
     public async Task An_unknown_invitation_code_is_404()
     {
-        using var response = await SendAsync(HttpMethod.Get, "/api/invitations/" + new string('A', 43));
+        using var response = await PeekAsync(new string('A', 43));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.NotNull((await JsonAsync(response))["error"]);
@@ -146,7 +208,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.Conflict, join.StatusCode);
         Assert.Null(SetCookie(join));
-        using var peek = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}");
+        using var peek = await PeekAsync(code);
         Assert.True((await JsonAsync(peek))["valid"]!.GetValue<bool>());
     }
 
@@ -378,6 +440,23 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_refused_admin_change_changes_nothing()
+    {
+        var adminName = await NewUserAsync(Roles.Admin);
+        var admin = await SignInAsync(adminName);
+        using var list = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
+        var self = (await JsonAsync(list)).AsArray().Single(u => u!["username"]!.GetValue<string>() == adminName)!["id"]!.GetValue<string>();
+
+        using var refused = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{self}", new { role = "user", active = false }, session: admin);
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        using var after = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
+        var row = (await JsonAsync(after)).AsArray().Single(u => u!["id"]!.GetValue<string>() == self)!;
+        Assert.Equal("admin", row["role"]!.GetValue<string>());
+        Assert.True(row["active"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task The_admin_lists_and_revokes_invitations()
     {
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
@@ -396,7 +475,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
         using var again = await SendAsync(HttpMethod.Delete, $"/api/admin/invitations/{id}", session: admin);
         Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
-        using var peek = await SendAsync(HttpMethod.Get, $"/api/invitations/{code}");
+        using var peek = await PeekAsync(code);
         Assert.Equal("revoked", (await JsonAsync(peek))["reason"]!.GetValue<string>());
 
         using var tooLong = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "user", expiresInDays = 31 }, session: admin);
@@ -545,6 +624,16 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Api_responses_are_never_cached_and_others_are_left_alone()
+    {
+        using var api = await SendAsync(HttpMethod.Get, "/api/session", origin: null);
+        using var health = await SendAsync(HttpMethod.Get, "/healthz", origin: null);
+
+        Assert.True(api.Headers.CacheControl?.NoStore);
+        Assert.Null(health.Headers.CacheControl);
+    }
+
+    [Fact]
     public async Task Without_an_https_public_url_there_is_no_hsts()
     {
         using var http = Client(app);
@@ -565,7 +654,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         foreach (var (method, path) in new[]
                  {
                      ("post", "/api/session"), ("get", "/api/session"), ("delete", "/api/session"),
-                     ("get", "/api/invitations/{code}"), ("post", "/api/join"), ("post", "/api/recover"),
+                     ("post", "/api/invitations/peek"), ("post", "/api/join"), ("post", "/api/recover"),
                      ("post", "/api/password"), ("post", "/api/recovery-key"), ("post", "/api/sessions/end-others"),
                      ("get", "/api/keys"), ("post", "/api/keys"), ("delete", "/api/keys/{id}"),
                      ("get", "/api/admin/users"), ("patch", "/api/admin/users/{id}"),

@@ -320,7 +320,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     [Fact]
     public async Task A_parallel_burst_of_wrong_keys_gets_no_more_than_twenty_tries()
     {
-        await using var proxied = app.WithWebHostBuilder(b => b.UseSetting("Kumbu:Proxy:Trusted", "true"));
+        await using var proxied = app.WithWebHostBuilder(b => b.UseSetting("Kumbu:Proxy:Trusted", "true").UseSetting("Kumbu:PublicUrl", KumbuAppFactory.PublicUrl));
         using var http = proxied.CreateClient();
         const string ip = "203.0.113.66";
 

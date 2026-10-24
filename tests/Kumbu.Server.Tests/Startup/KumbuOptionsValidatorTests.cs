@@ -109,4 +109,18 @@ public sealed class KumbuOptionsValidatorTests
 
         Assert.True(Validate(options).Succeeded);
     }
+
+    // Behind a proxy that terminates TLS the request's own scheme is http, so without a PublicUrl the Origin
+    // check would refuse every state-changing request from the web app.
+    [Fact]
+    public void A_trusted_proxy_needs_a_public_url()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Proxy.Trusted = true;
+
+        Assert.Equal([KumbuOptionsValidator.ProxyNeedsPublicUrlMessage], Validate(options).Failures);
+
+        options.PublicUrl = "https://kumbu.example.org";
+        Assert.True(Validate(options).Succeeded);
+    }
 }

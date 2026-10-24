@@ -22,6 +22,8 @@ public sealed record SignInRequest(string Username, string Password);
 public sealed record InvitationPeekView(
     string Role, DateTime ExpiresAt, bool Valid, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reason = null);
 
+public sealed record PeekInvitationRequest(string Code);
+
 public sealed record JoinRequest(string Code, string Username, string Password);
 
 /// <summary>The new account; <c>recoveryKey</c> is shown here once and never again.</summary>
@@ -78,7 +80,8 @@ public static class AccountApi
     {
         var open = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).AllowAnonymous();
         open.MapPost("/session", SignInAsync).Errors(400, 401, 403, 429);
-        open.MapGet("/invitations/{code}", PeekInvitationAsync).Errors(404);
+        // POST with the code in the body, never in the path: request lines end up in logs.
+        open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404);
         open.MapPost("/join", JoinAsync).Errors(400, 403, 409, 429);
         open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 429);
 
@@ -121,9 +124,9 @@ public static class AccountApi
         return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt));
     }
 
-    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(string code, Invitations invitations, CancellationToken ct)
+    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(PeekInvitationRequest body, Invitations invitations, CancellationToken ct)
     {
-        var info = await invitations.PeekAsync(code, ct) ?? throw ApiErrors.NotFound("This is not a valid invitation.");
+        var info = await invitations.PeekAsync(body.Code, ct) ?? throw ApiErrors.NotFound("This is not a valid invitation.");
         return TypedResults.Ok(new InvitationPeekView(info.Role, info.ExpiresAt, info.Valid, info.Valid ? null : StateText(info.State)));
     }
 
@@ -215,14 +218,16 @@ public static class AccountApi
 
     private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSeenAt, u.Vaults, u.BytesStored))
+            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, u.Vaults, u.BytesStored))
             .ToArray());
 
     private static async Task<NoContent> UpdateUserAsync(string id, UpdateUserRequest body, RequestCaller caller, Admin admin, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
-        // The role first: SetRoleAsync refuses an unusable role before it changes anything, so a request that
-        // fails there leaves the user as they were.
+        // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
+        // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
+        // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
+        if (body.Active is false && id == caller.User!.Id) throw new NotPermittedException("You can't deactivate yourself.");
         if (body.Role is { } role && !await admin.SetRoleAsync(caller.User!, id, role, ct)) throw NoSuchUser();
         if (body.Active is { } active && !await admin.SetActiveAsync(caller.User!, id, active, ct)) throw NoSuchUser();
         return TypedResults.NoContent();
@@ -240,8 +245,7 @@ public static class AccountApi
             ? days > 0 && days <= Invitations.MaxExpiry.TotalDays ? TimeSpan.FromDays(days) : throw ApiErrors.BadRequest($"An invitation is valid for 1 to {Invitations.MaxExpiry.TotalDays} days.")
             : (TimeSpan?)null;
         var (code, info) = await invitations.CreateAsync(caller.User!, body.Role, body.Note, expiry, ct);
-        // Without a PublicUrl the link is relative: the web app puts its own origin in front.
-        var link = $"{options.Value.PublicUrl?.TrimEnd('/')}/join/{code}";
+        var link = Invitations.Link(options.Value.PublicUrl, code);
         return TypedResults.Created($"/api/admin/invitations/{info.Id}", new CreatedInvitationView(code, link, InvitationView(info)));
     }
 
