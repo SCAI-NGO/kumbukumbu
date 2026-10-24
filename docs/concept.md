@@ -142,6 +142,12 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - Rate limiting on login and invalid keys (Redis).
 - **Later:** sharing vaults between users (needs asymmetric crypto), TOTP/2FA.
 
+**Login through GitHub** (direction from Chris, Oct 24, 2026, for the COR.energy pitch): at COR.energy every internal tool for developers (Rancher, Argo CD, Mongo Express …) signs in through GitHub, and Kumbu² should fit in. To settle with step 8:
+- **GitHub as the identity provider, limited to an organisation and optionally a team** (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`), the pattern of oauth2-proxy and Argo CD. The first login of a member creates the user; leaving the organisation ends the access. Invites become an option for deployments without an organisation.
+- **Admins through a GitHub team** (`KUMBU_GITHUB_ADMIN_TEAM`) instead of, or next to, the bootstrap token.
+- **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, later a passkey with PRF); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
+- **Later: any OIDC provider** (Entra ID, Keycloak), GitHub being the first. The MCP OAuth flow (§9, step 10) uses the same login at `/authorize`; Claude and other clients are OAuth clients and bring no identity of their own.
+
 ## 9. Client access
 
 - **Bearer API keys:** Claude Code, opencode, Hermes, Chatsundere etc.
