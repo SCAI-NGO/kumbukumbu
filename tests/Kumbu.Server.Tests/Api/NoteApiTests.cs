@@ -5,7 +5,10 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Search;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -395,5 +398,26 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         var put = paths["/api/notes/{vault}/{path}"]!["put"]!["responses"]!;
         Assert.NotNull(put["409"]!["content"]?["application/json"]?["schema"]);
         Assert.NotNull(document["components"]!["schemas"]!["ConflictView"]);
+    }
+
+    [Fact]
+    public async Task No_name_or_path_of_a_users_vault_reaches_the_log()
+    {
+        const string vault = "Geheimprojekt Zebra";
+        const string notePath = "Kündigung Müller.md";
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var user = await RestClient.NewAsync(logged, vault);
+        await user.CreateAsync(notePath, "# Kündigung\n\nUnter uns.\n");
+        await logged.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        // A second process unlocks the vault from the database and indexes it again.
+        await using var again = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var opened = Assert.Single(await again.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct));
+        await again.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Contains(log.Lines, l => l.Contains($"Unlocked vault {opened.Id}", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("Geheimprojekt", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("Kündigung", StringComparison.OrdinalIgnoreCase));
     }
 }

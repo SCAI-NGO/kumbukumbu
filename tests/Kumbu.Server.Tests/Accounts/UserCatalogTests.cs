@@ -57,6 +57,8 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var before = kdf.Runs;
         Assert.Null(await users.TrySignInAsync("chris", "not the password at all", Ct));
         Assert.Equal(before + 1, kdf.Runs);
+        Assert.Null(await users.TrySignInAsync("chris", "", Ct));
+        Assert.Null(await users.TrySignInAsync("nobody", "", Ct));
 
         // Argon2 runs for an unknown username too, so timing doesn't tell which usernames exist.
         Assert.Null(await users.TrySignInAsync("nobody", Password, Ct));
@@ -154,8 +156,9 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var (user, oldRecoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
         var key = (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey;
 
-        var newRecoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, key, Ct);
+        var newRecoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, key, Password, Ct);
 
+        Assert.NotNull(newRecoveryKey);
         Assert.NotEqual(oldRecoveryKey, newRecoveryKey);
         Assert.False(await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct));
         Assert.True(await users.RecoverAsync("chris", newRecoveryKey, NewPassword, Ct));
@@ -163,13 +166,28 @@ public sealed class UserCatalogTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task Regenerating_the_recovery_key_refuses_a_key_that_is_not_the_users()
+    public async Task Regenerating_the_recovery_key_refuses_a_wrong_password_or_a_key_that_is_not_the_users()
     {
         var users = Catalog();
         var (user, recoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
+        var key = (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey;
 
-        await Assert.ThrowsAsync<ArgumentException>(() => users.RegenerateRecoveryKeyAsync(user.Id, new byte[32], Ct));
+        Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, key, "not the password at all", Ct));
+        Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, key, "", Ct));
+        Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, new byte[32], Password, Ct));
         Assert.True(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
+    }
+
+    [Theory]
+    [InlineData("Chris", "chris", "Chris")]
+    [InlineData("\u212Aai", "kai", "kai")]
+    [InlineData("\u212A\u212Aa", "kka", "kka")]
+    public async Task The_display_name_is_the_typed_form_only_when_it_is_plain_ascii(string typed, string username, string display)
+    {
+        var (user, _) = await Catalog().CreateAsync(typed, Password, Roles.User, Ct);
+
+        Assert.Equal(username, user.Username);
+        Assert.Equal(display, user.Display);
     }
 
     [Fact]

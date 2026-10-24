@@ -79,7 +79,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }
             catch (CryptographicException)
             {
-                log.LogWarning("A key slot of vault {Vault} matched the credential but did not open", slot.Vault);
+                log.LogWarning("A key slot of vault {VaultId} matched the credential but did not open", slot.Vault);
                 continue;
             }
 
@@ -140,7 +140,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }
             catch (CryptographicException)
             {
-                log.LogWarning("A user slot of vault {Vault} matched the user key but did not open", slot.Vault);
+                log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
                 continue;
             }
 
@@ -281,7 +281,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
-                log.LogWarning("A slot of API key {KeyId} on vault {Vault} did not open", keyId, slot.Vault);
+                log.LogWarning("A slot of API key {KeyId} on vault {VaultId} did not open", keyId, slot.Vault);
                 continue;
             }
 
@@ -368,7 +368,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         {
             if (now - vault.LastUsed > TimeSpan.FromMinutes(o.IdleMinutes) && now - vault.LastUsed > InUse && _open.TryRemove(id, out _))
             {
-                log.LogInformation("Locked vault {Vault} after {Minutes} idle minutes", vault.Name, o.IdleMinutes);
+                log.LogInformation("Locked vault {VaultId} after {Minutes} idle minutes", vault.Id, o.IdleMinutes);
             }
         }
 
@@ -376,7 +376,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         foreach (var vault in _open.Values.Where(v => now - v.LastUsed > InUse).OrderBy(v => v.LastUsed))
         {
             if (_open.Values.Sum(v => v.ApproxBytes) <= cap) break;
-            if (_open.TryRemove(vault.Id, out _)) log.LogInformation("Locked vault {Vault} to stay below the memory limit", vault.Name);
+            if (_open.TryRemove(vault.Id, out _)) log.LogInformation("Locked vault {VaultId} to stay below the memory limit", vault.Id);
         }
 
         foreach (var vault in _open.Values)
@@ -455,7 +455,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
 
             _open[id] = vault;
-            log.LogInformation("Unlocked vault {Vault} ({Notes})", vault.Name, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
+            log.LogInformation("Unlocked vault {VaultId} ({Notes})", vault.Id, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
             Unlocked?.Invoke(vault);
             return vault;
         }
@@ -473,7 +473,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         }
         catch (Exception e) when (e is CryptographicException or JsonException or InvalidDataException)
         {
-            log.LogError("Document {Id} of vault {Vault} does not open; it was changed or damaged outside Kumbu²", doc.Id, vault.Name);
+            log.LogError("Document {Id} of vault {VaultId} does not open; it was changed or damaged outside Kumbu²", doc.Id, vault.Id);
             return null;
         }
     }

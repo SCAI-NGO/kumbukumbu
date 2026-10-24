@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -242,7 +243,11 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     {
         var clean = name.Normalize(NormalizationForm.FormC).Trim();
         if (clean.Length is 0 or > MaxNameLength) throw new ArgumentException($"An API key's name has 1 to {MaxNameLength} characters.", nameof(name));
-        if (clean.Any(char.IsControl)) throw new ArgumentException("An API key's name can't contain control characters.", nameof(name));
+        // Format characters (zero-width, bidi overrides) are invisible too: "chris\u200B" would show as "chris".
+        if (clean.Any(c => char.IsControl(c) || char.GetUnicodeCategory(c) == UnicodeCategory.Format))
+        {
+            throw new ArgumentException("An API key's name can't contain control or invisible formatting characters.", nameof(name));
+        }
         if (clean.Contains(" (", StringComparison.Ordinal)) throw new ArgumentException("An API key's name can't contain \" (\".", nameof(name));
         if (string.Equals(clean, user.Username, StringComparison.OrdinalIgnoreCase))
         {

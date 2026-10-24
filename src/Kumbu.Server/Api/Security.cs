@@ -101,10 +101,10 @@ public static class Security
 
 /// <summary>
 /// The rate limits of the account endpoints, in memory (one instance): sign-in 5 per minute per username and
-/// 20 per minute per address, join and recovery 5 per minute per address; checking the old password of a
-/// password change 5 per minute per username. Every attempt counts, successful or
-/// not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make the server
-/// spend. Sliding windows, as in <see cref="WrongKeyLimiter"/>.
+/// 20 per minute per address, join and recovery 5 per minute per address; checking the current password of a
+/// password change or of a new recovery key 5 per minute per username (together). Every attempt counts,
+/// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
+/// the server spend. Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
 {
@@ -129,9 +129,9 @@ public sealed class AccountLimits : IDisposable
     public TimeSpan? SignIn(HttpContext context, string username) =>
         Take(_signInByAddress, Address(context)) ?? Take(_signInByUsername, UsernameKey(username));
 
-    /// <summary>A password change checks the old password: limited like the username's sign-ins (but apart from
-    /// them, so changing the password doesn't use up the sign-in that follows), so that a stolen session can't be
-    /// used to guess the password faster than signing in could.</summary>
+    /// <summary>A password change or a new recovery key checks the current password: limited like the username's
+    /// sign-ins (but apart from them, so changing the password doesn't use up the sign-in that follows), so that a
+    /// stolen session can't be used to guess the password faster than signing in could.</summary>
     public TimeSpan? PasswordCheck(string username) => Take(_passwordCheckByUsername, UsernameKey(username));
 
     public TimeSpan? Join(HttpContext context) => Take(_joinByAddress, Address(context));

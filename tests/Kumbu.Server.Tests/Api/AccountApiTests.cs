@@ -8,7 +8,6 @@ using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
-using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -90,27 +89,6 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
         using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role }, session: admin);
         return (await JsonAsync(created))["code"]!.GetValue<string>();
-    }
-
-    private sealed class CapturedLog : ILoggerProvider
-    {
-        public ConcurrentQueue<string> Lines { get; } = new();
-
-        public ILogger CreateLogger(string categoryName) => new Logger(categoryName, Lines);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class Logger(string category, ConcurrentQueue<string> lines) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
-                lines.Enqueue($"{logLevel} {category}: {formatter(state, exception)} {exception}");
-        }
     }
 
     private static string NewIp() => $"198.19.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
@@ -519,7 +497,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var join = await SendAsync(HttpMethod.Post, "/api/join", new { code, username, password = Password });
         var firstKey = (await JsonAsync(join))["recoveryKey"]!.GetValue<string>();
 
-        using var regenerated = await SendAsync(HttpMethod.Post, "/api/recovery-key", session: SessionOf(join));
+        using var regenerated = await SendAsync(HttpMethod.Post, "/api/recovery-key", new { currentPassword = Password }, session: SessionOf(join));
         Assert.Equal(HttpStatusCode.OK, regenerated.StatusCode);
         var secondKey = (await JsonAsync(regenerated))["recoveryKey"]!.GetValue<string>();
         Assert.NotEqual(firstKey, secondKey);
@@ -532,6 +510,49 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var oldSession = await SendAsync(HttpMethod.Get, "/api/session", session: SessionOf(join));
         Assert.Equal(HttpStatusCode.Unauthorized, oldSession.StatusCode);
         await SignInAsync(username, NewPassword);
+    }
+
+    [Fact]
+    public async Task A_new_recovery_key_needs_the_current_password_so_a_stolen_session_cannot_take_the_account()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "user" }, session: admin);
+        var code = (await JsonAsync(created))["code"]!.GetValue<string>();
+        var username = NewUsername();
+        using var join = await SendAsync(HttpMethod.Post, "/api/join", new { code, username, password = Password });
+        var firstKey = (await JsonAsync(join))["recoveryKey"]!.GetValue<string>();
+        var session = SessionOf(join);
+
+        using var without = await SendAsync(HttpMethod.Post, "/api/recovery-key", new { }, session: session);
+        using var wrong = await SendAsync(HttpMethod.Post, "/api/recovery-key", new { currentPassword = "not the password at all" }, session: session);
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        Assert.DoesNotContain("recoveryKey", await wrong.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+
+        // Nothing changed: the first key still works, and the session too.
+        using var me = await SendAsync(HttpMethod.Get, "/api/session", session: session);
+        Assert.Equal(HttpStatusCode.OK, me.StatusCode);
+        using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
+    }
+
+    [Fact]
+    public async Task Checking_the_current_password_for_a_new_recovery_key_is_rate_limited_with_the_password_change()
+    {
+        var username = await NewUserAsync();
+        var session = await SignInAsync(username);
+
+        for (var i = 0; i < Kumbu.Server.Api.AccountLimits.SignInsPerUsername - 1; i++)
+        {
+            using var wrong = await SendAsync(HttpMethod.Post, "/api/recovery-key", new { currentPassword = "not the password at all" }, session: session);
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        }
+
+        using var wrongOld = await SendAsync(HttpMethod.Post, "/api/password", new { oldPassword = "not the password at all", newPassword = NewPassword }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongOld.StatusCode);
+        using var limited = await SendAsync(HttpMethod.Post, "/api/recovery-key", new { currentPassword = Password }, session: session);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
     }
 
     [Fact]
@@ -667,6 +688,9 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         // Typed responses, so the web app can generate a client.
         Assert.NotNull(paths["/api/session"]!["post"]!["responses"]!["200"]!["content"]?["application/json"]?["schema"]);
         Assert.NotNull(paths["/api/session"]!["post"]!["responses"]!["401"]);
+        Assert.NotNull(paths["/api/recovery-key"]!["post"]!["requestBody"]);
+        Assert.NotNull(paths["/api/recovery-key"]!["post"]!["responses"]!["429"]);
+        Assert.Contains("currentPassword", (await JsonAsync(response))["components"]!["schemas"]!["RegenerateRecoveryKeyRequest"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
         Assert.DoesNotContain("reason", (await JsonAsync(response))["components"]!["schemas"]!["InvitationPeekView"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
     }
 }

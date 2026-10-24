@@ -202,7 +202,8 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var result = await ShAsync("ls /");
 
         Assert.NotEqual(true, result.IsError);
-        // Other tests in this collection create users' vaults, which the dev token counts as locked below the list.
+        // Only the vault lines: users' vaults that other tests in this collection create are neither listed nor counted
+        // as locked, but a footer below the list (a hint, a locked count) isn't part of what this test checks.
         Assert.Equal(["Demo/", "Ideas/"], Text(result).Split('\n').TakeWhile(l => l.EndsWith('/')));
     }
 

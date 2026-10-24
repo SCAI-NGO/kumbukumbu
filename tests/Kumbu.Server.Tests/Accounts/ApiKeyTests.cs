@@ -220,6 +220,8 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     [InlineData("   ")]
     [InlineData("Claude (laptop)")]
     [InlineData("tab\there")]
+    [InlineData("chris\u200B")]
+    [InlineData("laptop\u202Edm.txt")]
     [InlineData("dev")]
     [InlineData("seed")]
     public async Task An_unusable_name_is_refused(string name)

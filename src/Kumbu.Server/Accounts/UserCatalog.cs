@@ -55,12 +55,14 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
 
         // Slots first, under a fresh id: if the username turns out to be taken they are removed again, and a
         // crash in between leaves only slots of no user, never a user without a way in.
-        await Slots.InsertManyAsync([PasswordSlot(id, userKey, password), RecoverySlot(id, userKey, recoveryKey)], cancellationToken: ct);
+        await Slots.InsertManyAsync([await PasswordSlotAsync(id, userKey, password, ct), RecoverySlot(id, userKey, recoveryKey)], cancellationToken: ct);
         var user = new UserDocument
         {
             Id = id,
             Username = name,
-            Display = username,
+            // The typed form only if it is plain ASCII: "K" through the Kelvin sign or "İ" lowers to the ASCII
+            // username but would show as something else, which defeats the ASCII-only rule.
+            Display = Ascii.IsValid(username) ? username : name,
             Role = role,
             Active = true,
             KeyId = KeyId(userKey, id),
@@ -95,11 +97,11 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         var slot = await FindSlotAsync(user?.Id ?? DummyId, UserSlotDocument.Password, ct);
         if (user is null || slot?.Salt is null)
         {
-            kdf.Derive(password, DummySalt);
+            if (password.Length > 0) await kdf.DeriveAsync(password, DummySalt, ct);
             return null;
         }
 
-        if (OpenPasswordSlot(slot, password) is not { } userKey || !user.Active) return null;
+        if (await OpenPasswordSlotAsync(slot, password, ct) is not { } userKey || !user.Active) return null;
 
         var now = Now;
         user.PreviousSignInAt = user.LastSignInAt;
@@ -147,7 +149,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
         if (await FindSlotAsync(userId, UserSlotDocument.Password, ct) is not { Salt: not null } slot
-            || OpenPasswordSlot(slot, oldPassword) is not { } opened
+            || await OpenPasswordSlotAsync(slot, oldPassword, ct) is not { } opened
             || !CryptographicOperations.FixedTimeEquals(opened, userKey))
         {
             return false;
@@ -157,16 +159,23 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         return true;
     }
 
-    /// <summary>A new recovery key for the user; the old one stops working at once. Throws
-    /// <see cref="ArgumentException"/> if <paramref name="userKey"/> isn't this user's.</summary>
-    public async Task<string> RegenerateRecoveryKeyAsync(string userId, byte[] userKey, CancellationToken ct)
+    /// <summary>
+    /// A new recovery key for the user, the old one stops working at once; null if <paramref name="currentPassword"/>
+    /// is wrong or doesn't open <paramref name="userKey"/>. The password is asked for because a stolen session
+    /// alone must not be able to make a recovery key, set a new password with it and lock the owner out.
+    /// </summary>
+    public async Task<string?> RegenerateRecoveryKeyAsync(string userId, byte[] userKey, string currentPassword, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var user = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
-        if (user is null || !CryptographicOperations.FixedTimeEquals(user.KeyId, KeyId(userKey, userId)))
+        // The password must open this very user key: a wrong key would leave a recovery slot that opens to
+        // nothing, and the user would lose recovery unnoticed.
+        if (user is null
+            || await FindSlotAsync(userId, UserSlotDocument.Password, ct) is not { Salt: not null } passwordSlot
+            || await OpenPasswordSlotAsync(passwordSlot, currentPassword, ct) is not { } opened
+            || !CryptographicOperations.FixedTimeEquals(opened, userKey))
         {
-            // A wrong key would leave a recovery slot that opens to nothing: the user would lose recovery unnoticed.
-            throw new ArgumentException("This is not the user key of that user.", nameof(userKey));
+            return null;
         }
 
         var recoveryKey = RecoveryKey.New();
@@ -194,7 +203,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
 
     private async Task SetPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
     {
-        var slot = PasswordSlot(userId, userKey, password);
+        var slot = await PasswordSlotAsync(userId, userKey, password, ct);
         // Stamped before the new slot, so sessions of the old password are refused even if a crash leaves their
         // slots behind (a crash before the slot write only leaves the old password in place, signed out) ...
         await StampCredentialsChangedAsync(userId, ct);
@@ -215,11 +224,14 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     private Task<UserSlotDocument?> FindSlotAsync(string userId, string kind, CancellationToken ct) =>
         Slots.Find(s => s.User == userId && s.Kind == kind).FirstOrDefaultAsync(ct)!;
 
-    private byte[]? OpenPasswordSlot(UserSlotDocument slot, string password)
+    private async Task<byte[]?> OpenPasswordSlotAsync(UserSlotDocument slot, string password, CancellationToken ct)
     {
+        // Argon2 refuses an empty password, and no stored password is empty.
+        if (password.Length == 0) return null;
+        var kek = await kdf.DeriveAsync(password, slot.Salt!, ct);
         try
         {
-            return VaultCrypto.Open(kdf.Derive(password, slot.Salt!), slot.Wrapped, SlotContext(slot.User, UserSlotDocument.Password));
+            return VaultCrypto.Open(kek, slot.Wrapped, SlotContext(slot.User, UserSlotDocument.Password));
         }
         catch (CryptographicException)
         {
@@ -227,7 +239,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         }
     }
 
-    private UserSlotDocument PasswordSlot(string userId, byte[] userKey, string password)
+    private async Task<UserSlotDocument> PasswordSlotAsync(string userId, byte[] userKey, string password, CancellationToken ct)
     {
         var salt = RandomNumberGenerator.GetBytes(Argon2Kdf.SaltBytes);
         return new UserSlotDocument
@@ -235,7 +247,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             User = userId,
             Kind = UserSlotDocument.Password,
             Salt = salt,
-            Wrapped = VaultCrypto.Seal(kdf.Derive(password, salt), userKey, SlotContext(userId, UserSlotDocument.Password)),
+            Wrapped = VaultCrypto.Seal(await kdf.DeriveAsync(password, salt, ct), userKey, SlotContext(userId, UserSlotDocument.Password)),
             CreatedAt = Now,
         };
     }

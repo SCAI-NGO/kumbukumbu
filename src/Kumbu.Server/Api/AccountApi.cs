@@ -36,6 +36,9 @@ public sealed record ChangePasswordRequest(string OldPassword, string NewPasswor
 /// <summary>Always true: a changed password ends every session, this one too, so the web app signs in again.</summary>
 public sealed record PasswordChangedView(bool SignedOut);
 
+/// <summary>The current password, so a stolen session alone can't make a new recovery key.</summary>
+public sealed record RegenerateRecoveryKeyRequest(string CurrentPassword);
+
 public sealed record RecoveryKeyView(string RecoveryKey);
 
 /// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.</summary>
@@ -89,7 +92,7 @@ public static class AccountApi
         account.MapGet("/session", Session).Errors(401, 403);
         account.MapDelete("/session", SignOutAsync).Errors(401, 403);
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 429);
-        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(401, 403);
+        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
@@ -175,8 +178,16 @@ public static class AccountApi
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));
     }
 
-    private static async Task<Ok<RecoveryKeyView>> RegenerateRecoveryKeyAsync(RequestCaller caller, UserCatalog users, CancellationToken ct) =>
-        TypedResults.Ok(new RecoveryKeyView(await users.RegenerateRecoveryKeyAsync(caller.User!.Id, caller.UserKey!, ct)));
+    private static async Task<Ok<RecoveryKeyView>> RegenerateRecoveryKeyAsync(
+        RegenerateRecoveryKeyRequest body, RequestCaller caller, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    {
+        var user = caller.User!;
+        // The same limit as the password change: both are a password check behind a session.
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, caller.UserKey!, body.CurrentPassword, ct)
+            ?? throw ApiErrors.BadRequest("The current password is wrong.");
+        return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
+    }
 
     private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, CancellationToken ct)
     {
