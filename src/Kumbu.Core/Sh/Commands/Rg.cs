@@ -230,22 +230,31 @@ public sealed class Rg(INoteReader notes) : ICommand
         return false;
     }
 
+    /// <summary>
+    /// The regex rg searches with (-F, -w, -i), never backtracking. Throws <see cref="NotSupportedException"/> for
+    /// syntax that needs backtracking and <see cref="ArgumentException"/> for one that doesn't parse; a literal
+    /// (<paramref name="fixedStrings"/>) never does.
+    /// </summary>
+    public static Regex Pattern(IReadOnlyList<string> patterns, bool fixedStrings, bool wordRegexp, bool ignoreCase)
+    {
+        var parts = patterns.Select(p => fixedStrings ? Regex.Escape(p) : p).ToList();
+        var pattern = parts.Count == 1 ? parts[0] : string.Join('|', parts.Select(p => $"(?:{p})"));
+        if (wordRegexp) pattern = $@"\b(?:{pattern})\b";
+
+        var regexOptions = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
+        if (ignoreCase) regexOptions |= RegexOptions.IgnoreCase;
+        return new Regex(pattern, regexOptions, MatchTimeout);
+    }
+
     private static bool TryBuildRegex(
         IReadOnlyList<string> patterns, Options options,
         [NotNullWhen(true)] out Regex? regex, [NotNullWhen(false)] out ShellResult? error)
     {
-        var parts = patterns.Select(p => options.Has("fixed-strings") ? Regex.Escape(p) : p).ToList();
-        var pattern = parts.Count == 1 ? parts[0] : string.Join('|', parts.Select(p => $"(?:{p})"));
-        if (options.Has("word-regexp")) pattern = $@"\b(?:{pattern})\b";
-
-        var regexOptions = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant;
-        if (options.Has("ignore-case")) regexOptions |= RegexOptions.IgnoreCase;
-
         regex = null;
         error = null;
         try
         {
-            regex = new Regex(pattern, regexOptions, MatchTimeout);
+            regex = Pattern(patterns, options.Has("fixed-strings"), options.Has("word-regexp"), options.Has("ignore-case"));
             return true;
         }
         catch (NotSupportedException)

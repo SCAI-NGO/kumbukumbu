@@ -72,8 +72,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         }
 
-        var lines = new List<string> { Line(note.Content, note.LastWriter, note.LastWriteAt) + "  (current)" };
-        lines.AddRange(note.History.Select(h => Line(h.Content, h.WrittenBy, h.WrittenAt)));
+        var lines = NoteHistory.Versions(note).Select(v => Line(v.Content, v.Writer, v.WrittenAt) + (v.Current ? "  (current)" : ""));
         return ShellResult.Ok(Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
 

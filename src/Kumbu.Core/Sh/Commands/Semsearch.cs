@@ -15,7 +15,6 @@ namespace Kumbu.Core.Sh.Commands;
 public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
 {
     private const int DefaultMax = 10;
-    private const int SnippetLength = 160;
 
     private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning")];
 
@@ -78,33 +77,14 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
             if (found.Count == 0 && !scope.IsRoot && !isVault) return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
         }
 
-        var chunks = found.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
-
-        // Every chunk with a cosine takes part, so the bonus can lift a section from anywhere in the scope.
-        SemanticResult? semantic = null;
-        var notIndexed = false;
-        List<(Chunk Chunk, double? Score)> ranked;
-        if (options.Has("words")) ranked = RankByWords(chunks, query);
-        else
+        var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
+        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct) switch
         {
-            semantic = await index.SearchAsync(scope, query, int.MaxValue, ct);
-            if (semantic.State == SemanticState.Ready)
-            {
-                ranked = RankByMeaning(chunks, semantic, query, options.Has("meaning"));
+            { MeaningUnavailable: true } r => (null, r.Semantic, false),
+            var r => (r.Hits, r.Semantic, r.FellBackToWords),
+        };
+        if (listed is null) return ShellResult.Error($"semsearch: {semantic!.Reason ?? "search by meaning isn't available"}; without --meaning, it ranks by words");
 
-                // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
-                if (ranked.Count == 0 && semantic.Pending > 0 && !options.Has("meaning"))
-                {
-                    ranked = RankByWords(chunks, query);
-                    notIndexed = true;
-                }
-            }
-            else if (options.Has("meaning")) return ShellResult.Error($"semsearch: {semantic.Reason ?? "search by meaning isn't available"}; without --meaning, it ranks by words");
-            else ranked = RankByWords(chunks, query);
-        }
-
-        // A heading with nothing below it says little; it still ranks, but the next section takes its place.
-        var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max).ToList();
         var lines = new List<string>();
         if (listed.Count == 0) lines.Add($"(nothing found for '{query}'{(scope.IsRoot ? "" : " below " + scope.Value)})");
         for (var i = 0; i < listed.Count; i++)
@@ -112,56 +92,11 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
             var (c, score) = listed[i];
             var shown = score is { } s ? string.Create(CultureInfo.InvariantCulture, $"  score {s:0.00}") : "";
             lines.Add($"{i + 1}. {c.Path.Value}{c.Address}  lines {c.StartLine + 1}-{c.EndLine}{shown}");
-            lines.Add($"   {Snippet(c)}");
+            lines.Add($"   {SectionSearch.Snippet(c)}");
         }
 
         lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0));
         return ShellResult.Ok(Lines.Join(lines));
-    }
-
-    private static List<(Chunk, double?)> RankByWords(List<Chunk> chunks, string query) =>
-        [.. Bm25.Rank(chunks.Select(c => c.EmbeddingText).ToList(), query).Select(r => (chunks[r.Index], (double?)null))];
-
-    private static List<(Chunk, double?)> RankByMeaning(List<Chunk> chunks, SemanticResult semantic, string query, bool meaningOnly)
-    {
-        var byKey = chunks.ToDictionary(c => c.Key);
-        var terms = meaningOnly ? [] : Bm25.QueryTerms(query);
-        var cosines = new Dictionary<(VaultPath, int), double>();
-        foreach (var hit in semantic.Hits)
-        {
-            if (Locate(hit, chunks, byKey) is not { } key) continue;
-            cosines[key] = Math.Max(cosines.GetValueOrDefault(key, double.MinValue), hit.Score);
-        }
-
-        // Ties keep the order of the notes and of the sections within them.
-        return [.. chunks.Where(c => cosines.ContainsKey(c.Key))
-            .Select(c => (Chunk: c, Score: Fusion.Score(cosines[c.Key], terms, Bm25.Terms(c.EmbeddingText).ToHashSet())))
-            .OrderByDescending(r => r.Score)
-            .Select(r => (r.Chunk, (double?)r.Score))];
-    }
-
-    private static bool IsHeadingOnly(Chunk chunk)
-    {
-        var text = chunk.Text.Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        return text.Count == 1 && Outline.HeadingRegex().IsMatch(text[0]);
-    }
-
-    /// <summary>The current chunk for a hit: the same start line, or the chunk that now contains it (the
-    /// index may lag behind a write by a moment).</summary>
-    private static (VaultPath, int)? Locate(SemanticHit hit, List<Chunk> chunks, Dictionary<(VaultPath, int), Chunk> byKey)
-    {
-        if (byKey.ContainsKey((hit.Path, hit.StartLine))) return (hit.Path, hit.StartLine);
-        return chunks.FirstOrDefault(c => c.Path == hit.Path && c.StartLine <= hit.StartLine && hit.StartLine < c.EndLine)?.Key;
-    }
-
-    private static string Snippet(Chunk chunk)
-    {
-        var text = string.Join(' ', chunk.Text.Split('\n')
-            .Where(l => l.Trim().Length > 0)
-            .Skip(chunk.Address.Length > 0 && chunk.Text.Split('\n').Length > 1 ? 1 : 0)
-            .Select(l => l.Trim()));
-        if (text.Length == 0) text = chunk.Text.Trim();
-        return text.Length <= SnippetLength ? text : text[..SnippetLength] + "…";
     }
 
     private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool notIndexed, bool any)

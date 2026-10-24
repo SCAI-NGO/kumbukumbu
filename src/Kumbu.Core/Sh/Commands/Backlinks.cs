@@ -35,27 +35,9 @@ public sealed class Backlinks(INoteReader notes) : ICommand
         var note = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         if (note.IsError) return note;
 
-        var vault = VaultPath.Root.Child(path.Segments[0]);
-        var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path));
-        var output = new List<string>();
-        var maybe = new List<string>();
-        foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
-        {
-            var lines = Lines.Split(source.Content);
-            var resolved = WikiLink.Parse(source.Content)
-                .Where(l => l.Target.Trim().Length > 0)
-                .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l.Target)))
-                .ToList();
-            output.AddRange(resolved.Where(r => r.Resolution.Target == path).Select(r => r.Line).Distinct()
-                .Select(line => $"{source.Path.Value}:{line + 1}:{lines[line]}"));
-            maybe.AddRange(resolved
-                .Where(r => r.Resolution.Kind == LinkKind.Ambiguous && r.Resolution.Candidates.Contains(path))
-                .Select(r => r.Line).Distinct()
-                .Select(line => $"{source.Path.Value}:{line + 1}:{lines[line]}  (ambiguous, may mean this note)"));
-        }
-
-        output.AddRange(maybe);
+        var output = (await NoteLinks.ToAsync(notes, path, ct))
+            .Select(b => $"{b.Source.Value}:{b.Line + 1}:{b.Text}{(b.Ambiguous ? "  (ambiguous, may mean this note)" : "")}")
+            .ToList();
         return note with { Output = output.Count > 0 ? Lines.Join(output) : "(no notes link here)" };
     }
 }
