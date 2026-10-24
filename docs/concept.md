@@ -211,7 +211,7 @@ v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, 
 
 v2 also brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Two groundworks belong in v1 because they are needed with or without the flag: markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv`, and writer identities in step 8 that tell humans from agents.
 
-v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. Open questions in §13.
+v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. Leaning: a board is its own data model with import and export, with MCP tools for card operations, and a vault optionally carries one. Details and open questions in §13.
 
 Each step = a chapter in `CONCEPTS.md`.
 
@@ -240,12 +240,17 @@ Background and the full gap analysis: `docs/okf-gap-analysis.md`.
 - Out of scope: Attested Computation (made for data catalogues; its attesters are code files, against text-only).
 
 ### Kanban boards (v2)
-Decided: several boards; boards can be assigned to API keys. Everything else is open:
-- **A board as a note, or its own data model.** A note in the format of the Obsidian Kanban plugin (frontmatter `kanban-plugin: board`, a `##` heading per lane, a `- [ ]` item per card) would get history, changesets, checkpoints, search, links and the Obsidian sync for free, and stays text. Its own model would make card operations and per-card concurrency simpler, but would need all of that rebuilt. Leaning towards the note, to check against what the community asked for.
-- **What "assign a board to a key" means with encryption.** Access is a key slot per vault (§9), so a key can read a whole vault or nothing. A key that may see only some boards needs either boards in a vault of their own, or a permission layer on top of the slot inside a vault (weaker: the key can decrypt more than it may read). Ties into step 8 (users, API keys).
-- **Card operations for agents.** Plain `edit` on the board note, or commands of their own (`board`, moving a card between lanes, adding one) that don't need the whole note and its version token. Several agents on one board make conflicts on the board note likely; operations on single cards would avoid them.
-- **Cards and notes.** A card that is a `[[link]]` to a note, a card with its text inline, or both (as the Obsidian plugin allows); what `mv` and `rm` of a linked note do to the card.
-- **The web UI (step 9) shows boards**, with drag and drop; designed with the board format, so the UI and the Obsidian plugin don't fight over it.
+Decided: several boards; boards can be assigned to API keys. Leaning (Chris, Oct 24, 2026):
+- **Its own data model, with import and export**, not a note. Agents get MCP tools that say what should happen, such as add a card, move it to another lane, annotate it, instead of editing a board's text. Import and export in the Obsidian Kanban format (frontmatter `kanban-plugin: board`, a `##` heading per lane, a `- [ ]` item per card) keep the way to Obsidian open.
+- **A board belongs to a vault, optionally.** The vault "Kumbu²" carries a board, the vault "Kochrezeptideen" doesn't. That answers "assign a board to a key" with what exists: a key with a slot in the vault (§9) reaches its board, sealed with the vault key like its notes, and several boards come from several vaults.
+
+Open:
+- **One board per vault, or several?** One keeps "a board is part of a vault" simple; several would need a name per board, and every key with the vault's slot reaches all of them.
+- **What the data model brings along that notes have for free:** history and undo of card changes (an activity log per card?), changesets, whether a named checkpoint of the vault includes its board, the trash for removed cards, search over cards.
+- **Cards and notes.** A card can link to a note of the same vault (`[[…]]`, resolved like note links); what `mv` and `rm` of that note do to the card, and whether `backlinks` lists cards.
+- **Concurrency.** Card operations instead of a whole-board version token, so several agents on one board don't block each other; what a conflict on one card looks like (both move the same card).
+- **The Obsidian sync (step 11)** doesn't carry the board as a note; whether it exports a read-only Kanban note, or the board stays server-side only.
+- **The web UI (step 9) shows boards**, with drag and drop.
 
 ### Resolved (Oct 21, 2026)
 - Token lifecycle vs. key slots → §9 "Tokens as key slots".
