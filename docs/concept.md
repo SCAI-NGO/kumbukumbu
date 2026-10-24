@@ -211,7 +211,7 @@ v1 is text only, on purpose. Attachments (images, PDFs, canvas) are a v2 topic, 
 
 v2 also brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Two groundworks belong in v1 because they are needed with or without the flag: markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv`, and writer identities in step 8 that tell humans from agents.
 
-v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. Leaning: a board is its own data model with import and export, with MCP tools for card operations, and a vault optionally carries one. Details and open questions in §13.
+v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. One vault carries at most one board, and cards are on a par with notes. Leaning: a board is its own data model with import and export, with MCP tools for card operations. Details and open questions in §13.
 
 Each step = a chapter in `CONCEPTS.md`.
 
@@ -240,9 +240,9 @@ Background and the full gap analysis: `docs/okf-gap-analysis.md`.
 - Out of scope: Attested Computation (made for data catalogues; its attesters are code files, against text-only).
 
 ### Kanban boards (v2)
-Decided: several boards; boards can be assigned to API keys. Leaning (Chris, Oct 24, 2026):
+Decided: several boards; boards can be assigned to API keys. **One vault, one board** (decided by Chris, Oct 24, 2026): a vault carries at most one board, and several topics mean several vaults. A deliberate limit, to nudge users towards working with vaults actively, the way game rules steer players (Chris thought of EVE Online, where many mechanics nudge): Kumbu² as a "chaos avoider". Leaning (Chris, Oct 24, 2026):
 - **Its own data model, with import and export**, not a note. Agents get MCP tools that say what should happen, such as add a card, move it to another lane, annotate it, instead of editing a board's text. Import and export in the Obsidian Kanban format (frontmatter `kanban-plugin: board`, a `##` heading per lane, a `- [ ]` item per card) keep the way to Obsidian open.
-- **A board belongs to a vault, optionally.** The vault "Kumbu²" carries a board, the vault "Kochrezeptideen" doesn't. That answers "assign a board to a key" with what exists: a key with a slot in the vault (§9) reaches its board, sealed with the vault key like its notes, and several boards come from several vaults.
+- **A board belongs to a vault, optionally.** The vault "Kumbu²" carries a board, the vault "Kochrezeptideen" doesn't. That answers "assign a board to a key" with what exists: a key with a slot in the vault (§9) reaches its board, sealed with the vault key like its notes, and several boards are several vaults.
 
 - **Cards are on a par with notes** (decided by Chris, Oct 24, 2026). The ground rule for everything the data model has to bring along: wherever notes take part, cards do too. So:
   - a named checkpoint of the vault includes its board, and restoring it restores the cards;
@@ -251,7 +251,6 @@ Decided: several boards; boards can be assigned to API keys. Leaning (Chris, Oct
   - by the same rule, still to confirm in the design: history and undo per card, changesets, the trash for removed cards, search over cards, and whether a note can link to a card.
 
 Open:
-- **One board per vault, or several?** Not decided; Chris wants to sleep on it and not build a monster. Leaning towards nudging users: several topics, several vaults. One board per vault keeps "a board is part of a vault" simple; several would need a name per board, and every key with the vault's slot reaches all of them.
 - **Concurrency.** Card operations instead of a whole-board version token, so several agents on one board don't block each other; what a conflict on one card looks like (both move the same card).
 - **The Obsidian sync (step 11)** doesn't carry the board as a note; whether it exports a read-only Kanban note, or the board stays server-side only.
 - **The web UI (step 9) shows boards**, with drag and drop.
