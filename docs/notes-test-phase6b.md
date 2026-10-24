@@ -164,7 +164,6 @@ Minor: `diff --checkpoint` on a folder lists a moved note as `removed` plus `new
 
 ## Suggested next step
 
-1. A short step 6c before step 7: the decisions on observations 1, 2 and 3 above, and the small fixes 4, 5, 6, 7.
-2. Then build order step 7 (embeddings and hybrid search).
-3. The plugin package (rename skill and others) is planned in its own repository; not part of the server's build order.
-4. Housekeeping: the test notes in `/Ideas` (`t6b/`, `a/`, `b/`, `zz/`, `outside.md`, changes to `retrofuturism.md`) and 7 checkpoints are still there; a `down -v` before the next phase resets everything.
+1. Build order step 7 starts with the decisions on observations 1, 2 and 3 above and the small fixes 4, 5, 6, 7 (decided by Chris, Oct 24, 2026: part of step 7, no step 6c), then embeddings and hybrid search.
+2. The plugin package (rename skill and others) is planned in its own repository; not part of the server's build order.
+3. Housekeeping: the test notes in `/Ideas` (`t6b/`, `a/`, `b/`, `zz/`, `outside.md`, changes to `retrofuturism.md`) and 7 checkpoints are still there; a `down -v` before the next phase resets everything.
