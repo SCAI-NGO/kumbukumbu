@@ -19,6 +19,7 @@ const listed = {
   createdAt: "2026-10-01T09:00:00Z",
   lastUsedAt: null,
   revokedAt: null,
+  expiresAt: null as string | null,
 };
 const revoked = { ...listed, id: "k0", name: "Old phone", prefix: "Zz99Yy", vaults: { Home: "read" }, revokedAt: "2026-10-02T09:00:00Z" };
 
@@ -119,7 +120,41 @@ describe("Keys", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
 
     expect(await within(dialog).findByText("You already have a key named 'Claude'.")).toBeInTheDocument();
-    expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "write", Home: "read" } }]);
+    expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "write", Home: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("lets a key expire after 30, 90 or 365 days, 90 unless chosen otherwise, or never", async () => {
+    const bodies: unknown[] = [];
+    api({ "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "taken" })) });
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read"));
+    const expiry = within(dialog).getByRole("group", { name: "Expires after" });
+    expect(within(expiry).getByLabelText("90 days")).toBeChecked();
+
+    for (const [i, [label, days]] of ([["30 days", 30], ["1 year", 365], ["Never", undefined]] as const).entries()) {
+      await userEvent.click(within(expiry).getByLabelText(label));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+      await waitFor(() => expect(bodies).toHaveLength(i + 1));
+      expect(bodies[i]).toEqual({ name: "Claude", vaults: { Work: "read" }, ...(days ? { expiresInDays: days } : {}) });
+      await within(dialog).findByText("taken");
+    }
+  });
+
+  it("shows when a key expires, and an expired key as expired, without a revoke button", async () => {
+    const soon = { ...listed, id: "k3", name: "Soon", expiresAt: "2099-01-31T09:00:00Z" };
+    const gone = { ...listed, id: "k4", name: "Gone", expiresAt: "2026-01-31T09:00:00Z" };
+    api({ "GET /api/keys": () => json(200, [listed, soon, gone]) });
+    renderApp("/keys");
+
+    expect((await screen.findByText("Laptop")).closest("li")).toHaveTextContent("Doesn't expire");
+    const soonItem = screen.getByText("Soon").closest("li")!;
+    expect(soonItem).toHaveTextContent("Expires 31 Jan 2099");
+    expect(within(soonItem).getByRole("button", { name: "Revoke Soon" })).toBeInTheDocument();
+    const goneItem = screen.getByText("Gone").closest("li")!;
+    expect(goneItem).toHaveTextContent("Expired 31 Jan 2026");
+    expect(within(goneItem).queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
   });
 
   it("marks only the button that was used as copied", async () => {

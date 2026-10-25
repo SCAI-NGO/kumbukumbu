@@ -43,12 +43,15 @@ public sealed record RegenerateRecoveryKeyRequest(string CurrentPassword);
 
 public sealed record RecoveryKeyView(string RecoveryKey);
 
-/// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.</summary>
+/// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
+/// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.</summary>
 public sealed record ApiKeyView(
-    string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt);
+    string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
+    DateTime? ExpiresAt);
 
-/// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>.</summary>
-public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults);
+/// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
+/// out or null, the key doesn't expire.</summary>
+public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
 
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
@@ -59,6 +62,12 @@ public sealed record AdminUserView(
 
 /// <summary>Either or both; the role is <c>user</c> or <c>admin</c>.</summary>
 public sealed record UpdateUserRequest(bool? Active = null, string? Role = null);
+
+/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
+public sealed record DeleteAccountRequest(string Password, string Confirm);
+
+/// <summary>Deleting a deactivated user: the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
+public sealed record DeleteUserRequest(string Password, string Confirm);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -96,6 +105,7 @@ public static class AccountApi
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 429);
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
+        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
         account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409);
@@ -103,6 +113,7 @@ public static class AccountApi
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404);
+        account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404, 429);
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
@@ -137,12 +148,27 @@ public static class AccountApi
         // The account exists now, whatever happens next: the recovery key must reach the user even if signing in
         // fails (deactivated in the meantime), so that case answers without a cookie rather than with an error.
         // Signing in costs a second Argon2 run, for a user key the service doesn't hand out at creation.
-        if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt))
+        if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt)
+            && await TryStartSessionAsync(sessions, signedIn, userKey, readAt) is { } secret)
         {
-            SetSessionCookie(http, await sessions.StartAsync(signedIn, userKey, readAt, CancellationToken.None));
+            SetSessionCookie(http, secret);
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
+    }
+
+    /// <summary>A session for a user who just signed in, or null if they were deactivated or deleted in between:
+    /// joining then still answers, without a cookie, so the recovery key reaches the user.</summary>
+    internal static async Task<string?> TryStartSessionAsync(Sessions sessions, User user, byte[] userKey, DateTime readAt)
+    {
+        try
+        {
+            return await sessions.StartAsync(user, userKey, readAt, CancellationToken.None);
+        }
+        catch (CredentialsChangedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>
@@ -189,6 +215,17 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
+    /// <summary>Everything of the account goes, this session too: the cookie is cleared with it.</summary>
+    private static async Task<NoContent> DeleteAccountAsync(
+        DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw ApiErrors.BadRequest("The password is wrong.");
+        ClearSessionCookie(http);
+        return TypedResults.NoContent();
+    }
+
     private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, CancellationToken ct)
     {
         await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
@@ -213,7 +250,7 @@ public static class AccountApi
             vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
         }
 
-        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct);
+        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 
@@ -237,6 +274,15 @@ public static class AccountApi
         return TypedResults.NoContent();
 
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
+    }
+
+    private static async Task<NoContent> DeleteUserAsync(
+        string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        return await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound("There is no such user.");
     }
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
@@ -268,7 +314,8 @@ public static class AccountApi
         info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
         info.CreatedAt,
         info.LastUsedAt,
-        info.RevokedAt);
+        info.RevokedAt,
+        info.ExpiresAt);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

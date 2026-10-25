@@ -56,3 +56,6 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>
 public sealed class VaultUnavailableException(string message) : Exception(message);
+
+/// <summary>A write reached a vault that was deleted while the request was under way; nothing was written.</summary>
+public sealed class VaultDeletedException() : Exception("This vault has just been deleted; nothing was written.");

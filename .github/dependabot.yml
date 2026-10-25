@@ -1,7 +1,19 @@
-# Keeps the actions pinned to commit hashes in the workflows up to date.
+# Keeps what the build pulls in up to date, each pinned where it is used: the actions to commit hashes in the
+# workflows, the base images to digests in the Dockerfile, the NuGet packages to the versions in the project files
+# and packages.lock.json.
 version: 2
 updates:
   - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: nuget
     directory: /
     schedule:
       interval: weekly

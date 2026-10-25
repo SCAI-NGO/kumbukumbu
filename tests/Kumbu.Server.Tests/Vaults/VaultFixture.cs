@@ -8,11 +8,21 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Tests.Vaults;
 
 /// <summary>A fresh database with helpers to open it like a second process would.</summary>
-public sealed class VaultWorld(IMongoDatabase db)
+public sealed class VaultWorld
 {
     public const string Token = "test-token-0123456789abcdef";
 
-    public IMongoDatabase Db { get; } = db;
+    /// <summary>The user ids these tests give vaults to: a user vault is only made for a user that exists.</summary>
+    private static readonly string[] Owners = ["u1", "u2", "user-lea"];
+
+    public VaultWorld(IMongoDatabase db)
+    {
+        Db = db;
+        db.GetCollection<Kumbu.Server.Accounts.UserDocument>("users").InsertMany(
+            Owners.Select(id => new Kumbu.Server.Accounts.UserDocument { Id = id, Username = "owner-" + id, Display = id, Role = Kumbu.Server.Accounts.Roles.User, Active = true }));
+    }
+
+    public IMongoDatabase Db { get; }
 
     public static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
 

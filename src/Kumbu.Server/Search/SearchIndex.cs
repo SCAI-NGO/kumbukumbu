@@ -127,6 +127,8 @@ public sealed class SearchIndex : BackgroundService
         await vault.IndexGate.WaitAsync(ct);
         try
         {
+            // An upsert now would bring back an embedding of a vault that is gone.
+            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {
@@ -156,9 +158,11 @@ public sealed class SearchIndex : BackgroundService
                 for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];
             }
 
-            if (vault.EmbeddingProvider != provider) return;
-
             var embeddings = new NoteEmbeddings(model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
+            // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
+            // or deleted the vault.
+            if (vault.EmbeddingProvider != provider) return;
+            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update

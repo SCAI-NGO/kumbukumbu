@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -216,6 +217,36 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull((await JsonAsync(response))["error"]);
     }
 
+    [Theory]
+    [InlineData("deactivated")]
+    [InlineData("deleted")]
+    public async Task A_join_whose_session_cannot_start_any_more_still_answers_without_a_cookie(string what)
+    {
+        // Between the join's sign-in and its session: the user is deactivated, or gone.
+        var username = await NewUserAsync();
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+        var users = app.Database.GetCollection<UserDocument>("users");
+        if (what == "deactivated") await users.UpdateOneAsync(u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        else await users.DeleteOneAsync(u => u.Id == user.Id, Ct);
+
+        var sessions = Api.Services.GetRequiredService<Sessions>();
+        Assert.Null(await Kumbu.Server.Api.AccountApi.TryStartSessionAsync(sessions, user, userKey, readAt));
+
+        Assert.Equal(0, await app.Database.GetCollection<UserSlotDocument>("user_slots")
+            .CountDocumentsAsync(sl => sl.User == user.Id && sl.Kind == UserSlotDocument.Session, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task A_session_starts_for_a_user_who_is_still_there()
+    {
+        var username = await NewUserAsync();
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+
+        var secret = await Kumbu.Server.Api.AccountApi.TryStartSessionAsync(Api.Services.GetRequiredService<Sessions>(), user, userKey, readAt);
+
+        Assert.NotNull(await Api.Services.GetRequiredService<Sessions>().ResolveAsync(secret!, Ct));
+    }
+
     [Fact]
     public async Task A_taken_username_at_join_is_409_and_the_invitation_stays_usable()
     {
@@ -392,7 +423,8 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         foreach (var (method, path) in new[]
                  {
                      (HttpMethod.Get, "/api/admin/users"), (HttpMethod.Get, "/api/keys"), (HttpMethod.Post, "/api/keys"),
-                     (HttpMethod.Post, "/api/recovery-key"), (HttpMethod.Get, "/api/session"),
+                     (HttpMethod.Post, "/api/recovery-key"), (HttpMethod.Get, "/api/session"), (HttpMethod.Post, "/api/account/delete"),
+                     (HttpMethod.Post, "/api/vaults/Notizen/delete"), (HttpMethod.Post, "/api/admin/users/someone/delete"),
                  })
         {
             using var response = await SendAsync(method, path, method == HttpMethod.Post ? new { } : null, origin: null, bearer: key);
@@ -413,6 +445,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
                  {
                      (HttpMethod.Get, "/api/admin/users", null),
                      (HttpMethod.Patch, "/api/admin/users/someone", new { active = false }),
+                     (HttpMethod.Post, "/api/admin/users/someone/delete", new { password = Password, confirm = "someone" }),
                      (HttpMethod.Get, "/api/admin/invitations", null),
                      (HttpMethod.Post, "/api/admin/invitations", new { role = "user" }),
                      (HttpMethod.Delete, "/api/admin/invitations/something", null),
@@ -422,6 +455,117 @@ public sealed class AccountApiTests(KumbuAppFactory app)
             Assert.True(response.StatusCode == HttpStatusCode.Forbidden, $"{method} {path}: {response.StatusCode}");
             Assert.NotNull((await JsonAsync(response))["error"]);
         }
+    }
+
+    [Fact]
+    public async Task A_vault_is_deleted_by_its_owner_with_its_name_typed()
+    {
+        var username = await NewUserAsync();
+        var session = await SignInAsync(username);
+        using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Alt Ablage" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+
+        using var mistyped = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "alt ablage" }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, mistyped.StatusCode);
+        using var unknown = await SendAsync(HttpMethod.Post, "/api/vaults/Fremd/delete", new { password = Password, confirm = "Fremd" }, session: session);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        using var wrongPassword = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = NewPassword, confirm = "Alt Ablage" }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        Assert.Equal("The password is wrong.", (await JsonAsync(wrongPassword))["error"]!.GetValue<string>());
+        using var noOrigin = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "Alt Ablage" }, session: session, origin: null);
+        Assert.Equal(HttpStatusCode.Forbidden, noOrigin.StatusCode);
+        using (var before = await SendAsync(HttpMethod.Get, "/api/vaults", session: session))
+        {
+            Assert.Equal(2, (await JsonAsync(before)).AsArray().Count);
+        }
+
+        using var deleted = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "Alt Ablage" }, session: session);
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+
+        using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
+        Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Deleting_a_vault_takes_five_password_checks_a_minute_then_429()
+    {
+        var username = await NewUserAsync();
+        var session = await SignInAsync(username);
+        using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        for (var i = 0; i < 5; i++)
+        {
+            using var refused = await SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password = NewPassword, confirm = "Arbeit" }, session: session);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password = Password, confirm = "Arbeit" }, session: session);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
+        Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Deleting_a_user_takes_five_checks_of_the_admins_password_a_minute_then_429()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        for (var i = 0; i < 5; i++)
+        {
+            using var refused = await SendAsync(HttpMethod.Post, "/api/admin/users/someone/delete", new { password = NewPassword, confirm = "someone" }, session: admin);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/admin/users/someone/delete", new { password = Password, confirm = "someone" }, session: admin);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+    }
+
+    [Fact]
+    public async Task Deleting_ones_account_needs_the_password_and_the_username_and_ends_the_session()
+    {
+        var username = await NewUserAsync();
+        var session = await SignInAsync(username);
+        var other = await SignInAsync(username);
+
+        using var wrongPassword = await SendAsync(HttpMethod.Post, "/api/account/delete", new { password = NewPassword, confirm = username }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        using var wrongName = await SendAsync(HttpMethod.Post, "/api/account/delete", new { password = Password, confirm = "someone" }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongName.StatusCode);
+
+        using var deleted = await SendAsync(HttpMethod.Post, "/api/account/delete", new { password = Password, confirm = username }, session: session);
+
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Contains("expires=Thu, 01 Jan 1970", SetCookie(deleted), StringComparison.OrdinalIgnoreCase);
+        using var me = await SendAsync(HttpMethod.Get, "/api/session", session: other);
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username, password = Password }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.Unauthorized, signIn.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_admin_deletes_a_user_only_once_deactivated()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        var username = await NewUserAsync();
+        var id = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value.User.Id;
+
+        using var active = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
+        Assert.Equal(HttpStatusCode.Forbidden, active.StatusCode);
+        using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { active = false }, session: admin);
+        Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
+        using var mistyped = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = "someone" }, session: admin);
+        Assert.Equal(HttpStatusCode.BadRequest, mistyped.StatusCode);
+        using var wrongPassword = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = NewPassword, confirm = username }, session: admin);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        Assert.Equal("Your password is wrong.", (await JsonAsync(wrongPassword))["error"]!.GetValue<string>());
+
+        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
+
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        using var again = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
+        Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+        using var list = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
+        Assert.DoesNotContain(username, await list.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -696,6 +840,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, notMine.StatusCode);
         using var badRight = await SendAsync(HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "admin" } }, session: session);
         Assert.Equal(HttpStatusCode.BadRequest, badRight.StatusCode);
+        Assert.Null(listed["expiresAt"]?.GetValue<DateTime?>());
 
         using var revoke = await SendAsync(HttpMethod.Delete, $"/api/keys/{id}", session: session);
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
@@ -705,6 +850,15 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull(Assert.Single((await JsonAsync(after)).AsArray())!["revokedAt"]?.GetValue<DateTime>());
         using var refused = await SendAsync(HttpMethod.Get, "/api/keys", origin: null, bearer: key);
         Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+
+        using var badExpiry = await SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "read" }, expiresInDays = 45 }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, badExpiry.StatusCode);
+        using var expiring = await SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "read" }, expiresInDays = 90 }, session: session);
+        Assert.Equal(HttpStatusCode.Created, expiring.StatusCode);
+        var expiresAt = (await JsonAsync(expiring))["apiKey"]!["expiresAt"]!.GetValue<DateTime>().ToUniversalTime();
+        Assert.InRange(expiresAt, DateTime.UtcNow.AddDays(90).AddMinutes(-1), DateTime.UtcNow.AddDays(90));
     }
 
     [Fact]

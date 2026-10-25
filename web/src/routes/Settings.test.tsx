@@ -3,13 +3,18 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
 const recoveryKey = "WXYZ-2345-6789-ABCD";
 
 function api(overrides: Record<string, (r: Request) => Response | Promise<Response>> = {}) {
-  return fakeApi({ "GET /api/session": () => json(200, { user, previousSignInAt: null }), ...overrides });
+  return fakeApi({
+    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }]),
+    ...overrides,
+  });
 }
 
 function mockSystem(dark: boolean) {
@@ -28,6 +33,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   useSession.getState().reset();
+  useEditor.getState().reset();
 });
 
 describe("Settings", () => {
@@ -157,5 +163,89 @@ describe("Settings", () => {
     await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
     expect(await within(section("Sessions")).findByText("Every other session has ended.")).toBeInTheDocument();
     expect(ended).toBe(1);
+  });
+
+  it("deletes a vault only with the password and its name typed exactly", async () => {
+    const bodies: unknown[] = [];
+    let vaults = [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }];
+    api({
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/keys": () => json(200, []),
+      "POST /api/vaults/Diary/delete": async (r) => {
+        bodies.push(await r.json());
+        vaults = vaults.filter((v) => v.name !== "Diary");
+        return noContent();
+      },
+    });
+    useEditor.getState().openNote("/Diary/today.md");
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    expect(await within(vaultsSection).findByText("1 note")).toBeInTheDocument();
+
+    await userEvent.click(within(vaultsSection).getByRole("button", { name: "Delete Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Diary?" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete vault" });
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "diary");
+    expect(confirm).toBeDisabled();
+    await userEvent.clear(within(dialog).getByLabelText("Type Diary to confirm"));
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ password: "my password, long", confirm: "Diary" }]);
+    await waitFor(() => expect(within(vaultsSection).queryByText("Diary")).not.toBeInTheDocument());
+    expect(useEditor.getState().currentPath).toBeNull();
+    expect(useEditor.getState().recentPaths).toEqual([]);
+  });
+
+  it("shows the server's sentence when the vault deletion is refused, and keeps the password out of the caches", async () => {
+    api({ "GET /api/keys": () => json(200, []), "POST /api/vaults/Diary/delete": () => json(400, { error: "The password is wrong." }) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/settings", queryClient);
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Delete Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Diary?" });
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "wrong password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete vault" }));
+
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("wrong password");
+  });
+
+  it("deletes the account with the password and the username typed, and goes to sign-in", async () => {
+    const bodies: unknown[] = [];
+    api({ "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()) });
+    const router = renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    const button = within(form).getByRole("button", { name: "Delete my account" });
+    await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");
+    expect(button).toBeDisabled();
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    await userEvent.click(button);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    expect(bodies).toEqual([{ password: "my password, long", confirm: "ada" }]);
+    expect(await screen.findByRole("status")).toHaveTextContent("Your account is deleted");
+  });
+
+  it("shows the server's sentence when the account deletion is refused", async () => {
+    api({ "POST /api/account/delete": () => json(400, { error: "The password is wrong." }) });
+    renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    await userEvent.type(within(form).getByLabelText("Current password"), "wrong password, long");
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    await userEvent.click(within(form).getByRole("button", { name: "Delete my account" }));
+    expect(await within(form).findByText("The password is wrong.")).toBeInTheDocument();
+  });
+
+  it("offers the primary admin no account deletion", async () => {
+    api({ "GET /api/session": () => json(200, { user: { ...user, role: "primary_admin" }, previousSignInAt: null }) });
+    renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    expect(form).toHaveTextContent("the server always needs one");
+    expect(within(form).queryByRole("button")).not.toBeInTheDocument();
   });
 });

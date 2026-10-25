@@ -70,6 +70,8 @@ interface EditorState {
   forgetNote(path: string): void;
   /** A moved note (or folder, `from` ending in `/`): the open note, the recent notes and the open folders follow it. */
   moved(from: string, to: string): void;
+  /** A deleted vault: its notes leave the recent notes, the open note and the draft, and it is no longer active. */
+  forgetVault(vault: string): void;
   reset(): void;
 }
 
@@ -143,6 +145,17 @@ export const useEditor = create<EditorState>()((set, get) => ({
         expandedFolders: Object.fromEntries([...folders, ...target]),
         draft: s.draft && { ...s.draft, path: map(s.draft.path) },
         upload: s.upload && { ...s.upload, folder: mapFolder(s.upload.folder) },
+      };
+    }),
+  forgetVault: (vault) =>
+    set((s) => {
+      const outside = (path: string | null | undefined) => path != null && vaultOf(path) !== vault;
+      return {
+        recentPaths: s.recentPaths.filter(outside),
+        currentPath: outside(s.currentPath) ? s.currentPath : null,
+        draft: outside(s.draft?.path) ? s.draft : null,
+        activeVault: s.activeVault === vault ? null : s.activeVault,
+        expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
       };
     }),
   reset: () => set(initial),

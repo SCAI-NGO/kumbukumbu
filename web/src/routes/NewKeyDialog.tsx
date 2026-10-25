@@ -17,6 +17,17 @@ const rights: { value: Right; label: string }[] = [
   { value: "write", label: "Read and write" },
 ];
 
+/** The lifetimes the server accepts; 0 stands for "never". */
+const expiries: { days: number; label: string }[] = [
+  { days: 30, label: "30 days" },
+  { days: 90, label: "90 days" },
+  { days: 365, label: "1 year" },
+  { days: 0, label: "Never" },
+];
+
+const segmentClass =
+  "flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-text-body has-checked:bg-accent has-checked:text-on-accent has-focus-visible:outline-2 has-focus-visible:outline-accent";
+
 /** Asks for a key's name and its right per vault; the server says what a name may be. */
 export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; onCreated(created: Created): void }) {
   const id = useId();
@@ -25,12 +36,14 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
   const vaults = useVaults();
   const [name, setName] = useState("");
   const [chosen, setChosen] = useState<Record<string, Right>>({});
+  // A key that expires by itself is the safer default: a forgotten one stops working on its own.
+  const [expiresInDays, setExpiresInDays] = useState(90);
 
   const granted = Object.fromEntries(Object.entries(chosen).filter(([, right]) => right !== "none"));
   const ready = name.trim() !== "" && Object.keys(granted).length > 0;
 
   const create = useMutation({
-    mutationFn: () => call(api.POST("/api/keys", { body: { name, vaults: granted } })),
+    mutationFn: () => call(api.POST("/api/keys", { body: { name, vaults: granted, ...(expiresInDays ? { expiresInDays } : {}) } })),
     // The result carries the key: it goes to the reveal's state, not the client-wide mutation cache.
     gcTime: 0,
     onSuccess: (created) => {
@@ -69,10 +82,7 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
               <legend className="mb-1 text-text">{vault.name}</legend>
               <div className="flex rounded-[10px] border border-line bg-surface-2 p-0.5">
                 {rights.map((right) => (
-                  <label
-                    key={right.value}
-                    className="flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-text-body has-checked:bg-accent has-checked:text-on-accent has-focus-visible:outline-2 has-focus-visible:outline-accent"
-                  >
+                  <label key={right.value} className={segmentClass}>
                     <input
                       type="radio"
                       name={`${id}-${vault.name}`}
@@ -89,6 +99,26 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
           ))}
           <p className="text-sm text-muted">A key needs a name and at least one vault it may read.</p>
         </div>
+
+        <fieldset className="flex flex-col gap-1">
+          <legend className={`${labelClass} mb-1`}>Expires after</legend>
+          <div className="flex rounded-[10px] border border-line bg-surface-2 p-0.5">
+            {expiries.map((expiry) => (
+              <label key={expiry.days} className={segmentClass}>
+                <input
+                  type="radio"
+                  name={`${id}-expiry`}
+                  value={expiry.days}
+                  checked={expiresInDays === expiry.days}
+                  onChange={() => setExpiresInDays(expiry.days)}
+                  className="sr-only"
+                />
+                {expiry.label}
+              </label>
+            ))}
+          </div>
+          <p className="text-sm text-muted">From then on the key opens nothing, as if revoked; make a new one for the agent.</p>
+        </fieldset>
 
         {create.isError && <FormError>{errorText(create.error)}</FormError>}
         <div className="flex gap-2">

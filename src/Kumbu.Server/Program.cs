@@ -39,7 +39,7 @@ builder.Services.AddOptions<KumbuOptions>()
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
 
 builder.Services.AddSingleton<IMongoClient>(sp =>
-    new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ConnectionString));
+    new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ClientSettings()));
 builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -65,6 +65,7 @@ builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<AccountLimits>();
