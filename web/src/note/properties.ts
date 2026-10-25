@@ -8,9 +8,20 @@ const unquote = (v: string) => {
   return (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")) ? t.slice(1, -1) : t;
 };
 
+/** A trailing comment (` # …`, as YAML has it: after a space) is YAML syntax this reading doesn't take apart. */
+const commented = (v: string) => /(^|\s)#/.test(v);
+
+/** An inline list's items, or null where a comma sits inside quotes (`["a, b"]`): splitting on it would be wrong. */
+function inlineItems(inner: string): string[] | null {
+  const parts = inner.split(",").map((p) => p.trim());
+  const open = (p: string) => (p.startsWith('"') || p.startsWith("'")) && (p.length < 2 || !p.endsWith(p[0]));
+  return parts.some(open) ? null : parts.map(unquote);
+}
+
 /**
  * The flat key/value properties of a YAML front matter, as Obsidian shows them; null for anything flatter
- * reading can't take apart faithfully (nested maps, block text, comments, anchors), which is then shown as written.
+ * reading can't take apart faithfully (nested maps, block text, comments, anchors, commas in quoted list items),
+ * which is then shown as written.
  * No YAML library: the subset is small, and nothing here is ever executed or resolved.
  */
 export function parseProperties(yaml: string): Property[] | null {
@@ -23,15 +34,21 @@ export function parseProperties(yaml: string): Property[] | null {
     if (!m) return null;
     const key = m[1].trim();
     const raw = (m[2] ?? "").trim();
-    if (/^[|>&*!#]/.test(raw)) return null;
+    if (/^[|>&*!#]/.test(raw) || commented(raw)) return null;
     if (raw.startsWith("[")) {
       if (!raw.endsWith("]")) return null;
       const inner = raw.slice(1, -1).trim();
-      props.push({ key, value: inner ? inner.split(",").map(unquote) : [] });
+      const items = inner ? inlineItems(inner) : [];
+      if (!items) return null;
+      props.push({ key, value: items });
     } else if (raw === "") {
       // A list below the key, one `- item` per line; anything else indented under it is a nested map.
       const items: string[] = [];
-      while (i + 1 < lines.length && /^\s+-(\s|$)|^-\s/.test(lines[i + 1])) items.push(unquote(lines[++i].replace(/^\s*-\s?/, "")));
+      while (i + 1 < lines.length && /^\s+-(\s|$)|^-\s/.test(lines[i + 1])) {
+        const item = lines[++i].replace(/^\s*-\s?/, "");
+        if (commented(item)) return null;
+        items.push(unquote(item));
+      }
       if (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) return null;
       props.push({ key, value: items.length ? items : "" });
     } else {

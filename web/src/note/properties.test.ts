@@ -28,5 +28,12 @@ describe("parseProperties", () => {
     expect(parseProperties("# a comment")).toBeNull();
     expect(parseProperties("just text")).toBeNull();
     expect(parseProperties("ref: *anchor")).toBeNull();
+    expect(parseProperties('tags: ["a, b", c]')).toBeNull();
+    expect(parseProperties("status: draft # for now")).toBeNull();
+    expect(parseProperties("tags:\n  - a # first")).toBeNull();
+  });
+
+  it("keeps a # that is no comment, as in a URL's fragment", () => {
+    expect(parseProperties("source: https://example.org/a#part")).toEqual([{ key: "source", value: "https://example.org/a#part" }]);
   });
 });
