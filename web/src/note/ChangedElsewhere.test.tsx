@@ -196,6 +196,40 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(server.noteReads).toBe(3);
   });
 
+  it("says when a refresh failed, and keeps the bar to try again", async () => {
+    const server = newServer();
+    server.failNotes = true;
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+    writeElsewhere(server, "v2");
+    backToThePage();
+
+    await userEvent.click(within(await bar()).getByRole("button", { name: "Refresh" }));
+
+    expect(await within(await bar()).findByText("Couldn't load the new version. Try again.")).toBeInTheDocument();
+    expect(screen.getByText("Second.")).toBeInTheDocument();
+
+    server.failNotes = false;
+    await userEvent.click(within(await bar()).getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+  });
+
+  it("offers the bar after an automatic refresh failed", async () => {
+    setAutoRefresh(true);
+    const server = newServer();
+    server.failNotes = true;
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+    writeElsewhere(server, "v2");
+    backToThePage();
+
+    const shown = await bar();
+    expect(await within(shown).findByText("Couldn't load the new version. Try again.")).toBeInTheDocument();
+    expect(within(shown).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
   it("says when the note was moved or removed elsewhere", async () => {
     const server = newServer();
     api(server);

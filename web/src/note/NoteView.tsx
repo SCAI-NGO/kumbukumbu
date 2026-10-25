@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
+import type { NoteVersion } from "../api/history";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -43,6 +44,9 @@ function EditorLoadFailed() {
   return <LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />;
 }
 
+/** One write of the note: a version alone may come back (a restore), its time doesn't. */
+const versionKey = (v: { version: string; lastWriteAt: string }) => `${v.version}@${v.lastWriteAt}`;
+
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
 
 /**
@@ -80,6 +84,8 @@ export default function NoteView({ path }: { path: string }) {
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
   const [updatedBy, setUpdatedBy] = useState<string | null>(null);
+  // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
+  const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
   const highlight = refreshed && refreshed.version === note.data?.version ? refreshed : agentHighlight;
   // The frontmatter's lines are 2 to its closing line (`parts.frontmatter` has one line fewer than that).
@@ -102,15 +108,18 @@ export default function NoteView({ path }: { path: string }) {
 
   /** Takes the version written elsewhere: the reader stays where they were, and what changed is tinted. */
   const refresh = useCallback(
-    async (writer: string, auto: boolean) => {
+    async (newer: NoteVersion, auto: boolean) => {
       if (refreshing.current || !note.data) return;
       refreshing.current = true;
+      const writer = writerOf(newer.lastWriter);
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
       const fresh = await note.refetch();
       refreshing.current = false;
       // A failed read keeps the version shown; it is not tinted as if it were the new one.
-      if (fresh.isError || !fresh.data || fresh.data.version === note.data.version) return;
+      if (fresh.isError || !fresh.data) return setRefreshFailed(versionKey(newer));
+      setRefreshFailed(null);
+      if (fresh.data.version === note.data.version) return;
       keepScroll.current = top;
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
       setUpdatedBy(auto ? writer : null);
@@ -129,9 +138,9 @@ export default function NoteView({ path }: { path: string }) {
   // Each new version is taken once: a read that fails is not repeated on every render, only for the next version.
   const tried = useRef(new Set<string>());
   useEffect(() => {
-    if (!autoRefresh || !newer || tried.current.has(`${newer.version}@${newer.lastWriteAt}`)) return;
-    tried.current.add(`${newer.version}@${newer.lastWriteAt}`);
-    void refresh(writerOf(newer.lastWriter), true);
+    if (!autoRefresh || !newer || tried.current.has(versionKey(newer))) return;
+    tried.current.add(versionKey(newer));
+    void refresh(newer, true);
   }, [autoRefresh, newer, refresh]);
   useEffect(() => {
     if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
@@ -236,9 +245,10 @@ export default function NoteView({ path }: { path: string }) {
         <ElsewhereBar>
           <GoneText movedTo={elsewhere.movedTo} />
         </ElsewhereBar>
-      ) : newer && !autoRefresh ? (
-        <ElsewhereBar actions={<BarButton onClick={() => void refresh(writerOf(newer.lastWriter), false)}>Refresh</BarButton>}>
+      ) : newer && (!autoRefresh || refreshFailed === versionKey(newer)) ? (
+        <ElsewhereBar actions={<BarButton onClick={() => void refresh(newer, false)}>Refresh</BarButton>}>
           <ChangeText change={newer} />
+          {refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>}
         </ElsewhereBar>
       ) : (
         updatedBy && (
