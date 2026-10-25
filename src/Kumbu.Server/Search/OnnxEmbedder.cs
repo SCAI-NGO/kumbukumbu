@@ -8,12 +8,12 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 namespace Kumbu.Server.Search;
 
 /// <summary>
-/// The embedding model, in process via ONNX Runtime: plaintext never leaves the server (concept §6). On the
+/// The internal embedding model (the <c>onnx</c> driver), in process via ONNX Runtime: plaintext never leaves the server (concept §6). On the
 /// first start it downloads the model into <c>Kumbu:Search:ModelPath</c> and checks each file's SHA-256; after
 /// that it runs offline. Until the model is loaded, search ranks by words only and says why.
 /// </summary>
 public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFactory http, ILogger<OnnxEmbedder> log)
-    : BackgroundService, IEmbedder
+    : BackgroundService, IEmbeddingDriver
 {
     private const int BatchSize = 8;
     private static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(10);
@@ -25,7 +25,12 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
 
     public SemanticState State { get; private set; } = SemanticState.Preparing;
 
-    public string Model => options.Value.Search.Model;
+    public string ModelKey => options.Value.Search.Model;
+
+    public int Dimensions => ModelFiles.Get(ModelKey).Dimensions;
+
+    /// <summary>Any number would do (it runs batches of eight); this keeps one call's work, and its wait, short.</summary>
+    public int MaxBatch => 64;
 
     public string? Reason { get; private set; } = "the embedding model is loading";
 

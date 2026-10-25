@@ -16,67 +16,91 @@ namespace Kumbu.Server.Search;
 /// split into chunks, and only chunks whose text changed are embedded again. The embeddings are sealed in
 /// MongoDB (<c>embeddings</c>) and held in the vault's working set, so a search is dot products in memory.
 /// A vault catches up when it is unlocked, so nothing written while it was locked, or before a restart, is missed.
+/// Each vault is embedded by its own provider (<see cref="UnlockedVault.EmbeddingProvider"/>): the internal model,
+/// or the external one its owner opted in to.
 /// </summary>
 public sealed class SearchIndex : BackgroundService
 {
     private readonly VaultCatalog _catalog;
-    private readonly IEmbedder _embedder;
+    private readonly EmbeddingProviders _providers;
     private readonly ILogger<SearchIndex> _log;
-    private readonly Channel<(UnlockedVault Vault, VaultPath Path)> _queue = Channel.CreateUnbounded<(UnlockedVault, VaultPath)>();
-    private readonly ConcurrentDictionary<(string Vault, VaultPath Path), byte> _queued = new();
+    private readonly Dictionary<string, Channel<(UnlockedVault Vault, VaultPath Path)>> _queues;
+    private readonly ConcurrentDictionary<(string Provider, string Vault, VaultPath Path), byte> _queued = new();
     private int _busy;
 
-    public SearchIndex(VaultCatalog catalog, IEmbedder embedder, ILogger<SearchIndex> log)
+    public SearchIndex(VaultCatalog catalog, EmbeddingProviders providers, ILogger<SearchIndex> log)
     {
-        (_catalog, _embedder, _log) = (catalog, embedder, log);
+        (_catalog, _providers, _log) = (catalog, providers, log);
+        // A queue per provider: one that is down or still loading holds up its own vaults only.
+        _queues = providers.All.ToDictionary(p => p.Name, _ => Channel.CreateUnbounded<(UnlockedVault, VaultPath)>(), StringComparer.Ordinal);
         catalog.Unlocked += CatchUp;
     }
 
-    public IEmbedder Embedder => _embedder;
+    public EmbeddingProviders Providers => _providers;
 
     /// <summary>How many notes wait to be indexed or are being indexed, in all vaults.</summary>
     public int Queued => _queued.Count + Volatile.Read(ref _busy);
 
-    /// <summary>Queues notes to be indexed. While search by meaning is off, the queue just waits; it holds each
-    /// note once, however often it is written.</summary>
+    /// <summary>Queues notes to be indexed by the vault's provider. While it is off, its queue just waits; it holds
+    /// each note once, however often it is written. A vault whose provider isn't configured isn't indexed.</summary>
     public void Enqueue(UnlockedVault vault, IEnumerable<VaultPath> paths)
     {
+        var provider = vault.EmbeddingProvider;
+        if (!_queues.TryGetValue(provider, out var queue)) return;
         foreach (var path in paths)
         {
-            if (_queued.TryAdd((vault.Id, path), 0)) _queue.Writer.TryWrite((vault, path));
+            if (_queued.TryAdd((provider, vault.Id, path), 0)) queue.Writer.TryWrite((vault, path));
         }
     }
 
-    /// <summary>Every note whose current version has no embeddings of the current model, and every embedding whose
-    /// note is gone. Embeddings of another model count as missing: after a switch, the vault is embedded again.</summary>
-    private void CatchUp(UnlockedVault vault)
+    /// <summary>Every note whose current version has no embeddings of the vault's model, and every embedding whose
+    /// note is gone. Embeddings of another model count as missing: after a switch (of the internal model, or of the
+    /// vault's provider), the vault is embedded again.</summary>
+    public void CatchUp(UnlockedVault vault)
     {
+        if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
+        {
+            _log.LogWarning("Vault {VaultId} uses the embedding provider {Provider}, which isn't configured; it isn't indexed", vault.Id, vault.EmbeddingProvider);
+            return;
+        }
+
+        var model = provider.Driver.ModelKey;
         var (notes, embeddings) = (vault.Notes, vault.Embeddings);
-        var otherModel = embeddings.Where(e => e.Value.Model != _embedder.Model && notes.ContainsKey(e.Key)).ToList();
+        var otherModel = embeddings.Where(e => e.Value.Model != model && notes.ContainsKey(e.Key)).ToList();
         if (otherModel.Count > 0)
         {
             _log.LogInformation("Vault {VaultId}: {Count} {Notes} to embed with {New} (were {Old})",
-                vault.Id, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", _embedder.Model,
+                vault.Id, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", model,
                 string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
-        Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note)).Select(n => n.Key)
+        Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note, model)).Select(n => n.Key)
             .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p))));
     }
 
-    private bool IsCurrent(NoteEmbeddings? embeddings, StoredNote note) => embeddings?.Model == _embedder.Model && embeddings.Version == note.Version;
+    private static bool IsCurrent(NoteEmbeddings? embeddings, StoredNote note, string model) => embeddings?.Model == model && embeddings.Version == note.Version;
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
+
+    private async Task RunAsync(EmbeddingProvider provider, ChannelReader<(UnlockedVault Vault, VaultPath Path)> queue, CancellationToken stoppingToken)
     {
-        await _embedder.WhenReadyAsync(stoppingToken);
-        await foreach (var (vault, path) in _queue.Reader.ReadAllAsync(stoppingToken))
+        await provider.Driver.WhenReadyAsync(stoppingToken);
+        await foreach (var (vault, path) in queue.ReadAllAsync(stoppingToken))
         {
             // Off the queue before indexing: a write meanwhile queues the note again, so it isn't missed.
             Interlocked.Increment(ref _busy);
-            _queued.TryRemove((vault.Id, path), out _);
+            _queued.TryRemove((provider.Name, vault.Id, path), out _);
             try
             {
-                await IndexAsync(vault, path, stoppingToken);
+                // The owner switched the vault to another provider since: that provider's queue has the note.
+                if (vault.EmbeddingProvider == provider.Name) await IndexAsync(vault, path, stoppingToken);
+            }
+            catch (EmbeddingUnavailableException e) when (e.ProviderDown)
+            {
+                // Not this note's fault: it waits in the queue until the provider is back.
+                Enqueue(vault, [path]);
+                await provider.Driver.WhenReadyAsync(stoppingToken);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
@@ -90,7 +114,8 @@ public sealed class SearchIndex : BackgroundService
         }
     }
 
-    /// <summary>Brings one note's embeddings up to its current version, or removes them if the note is gone.</summary>
+    /// <summary>Brings one note's embeddings up to its current version with the vault's provider, or removes them
+    /// if the note is gone.</summary>
     public async Task IndexAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
         await vault.IndexGate.WaitAsync(ct);
@@ -104,22 +129,24 @@ public sealed class SearchIndex : BackgroundService
                 return;
             }
 
+            if (_providers.Get(vault.EmbeddingProvider)?.Driver is not { } driver) return;
+            var model = driver.ModelKey;
             var note = entry.Note;
-            if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note)) return;
+            if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note, model)) return;
 
             // Vectors are reused by the hash of their text, but only the current model's: the same text gives
             // another vector under another model.
             var chunks = Chunker.Split(new Note(path, note.Content));
-            var known = vault.Embeddings.Values.Where(e => e.Model == _embedder.Model).SelectMany(e => e.Chunks).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
+            var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
-            var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).ToList();
-            if (missing.Count > 0)
+            var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
+            foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))
             {
-                var vectors = await _embedder.EmbedAsync([.. missing.Select(i => chunks[i].EmbeddingText)], query: false, ct);
-                for (var k = 0; k < missing.Count; k++) known[hashes[missing[k]]] = vectors[k];
+                var vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, ct);
+                for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];
             }
 
-            var embeddings = new NoteEmbeddings(_embedder.Model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
+            var embeddings = new NoteEmbeddings(model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update

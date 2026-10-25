@@ -110,6 +110,9 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
             var one = semantic.Pending == 1;
             var subject = one ? "note isn't" : "notes aren't";
             if (notIndexed) return $"(ranked by words only: {semantic.Pending} {subject} indexed yet{read})";
+
+            // Some vaults' provider is unavailable: their notes count as pending, and only the words find them.
+            if (semantic.Reason is { } partial) return $"(ranked by {by} without the notes of {partial}; semsearch --words finds them{read})";
             var verb = one ? "isn't" : "aren't";
             var rest = meaningOnly ? $"{verb} ranked" : $"{verb} ranked by meaning; semsearch --words finds {(one ? "it" : "them")}";
             return $"(ranked by {by}; {semantic.Pending} {subject} indexed yet and {rest}{read})";

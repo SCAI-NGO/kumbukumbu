@@ -44,8 +44,12 @@ builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<OnnxEmbedder>();
-builder.Services.AddSingleton<IEmbedder>(sp => sp.GetRequiredService<OnnxEmbedder>());
+builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
+// The internal model and the external providers the admin configured; each vault uses one of them.
+builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
+    sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
+    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();

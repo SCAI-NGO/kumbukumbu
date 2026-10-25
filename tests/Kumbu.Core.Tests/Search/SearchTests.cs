@@ -132,6 +132,16 @@ public class SearchTests
     }
 
     [Fact]
+    public async Task SemsearchNamesTheVaultsWhoseProviderIsUnavailable()
+    {
+        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.5)], 3, "Private: the embedding provider TensorX answered 503 Service Unavailable"));
+
+        Assert.EndsWith(
+            "(ranked by words and meaning without the notes of Private: the embedding provider TensorX answered 503 Service Unavailable; semsearch --words finds them; cat \"path#Section\" reads one)",
+            (await Run("semsearch rules /Demo", index)).Output);
+    }
+
+    [Fact]
     public async Task PendingNotesAreNamedWithWords()
     {
         var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.5)], 1));
