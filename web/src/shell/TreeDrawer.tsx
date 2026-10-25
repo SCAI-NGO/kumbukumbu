@@ -129,7 +129,7 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
 
   return (
     <div className="absolute inset-0 z-20 flex">
-      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" className="k-drawer flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" data-drawer className="k-drawer flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface">
         <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
           <div className="min-w-0 flex-1">
             <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>

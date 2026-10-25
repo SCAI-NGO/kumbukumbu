@@ -7,6 +7,7 @@ import { FolderInput, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { topDialog } from "../hooks/useDialog";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
@@ -79,7 +80,12 @@ export default function MobileShell() {
   const [vaultDialog, setVaultDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
-  const swipe = useEdgeSwipe(overlay === "tree", () => setOverlay("tree"), () => setOverlay("none"));
+  // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
+  const swipe = useEdgeSwipe(
+    overlay === "tree",
+    () => useEditor.getState().overlay === "none" && !topDialog() && setOverlay("tree"),
+    () => topDialog()?.dataset.drawer !== undefined && setOverlay("none"),
+  );
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
   // Only then: after signing out, the store is empty while this URL is still shown for a moment.

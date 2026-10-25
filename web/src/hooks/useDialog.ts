@@ -6,6 +6,9 @@ const focusable = 'a[href], button:not([disabled]), input:not([disabled]), selec
 /** The open dialogs, topmost last: only the topmost answers Escape and keeps Tab inside. */
 const stack: HTMLElement[] = [];
 
+/** The topmost open dialog, if any. */
+export const topDialog = (): HTMLElement | null => stack.at(-1) ?? null;
+
 /**
  * What `aria-modal` promises: focus moves in on open (to `[data-autofocus]`, else the first control), Tab stays
  * inside, Escape calls `onClose` wherever focus is, and focus goes back to the opener on close. An opener that only
