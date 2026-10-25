@@ -36,9 +36,9 @@ function writeElsewhere(s: Server, version: string, writer = "liz") {
   s.at += 1;
 }
 
-function api(server: Server, puts: unknown[] = []) {
+function api(server: Server, puts: unknown[] = [], previousSignInAt: string | null = null) {
   return fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+    "GET /api/session": () => json(200, { user, previousSignInAt }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal" }]),
     "GET /api/vaults/Work/tree": () => json(200, tree),
     "GET /api/notes/Work/plan.md": async () => {
@@ -71,7 +71,8 @@ function api(server: Server, puts: unknown[] = []) {
     "GET /api/version/*": () => json(404, { error: "" }),
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
-    "GET /api/changes": () => json(200, []),
+    // An agent's write since the previous sign-in: liz's key wrote the version shown last.
+    "GET /api/changes": () => json(200, server.writer.startsWith("liz") ? [{ path: PLAN, writer: "liz", lastWriteAt: iso(server.at), version: server.version }] : []),
   });
 }
 
@@ -103,6 +104,26 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
 
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect([...document.querySelectorAll("[data-changed]")].map((e) => e.textContent?.trim())).toEqual(["Second, changed by liz."]);
+    expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
+  });
+
+  it("is shown once when an agent made it: the agent banner offers Refresh, and no second bar says the same", async () => {
+    const server = newServer();
+    api(server, [], "2026-10-24T08:00:00Z");
+    renderApp("/notes/Work/plan.md");
+    expect(await screen.findByText("Second.")).toBeInTheDocument();
+
+    writeElsewhere(server, "v2", "liz (edit)");
+    backToThePage();
+
+    const banner = await screen.findByRole("region", { name: "Agent changes" });
+    await waitFor(() => expect(within(banner).getByRole("button", { name: "Refresh" })).toBeInTheDocument());
+    expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(banner).getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Agent changes" })).queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
   });
 

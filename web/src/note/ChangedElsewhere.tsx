@@ -6,10 +6,7 @@ import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
 import { noteUrl } from "../api/paths";
 import { useSession } from "../state/session";
-import { ago } from "./AgentBanner";
-
-/** Who wrote, without the tool: "liz (edit)" is "liz" (as Writers.Identity on the server). */
-export const writerOf = (label: string) => label.split(" (")[0];
+import { ago, writerOf } from "./AgentBanner";
 
 /**
  * A write of the open note made elsewhere (an agent, another tab or device): the server's version differs from the

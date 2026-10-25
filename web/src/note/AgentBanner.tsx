@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useChanges, useHistory, useNoteVersion, type HistoryEntry } from "../api/notes";
 import type { components } from "../api/schema";
 import { useEditor } from "../state/editor";
@@ -32,8 +32,8 @@ export function useAgentChange(path: string): Change | undefined {
   return useChanges(since).data?.find((c) => c.path === path);
 }
 
-/** Who wrote, without the tool: "liz (mv)" is "liz" (as Writers.Identity on the server). */
-const identity = (writer: string) => writer.split(" (")[0];
+/** Who wrote, without the tool: "liz (edit)" is "liz" (as Writers.Identity on the server). */
+export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
  * The version the user last saw, roughly: the newest one before the agents' writes since the previous sign-in,
@@ -41,7 +41,7 @@ const identity = (writer: string) => writer.split(" (")[0];
  */
 export function lastSeen(history: HistoryEntry[], since: string, username: string): string | null {
   const from = Date.parse(since);
-  return history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || identity(v.writer) === username))?.version ?? null;
+  return history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || writerOf(v.writer) === username))?.version ?? null;
 }
 
 /**
@@ -65,8 +65,12 @@ export function useAgentHighlight(path: string, change: Change | undefined, cont
   }, [on, history.data, base, earlier.data, content, change]);
 }
 
-/** "Agent key liz edited 3 minutes ago", with Show / Hide for the highlights of what it changed. */
-export default function AgentBanner({ change }: { change: Change | undefined }) {
+/**
+ * "Agent key liz edited 3 minutes ago", with Show / Hide for the highlights of what it changed. When that write isn't
+ * on screen yet, the note view puts its Refresh here (`actions`, and a line under the text in `children`) instead of
+ * a second bar about the same write.
+ */
+export default function AgentBanner({ change, actions, children }: { change: Change | undefined; actions?: ReactNode; children?: ReactNode }) {
   const show = useEditor((s) => s.showAgentHighlights);
   const setShow = useEditor((s) => s.setShowAgentHighlights);
   if (!change) return null;
@@ -76,7 +80,9 @@ export default function AgentBanner({ change }: { change: Change | undefined }) 
       <span aria-hidden className="size-2 flex-none rounded-full bg-accent" />
       <span className="min-w-0 flex-1">
         Agent key <code className="font-mono text-text">{change.writer}</code> edited {ago(change.lastWriteAt)}
+        {children}
       </span>
+      {actions}
       <button
         type="button"
         aria-pressed={show}

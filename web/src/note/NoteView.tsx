@@ -12,9 +12,9 @@ import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
+import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
-import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout, writerOf } from "./ChangedElsewhere";
+import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -238,20 +238,32 @@ export default function NoteView({ path }: { path: string }) {
     },
   };
 
+  // The agent banner and the bar about a write elsewhere can mean the same write: then the banner alone says it.
+  const sameWrite = (w: { version: string; lastWriteAt: string } | null | undefined) =>
+    !!change && !!w && w.version === change.version && Date.parse(w.lastWriteAt) === Date.parse(change.lastWriteAt);
+  const offerRefresh = !!newer && (!autoRefresh || refreshFailed === versionKey(newer));
+  const refreshButton = newer && <BarButton onClick={() => void refresh(newer, false)}>Refresh</BarButton>;
+  const failedText = newer && refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>;
+  const bannerHasIt = sameWrite(newer);
+
   return (
     <>
-      <AgentBanner change={change} />
+      <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
+        {bannerHasIt && failedText}
+      </AgentBanner>
       {elsewhere.gone ? (
         <ElsewhereBar>
           <GoneText movedTo={elsewhere.movedTo} />
         </ElsewhereBar>
-      ) : newer && (!autoRefresh || refreshFailed === versionKey(newer)) ? (
-        <ElsewhereBar actions={<BarButton onClick={() => void refresh(newer, false)}>Refresh</BarButton>}>
-          <ChangeText change={newer} />
-          {refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>}
+      ) : offerRefresh && !bannerHasIt ? (
+        <ElsewhereBar actions={refreshButton}>
+          <ChangeText change={newer!} />
+          {failedText}
         </ElsewhereBar>
       ) : (
-        updatedBy && (
+        // Taken automatically: the banner already names the agent whose write it was.
+        updatedBy &&
+        !(note.data && sameWrite(note.data)) && (
           <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
             {updatedBy === username ? "Updated: you changed this note elsewhere" : `Updated by ${updatedBy}`}
           </p>
