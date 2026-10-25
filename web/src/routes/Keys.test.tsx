@@ -171,6 +171,8 @@ describe("Keys", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { router } = await createKey(queryClient);
+    // While it is shown, it is only in the reveal's state: the dialog that made it is gone, and its mutation with it.
+    expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(secret);
     const line = `claude mcp add --transport http kumbu ${window.location.origin}/mcp --header "Authorization: Bearer ${secret}"`;
     expect(screen.getByText(line)).toBeInTheDocument();
 
