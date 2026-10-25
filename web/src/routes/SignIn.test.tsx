@@ -51,6 +51,29 @@ describe("a session that ends mid-use", () => {
     expect(body).toEqual({ username: "ada", password: "correct horse battery" });
   });
 
+  it("doesn't take someone else signing in to the previous user's note", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    useEditor.getState().openNote("/Arbeit/plan.md");
+    const liz = { ...user, id: "u2", username: "liz", display: "Liz" };
+    let signedIn = false;
+    fakeApi({
+      "GET /api/session": () => (signedIn ? json(200, { user: liz, previousSignInAt: null }) : json(401, { error: "Sign in first." })),
+      "POST /api/session": () => {
+        signedIn = true;
+        return json(200, { user: liz, previousSignInAt: null });
+      },
+      "GET /api/vaults": () => json(200, [{ name: "Garten", notes: 1 }]),
+    });
+
+    const router = renderApp("/notes/Arbeit/plan.md");
+    await screen.findByText("Your session has ended. Please sign in again.");
+    await signIn();
+
+    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    expect(path(router)).toBe("/");
+    expect(useEditor.getState().recentPaths).toEqual([]);
+  });
+
   it("sends a first visit to sign-in without the message", async () => {
     fakeApi({ "GET /api/session": () => json(401, { error: "Sign in first." }) });
     const router = renderApp("/");

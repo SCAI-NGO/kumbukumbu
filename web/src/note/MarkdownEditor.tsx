@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction } from "react-router-dom";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { useEditor } from "../state/editor";
+import { useSession } from "../state/session";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import MarkdownToolbar from "./MarkdownToolbar";
 import { useAutosave } from "./useAutosave";
@@ -10,18 +11,44 @@ import { useAutosave } from "./useAutosave";
 /**
  * Write mode (MOBILE_EDITOR §4, §7): the raw Markdown in a plain textarea (16 px, so iOS doesn't zoom), saved as
  * the user types. Nothing leaves Write mode, the note or the page while text is unsaved without saving it first;
- * with a conflict or a failed save open, the user stays here and decides.
+ * with a conflict or a failed save open, the user stays here and decides. A session that ends meanwhile leaves the
+ * unsaved text in memory (never in storage), and the note opens with it again once the same user is back.
  */
 export default function MarkdownEditor({ path, note }: { path: string; note: NoteView }) {
   const save = useSaveNote(path);
-  const autosave = useAutosave(note, (content, version, options) => save.mutateAsync({ content, version, ...options }));
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved } = autosave;
+  const [draft] = useState(() => {
+    const { draft } = useEditor.getState();
+    const mine = draft?.path === path && draft.username === useSession.getState().user?.username;
+    return mine && draft.text !== note.content ? draft : null;
+  });
+  const autosave = useAutosave(
+    note,
+    // Without a session a save can only fail (401); what is unsaved is kept as a draft instead (below).
+    (content, version, options) => (useSession.getState().user ? save.mutateAsync({ content, version, ...options }) : Promise.reject(new Error("Signed out"))),
+    draft,
+  );
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved, unsaved } = autosave;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
 
   useEffect(() => {
     textarea.current?.focus({ preventScroll: true });
   }, []);
+
+  useEffect(() => {
+    // Taken: from here on the editor holds the text.
+    if (useEditor.getState().draft) useEditor.getState().setDraft(null);
+  }, []);
+
+  useEffect(() => {
+    // The session ended under the editor (a 401): the user is gone, and whose it was is still known. A sign-out
+    // forgets that, as the user chose to leave.
+    return () => {
+      const { user, previousUser } = useSession.getState();
+      const text = unsaved();
+      if (!user && previousUser && text) useEditor.getState().setDraft({ username: previousUser, path, ...text });
+    };
+  }, [path, unsaved]);
 
   useEffect(() => {
     useEditor.getState().setBeforeRead(flush);

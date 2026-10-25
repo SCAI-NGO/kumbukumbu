@@ -6,6 +6,8 @@ import type { Picked } from "../upload/collectFiles";
 export type Mode = "read" | "write";
 export type Overlay = "none" | "tree" | "search" | "upload";
 export type SearchMode = "hybrid" | "meaning" | "exact";
+/** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
+export type Draft = { username: string; path: string; text: string; version: string };
 
 const RECENT = 5;
 
@@ -32,6 +34,8 @@ interface EditorState {
   upload: { folder: string; dropped: Picked[] | null } | null;
   /** Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure). */
   beforeRead: (() => Promise<boolean>) | null;
+  /** Kept in memory only, like everything here; the note opens with it in Write mode. */
+  draft: Draft | null;
 
   /** Opens a note: overlays close, its vault becomes active and its folder chain opens in the drawer. */
   openNote(path: string, mode?: Mode): void;
@@ -40,6 +44,7 @@ interface EditorState {
   endWrite(): Promise<void>;
   setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: (() => Promise<boolean>) | null): void;
+  setDraft(draft: Draft | null): void;
   setOverlay(overlay: Overlay): void;
   /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */
   openUpload(folder: string, dropped?: Picked[]): void;
@@ -64,6 +69,7 @@ const initial = {
   showAgentHighlights: false,
   recentPaths: [],
   beforeRead: null,
+  draft: null,
   scrollTarget: null,
   upload: null,
 };
@@ -79,7 +85,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   openNote: (path, mode = "read") =>
     set((s) => ({
       currentPath: path,
-      mode,
+      mode: s.draft?.path === path ? "write" : mode,
       overlay: "none",
       activeVault: vaultOf(path),
       expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(folderOf(path)).map((f) => [f, true])) },
@@ -91,6 +97,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (!guard || (await guard())) set({ mode: "read" });
   },
   setBeforeRead: (beforeRead) => set({ beforeRead }),
+  setDraft: (draft) => set({ draft }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
   openUpload: (folder, dropped) => set({ overlay: "upload", upload: { folder, dropped: dropped ?? null } }),

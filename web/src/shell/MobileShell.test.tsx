@@ -208,6 +208,17 @@ describe("the shell", () => {
     expect(useSession.getState().user).toBeNull();
   });
 
+  it("stays signed in, and says so, when signing out fails", async () => {
+    signedInApi({ "DELETE /api/session": () => json(500, { error: "Something went wrong." }) });
+    const router = renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await within(drawer()).findByRole("alert")).toHaveTextContent("Couldn't sign out. Try again.");
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
+    expect(useEditor.getState().recentPaths).toEqual(["/Work/inbox.md"]);
+    expect(useSession.getState().user).not.toBeNull();
+  });
+
   it("opens the last note at /", async () => {
     signedInApi();
     useEditor.getState().openNote("/Work/projects/roadmap.md");

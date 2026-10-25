@@ -27,7 +27,21 @@ export function useLeaveGuard(saved: boolean) {
 }
 
 /** "Leave without it?": Escape stays, as the safe answer. */
-export function LeaveDialog({ id, title, text, onStay, onLeave }: { id: string; title: string; text: string; onStay(): void; onLeave(): void }) {
+export function LeaveDialog({
+  id,
+  title,
+  text,
+  leaveLabel = "Leave without it",
+  onStay,
+  onLeave,
+}: {
+  id: string;
+  title: string;
+  text: string;
+  leaveLabel?: string;
+  onStay(): void;
+  onLeave(): void;
+}) {
   const dialog = useDialog<HTMLDivElement>(onStay);
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -47,7 +61,7 @@ export function LeaveDialog({ id, title, text, onStay, onLeave }: { id: string; 
             Stay
           </button>
           <button type="button" onClick={onLeave} className={`${secondaryButtonClass} flex-1`}>
-            Leave without it
+            {leaveLabel}
           </button>
         </div>
       </div>

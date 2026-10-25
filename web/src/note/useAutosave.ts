@@ -12,22 +12,27 @@ export type SaveOptions = { keepalive: boolean };
 export type AutosaveStatus = "saved" | "pending" | "saving" | "conflict" | "error";
 
 /**
- * The text being written and its saves. Saves go one at a time, each on the version the previous one returned
+ * The text being written and its saves. `draft` is text left unsaved by a session that ended: it is saved on its
+ * own version at once, so a newer write meanwhile ends in the conflict toast. Saves go one at a time, each on the version the previous one returned
  * (never one only read from the cache, which may already hold an agent's newer write). A 409 pauses saving and
  * keeps the user's text until they choose: `reload` takes the newer text, `keepMine` writes theirs on top of it.
  */
-export function useAutosave(initial: { content: string; version: string }, save: (content: string, version: string, options: SaveOptions) => Promise<SaveResult>) {
-  const [value, setValue] = useState(initial.content);
+export function useAutosave(
+  initial: { content: string; version: string },
+  save: (content: string, version: string, options: SaveOptions) => Promise<SaveResult>,
+  draft: { text: string; version: string } | null = null,
+) {
+  const [value, setValue] = useState(draft?.text ?? initial.content);
   const [status, setStatus] = useState<AutosaveStatus>("saved");
   const [conflict, setConflict] = useState<Conflict | null>(null);
   const saveRef = useRef(save);
   saveRef.current = save;
   // The live state, read by timers and promises that outlast a render.
   const s = useRef({
-    text: initial.content,
+    text: draft?.text ?? initial.content,
     /** What the server holds at `version`, as far as this editor knows. */
     saved: initial.content,
-    version: initial.version,
+    version: draft?.version ?? initial.version,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
     inFlight: null as Promise<void> | null,
     again: false,
@@ -144,6 +149,13 @@ export function useAutosave(initial: { content: string; version: string }, save:
   /** Anything unsaved, in flight, failed or in conflict: leaving now could lose text. */
   const unresolved = useCallback(() => !!(s.conflict || s.failed || s.inFlight || s.text !== s.saved), [s]);
 
+  /** The text and the version it goes on, while any of it isn't saved. */
+  const unsaved = useCallback(() => (s.conflict || s.text !== s.saved ? { text: s.text, version: s.version } : null), [s]);
+
+  useEffect(() => {
+    if (s.text !== s.saved) void run();
+  }, [s, run]);
+
   // Leaving without the guards (signed out, say): what can still be saved is sent.
   useEffect(
     () => () => {
@@ -156,5 +168,5 @@ export function useAutosave(initial: { content: string; version: string }, save:
     [s],
   );
 
-  return { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved };
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved, unsaved };
 }

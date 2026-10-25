@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, KeyRound, LogOut, Settings, Shield, Upload } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useTree, type TreeFolder } from "../api/notes";
 import { noteUrl, titleOf } from "../api/paths";
 import { Menu, type MenuItem } from "../components/Menu";
+import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -49,9 +51,22 @@ function AccountRow() {
   const role = useSession((s) => s.user?.role);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [asking, setAsking] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  const signOut = async () => {
-    await api.DELETE("/api/session");
+  /** The open editor saves first; text it can't save (a conflict, a failure) is given up only when the user says so. */
+  const signOut = async (anyway = false) => {
+    setAsking(false);
+    setFailed(false);
+    const save = useEditor.getState().beforeRead;
+    if (!anyway && save && !(await save())) return setAsking(true);
+    try {
+      const { response } = await api.DELETE("/api/session");
+      // A 401: the session had ended already, and the app is on its way to sign-in.
+      if (!response.ok && response.status !== 401) return setFailed(true);
+    } catch {
+      return setFailed(true);
+    }
     useEditor.getState().reset();
     useSession.getState().reset();
     navigate("/signin", { replace: true });
@@ -75,10 +90,25 @@ function AccountRow() {
           Admin
         </Link>
       )}
-      <button type="button" onClick={signOut} className={`${link} ml-auto`}>
+      <button type="button" onClick={() => void signOut()} className={`${link} ml-auto`}>
         <LogOut size={16} aria-hidden className="text-muted" />
         Sign out
       </button>
+      {failed && (
+        <p role="alert" className="w-full px-2 pb-1 text-sm text-text">
+          Couldn't sign out. Try again.
+        </p>
+      )}
+      {asking && (
+        <LeaveDialog
+          id="sign-out-unsaved"
+          title="Sign out with unsaved changes?"
+          text="The open note has changes that aren't saved. Signing out now loses them."
+          leaveLabel="Sign out anyway"
+          onStay={() => setAsking(false)}
+          onLeave={() => void signOut(true)}
+        />
+      )}
     </nav>
   );
 }

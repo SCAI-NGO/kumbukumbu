@@ -6,6 +6,7 @@ import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 
 /**
@@ -33,8 +34,15 @@ export default function SignIn() {
       // Nothing cached from an earlier session (maybe another user's) outlives this sign-in.
       queryClient.clear();
       queryClient.setQueryData(["session"], view);
+      let next = safeNext(params.get("next"));
+      // Someone else than the user whose session ended here: their notes, unsaved text and paths (content too) go.
+      const previous = useSession.getState().previousUser;
+      if (previous && previous !== view.user.username) {
+        useEditor.getState().reset();
+        if (next.startsWith("/notes/")) next = "/";
+      }
       signedIn(view);
-      navigate(safeNext(params.get("next")), { replace: true });
+      navigate(next, { replace: true });
     },
   });
 

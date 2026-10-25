@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { fakeApi, json, renderApp, user } from "../test/app";
+import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
 afterEach(() => {
@@ -43,10 +43,12 @@ const conflict =
   () =>
     json(409, { error: "The note changed since that version.", current: { content, version } });
 
-/** The API with the plan note; each PUT takes the next answer (the last one repeats) and is recorded. */
-function editorApi(answers: Answer[] = [ok], getNote = () => json(200, noteView(PLAN, source, "v1"))) {
+/** The API with the plan note; each PUT takes the next answer (the last one repeats) and is recorded; a GET answers what was saved last. */
+function editorApi(answers: Answer[] = [ok], getNote?: () => Response, extra: Parameters<typeof fakeApi>[0] = {}) {
   const puts: Put[] = [];
-  fakeApi({
+  let current = noteView(PLAN, source, "v1");
+  getNote ??= () => json(200, current);
+  const fetch = fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2 }]),
     "GET /api/vaults/Work/tree": () => json(200, tree),
@@ -55,13 +57,17 @@ function editorApi(answers: Answer[] = [ok], getNote = () => json(200, noteView(
       const body = (await r.json()) as Put;
       puts.push(body);
       keepalives.push(r.keepalive);
-      return answers[Math.min(puts.length - 1, answers.length - 1)](body);
+      const answer = answers[Math.min(puts.length - 1, answers.length - 1)](body);
+      if (answer.ok) current = await answer.clone().json();
+      return answer;
     },
     "GET /api/notes/*": (r) => json(200, noteView(decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), "Roadmap text.", "r1")),
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
+    ...extra,
   });
-  return puts;
+  // Not enumerable, so `toEqual` still compares the PUTs only.
+  return Object.defineProperty(puts, "fetch", { value: fetch }) as Put[] & { fetch: typeof fetch };
 }
 
 const typist = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -305,5 +311,137 @@ describe("Write mode", () => {
     await u.click(within(notSaved).getByRole("button", { name: "retry" }));
     await waitFor(() => expect(puts[1]).toEqual({ content: `${source} mine`, version: "v1" }));
     await waitFor(() => expect(screen.queryByRole("alert", { name: "Not saved" })).not.toBeInTheDocument());
+  });
+});
+
+const sessionGone: Answer = () => json(401, { error: "Sign in first." });
+
+/** Every value in both web storages, joined: what the browser would keep of this tab. */
+const stored = () =>
+  [localStorage, sessionStorage].flatMap((storage) => Array.from({ length: storage.length }, (_, i) => storage.getItem(storage.key(i)!))).join("\n");
+
+async function signInAgain(u: ReturnType<typeof typist>) {
+  await u.type(await screen.findByLabelText("Username"), "ada");
+  await u.type(screen.getByLabelText("Password"), "correct horse battery");
+  // A plain click: what follows (the sign-in, the note, its save) is awaited by the test, inside waitFor.
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+}
+
+describe("A session that ends mid-edit", () => {
+  const signInAs = (who = user) => ({ "POST /api/session": () => json(200, { user: who, previousSignInAt: null }) });
+
+  it("keeps the unsaved text in memory only, and saves it on its version after signing in again", async () => {
+    const puts = editorApi([sessionGone, ok], undefined, signInAs());
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await waitFor(() => expect(useEditor.getState().draft).not.toBeNull());
+
+    expect(await screen.findByText("Your session has ended. Please sign in again.")).toBeInTheDocument();
+    expect(router.state.location.search).toBe(`?next=${encodeURIComponent(planUrl)}`);
+    expect(useEditor.getState().draft).toEqual({ username: "ada", path: PLAN, text: `${source} mine`, version: "v1" });
+    expect(stored()).not.toContain("mine");
+    // Without a session a save can only fail: nothing more is sent.
+    expect(puts).toHaveLength(1);
+
+    await signInAgain(u);
+
+    await waitFor(() => expect(puts[1]).toEqual({ content: `${source} mine`, version: "v1" }));
+    await waitFor(() => expect(editorBox()).toHaveValue(`${source} mine`));
+    expect(router.state.location.pathname).toBe(planUrl);
+    expect(useEditor.getState().draft).toBeNull();
+  });
+
+  it("shows the conflict toast when the note changed meanwhile, with the text kept", async () => {
+    const puts = editorApi([sessionGone, conflict(theirs, "v7")], undefined, signInAs());
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await waitFor(() => expect(useEditor.getState().draft).not.toBeNull());
+    await screen.findByText("Your session has ended. Please sign in again.");
+
+    await signInAgain(u);
+
+    expect(await screen.findByRole("alert", { name: "Changed elsewhere" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe(planUrl);
+    expect(editorBox()).toHaveValue(`${source} mine`);
+    expect(puts).toHaveLength(2);
+  });
+
+  it("drops the text, the note and the recent notes when someone else signs in", async () => {
+    const puts = editorApi([sessionGone, ok], undefined, signInAs({ ...user, id: "u2", username: "liz", display: "Liz" }));
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await waitFor(() => expect(useEditor.getState().draft).not.toBeNull());
+    await screen.findByText("Your session has ended. Please sign in again.");
+
+    await signInAgain(u);
+
+    // The vault overview, and the first vault taken up afresh (it was reset on the way).
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+      expect(useEditor.getState().activeVault).toBe("Work");
+    });
+    expect(router.state.location.pathname).toBe("/");
+    expect(useEditor.getState()).toMatchObject({ draft: null, recentPaths: [], currentPath: null, mode: "read" });
+    expect(puts).toHaveLength(1);
+  });
+});
+
+describe("Signing out mid-edit", () => {
+  const signOut = async (u: ReturnType<typeof typist>) => {
+    await u.click(screen.getByRole("button", { name: "Open file tree" }));
+    // The save before signing out settles within act(); a sign-out it lets through is awaited by the test.
+    await act(async () => void fireEvent.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "Sign out" })));
+  };
+  const sent = (fetch: ReturnType<typeof fakeApi>) => fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`).filter((k) => !k.startsWith("GET"));
+
+  it("saves the text first, and signs out once it is saved", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const bodies: Put[] = [];
+    const { fetch } = editorApi([ok], undefined, {
+      "DELETE /api/session": () => noContent(),
+      [`PUT /api/notes${PLAN}`]: async (r) => {
+        const body = (await r.json()) as Put;
+        bodies.push(body);
+        await gate;
+        return ok(body);
+      },
+    });
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+
+    await signOut(u);
+    await wait(50);
+    expect(sent(fetch)).toEqual([`PUT /api/notes${PLAN}`]);
+    release();
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    expect(bodies).toEqual([{ content: `${source} mine`, version: "v1" }]);
+    expect(sent(fetch)).toEqual([`PUT /api/notes${PLAN}`, "DELETE /api/session"]);
+  });
+
+  it("asks while the text can't be saved, and signs out only when told to", async () => {
+    const puts = editorApi([conflict(theirs, "v7")], undefined, { "DELETE /api/session": () => noContent() });
+    const { u, router } = await openInWrite();
+    await u.type(editorBox(), " mine");
+    await wait(800);
+    await screen.findByRole("alert", { name: "Changed elsewhere" });
+
+    await signOut(u);
+    const ask = await screen.findByRole("alertdialog", { name: "Sign out with unsaved changes?" });
+    expect(sent(puts.fetch)).toEqual([`PUT /api/notes${PLAN}`]);
+    await u.click(within(ask).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe(planUrl);
+    expect(useSession.getState().user).not.toBeNull();
+
+    fireEvent.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "Sign out" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "Sign out with unsaved changes?" })).getByRole("button", { name: "Sign out anyway" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    expect(sent(puts.fetch)).toEqual([`PUT /api/notes${PLAN}`, "DELETE /api/session"]);
+    expect(useEditor.getState().draft).toBeNull();
   });
 });
