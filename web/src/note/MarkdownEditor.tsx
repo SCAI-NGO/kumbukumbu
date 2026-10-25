@@ -33,7 +33,7 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
     (content, version, options) => (useSession.getState().user ? save.mutateAsync({ content, version, ...options }) : Promise.reject(new Error("Signed out"))),
     draft,
   );
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, release, retry, unresolved, unsaved } = autosave;
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
   const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
@@ -43,7 +43,8 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
   const newer = gone ? null : elsewhere?.change;
   useEffect(() => {
     if (gone) stop();
-  }, [gone, stop]);
+    else resume();
+  }, [gone, stop, resume]);
   const [keepProblem, setKeepProblem] = useState<string | null>(null);
 
   /** The text as a new note beside where the note was: `plan (kept).md`, else `plan (kept 2).md` …, opened in Write mode. */

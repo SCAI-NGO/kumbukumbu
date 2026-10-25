@@ -167,6 +167,13 @@ export function useAutosave(
     s.timer = undefined;
   }, [s]);
 
+  /** The note is back at its path: saving goes on, on the version it had (a newer one meanwhile is a 409). */
+  const resume = useCallback(() => {
+    if (!s.stopped) return;
+    s.stopped = false;
+    if (s.text !== s.saved) void run();
+  }, [s, run]);
+
   /** The text is safe elsewhere now (saved as another note): leaving no longer loses it. */
   const release = useCallback(() => {
     s.saved = s.text;
@@ -200,5 +207,5 @@ export function useAutosave(
     [s],
   );
 
-  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, release, retry, unresolved, unsaved };
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved };
 }

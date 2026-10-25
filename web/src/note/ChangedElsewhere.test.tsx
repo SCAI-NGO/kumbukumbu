@@ -364,6 +364,30 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
     await waitFor(() => expect(useEditor.getState().currentPath).toBe("/Work/plan (kept).md"));
   });
 
+  it("saves again once the note is back (restored from the trash elsewhere)", async () => {
+    const server = newServer();
+    const puts: unknown[] = [];
+    const editor = await openInWrite(server, puts);
+    server.gone = "There is no note at /Work/plan.md (if it was removed, it is in the trash).";
+    backToThePage();
+    await bar();
+    await userEvent.type(editor, " a");
+    fireEvent.blur(editor);
+    await settle();
+    expect(puts).toHaveLength(0);
+
+    server.gone = null;
+    backToThePage();
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument());
+    // What was kept is saved at once, on the version the note had.
+    await waitFor(() => expect(puts).toEqual([{ content: `${texts.v1} a`, version: "v1" }]));
+
+    await userEvent.type(editor, "b");
+    fireEvent.blur(editor);
+
+    await waitFor(() => expect(puts.at(-1)).toEqual({ content: `${texts.v1} ab`, version: "v9" }));
+  });
+
   it("does not count the user's own saves", async () => {
     const server = newServer();
     const puts: unknown[] = [];
