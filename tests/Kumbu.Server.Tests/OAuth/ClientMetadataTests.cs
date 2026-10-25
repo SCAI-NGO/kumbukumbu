@@ -309,6 +309,14 @@ public sealed class ClientMetadataTests
     [InlineData("::127.0.0.1", false)]
     [InlineData("::10.0.0.1", false)]
     [InlineData("64:ff9b::7f00:1", false)]
+    [InlineData("2002:7f00:1::", false)]
+    [InlineData("2002:0a00:1::1", false)]
+    [InlineData("2002:0101:0101::1", true)]
+    [InlineData("2001:0:4136:e378:8000:63bf:3fff:fdd2", false)]
+    [InlineData("64:ff9b:1::1", false)]
+    [InlineData("::ffff:0:127.0.0.1", false)]
+    [InlineData("::ffff:0:10.0.0.1", false)]
+    [InlineData("::ffff:0:1.1.1.1", true)]
     [InlineData("160.79.104.10", true)]
     [InlineData("1.1.1.1", true)]
     [InlineData("172.32.0.1", true)]
@@ -385,5 +393,50 @@ public sealed class ClientMetadataTests
 
         Assert.Contains(log.Lines, l => l.Contains(nameof(ClientMetadataFetcher), StringComparison.Ordinal));
         Assert.DoesNotContain(log.Lines, l => l.Contains(marker, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""{"client_id":"ID","client_name":"\ud800x","redirect_uris":["https://claude.ai/cb"]}""")]
+    [InlineData("""{"client_id":"ID","client_name":"Claude","redirect_uris":["https://claude.ai/\ud800"]}""")]
+    [InlineData("""{"client_id":"\ud800","client_name":"Claude","redirect_uris":["https://claude.ai/cb"]}""")]
+    public async Task A_lone_surrogate_is_a_refusal_and_is_cached(string body)
+    {
+        var time = new FakeTimeProvider();
+        await using var server = await ServerAsync(id => new MetadataResponse(body.Replace("\"ID\"", $"\"{id}\"", StringComparison.Ordinal)));
+        var fetcher = Fetcher(time: time);
+
+        Assert.Equal("not_json", (await fetcher.FetchAsync(server.ClientId, Ct)).Error);
+        Assert.Equal("not_json", (await fetcher.FetchAsync(server.ClientId, Ct)).Error);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task Keeps_emoji_in_the_name()
+    {
+        await using var server = await ServerAsync(id => new MetadataResponse(
+            $$"""{"client_id":"{{id}}","client_name":"Claude \ud83d\ude00","redirect_uris":["https://claude.ai/cb"]}"""));
+
+        Assert.Equal("Claude \U0001F600", (await Fetcher().FetchAsync(server.ClientId, Ct)).Client!.Name);
+    }
+
+    [Fact]
+    public void The_client_uses_no_proxy_cookies_or_redirects()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IOptions<KumbuOptions>>(Options.Create(new KumbuOptions()));
+        services.AddSingleton(TimeProvider.System);
+        services.AddClientMetadataFetcher();
+        using var provider = services.BuildServiceProvider();
+
+        HttpMessageHandler? handler = provider.GetRequiredService<IHttpMessageHandlerFactory>().CreateHandler("cimd");
+        while (handler is DelegatingHandler d) handler = d.InnerHandler;
+
+        var sockets = Assert.IsType<SocketsHttpHandler>(handler);
+        Assert.False(sockets.UseProxy);
+        Assert.False(sockets.UseCookies);
+        Assert.False(sockets.AllowAutoRedirect);
+        Assert.NotNull(sockets.ConnectCallback);
+        Assert.Equal(ClientMetadataFetcher.Timeout, sockets.ConnectTimeout);
     }
 }

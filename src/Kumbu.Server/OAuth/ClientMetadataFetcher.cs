@@ -180,6 +180,19 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
 
     private static ClientMetadataResult Parse(string clientId, string host, byte[] body)
     {
+        try
+        {
+            return ParseDocument(clientId, host, body);
+        }
+        catch (InvalidOperationException)
+        {
+            // GetString() throws on a string holding an unpaired surrogate escape (\ud800): not a usable document.
+            return new ClientMetadataResult(null, "not_json");
+        }
+    }
+
+    private static ClientMetadataResult ParseDocument(string clientId, string host, byte[] body)
+    {
         JsonDocument document;
         try
         {
@@ -243,10 +256,19 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     private static string CleanName(string raw)
     {
         var sb = new StringBuilder(raw.Length);
-        foreach (var c in raw)
+        for (var i = 0; i < raw.Length; i++)
         {
+            var c = raw[i];
+            if (char.IsHighSurrogate(c) && i + 1 < raw.Length && char.IsLowSurrogate(raw[i + 1]))
+            {
+                sb.Append(c).Append(raw[++i]);
+                continue;
+            }
+
+            // Unpaired surrogates fall in the Surrogate category and go with the rest.
             var category = char.GetUnicodeCategory(c);
-            if (category is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) continue;
+            if (category is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator
+                or UnicodeCategory.ParagraphSeparator or UnicodeCategory.Surrogate) continue;
             sb.Append(c);
         }
 
@@ -297,6 +319,12 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
         if (address.IsIPv4MappedToIPv6) return IsPublicV4(b[12..]);
         if (b[..12].All(x => x == 0)) return b[12..].Any(x => x != 0) && !(b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] <= 1) && IsPublicV4(b[12..]);
         if (b[0] == 0 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b[4..12].All(x => x == 0)) return IsPublicV4(b[12..]);
+        // SIIT (::ffff:0:a.b.c.d) and 6to4 (2002:a.b.c.d::) carry an IPv4 address too.
+        if (b[..8].All(x => x == 0) && b[8] == 0xff && b[9] == 0xff && b[10] == 0 && b[11] == 0) return IsPublicV4(b[12..]);
+        if (b[0] == 0x20 && b[1] == 0x02) return IsPublicV4(b[2..6]);
+        // Teredo (2001::/32) tunnels through arbitrary relays and local-use NAT64 (64:ff9b:1::/48) is for the local network: refused outright.
+        if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0 && b[3] == 0) return false;
+        if (b[0] == 0 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && b[4] == 0 && b[5] == 1) return false;
 
         if (address.IsIPv6Multicast || address.IsIPv6LinkLocal || address.IsIPv6SiteLocal) return false;
         if ((b[0] & 0xfe) == 0xfc) return false; // fc00::/7 unique local
