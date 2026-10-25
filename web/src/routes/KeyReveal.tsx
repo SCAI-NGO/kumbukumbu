@@ -2,7 +2,7 @@
 // Adapted from chatsundere (apps/admin-client/src/routes/invitations/reveal-screen.tsx)
 import { useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
-import { LeaveDialog, useLeaveGuard } from "../components/shownOnce";
+import { CopyButton, LeaveDialog, useLeaveGuard } from "../components/shownOnce";
 
 /** The line that adds Kumbu² to Claude Code with this key. */
 export const claudeCodeLine = (key: string) =>
@@ -20,16 +20,10 @@ export default function KeyReveal({ name, value, onDone }: { name: string; value
   const blocker = useLeaveGuard(saved);
   const line = claudeCodeLine(value);
 
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyFailed(false);
-      setSaved(true);
-    } catch {
-      // Permission denied or no secure context: the user can still select the text by hand.
-      setCopyFailed(true);
-    }
-  }
+  const copied = (ok: boolean) => {
+    setCopyFailed(!ok);
+    if (ok) setSaved(true);
+  };
 
   const leave = {
     id: `${id}-leave`,
@@ -52,9 +46,7 @@ export default function KeyReveal({ name, value, onDone }: { name: string; value
         >
           {value}
         </pre>
-        <button type="button" onClick={() => void copy(value)} className={secondaryButtonClass}>
-          Copy key
-        </button>
+        <CopyButton value={value} label="Copy key" className={secondaryButtonClass} onResult={copied} />
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -65,9 +57,7 @@ export default function KeyReveal({ name, value, onDone }: { name: string; value
         >
           {line}
         </pre>
-        <button type="button" onClick={() => void copy(line)} className={secondaryButtonClass}>
-          Copy command
-        </button>
+        <CopyButton value={line} label="Copy command" className={secondaryButtonClass} onResult={copied} />
       </div>
 
       {copyFailed && (

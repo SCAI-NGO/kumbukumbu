@@ -2,7 +2,7 @@
 // Adapted from chatsundere (apps/user-client/src/components/RecoveryKeyReveal.tsx, packages/ui-shared/src/components/ConfirmTyped.tsx)
 import { useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
-import { LeaveDialog, useLeaveGuard } from "./shownOnce";
+import { CopyButton, LeaveDialog, useLeaveGuard } from "./shownOnce";
 
 /**
  * The recovery key, shown once. Continue unlocks only after the key was downloaded or copied and the user ticked
@@ -16,16 +16,10 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
   const [copyFailed, setCopyFailed] = useState(false);
   const blocker = useLeaveGuard(saved);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopyFailed(false);
-      setSaved(true);
-    } catch {
-      // Permission denied or no secure context: the user can still select the key by hand or download it.
-      setCopyFailed(true);
-    }
-  }
+  const copied = (ok: boolean) => {
+    setCopyFailed(!ok);
+    if (ok) setSaved(true);
+  };
 
   function download() {
     const text = `Kumbu² recovery key for ${username}\n\n${value}\n\nWith it you can set a new password if you forget yours. Nobody else can.\n`;
@@ -60,9 +54,7 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
         <button type="button" onClick={download} className={`${secondaryButtonClass} flex-1`}>
           Download
         </button>
-        <button type="button" onClick={() => void copy()} className={`${secondaryButtonClass} flex-1`}>
-          {saved && !copyFailed ? "Copy again" : "Copy"}
-        </button>
+        <CopyButton value={value} label={saved && !copyFailed ? "Copy again" : "Copy"} className={`${secondaryButtonClass} flex-1`} onResult={copied} />
       </div>
       {copyFailed && (
         <p aria-live="polite" className="text-sm text-text">

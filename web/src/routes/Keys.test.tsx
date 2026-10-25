@@ -122,6 +122,15 @@ describe("Keys", () => {
     expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "write", Home: "read" } }]);
   });
 
+  it("marks only the button that was used as copied", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    await createKey(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await userEvent.click(screen.getByRole("button", { name: "Copy key" }));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+    expect(screen.getAllByRole("status").map((s) => s.textContent).join("")).toBe("Copied");
+  });
+
   it("shows the new key once, with copy buttons for the key and the Claude Code line", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });

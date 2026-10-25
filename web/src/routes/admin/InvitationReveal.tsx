@@ -3,7 +3,7 @@
 import QRCode from "qrcode";
 import { useEffect, useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
-import { LeaveDialog, useLeaveGuard } from "../../components/shownOnce";
+import { CopyButton, LeaveDialog, useLeaveGuard } from "../../components/shownOnce";
 
 /**
  * A new invitation's link and QR code, shown once. Until the link was copied, leaving the page or closing asks
@@ -28,16 +28,10 @@ export default function InvitationReveal({ link, onDone }: { link: string; onDon
     };
   }, [link]);
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopyFailed(false);
-      setSaved(true);
-    } catch {
-      // Permission denied or no secure context: the user can still select the text by hand.
-      setCopyFailed(true);
-    }
-  }
+  const copied = (ok: boolean) => {
+    setCopyFailed(!ok);
+    if (ok) setSaved(true);
+  };
 
   const leave = {
     id: `${id}-leave`,
@@ -60,9 +54,7 @@ export default function InvitationReveal({ link, onDone }: { link: string; onDon
         >
           {link}
         </pre>
-        <button type="button" onClick={() => void copy()} className={secondaryButtonClass}>
-          Copy link
-        </button>
+        <CopyButton value={link} label="Copy link" className={secondaryButtonClass} onResult={copied} />
       </div>
 
       {qr && (

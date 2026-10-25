@@ -120,6 +120,15 @@ describe("Admin invitations", () => {
     expect(bodies).toEqual([{ role: "user", expiresInDays: 7 }]);
   });
 
+  it("marks the copied link", async () => {
+    stubClipboard();
+    const { dialog } = await createInvitation();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create invitation" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Copied$/);
+  });
+
   it("shows the link and a QR code once, and copies the link", async () => {
     const writeText = stubClipboard();
     const { dialog } = await createInvitation();

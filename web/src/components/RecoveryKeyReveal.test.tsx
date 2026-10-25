@@ -52,6 +52,20 @@ describe("RecoveryKeyReveal", () => {
     expect(onContinue).toHaveBeenCalledOnce();
   });
 
+  it("shows \"Copied\" for a moment after copying, announces it without the key, then goes back", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    setup();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy" })));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Copied$/);
+
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy again" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
   it("downloads the key from a blob URL that is revoked right after", () => {
     vi.useFakeTimers();
     const createObjectURL = vi.fn((_: Blob) => "blob:kumbu/1");
