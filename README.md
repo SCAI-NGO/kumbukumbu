@@ -101,7 +101,7 @@ curl localhost:8080/healthz       # ok
 docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'   # store these keys safely
 ```
 
-For the web app, set `KUMBU_PUBLIC_URL` in `.env` to the address you open it at (e.g. `http://localhost:8080`), then create the first admin and open the link it prints, `…/join#<code>`:
+For the web app, set `KUMBU_PUBLIC_URL` in `.env` to the address you open it at (e.g. `http://localhost:8080`; run `docker compose up -d` again so it takes effect), then create the first admin and open the link it prints, `…/join#<code>`:
 
 ```sh
 docker compose exec kumbu kumbu bootstrap-admin
@@ -161,7 +161,7 @@ Without it the tests use a stand-in embedder and skip the three tests that need 
 
 ### The web app
 
-Needs Node 20+ and pnpm. Details are in [web/README.md](web/README.md).
+Needs Node 22.4+ (the test script uses a flag from that version) and pnpm. Details are in [web/README.md](web/README.md).
 
 ```sh
 pnpm -C web install
