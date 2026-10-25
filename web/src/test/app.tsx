@@ -6,9 +6,8 @@ import { vi } from "vitest";
 import { routerFuture, routes } from "../router";
 
 /** The app's routes in a memory router at `path`, with a fresh query cache. */
-export function renderApp(path: string) {
+export function renderApp(path: string, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   const router = createMemoryRouter(routes, { initialEntries: [path], future: routerFuture });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} future={{ v7_startTransition: true }} />

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -69,7 +70,8 @@ describe("Join", () => {
       "POST /api/join": () => json(200, { user, recoveryKey: "RK-1234" }),
       "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     });
-    const router = renderApp(`/join#${code}`);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp(`/join#${code}`, queryClient);
     await userEvent.type(await screen.findByLabelText("Username"), "ada");
     await userEvent.type(screen.getByLabelText("Password"), "correct horse battery");
     await userEvent.click(screen.getByRole("button", { name: "Create account" }));
@@ -80,5 +82,11 @@ describe("Join", () => {
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
     expect(await screen.findByText(/Signed in as Ada/)).toBeInTheDocument();
+    // The key lives only in the reveal's state: nothing client-wide keeps it once the user is in.
+    const cached = JSON.stringify([
+      queryClient.getMutationCache().getAll().map((m) => m.state),
+      queryClient.getQueryCache().getAll().map((q) => q.state),
+    ]);
+    expect(cached).not.toContain("RK-1234");
   });
 });

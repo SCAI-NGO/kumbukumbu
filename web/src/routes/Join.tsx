@@ -60,6 +60,8 @@ function JoinForm({ code, role }: { code: string; role: string }) {
 
   const join = useMutation({
     mutationFn: () => call(api.POST("/api/join", { body: { code, username, password } })),
+    // The result carries the recovery key: it goes into component state, not the client-wide mutation cache.
+    gcTime: 0,
     onSuccess: setJoined,
   });
 
@@ -70,6 +72,7 @@ function JoinForm({ code, role }: { code: string; role: string }) {
           value={joined.recoveryKey}
           username={joined.user.username}
           onContinue={() => {
+            join.reset();
             const view = { user: joined.user, previousSignInAt: null };
             queryClient.setQueryData(["session"], view);
             signedIn(view);
