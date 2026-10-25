@@ -9,7 +9,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "NODE_OPTIONS=--no-experimental-webstorage vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "openapi-typescript ${KUMBU_OPENAPI_URL:-http://localhost:8083/api/openapi.json} -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
