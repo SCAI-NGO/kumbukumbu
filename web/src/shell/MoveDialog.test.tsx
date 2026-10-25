@@ -63,7 +63,7 @@ describe("Rename or move", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename or move inbox" });
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move inbox" });
     expect(dialog).toHaveTextContent("Links to this note in other notes are updated to the new place");
     const name = within(dialog).getByLabelText("Name");
     expect(name).toHaveFocus();
@@ -89,7 +89,7 @@ describe("Rename or move", () => {
     await userEvent.click(await within(drawer).findByRole("button", { name: "Actions for projects" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename or move projects" });
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move projects" });
     const folder = within(dialog).getByLabelText("Folder");
     const options = within(folder).getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual(["Work (top level)", "Work / archive"]);
@@ -119,7 +119,7 @@ describe("Rename or move", () => {
     renderApp("/notes/Work/inbox.md");
     await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
-    const dialog = screen.getByRole("dialog", { name: "Rename or move inbox" });
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move inbox" });
     const name = within(dialog).getByLabelText("Name");
 
     await userEvent.clear(name);

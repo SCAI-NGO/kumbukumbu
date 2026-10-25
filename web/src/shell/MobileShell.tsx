@@ -13,14 +13,15 @@ import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
-import MoveDialog, { type MoveSubject } from "./MoveDialog";
+import type { MoveSubject } from "./MoveDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
 
-// Loaded on first use, which keeps the main bundle under Vite's 500 kB warning: upload is seldom used, and search
-// has its own sheet over the note.
+// Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
+// its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
+const MoveDialog = lazy(() => import("./MoveDialog"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 
@@ -156,7 +157,13 @@ export default function MobileShell() {
           </Suspense>
         </LoadBoundary>
       )}
-      {moving && <MoveDialog subject={moving} onClose={() => setMoving(null)} />}
+      {moving && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setMoving(null)} />}>
+          <Suspense>
+            <MoveDialog subject={moving} onClose={() => setMoving(null)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
         <NewVaultDialog
