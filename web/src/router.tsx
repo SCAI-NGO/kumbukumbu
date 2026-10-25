@@ -4,7 +4,6 @@ import { useEffect } from "react";
 import { Outlet, useLocation, useNavigate, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
-import { AccountScreen } from "./components/form";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -73,9 +72,8 @@ export const routes: RouteObject[] = [
           },
           { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
-          // Their screens come with the next step.
-          { path: "/admin/users", element: <AccountScreen title="Users" /> },
-          { path: "/admin/invitations", element: <AccountScreen title="Invitations" /> },
+          { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
+          { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],
       },
     ],

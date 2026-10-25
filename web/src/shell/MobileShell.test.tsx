@@ -266,7 +266,7 @@ describe("the shell", () => {
     ["/admin/users", "Users"],
     ["/admin/invitations", "Invitations"],
   ])("has a page at %s, with the way back to the notes", async (path, title) => {
-    signedInApi();
+    signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
     renderApp(path);
     expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to the notes" })).toHaveAttribute("href", "/");
