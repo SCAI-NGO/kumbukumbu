@@ -102,6 +102,22 @@ describe("Rename or move", () => {
     expect(useEditor.getState().expandedFolders["/Work/archive/projects/deep"]).toBe(true);
   });
 
+  it("renames a folder when only its case changes", async () => {
+    const { moves } = api(() => json(200, { message: "moved /Work/archive/ to /Work/Archive/ (1); no links needed rewriting", path: null, version: null }));
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    const drawer = screen.getByRole("dialog", { name: "File tree" });
+    await userEvent.click(await within(drawer).findByRole("button", { name: "Actions for archive" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+    const dialog = await screen.findByRole("dialog", { name: "Rename or move archive" });
+    const name = within(dialog).getByLabelText("Name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Archive");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("No links needed rewriting.");
+    expect(moves).toEqual([{ from: "/Work/archive/", to: "/Work/Archive", keepLinks: false }]);
+  });
+
   it("offers no move for the vault's root, and one for every note in the tree", async () => {
     api(() => json(500, {}));
     renderApp("/notes/Work/inbox.md");

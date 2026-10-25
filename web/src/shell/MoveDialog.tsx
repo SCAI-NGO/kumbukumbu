@@ -50,8 +50,9 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
     setProblem(null);
     if (!name.trim() || name.includes("/")) return setProblem("A name can't be empty or contain “/”.");
     const there = tree.data && findFolder(tree.data.root, parent);
-    // Moving onto a folder would put it inside that folder: the server's `mv`, not what this dialog says.
-    if (there?.folders.some((f) => f.path.toLowerCase() === target.toLowerCase())) return setProblem(`There is a folder named “${fileName}” there already.`);
+    // Moving onto a folder would put it inside that folder: the server's `mv`, not what this dialog says. The folder
+    // itself is no such folder (a rename that changes only case).
+    if (there?.folders.some((f) => f.path.toLowerCase() === target.toLowerCase() && f.path !== subject.path)) return setProblem(`There is a folder named “${fileName}” there already.`);
     if (there?.notes.some((n) => n.path.toLowerCase() === target.toLowerCase() && n.path !== subject.path)) return setProblem(`There is a note named “${fileName}” there already.`);
 
     // The open note's pending text is saved first: once moved, a save to the old path would make a new note there.
