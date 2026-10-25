@@ -326,3 +326,73 @@ describe("the note view", () => {
     expect(await screen.findByText("There is no note at /Work/projects/plan.md.")).toBeInTheDocument();
   });
 });
+
+describe("Outline and find in the note", () => {
+  const long = ["# Plan", "", "Intro about the road.", "", "## Goals", "", "```", "# not a heading, road", "```", "", "### Road **ahead**", "", "The road `road` ends."].join("\n");
+  const scrolled: Element[] = [];
+  const scroll = vi.fn(function (this: Element) {
+    scrolled.push(this);
+  });
+
+  it("lists the headings from the title bar, and jumps to one", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, long)) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Outline" }));
+    const sheet = screen.getByRole("dialog", { name: "Outline" });
+    expect(within(sheet).getAllByRole("button", { name: /^(?!Close)/ }).map((b) => b.textContent)).toEqual(["Plan", "Goals", "Road ahead"]);
+    await userEvent.click(within(sheet).getByRole("button", { name: "Road ahead" }));
+    expect(screen.queryByRole("dialog", { name: "Outline" })).not.toBeInTheDocument();
+    expect(scrolled.at(-1)).toBe(screen.getByRole("heading", { name: "Road ahead", level: 3 }));
+  });
+
+  it("has no outline button in Write mode", async () => {
+    noteApi();
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    expect(screen.queryByRole("button", { name: "Outline" })).not.toBeInTheDocument();
+  });
+
+  it("finds in the note: marks every match, steps through them, and closes back to the dock", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, long)) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Find in note" }));
+
+    const bar = screen.getByRole("search", { name: "Find in note" });
+    expect(screen.queryByRole("navigation", { name: "Vault actions" })).not.toBeInTheDocument();
+    const input = within(bar).getByRole("searchbox", { name: "Find in note" });
+    expect(input).toHaveFocus();
+    await userEvent.type(input, "ROAD");
+
+    // Intro, the code block, the heading, the text and the inline code: five.
+    await waitFor(() => expect(within(bar).getByRole("status")).toHaveTextContent("1 of 5"));
+    const marks = () => [...document.querySelectorAll("mark[data-find]")];
+    expect(marks()).toHaveLength(5);
+    expect(marks()[0]).toHaveAttribute("data-current");
+    expect(marks()[1].closest("pre")).not.toBeNull();
+    expect(marks()[4].closest("code")).not.toBeNull();
+
+    await userEvent.keyboard("{Enter}");
+    expect(within(bar).getByRole("status")).toHaveTextContent("2 of 5");
+    await waitFor(() => expect(marks()[1]).toHaveAttribute("data-current"));
+    expect(scrolled.at(-1)).toBe(marks()[1]);
+    await userEvent.click(within(bar).getByRole("button", { name: "Previous match" }));
+    await userEvent.click(within(bar).getByRole("button", { name: "Previous match" }));
+    expect(within(bar).getByRole("status")).toHaveTextContent("5 of 5");
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "nothing like it");
+    await waitFor(() => expect(within(bar).getByRole("status")).toHaveTextContent("No matches"));
+    expect(within(bar).getByRole("button", { name: "Next match" })).toBeDisabled();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("search", { name: "Find in note" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Vault actions" })).toBeInTheDocument();
+    expect(marks()).toHaveLength(0);
+  });
+});

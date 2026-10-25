@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import { noteUrl } from "../api/paths";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
+import { remarkFind } from "./findInNote";
 import { remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
@@ -77,11 +78,13 @@ interface Props {
   onCreateMissing(target: string): void;
   /** Agent highlights while "Show" is on, else null. */
   highlight?: Highlight | null;
+  /** Find in the note: matches are marked, `current` (0-based) as the current one. */
+  find?: { query: string; current: number } | null;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source" | "highlight">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
+const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
 
 function TaskItem({ node, children, ...rest }: { node: HastNode; children: ReactNode } & ComponentPropsWithoutRef<"li">) {
   const { tasksDisabled, onToggleTask } = useContext(NoteContext);
@@ -205,6 +208,12 @@ const components: Components = {
     <h2 data-line={node?.position?.start.line} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
   ),
   h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
+  h4: ({ node, ...props }) => <h4 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
+  h5: ({ node, ...props }) => <h5 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
+  h6: ({ node, ...props }) => <h6 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
+  mark: ({ node, ...props }) => (
+    <mark className={`rounded-[3px] ${node?.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
+  ),
   p: ({ node, children, ...props }) =>
     node?.properties.dataCalloutTitle ? (
       <p {...props} className="flex items-center gap-2">
@@ -270,10 +279,13 @@ const components: Components = {
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null }: Props) {
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null }: Props) {
+  const query = find?.query ?? "";
+  const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
-    () => [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkChanged, { highlight }]] as const,
-    [links, highlight],
+    () =>
+      [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
+    [links, highlight, query, current],
   );
   const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing }), [links, tasksDisabled, onToggleTask, onCreateMissing]);
 

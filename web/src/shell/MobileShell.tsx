@@ -3,11 +3,12 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
-import { FolderInput, Trash2 } from "lucide-react";
+import { FolderInput, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
@@ -70,7 +71,7 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
-  const { recentPaths, overlay, mode, activeVault, upload, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
+  const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
@@ -111,13 +112,15 @@ export default function MobileShell() {
           {errorText(createUntitled.error)}
         </p>
       )}
-      {(!path || mode === "read") && (
+      {path && mode === "read" && noteTool === "find" && <FindBar />}
+      {(!path || mode === "read") && !(path && noteTool === "find") && (
         <Dock
           newNote={dockFolder ? () => newNote(dockFolder) : null}
           upload={dockFolder ? () => openUpload(dockFolder) : null}
           noteActions={
             path
               ? [
+                  { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                   { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
                   { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
                 ]

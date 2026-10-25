@@ -13,6 +13,8 @@ import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
 import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
+import { OutlineSheet } from "./NoteTools";
+import { outline } from "./outline";
 import { parseProperties } from "./properties";
 import { taskToggle } from "./taskToggle";
 
@@ -67,6 +69,11 @@ export default function NoteView({ path }: { path: string }) {
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
 
+  const noteTool = useEditor((s) => s.noteTool);
+  const find = useEditor((s) => s.find);
+  const headings = useMemo(() => (noteTool === "outline" ? outline(parts.body) : []), [noteTool, parts.body]);
+  const finding = noteTool === "find" && find.query !== "" ? { query: find.query, current: find.index } : null;
+
   // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
   const scrollTarget = useEditor((s) => s.scrollTarget);
   const article = useRef<HTMLElement>(null);
@@ -76,6 +83,19 @@ export default function NoteView({ path }: { path: string }) {
     headings.at(-1)?.scrollIntoView({ block: "start" });
     useEditor.getState().setScrollTarget(null);
   }, [scrollTarget, path, mode, note.data]);
+
+  // Find in the note: the note says how many matches it marked, and the current one comes into view.
+  useEffect(() => {
+    if (noteTool !== "find" || mode !== "read" || !article.current) return;
+    const marks = article.current.querySelectorAll<HTMLElement>("mark[data-find]");
+    if (marks.length !== useEditor.getState().find.count) useEditor.getState().setFind({ count: marks.length });
+    article.current.querySelector<HTMLElement>("mark[data-current]")?.scrollIntoView({ block: "center" });
+  }, [noteTool, mode, finding?.query, finding?.current, note.data?.content]);
+
+  const jump = (line: number) => {
+    useEditor.getState().setNoteTool(null);
+    article.current?.querySelector<HTMLElement>(`[data-line="${line}"]`)?.scrollIntoView({ block: "start" });
+  };
 
   const toggleTask = useCallback(
     (line: number) => {
@@ -150,11 +170,20 @@ export default function NoteView({ path }: { path: string }) {
         {note.data && (
           <article ref={article} className="mt-4">
             {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}
-            <MarkdownView source={parts.body} links={links.data} tasksDisabled={save.isPending} onToggleTask={toggleTask} onCreateMissing={createMissing} highlight={highlight} />
+            <MarkdownView
+              source={parts.body}
+              links={links.data}
+              tasksDisabled={save.isPending}
+              onToggleTask={toggleTask}
+              onCreateMissing={createMissing}
+              highlight={highlight}
+              find={finding}
+            />
           </article>
         )}
         {note.data && <BacklinksList path={path} />}
       </div>
+      {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
   );
 }

@@ -6,6 +6,9 @@ import type { Picked } from "../upload/collectFiles";
 export type Mode = "read" | "write";
 export type Overlay = "none" | "tree" | "search" | "upload";
 export type SearchMode = "hybrid" | "meaning" | "exact";
+/** The open note's tools in Read mode: its outline (a sheet), or find in the note (a bar in place of the dock). */
+export type NoteTool = "outline" | "find" | null;
+export type Find = { query: string; index: number; count: number };
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -36,6 +39,9 @@ interface EditorState {
   beforeRead: (() => Promise<boolean>) | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
+  noteTool: NoteTool;
+  /** Find in the note: what is looked for, which match is the current one (0-based), and how many the note shows. */
+  find: Find;
 
   /** Opens a note: overlays close, its vault becomes active and its folder chain opens in the drawer. */
   openNote(path: string, mode?: Mode): void;
@@ -53,6 +59,8 @@ interface EditorState {
   setSearchQuery(query: string): void;
   setSearchMode(mode: SearchMode): void;
   setShowAgentHighlights(show: boolean): void;
+  setNoteTool(tool: NoteTool): void;
+  setFind(find: Partial<Find>): void;
   /** A deleted note: it leaves the recent notes, and is no longer the open one. */
   forgetNote(path: string): void;
   /** A moved note (or folder, `from` ending in `/`): the open note, the recent notes and the open folders follow it. */
@@ -74,6 +82,8 @@ const initial = {
   draft: null,
   scrollTarget: null,
   upload: null,
+  noteTool: null as NoteTool,
+  find: { query: "", index: 0, count: 0 } as Find,
 };
 
 /** `/Work/projects/deep` → `/Work/projects`, `/Work/projects/deep` (the vault's root is always open). */
@@ -89,11 +99,12 @@ export const useEditor = create<EditorState>()((set, get) => ({
       currentPath: path,
       mode: s.draft?.path === path ? "write" : mode,
       overlay: "none",
+      noteTool: s.currentPath === path ? s.noteTool : null,
       activeVault: vaultOf(path),
       expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(folderOf(path)).map((f) => [f, true])) },
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
     })),
-  setMode: (mode) => set({ mode }),
+  setMode: (mode) => set(mode === "write" ? { mode, noteTool: null } : { mode }),
   endWrite: async () => {
     const guard = get().beforeRead;
     if (!guard || (await guard())) set({ mode: "read" });
@@ -108,6 +119,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSearchMode: (searchMode) => set({ searchMode }),
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
+  setNoteTool: (noteTool) => set({ noteTool }),
+  setFind: (find) => set((s) => ({ find: { ...s.find, ...find } })),
   forgetNote: (path) =>
     set((s) => ({ recentPaths: s.recentPaths.filter((p) => p !== path), currentPath: s.currentPath === path ? null : s.currentPath })),
   moved: (from, to) =>
