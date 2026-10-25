@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+/* The tokens of each scheme; the values live in src/theme/schemes.ts too (apply.test.ts keeps them in step). */
+:root,
+[data-scheme="kumbu"] {
+  color-scheme: dark;
+  --bg: #111113;
+  --surface: #1a1a1e;
+  --surface-2: #232328;
+  --line: #2e2e34;
+  --text: #eceae4;
+  --text-body: #d9d6cf;
+  --muted: #a09d96;
+  --dim: #8f8c86;
+  --accent: #f0a848;
+  --accent-text: #f0a848;
+  --on-accent: #17110a;
+}
+
+[data-scheme="catppuccin-latte"] {
+  color-scheme: light;
+  --bg: #eff1f5;
+  --surface: #e6e9ef;
+  --surface-2: #dce0e8;
+  --line: #ccd0da;
+  --text: #3c3f58;
+  --text-body: #4c4f69;
+  --muted: #555870;
+  --dim: #5f6278;
+  --accent: #8839ef;
+  --accent-text: #7a2fd6;
+  --on-accent: #ffffff;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-text-body: var(--text-body);
+  --color-muted: var(--muted);
+  --color-dim: var(--dim);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-on-accent: var(--on-accent);
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html {
+  background: var(--bg);
+  color: var(--text-body);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

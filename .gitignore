@@ -484,3 +484,4 @@ $RECYCLE.BIN/
 # Kumbu
 /vaults/
 .env
+/src/Kumbu.Server/wwwroot/

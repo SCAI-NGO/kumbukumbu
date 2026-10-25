@@ -142,6 +142,20 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
     app.UseForwardedHeaders(forwarded);
 }
 
+// The web app (web/, built into wwwroot): index.html changes with every build and must be revalidated, the
+// hashed files under /assets never change. Before routing: static files need no caller.
+var webApp = new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/assets")
+            ? "public, max-age=31536000, immutable"
+            : "no-cache";
+    },
+};
+app.UseDefaultFiles();
+app.UseStaticFiles(webApp);
+
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
 app.UseMiddleware<CallerMiddleware>();
@@ -152,6 +166,14 @@ app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
 app.MapNoteApi();
 app.MapUploadApi();
+
+// An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
+// win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
+app.MapFallback("/api/{**path}", () => Results.Json(new { error = "Not found." }, statusCode: StatusCodes.Status404NotFound));
+app.MapFallback("/mcp/{**path}", () => Results.Json(new { error = "Not found." }, statusCode: StatusCodes.Status404NotFound));
+// Every other path is the web app's router's: index.html, without signing in (the app itself asks for that).
+// Not the default pattern, which skips paths with an extension: a note's address ends in .md.
+app.MapFallbackToFile("{**path}", "index.html", webApp).AllowAnonymous();
 
 app.Run();
 return 0;
