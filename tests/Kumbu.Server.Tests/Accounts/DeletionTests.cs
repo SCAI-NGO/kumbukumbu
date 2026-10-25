@@ -143,6 +143,54 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_load_that_read_the_slot_before_the_commit_does_not_bring_the_vault_back()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        // Locked, so the next request has to load it from MongoDB again.
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog().Sweep();
+        Assert.Equal(0, Catalog().OpenCount);
+
+        Task<IReadOnlyList<UnlockedVault>>? load = null;
+        await Catalog().DeleteVaultsAsync(
+            [diary.Id],
+            async (_, _) =>
+            {
+                // A request while the deletion is uncommitted: it still finds the slot and the vault document.
+                load ??= Catalog().OpenForUserAsync(lea.Id, key, Ct);
+                await Task.Delay(300, Ct);
+            },
+            Ct);
+
+        Assert.Empty(await load!);
+        Assert.Equal(0, Catalog().OpenCount);
+        Assert.True(Catalog().IsDeleted(diary.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task An_older_vault_object_waiting_in_the_index_queue_brings_no_embedding_back()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var stale = await FilledVaultAsync(lea, key, "Tagebuch");
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog().Sweep();
+        using var index = new Kumbu.Server.Search.SearchIndex(Catalog(), new Search.FakeEmbedder(), NullLogger<Kumbu.Server.Search.SearchIndex>.Instance);
+        index.Enqueue(stale, [P("/Tagebuch/plan.md")]);
+
+        // The deletion unlocks a new object of the vault to find it; the one in the queue is older.
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
+        Assert.False(stale.Deleted);
+        await index.IndexAsync(stale, P("/Tagebuch/plan.md"), Ct);
+
+        Assert.Equal(0, await CountAsync("embeddings", "vault", stale.Id));
+        await AssertGoneAsync(stale.Id);
+        var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
+        Assert.Empty(await store.ListVaultsAsync(Ct));
+    }
+
+    [Fact]
     public async Task Deleting_ones_account_removes_the_user_their_slots_keys_and_vaults_and_keeps_others_and_invitations()
     {
         var (anna, _, _) = await SignedInAsync("anna", Roles.Admin);

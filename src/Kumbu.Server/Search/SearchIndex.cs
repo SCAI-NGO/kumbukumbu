@@ -97,7 +97,7 @@ public sealed class SearchIndex : BackgroundService
         try
         {
             // An upsert now would bring back an embedding of a vault that is gone.
-            if (vault.Deleted) return;
+            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {

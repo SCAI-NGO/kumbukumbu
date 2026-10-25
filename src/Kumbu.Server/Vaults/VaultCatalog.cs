@@ -29,6 +29,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
+
+    /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
+    /// one entry per deleted vault, kept for the life of the process.</summary>
+    private readonly ConcurrentDictionary<string, byte> _deleted = new();
     private volatile bool _ready;
 
     internal IMongoCollection<VaultDocument> Vaults { get; } = db.GetCollection<VaultDocument>("vaults");
@@ -298,9 +302,17 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
-    /// A vault in memory is taken off writes and indexing first (both its gates), and after the commit is marked
-    /// deleted and dropped from the working set, so a write or an indexing that waited for it adds nothing that
-    /// would outlive the vault. Returns how many documents went, slots included.
+    /// <para>
+    /// Nothing may bring a deleted vault back or write for it afterwards. Loading is held off for the whole
+    /// deletion (<c>_loading</c>), so a request that read the slot and the vault document just before the commit
+    /// can't put the vault back into the working set. The vault in memory is taken off writes and indexing (both
+    /// its gates). And the ids are tombstoned before the transaction (<see cref="IsDeleted"/>): an older
+    /// <see cref="UnlockedVault"/> of the same vault, locked meanwhile but still held by a request or waiting in the
+    /// search index's queue, has gates of its own, so every write and every indexing checks the tombstone too. After
+    /// the commit the vault in memory is marked deleted and dropped, and the content collections are swept once more
+    /// for a write of such an older object that was already under way when the tombstone was set.
+    /// </para>
+    /// Returns how many documents went, slots included.
     /// </summary>
     internal async Task<long> DeleteVaultsAsync(
         IReadOnlyCollection<string> vaultIds, Func<IClientSessionHandle, CancellationToken, Task> alsoDelete, CancellationToken ct)
@@ -308,6 +320,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await EnsureReadyAsync(ct);
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         var held = new List<UnlockedVault>();
+        var tombstoned = new List<string>();
+        // Never while holding a gate: nothing that holds a gate waits for _loading, so this order can't deadlock.
+        await _loading.WaitAsync(ct);
         try
         {
             // In id order, so two deletions can't each hold a gate the other waits for.
@@ -328,6 +343,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 held.Add(vault);
             }
 
+            tombstoned.AddRange(ids.Where(id => _deleted.TryAdd(id, 0)));
             long deleted;
             using (var session = await StartSessionAsync(ct))
             {
@@ -348,24 +364,37 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                     cancellationToken: ct);
             }
 
+            tombstoned.Clear();
             foreach (var vault in held) vault.Deleted = true;
             foreach (var id in ids)
             {
-                // Also one unlocked after the gates were taken: its slots are gone, so no request gets it again.
                 if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
+            }
+
+            foreach (var collection in ContentCollections)
+            {
+                deleted += (await collection.DeleteManyAsync(Builders<SealedDocument>.Filter.In(d => d.Vault, ids), CancellationToken.None)).DeletedCount;
             }
 
             return deleted;
         }
         finally
         {
+            // A deletion that failed takes its tombstones back: the vault is still there.
+            foreach (var id in tombstoned) _deleted.TryRemove(id, out _);
             foreach (var vault in held)
             {
                 vault.IndexGate.Release();
                 vault.Gate.Release();
             }
+
+            _loading.Release();
         }
     }
+
+    /// <summary>Whether the vault was deleted (or is being deleted) in this process: such a vault is never loaded,
+    /// written or indexed again, whatever <see cref="UnlockedVault"/> object a caller still holds.</summary>
+    public bool IsDeleted(string vaultId) => _deleted.ContainsKey(vaultId);
 
     /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
     internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
@@ -490,6 +519,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await _loading.WaitAsync(ct);
         try
         {
+            if (IsDeleted(id)) return null;
             if (_open.TryGetValue(id, out var cached))
             {
                 return CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", [])) ? cached : null;

@@ -379,7 +379,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         await vault.Gate.WaitAsync(ct);
         try
         {
-            if (vault.Deleted) throw new VaultDeletedException();
+            if (vault.Deleted || catalog.IsDeleted(vault.Id)) throw new VaultDeletedException();
             using var session = await catalog.StartSessionAsync(ct);
             session.StartTransaction();
             Action? apply;
