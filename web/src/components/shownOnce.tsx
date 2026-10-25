@@ -72,7 +72,7 @@ export function LeaveDialog({
 
 /**
  * Copies `value`, then says so for two seconds: the button reads "Copied" with a check, and a polite status
- * announces it. The announcement never holds the value. A failed copy is the caller's to explain.
+ * announces it (the button keeps its name, so it is not announced twice). The announcement never holds the value. A failed copy is the caller's to explain.
  */
 export function CopyButton({ value, label, className, onResult }: { value: string; label: string; className: string; onResult(copied: boolean): void }) {
   const [copied, setCopied] = useState(false);
@@ -95,9 +95,9 @@ export function CopyButton({ value, label, className, onResult }: { value: strin
 
   return (
     <>
-      <button type="button" onClick={() => void copy()} className={className}>
+      <button type="button" onClick={() => void copy()} aria-label={label} className={className}>
         {copied ? (
-          <span className="inline-flex items-center justify-center gap-1.5">
+          <span aria-hidden className="inline-flex items-center justify-center gap-1.5">
             <Check size={16} strokeWidth={2.5} aria-hidden />
             Copied
           </span>

@@ -126,8 +126,8 @@ describe("Keys", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     await createKey(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
     await userEvent.click(screen.getByRole("button", { name: "Copy key" }));
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy key" })).toHaveTextContent("Copied");
+    expect(screen.getByRole("button", { name: "Copy command" })).toHaveTextContent(/^Copy command$/);
     expect(screen.getAllByRole("status").map((s) => s.textContent).join("")).toBe("Copied");
   });
 

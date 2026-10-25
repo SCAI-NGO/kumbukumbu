@@ -125,7 +125,7 @@ describe("Admin invitations", () => {
     const { dialog } = await createInvitation();
     await userEvent.click(within(dialog).getByRole("button", { name: "Create invitation" }));
     await userEvent.click(await screen.findByRole("button", { name: "Copy link" }));
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy link" })).toHaveTextContent("Copied");
     expect(screen.getByRole("status")).toHaveTextContent(/^Copied$/);
   });
 

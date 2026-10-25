@@ -57,12 +57,12 @@ describe("RecoveryKeyReveal", () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
     setup();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy" })));
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+    // The name stays put (the status alone announces); only the text shows the change.
+    expect(screen.getByRole("button", { name: "Copy again" })).toHaveTextContent("Copied");
     expect(screen.getByRole("status")).toHaveTextContent(/^Copied$/);
 
     act(() => vi.advanceTimersByTime(2000));
-    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy again" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy again" })).toHaveTextContent(/^Copy again$/);
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
