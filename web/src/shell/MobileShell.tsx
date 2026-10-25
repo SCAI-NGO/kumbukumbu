@@ -3,24 +3,16 @@ import { useEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
-import { folderOf, noteUrl, pathFromRoute, titleOf, vaultOf } from "../api/paths";
+import { Trash2 } from "lucide-react";
+import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
-
-/** Where the note goes; NoteView takes this place in the next step. */
-function NotePlaceholder({ path }: { path: string }) {
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
-      <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>
-      <p className="mt-2 font-mono text-[12px] break-all text-dim">{path}</p>
-    </div>
-  );
-}
 
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
@@ -76,6 +68,7 @@ export default function MobileShell() {
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
   const [vaultDialog, setVaultDialog] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const swipe = useEdgeSwipe(overlay === "tree", () => setOverlay("tree"), () => setOverlay("none"));
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
@@ -104,13 +97,18 @@ export default function MobileShell() {
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       <TopBar path={path} />
-      <main className="flex min-h-0 flex-1 flex-col">{path ? <NotePlaceholder path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
+      <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
       {createUntitled.isError && (
         <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
           {errorText(createUntitled.error)}
         </p>
       )}
-      {(!path || mode === "read") && <Dock newNote={dockFolder ? () => newNote(dockFolder) : null} />}
+      {(!path || mode === "read") && (
+        <Dock
+          newNote={dockFolder ? () => newNote(dockFolder) : null}
+          noteActions={path ? [{ label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) }] : null}
+        />
+      )}
 
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
       {overlay === "search" && (
@@ -121,6 +119,7 @@ export default function MobileShell() {
           </button>
         </div>
       )}
+      {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
         <NewVaultDialog
           onClose={() => setVaultDialog(false)}

@@ -42,6 +42,12 @@ function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
     "GET /api/vaults": () => json(200, [{ name: "Home", notes: 1 }, { name: "Work", notes: 6 }]),
     "GET /api/vaults/Work/tree": () => json(200, workTree),
     "GET /api/vaults/Home/tree": () => json(200, homeTree),
+    // Every note opens, with a line of text and no links.
+    "GET /api/notes/*": (r) =>
+      json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "Text.", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+    "GET /api/links/*": () => json(200, []),
+    "GET /api/backlinks/*": () => json(200, []),
+    "GET /api/changes": () => json(200, []),
     ...extra,
   });
 }

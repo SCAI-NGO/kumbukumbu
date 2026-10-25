@@ -35,6 +35,8 @@ interface EditorState {
   setSearchQuery(query: string): void;
   setSearchMode(mode: SearchMode): void;
   setShowAgentHighlights(show: boolean): void;
+  /** A deleted note: it leaves the recent notes, and is no longer the open one. */
+  forgetNote(path: string): void;
   reset(): void;
 }
 
@@ -74,5 +76,7 @@ export const useEditor = create<EditorState>()((set) => ({
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSearchMode: (searchMode) => set({ searchMode }),
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
+  forgetNote: (path) =>
+    set((s) => ({ recentPaths: s.recentPaths.filter((p) => p !== path), currentPath: s.currentPath === path ? null : s.currentPath })),
   reset: () => set(initial),
 }));

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { FilePlus, Folder, Plus, Search } from "lucide-react";
+import { Ellipsis, FilePlus, Folder, Plus, Search } from "lucide-react";
 import { Menu, type MenuItem } from "../components/Menu";
 import { useEditor } from "../state/editor";
 
-/** The bottom of Read mode: files, search (showing its mode) and "+". `newNote` is null while there is no vault. */
-export default function Dock({ newNote }: { newNote: (() => void) | null }) {
+/**
+ * The bottom of Read mode: files, search (showing its mode), the open note's actions and "+", all in the thumb's
+ * reach. `newNote` is null while there is no vault, `noteActions` while no note is open.
+ */
+export default function Dock({ newNote, noteActions }: { newNote: (() => void) | null; noteActions: MenuItem[] | null }) {
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
   const items: MenuItem[] = [{ label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote }];
@@ -28,6 +31,16 @@ export default function Dock({ newNote }: { newNote: (() => void) | null }) {
         <span className="min-w-0 flex-1 truncate text-[15px]">Search</span>
         <span className="flex-none rounded-full bg-surface-2 px-2.5 py-1 font-mono text-[11px] text-accent-text">{searchMode}</span>
       </button>
+      {noteActions && (
+        <Menu
+          label="Note actions"
+          items={noteActions}
+          placement="above"
+          className="flex size-12 items-center justify-center rounded-[14px] border border-line bg-surface text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <Ellipsis size={22} strokeWidth={1.8} aria-hidden />
+        </Menu>
+      )}
       <Menu
         label="New"
         items={items}

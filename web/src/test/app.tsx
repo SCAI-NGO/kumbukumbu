@@ -18,11 +18,14 @@ export function renderApp(path: string, queryClient = new QueryClient({ defaultO
 
 type Handler = (request: Request) => Response | Promise<Response>;
 
-/** Answers `fetch` by "METHOD /path"; any other request fails the test. */
+/** Answers `fetch` by "METHOD /path", else by the longest "METHOD /prefix*"; any other request fails the test. */
 export function fakeApi(handlers: Record<string, Handler>) {
   const fetch = vi.fn(async (request: Request) => {
     const key = `${request.method} ${new URL(request.url).pathname}`;
-    const handler = handlers[key];
+    const prefix = Object.keys(handlers)
+      .filter((k) => k.endsWith("*") && key.startsWith(k.slice(0, -1)))
+      .sort((a, b) => b.length - a.length)[0];
+    const handler = handlers[key] ?? (prefix && handlers[prefix]);
     if (!handler) throw new Error(`Unexpected request: ${key}`);
     return handler(request);
   });
