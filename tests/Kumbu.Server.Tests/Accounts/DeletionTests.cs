@@ -29,7 +29,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     private VaultCatalog? _catalog;
 
     /// <summary>One catalog, as one server process has it: vaults in memory are shared between the calls.</summary>
-    private VaultCatalog Catalog() => _catalog ??= new(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
+    private VaultCatalog Catalog() => _catalog ??= new(_db, Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<VaultCatalog>());
 
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
@@ -122,6 +122,28 @@ public sealed class DeletionTests(MongoFixture fixture)
         Assert.Equal(0, Catalog().OpenCount);
         await AssertGoneAsync(diary.Id);
         await AssertIntactAsync(work.Id);
+    }
+
+    [Fact]
+    public async Task An_api_key_left_without_a_vault_is_revoked_with_the_deletion()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        var work = await FilledVaultAsync(lea, key, "Arbeit");
+        var (only, onlyInfo) = await Keys().CreateAsync(lea, key, Now, "diary only", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Write }, Ct);
+        var (both, bothInfo) = await Keys().CreateAsync(
+            lea, key, Now, "both", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Read, [work.Id] = KeyRight.Read }, Ct);
+
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
+
+        Assert.Null(await Keys().ResolveAsync(only, Ct));
+        Assert.NotNull(await Keys().ResolveAsync(both, Ct));
+        var listed = await Keys().ListAsync(lea, key, Ct);
+        Assert.NotNull(listed.Single(k => k.Id == onlyInfo.Id).RevokedAt);
+        Assert.Null(listed.Single(k => k.Id == bothInfo.Id).RevokedAt);
+        // Revoked, its name is free again.
+        await Keys().CreateAsync(lea, key, Now, "diary only", new Dictionary<string, KeyRight> { [work.Id] = KeyRight.Read }, Ct);
+        Assert.Contains("API key " + onlyInfo.Id + " has no vault left and is revoked", string.Join('\n', _log.Lines), StringComparison.Ordinal);
     }
 
     [Fact]

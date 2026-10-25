@@ -192,7 +192,7 @@ function VaultsSection() {
   return (
     <Section title="Vaults">
       <p className="text-text-body">
-        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults.
+        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults; a key that had only this one is revoked.
       </p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}
@@ -233,7 +233,7 @@ function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void 
   return (
     <ConfirmTyped
       title={`Delete ${vault}?`}
-      text="The vault goes for good, with every note in it, their history, the trash and the checkpoints. Nobody can bring it back."
+      text="The vault goes for good, with every note in it, their history, the trash and the checkpoints. Nobody can bring it back. An API key that had only this vault is revoked."
       word={vault}
       action="Delete vault"
       pending={remove.isPending}

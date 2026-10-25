@@ -362,6 +362,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         var held = new List<UnlockedVault>();
         var tombstoned = new List<string>();
+        IReadOnlyList<string> revoked = [];
         // Never while holding a gate: nothing that holds a gate waits for _loading, so this order can't deadlock.
         await _loading.WaitAsync(ct);
         try
@@ -392,8 +393,13 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 deleted = await session.WithTransactionAsync(
                     async (s, token) =>
                     {
+                        var slot = Builders<SlotDocument>.Filter;
+                        var keyIds = await (await Slots.DistinctAsync(
+                            s, sl => sl.KeyId, slot.Eq(sl => sl.Kind, SlotDocument.ApiKey) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.KeyId), cancellationToken: token))
+                            .ToListAsync(token);
                         long count = (await Vaults.DeleteManyAsync(s, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: token)).DeletedCount;
-                        count += (await Slots.DeleteManyAsync(s, Builders<SlotDocument>.Filter.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
+                        count += (await Slots.DeleteManyAsync(s, slot.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
+                        revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
                         foreach (var collection in ContentCollections)
                         {
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
@@ -406,6 +412,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }
 
             tombstoned.Clear();
+            foreach (var keyId in revoked) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
             foreach (var vault in held) vault.Deleted = true;
             foreach (var id in ids)
             {
@@ -431,6 +438,28 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
             _loading.Release();
         }
+    }
+
+    /// <summary>
+    /// Inside a deletion: of the API keys that had slots on the deleted vaults, those left with none (they can open
+    /// nothing any more) are revoked, as <see cref="Accounts.ApiKeys.RevokeAsync"/> would, name freed. Returns their ids.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> RevokeKeysWithoutVaultsAsync(IClientSessionHandle session, IReadOnlyList<string?> keyIds, CancellationToken ct)
+    {
+        if (keyIds.Count == 0) return [];
+        var slot = Builders<SlotDocument>.Filter;
+        var left = (await (await Slots.DistinctAsync(session, sl => sl.KeyId, slot.In(sl => sl.KeyId, keyIds), cancellationToken: ct)).ToListAsync(ct)).ToHashSet();
+        var orphans = keyIds.Where(k => k is not null && !left.Contains(k)).Select(k => k!).ToList();
+        if (orphans.Count == 0) return [];
+        var keys = db.GetCollection<Accounts.ApiKeyDocument>("api_keys");
+        var unrevoked = await keys.Find(session, k => orphans.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
+        if (unrevoked.Count == 0) return [];
+        await keys.UpdateManyAsync(
+            session,
+            Builders<Accounts.ApiKeyDocument>.Filter.In(k => k.Id, unrevoked),
+            Builders<Accounts.ApiKeyDocument>.Update.Set(k => k.RevokedAt, Now).Unset(k => k.NameId),
+            cancellationToken: ct);
+        return unrevoked;
     }
 
     /// <summary>Whether the vault was deleted (or is being deleted) in this process: such a vault is never loaded,

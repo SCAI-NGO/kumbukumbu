@@ -28,7 +28,8 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
     /// once <paramref name="confirm"/> repeats the name and <paramref name="password"/> is the user's (so a stolen
-    /// session alone can't); null if the user has no vault of that name. API keys that had it keep their other vaults.
+    /// session alone can't); null if the user has no vault of that name. API keys that had it keep their other vaults;
+    /// one left with none is revoked in the same transaction.
     /// </summary>
     public async Task<DeletionSummary?> DeleteVaultAsync(User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct)
     {
