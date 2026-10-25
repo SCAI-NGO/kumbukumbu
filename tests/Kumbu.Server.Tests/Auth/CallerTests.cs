@@ -149,6 +149,7 @@ public sealed class CallerTests(KumbuAppFactory app)
         builder.Services.AddSingleton(app.Services.GetRequiredService<VaultCatalog>());
         builder.Services.AddSingleton(new WrongKeyLimiter());
         builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.Accounts.Connections>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.OAuth.OAuthTokens>());
         var minimal = builder.Build();
         minimal.UseRouting();
         minimal.UseMiddleware<CallerMiddleware>();

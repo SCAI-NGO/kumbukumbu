@@ -19,7 +19,98 @@ public static partial class OAuthEndpoints
     {
         app.MapPost("/oauth/register", RegisterAsync).AllowAnonymous().ExcludeFromDescription();
         app.MapGet("/oauth/authorize", AuthorizeAsync).AllowAnonymous().ExcludeFromDescription();
+        app.MapPost("/oauth/token", TokenAsync).AllowAnonymous().ExcludeFromDescription();
     }
+
+    /// <summary>A token request is a few hundred bytes of form; more is not one.</summary>
+    public const int MaxTokenRequestBytes = 16 * 1024;
+
+    /// <summary>
+    /// The token endpoint (spec §4, RFC 6749 §3.2, §4.1.3, §5): a form POST only, each parameter at most once.
+    /// <c>authorization_code</c> exchanges a code (<see cref="OAuthTokens.ExchangeCodeAsync"/>); any other grant is
+    /// <c>unsupported_grant_type</c>. Failures are limited per <c>client_id</c> (Ruling 13), not per address: every
+    /// claude.ai user arrives from Anthropic's range. Every answer is <c>no-store</c>; tokens are never logged.
+    /// </summary>
+    private static async Task<IResult> TokenAsync(HttpContext http, OAuthTokens tokens, OAuthLimits limits, CancellationToken ct)
+    {
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers.Pragma = "no-cache";
+        if (!IsForm(http.Request.ContentType)) return TokenError("invalid_request", "The body must be application/x-www-form-urlencoded.");
+        var body = await ReadBodyAsync(http.Request, MaxTokenRequestBytes, ct);
+        if (body is null) return TokenError("invalid_request", "The request body is too large.");
+        Dictionary<string, Microsoft.Extensions.Primitives.StringValues> form;
+        try
+        {
+            form = new FormReader(System.Text.Encoding.UTF8.GetString(body)) { ValueCountLimit = 32, KeyLengthLimit = 64, ValueLengthLimit = MaxTokenRequestBytes }.ReadForm();
+        }
+        catch (InvalidDataException)
+        {
+            return TokenError("invalid_request", "The body is not a usable form.");
+        }
+
+        // A missing client_id is counted under the empty one: a public client always sends its id.
+        var clientId = form.TryGetValue("client_id", out var ids) && ids.Count == 1 ? ids[0] ?? "" : "";
+        if (limits.TokenReserve(clientId) is { } retryAfter)
+        {
+            ApiErrors.SetRetryAfter(http, retryAfter);
+            return TokenError("invalid_request", "Too many failed token requests for this client; try again later.", StatusCodes.Status429TooManyRequests);
+        }
+
+        TokenResult result;
+        try
+        {
+            result = await TokenResultAsync(form, tokens, ct);
+        }
+        catch
+        {
+            // MongoDB unreachable or the request aborted: not a failure of the client's.
+            limits.TokenRelease(clientId);
+            throw;
+        }
+
+        if (result.Pair is not { } pair)
+        {
+            limits.TokenFailed(clientId);
+            return TokenError(result.Error!, result.Description!, result.Error == "invalid_client" ? StatusCodes.Status401Unauthorized : StatusCodes.Status400BadRequest);
+        }
+
+        limits.TokenRelease(clientId);
+        return TypedResults.Json(new JsonObject
+        {
+            ["access_token"] = pair.AccessToken,
+            ["token_type"] = "Bearer",
+            ["expires_in"] = pair.ExpiresIn,
+            ["refresh_token"] = pair.RefreshToken,
+            ["scope"] = pair.Scope,
+        });
+    }
+
+    private static async Task<TokenResult> TokenResultAsync(Dictionary<string, Microsoft.Extensions.Primitives.StringValues> form, OAuthTokens tokens, CancellationToken ct)
+    {
+        // RFC 6749 §3.2: no parameter more than once; an empty one counts as missing.
+        if (form.Values.Any(v => v.Count > 1)) return TokenResult.Failure("invalid_request", "Each parameter may be sent once.");
+        string? Field(string name) => form.TryGetValue(name, out var v) && !string.IsNullOrEmpty(v[0]) ? v[0] : null;
+
+        var grantType = Field("grant_type");
+        if (grantType is null) return TokenResult.Failure("invalid_request", "grant_type is required.");
+        if (grantType != "authorization_code") return TokenResult.Failure("unsupported_grant_type", "Only the authorization_code grant is supported.");
+        if (Field("client_id") is not { } clientId) return TokenResult.Failure("invalid_client", "client_id is required: clients are public and identify themselves by it.");
+        if (Field("code") is not { } code || Field("redirect_uri") is not { } redirectUri || Field("code_verifier") is not { } verifier)
+            return TokenResult.Failure("invalid_request", "code, redirect_uri and code_verifier are required.");
+        if (!VerifierShape().IsMatch(verifier)) return TokenResult.Failure("invalid_request", "code_verifier must be 43 to 128 characters of A-Z, a-z, 0-9, '-', '.', '_' and '~'.");
+        return await tokens.ExchangeCodeAsync(new CodeExchange(code, clientId, redirectUri, verifier, Field("resource")), ct);
+    }
+
+    private static bool IsForm(string? contentType) =>
+        Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out var type)
+        && type.MediaType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase);
+
+    // RFC 6749 §5.2: {"error", "error_description"}, never cached.
+    private static IResult TokenError(string error, string description, int status = StatusCodes.Status400BadRequest) => Error(status, error, description);
+
+    /// <summary>RFC 7636 §4.1: 43 to 128 unreserved characters.</summary>
+    [GeneratedRegex("^[A-Za-z0-9._~-]{43,128}$")]
+    private static partial Regex VerifierShape();
 
     /// <summary>The category of the flow's log lines (<see cref="LogStep"/>).</summary>
     internal const string LogCategory = "Kumbu.Server.OAuth.Flow";
@@ -154,7 +245,7 @@ public static partial class OAuthEndpoints
             return Error(StatusCodes.Status429TooManyRequests, "invalid_client_metadata", "Too many registrations from this network; try again later.");
         }
 
-        var body = await ReadBodyAsync(http.Request, ct);
+        var body = await ReadBodyAsync(http.Request, MaxRegistrationBytes, ct);
         if (body is null) return Error(StatusCodes.Status413PayloadTooLarge, "invalid_client_metadata", "The request body is too large.");
 
         JsonDocument document;
@@ -192,16 +283,16 @@ public static partial class OAuthEndpoints
         }
     }
 
-    /// <summary>The whole body, or null if it exceeds <see cref="MaxRegistrationBytes"/>; read in pieces so a body without Content-Length is capped too.</summary>
-    private static async Task<byte[]?> ReadBodyAsync(HttpRequest request, CancellationToken ct)
+    /// <summary>The whole body, or null if it exceeds <paramref name="limit"/>; read in pieces so a body without Content-Length is capped too.</summary>
+    private static async Task<byte[]?> ReadBodyAsync(HttpRequest request, int limit, CancellationToken ct)
     {
-        if (request.ContentLength > MaxRegistrationBytes) return null;
+        if (request.ContentLength > limit) return null;
         using var buffer = new MemoryStream();
         var chunk = new byte[4096];
         int read;
         while ((read = await request.Body.ReadAsync(chunk, ct)) > 0)
         {
-            if (buffer.Length + read > MaxRegistrationBytes) return null;
+            if (buffer.Length + read > limit) return null;
             buffer.Write(chunk, 0, read);
         }
 

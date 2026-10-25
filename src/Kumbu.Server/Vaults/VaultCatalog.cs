@@ -334,20 +334,97 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         DateTime? expiresAt, CancellationToken ct)
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
-        return [.. vaults.Select(v => new SlotDocument
+        return WrapConnectionSlots([.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key], v.Value))], connectionId, tokenId, token, expiresAt);
+    }
+
+    /// <summary>
+    /// The slots a token of a connection gets from another token's (the refresh and access tokens from the code, the
+    /// next pair from a refresh token): every slot of <paramref name="fromTokenId"/> that opens with
+    /// <paramref name="fromToken"/> and hasn't expired, re-wrapped for <paramref name="toTokenId"/> with the same
+    /// right, carrying <paramref name="expiresAt"/>. Not stored here, as <see cref="ConnectionSlotsFromUserAsync"/>.
+    /// </summary>
+    internal async Task<IReadOnlyList<SlotDocument>> ConnectionSlotsFromTokenAsync(
+        string connectionId, string fromTokenId, string fromToken, string toTokenId, string toToken, DateTime? expiresAt, CancellationToken ct) =>
+        WrapConnectionSlots(await OpenConnectionSlotsAsync(connectionId, fromTokenId, fromToken, ct), connectionId, toTokenId, toToken, expiresAt);
+
+    /// <summary>A vault key opened from a token's slot, with the right sealed into it.</summary>
+    internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right);
+
+    /// <summary>
+    /// The vault keys a connection's token has slots for, each with its right. Every slot is opened, and one past its
+    /// <c>expiresAt</c> is refused here (MongoDB's TTL index only tidies up, once a minute); a slot that doesn't open
+    /// (changed or moved in the database) gives nothing.
+    /// </summary>
+    internal async Task<IReadOnlyList<ConnectionVaultKey>> OpenConnectionSlotsAsync(string connectionId, string tokenId, string token, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<SlotDocument>.Filter;
+        var slots = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.Connection) & f.Eq(s => s.TokenId, tokenId) & f.Eq(s => s.ConnectionId, connectionId)).ToListAsync(ct);
+        var now = Now;
+        var result = new List<ConnectionVaultKey>();
+        foreach (var slot in slots)
         {
-            Vault = v.Key,
+            if (now >= slot.ExpiresAt) continue;
+            try
+            {
+                var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(
+                    VaultCrypto.Open(ConnectionKek(token, slot.Vault), slot.Wrapped, ConnectionSlotContext(slot.Vault, connectionId, tokenId)))!;
+                result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, Accounts.KeyRights.Parse(payload.Rights) ?? throw new JsonException("unknown right")));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("A slot of connection {ConnectionId} on vault {VaultId} did not open", connectionId, slot.Vault);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Wraps opened vault keys for a token of the connection, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c>
+    /// and bound to the vault, the connection and the token's id, so a slot can't be moved to another token or
+    /// connection, nor read as an API key's.</summary>
+    internal IReadOnlyList<SlotDocument> WrapConnectionSlots(
+        IReadOnlyList<ConnectionVaultKey> keys, string connectionId, string tokenId, string token, DateTime? expiresAt) =>
+        [.. keys.Select(k => new SlotDocument
+        {
+            Vault = k.Vault,
             Kind = SlotDocument.Connection,
             ConnectionId = connectionId,
             TokenId = tokenId,
             ExpiresAt = expiresAt,
             Wrapped = VaultCrypto.Seal(
-                ConnectionKek(token, v.Key),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))),
-                ConnectionSlotContext(v.Key, connectionId, tokenId)),
+                ConnectionKek(token, k.Vault),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right))),
+                ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
+
+    /// <summary>
+    /// The vaults an access token of a connection has slots for, unlocked, each with its right: opened afresh on every
+    /// request, as <see cref="OpenForApiKeyAsync"/>, so a revoked or expired token (whose slots are gone or past their
+    /// expiry) opens nothing, whatever is in memory.
+    /// </summary>
+    internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForConnectionAsync(
+        string connectionId, string tokenId, string token, CancellationToken ct)
+    {
+        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
+        {
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add((vault, key.Right));
+        }
+
+        return result;
     }
+
+    /// <summary>Deletes the slots of these tokens of connections, inside the caller's transaction.</summary>
+    internal Task DeleteTokenSlotsAsync(IClientSessionHandle session, IReadOnlyCollection<string> tokenIds, CancellationToken ct) =>
+        Slots.DeleteManyAsync(
+            session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.Connection) & Builders<SlotDocument>.Filter.In(s => s.TokenId, tokenIds), cancellationToken: ct);
+
+    /// <summary>Deletes every slot of a connection's tokens, inside the caller's transaction.</summary>
+    internal Task DeleteConnectionSlotsAsync(IClientSessionHandle session, string connectionId, CancellationToken ct) =>
+        Slots.DeleteManyAsync(
+            session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.Connection) & Builders<SlotDocument>.Filter.Eq(s => s.ConnectionId, connectionId), cancellationToken: ct);
 
     /// <summary>
     /// The vaults an API key has slots for, unlocked, each with the right sealed into its slot. As in

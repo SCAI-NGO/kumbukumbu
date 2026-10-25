@@ -19,6 +19,31 @@ public static class OAuthTokenKinds
     public const string Refresh = "refresh";
 }
 
+/// <summary>What the token endpoint passes on for <c>grant_type=authorization_code</c>; <c>Resource</c> is optional.</summary>
+public sealed record CodeExchange(string Code, string ClientId, string RedirectUri, string CodeVerifier, string? Resource);
+
+/// <summary>A connection's tokens as the token endpoint answers them. Not logged: <see cref="ToString"/> hides them.</summary>
+public sealed record TokenPair(string AccessToken, string RefreshToken, int ExpiresIn, string Scope)
+{
+    public override string ToString() => $"TokenPair {{ ExpiresIn = {ExpiresIn}, Scope = {Scope} }}";
+}
+
+/// <summary>The token endpoint's answer: a pair, or an RFC 6749 §5.2 error (<c>invalid_request</c>, <c>invalid_grant</c>,
+/// <c>invalid_client</c>, <c>invalid_target</c>, <c>unsupported_grant_type</c>) with a description.</summary>
+public sealed record TokenResult(TokenPair? Pair, string? Error, string? Description)
+{
+    public static TokenResult Failure(string error, string description) => new(null, error, description);
+}
+
+/// <summary>The connection an access token belongs to, as <see cref="OAuthTokens.ResolveAccessAsync"/> found it valid;
+/// <c>Name</c> is the writer label sealed into the token's grant.</summary>
+public sealed record ResolvedConnection(User User, string ConnectionId, string TokenId, string Name);
+
+/// <summary>An access token's resolution: <c>Connection</c> if valid here; else <c>Known</c> if a record with its lookup
+/// exists (expired, of another connection, revoked meanwhile), which isn't a guess and isn't counted as a wrong key
+/// (Ruling 12).</summary>
+public sealed record AccessResolution(ResolvedConnection? Connection, bool Known);
+
 /// <summary>Allowing could not go ahead: the connection is no longer the user's to authorise (revoked, expired, gone,
 /// its rights changed meanwhile) or the client no longer resolves. The consent API answers 409.</summary>
 public sealed class ConnectionUnavailableException(string message) : Exception(message);
@@ -27,7 +52,8 @@ public sealed class ConnectionUnavailableException(string message) : Exception(m
 /// A connection's OAuth codes and tokens (spec §5): random secrets with a prefix (<see cref="Secrets"/>), stored only
 /// as derived values. Each token record has slots of its own (<see cref="SlotDocument.Connection"/>) that wrap the
 /// connection's vault keys under a key derived from the token, so a token opens exactly what was consented to, and
-/// only while its slots exist. This task issues codes; the token endpoint exchanges them.
+/// only while its slots exist. A code is exchanged once for an access token (an hour) and a refresh token (until the
+/// connection expires); a connection has one family of tokens at a time.
 /// </summary>
 public sealed class OAuthTokens(
     IMongoDatabase db, VaultCatalog catalog, Connections connections, OAuthClients clients, IOptions<KumbuOptions> options, TimeProvider time,
@@ -45,6 +71,15 @@ public sealed class OAuthTokens(
     /// <summary>A code's record outlives the code by this much (its slots don't), so that a reuse is recognised as one
     /// and revokes what the code issued.</summary>
     public static readonly TimeSpan CodeRetention = TimeSpan.FromMinutes(10);
+
+    /// <summary>An access token's record outlives the token by this much (its slots don't), so that an expired token is
+    /// recognised as one: it answers <c>invalid_token</c> and isn't counted as a wrong key (Ruling 12).</summary>
+    public static readonly TimeSpan AccessRetention = TimeSpan.FromHours(24);
+
+    /// <summary>How often a connection's <c>lastUsedAt</c> is written at most, as an API key's.</summary>
+    private static readonly TimeSpan LastUsedGranularity = TimeSpan.FromMinutes(1);
+
+    private const string InvalidCode = "The code is invalid, expired or already used.";
 
     private const string LookupLabel = "kumbu/v1/oauth-token-lookup";
     private const string GrantLabel = "kumbu/v1/oauth-grant";
@@ -143,6 +178,210 @@ public sealed class OAuthTokens(
 
         log.LogDebug("OAuth code {TokenId} issued for connection {ConnectionId}, expiring {ExpiresAt:u}", tokenId, connectionId, expiresAt);
         return code;
+    }
+
+    /// <summary>
+    /// Exchanges a code for the connection's tokens (spec §4, §5), in one transaction. The code is spent by the first
+    /// request that presents it, whatever the outcome, so a code intercepted and tried is burnt; a code presented again
+    /// after it issued tokens revokes the connection's tokens (<see cref="ConnectionReasons.CodeReused"/>). The code must
+    /// be unexpired, for this client and redirect URI (exactly as stored), its PKCE challenge must be
+    /// <c>BASE64URL(SHA256(verifier))</c> (compared in fixed time), and a <c>resource</c>, if sent, must name the
+    /// connection the code is for. The connection must still be live and its user active. Then the connection's
+    /// earlier tokens and their slots go (one family per connection), the code's slots go, and a refresh token
+    /// (until the connection expires) and an access token (<see cref="AccessLifetime"/>, at most until the connection
+    /// expires) get slots re-wrapped from the code's, each carrying its token's expiry for the TTL index.
+    /// </summary>
+    public async Task<TokenResult> ExchangeCodeAsync(CodeExchange exchange, CancellationToken ct)
+    {
+        if (!Secrets.IsWellFormed(exchange.Code, CodePrefix)) return Refused(null, null, "invalid_grant", InvalidCode);
+        await EnsureReadyAsync(ct);
+        var lookup = Lookup(exchange.Code);
+
+        // The code's slots are opened before the transaction: opening may create the slots' indexes once per process,
+        // which would wait for a transaction that has written. Used only if the transaction finds the same record.
+        var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
+        if (found is null || found.Kind != OAuthTokenKinds.Code) return Refused(null, null, "invalid_grant", InvalidCode);
+        var keys = found.UsedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, exchange.Code, ct) : [];
+
+        var access = Secrets.New(AccessPrefix);
+        var refresh = Secrets.New(RefreshPrefix);
+        var accessId = NewTokenId();
+        var refreshId = NewTokenId();
+        var reused = false;
+        using var session = await catalog.StartSessionAsync(ct);
+        var result = await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                reused = false;
+                var code = await Docs.Find(s, d => d.Id == found.Id).FirstOrDefaultAsync(token);
+                if (code is null) return TokenResult.Failure("invalid_grant", InvalidCode);
+                var now = Now;
+                if (code.UsedAt is not null)
+                {
+                    // Only a code that issued tokens has something to revoke; one burnt by a failed attempt issued nothing.
+                    if (code.Successor is not null)
+                    {
+                        await connections.RevokeConnectionTokensAsync(s, code.ConnectionId, ConnectionReasons.CodeReused, token);
+                        reused = true;
+                    }
+
+                    return TokenResult.Failure("invalid_grant", InvalidCode);
+                }
+
+                // Spent now, whatever comes next; committed with the answer.
+                await Docs.UpdateOneAsync(s, d => d.Id == code.Id, Builders<OAuthTokenDocument>.Update.Set(d => d.UsedAt, now), cancellationToken: token);
+                if (!(now < code.ExpiresAt)) return TokenResult.Failure("invalid_grant", InvalidCode);
+                if (!string.Equals(exchange.ClientId, code.ClientId, StringComparison.Ordinal)
+                    || !string.Equals(exchange.RedirectUri, code.RedirectUri, StringComparison.Ordinal)
+                    || !PkceMatches(exchange.CodeVerifier, code.CodeChallenge))
+                {
+                    return TokenResult.Failure("invalid_grant", "The code was issued to another client, redirect URI or code verifier.");
+                }
+
+                OAuthGrant grant;
+                try
+                {
+                    grant = OpenGrant(exchange.Code, code);
+                }
+                catch (Exception e) when (e is CryptographicException or JsonException)
+                {
+                    log.LogWarning("The grant of OAuth code {TokenId} does not open", code.Id);
+                    return TokenResult.Failure("invalid_grant", InvalidCode);
+                }
+
+                if (exchange.Resource is { } resource && OAuthUrls.Canonical(resource) != OAuthUrls.Canonical(grant.Resource))
+                    return TokenResult.Failure("invalid_target", "The resource is not the connection this code was issued for.");
+
+                var connection = await ConnectionDocs.Find(s, c => c.Id == code.ConnectionId).FirstOrDefaultAsync(token);
+                if (connection is null || !IsLive(connection, code.User, now) || now >= grant.ConnectionExpiresAt)
+                    return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
+                if (!await Users.Find(s, u => u.Id == code.User && u.Active).AnyAsync(token)) return TokenResult.Failure("invalid_grant", InvalidCode);
+                if (keys.Count == 0) return TokenResult.Failure("invalid_grant", InvalidCode);
+
+                // The connection's expiry as sealed into the grant: a changed expiresAt in the database extends nothing.
+                var connectionExpiresAt = grant.ConnectionExpiresAt;
+                var accessExpiresAt = Milliseconds(connectionExpiresAt is { } c && c < now + AccessLifetime ? c : now + AccessLifetime);
+
+                var earlier = await Docs.Find(s, d => d.ConnectionId == code.ConnectionId && (d.Kind == OAuthTokenKinds.Access || d.Kind == OAuthTokenKinds.Refresh))
+                    .Project(d => d.Id).ToListAsync(token);
+                if (earlier.Count > 0)
+                {
+                    await Docs.DeleteManyAsync(s, Builders<OAuthTokenDocument>.Filter.In(d => d.Id, earlier), cancellationToken: token);
+                    await catalog.DeleteTokenSlotsAsync(s, earlier, token);
+                }
+
+                await catalog.DeleteTokenSlotsAsync(s, [code.Id], token);
+                await Docs.InsertManyAsync(
+                    s,
+                    [
+                        Record(refreshId, OAuthTokenKinds.Refresh, refresh, code, grant, now, connectionExpiresAt, connectionExpiresAt),
+                        Record(accessId, OAuthTokenKinds.Access, access, code, grant, now, accessExpiresAt, accessExpiresAt + AccessRetention),
+                    ],
+                    cancellationToken: token);
+                await catalog.Slots.InsertManyAsync(
+                    s,
+                    [
+                        .. catalog.WrapConnectionSlots(keys, code.ConnectionId, refreshId, refresh, connectionExpiresAt),
+                        .. catalog.WrapConnectionSlots(keys, code.ConnectionId, accessId, access, accessExpiresAt),
+                    ],
+                    cancellationToken: token);
+                await Docs.UpdateOneAsync(s, d => d.Id == code.Id, Builders<OAuthTokenDocument>.Update.Set(d => d.Successor, refreshId), cancellationToken: token);
+                var update = Builders<ConnectionDocument>.Update.Unset(c => c.TokensRevokedAt).Unset(c => c.TokensRevokedReason);
+                if (connection.AuthorisedAt is null) update = update.Set(c => c.AuthorisedAt, now);
+                await ConnectionDocs.UpdateOneAsync(s, c => c.Id == code.ConnectionId, update, cancellationToken: token);
+
+                var scope = keys.All(k => k.Right == KeyRight.Read) ? OAuthScopes.Read : $"{OAuthScopes.Read} {OAuthScopes.Write}";
+                var expiresIn = (int)Math.Ceiling((accessExpiresAt - now).TotalSeconds);
+                return new TokenResult(new TokenPair(access, refresh, expiresIn, scope), null, null);
+            },
+            cancellationToken: ct);
+
+        var clientHost = found.RedirectUri is { } redirect ? OAuthEndpoints.ClientHost(found.ClientId, redirect) : null;
+        if (reused) log.LogWarning("OAuth code {TokenId} was presented again: the tokens of connection {ConnectionId} are revoked", found.Id, found.ConnectionId);
+        return result.Pair is not null
+            ? Logged(result, found.ConnectionId, clientHost, "issued")
+            : Refused(found.ConnectionId, clientHost, result.Error!, result.Description!);
+    }
+
+    private TokenResult Refused(string? connectionId, string? clientHost, string error, string description) =>
+        Logged(TokenResult.Failure(error, description), connectionId, clientHost, error);
+
+    private TokenResult Logged(TokenResult result, string? connectionId, string? clientHost, string outcome)
+    {
+        OAuthEndpoints.LogStep(log, "token", outcome, connectionId, clientHost, null);
+        return result;
+    }
+
+    private static OAuthTokenDocument Record(
+        string id, string kind, string token, OAuthTokenDocument code, OAuthGrant grant, DateTime now, DateTime? expiresAt, DateTime? purgeAt) => new()
+        {
+            Id = id,
+            Kind = kind,
+            ConnectionId = code.ConnectionId,
+            User = code.User,
+            ClientId = code.ClientId,
+            Lookup = Lookup(token),
+            Grant = SealGrant(token, id, kind, grant),
+            Parent = code.Id,
+            CreatedAt = now,
+            ExpiresAt = expiresAt,
+            PurgeAt = purgeAt,
+        };
+
+    /// <summary>RFC 7636 S256: <c>BASE64URL(SHA256(ASCII(verifier))) == challenge</c>, in fixed time.</summary>
+    private static bool PkceMatches(string verifier, string? challenge)
+    {
+        if (challenge is null) return false;
+        var computed = Convert.ToBase64String(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(verifier))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(computed), System.Text.Encoding.ASCII.GetBytes(challenge));
+    }
+
+    /// <summary>
+    /// The connection an access token presented on <c>/mcp/c/{connectionId}</c> is valid for (spec §4): a record of
+    /// kind <c>access</c> with its lookup, unexpired (checked here; the TTL index only tidies up), of exactly this
+    /// connection, its grant opening with the token and bound to <paramref name="resource"/> (canonically equal), the
+    /// connection neither revoked nor expired and its user active. Writes the connection's <c>lastUsedAt</c> at most
+    /// once a minute. Never logs anything of the token. The slots are opened by the caller.
+    /// </summary>
+    public async Task<AccessResolution> ResolveAccessAsync(string presented, string connectionId, string resource, CancellationToken ct)
+    {
+        if (!Secrets.IsWellFormed(presented, AccessPrefix)) return new(null, false);
+        await EnsureReadyAsync(ct);
+        var lookup = Lookup(presented);
+        var record = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
+        if (record is null) return new(null, false);
+        var known = new AccessResolution(null, true);
+        var now = Now;
+        if (record.Kind != OAuthTokenKinds.Access || record.ConnectionId != connectionId || !(now < record.ExpiresAt)) return known;
+
+        OAuthGrant grant;
+        try
+        {
+            grant = OpenGrant(presented, record);
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            log.LogWarning("The grant of OAuth access token {TokenId} does not open", record.Id);
+            return known;
+        }
+
+        if (OAuthUrls.Canonical(grant.Resource) != OAuthUrls.Canonical(resource) || now >= grant.ConnectionExpiresAt) return known;
+        var connection = await ConnectionDocs.Find(c => c.Id == connectionId).FirstOrDefaultAsync(ct);
+        if (connection is null || !IsLive(connection, record.User, now)) return known;
+        var user = await Users.Find(u => u.Id == record.User).FirstOrDefaultAsync(ct);
+        if (user is null || !user.Active) return known;
+
+        if (connection.LastUsedAt is not { } lastUsed || now - lastUsed >= LastUsedGranularity)
+        {
+            // Conditional, so of concurrent requests only one writes.
+            var stale = now - LastUsedGranularity;
+            await ConnectionDocs.UpdateOneAsync(
+                c => c.Id == connectionId && (c.LastUsedAt == null || c.LastUsedAt <= stale),
+                Builders<ConnectionDocument>.Update.Set(c => c.LastUsedAt, now),
+                cancellationToken: ct);
+        }
+
+        return new(new ResolvedConnection(user.ToUser(), connectionId, record.Id, grant.Name), true);
     }
 
     /// <summary>The user's own connection, neither revoked nor expired.</summary>
@@ -262,7 +501,8 @@ public sealed class OAuthTokenDocument
     [BsonElement("usedAt"), BsonIgnoreIfNull]
     public DateTime? UsedAt { get; set; }
 
-    /// <summary>Refresh tokens: the id of the record that replaced it (rotation).</summary>
+    /// <summary>Codes: the refresh token they issued (a reuse then revokes the connection's tokens). Refresh tokens:
+    /// the id of the record that replaced it (rotation).</summary>
     [BsonElement("successor"), BsonIgnoreIfNull]
     public string? Successor { get; set; }
 

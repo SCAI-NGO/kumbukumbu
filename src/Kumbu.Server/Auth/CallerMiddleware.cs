@@ -18,7 +18,8 @@ public sealed class BackgroundMetadata
 
 /// <summary>
 /// Resolves every request that needs one to a <see cref="RequestCaller"/>: a bearer key (the dev token when
-/// configured, or an API key) or, under <c>/api</c> only, the session cookie. Which requests need one
+/// configured, or an API key) or, under <c>/api</c> only, the session cookie; on a connection's URL only that
+/// connection's access tokens. Which requests need one
 /// fails closed:
 /// <list type="bullet">
 /// <item>every matched endpoint, unless it is marked <c>AllowAnonymous()</c> (<c>/healthz</c>,
@@ -35,7 +36,7 @@ public sealed class BackgroundMetadata
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections)
+    Connections connections, OAuthTokens tokens)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -116,11 +117,13 @@ public sealed class CallerMiddleware(
     }
 
     /// <summary>
-    /// A connection's own URL takes only its access tokens, which no one holds yet: API keys, the dev token and the
-    /// cookie are not resolved here, so a credential for <c>/mcp</c> opens nothing on it. An id that is no
-    /// connection's is a 404 (Ruling 18), like its metadata URL; a known one, in any state, is a 401 with the
-    /// challenge that leads an app to the metadata. A presented bearer is not counted as a wrong key: every one is
-    /// wrong for now, and the limiter is per address.
+    /// A connection's own URL takes only its access tokens (spec §4): API keys, the dev token and the cookie are not
+    /// resolved here, so a credential for <c>/mcp</c> opens nothing on it, and an access token is resolved nowhere
+    /// else. An id that is no connection's is a 404 (Ruling 18), like its metadata URL; a known one, in any state,
+    /// answers a request without a valid token with a 401 and the challenge that leads an app to the metadata. An
+    /// access token is looked up under the wrong-key limit; one that is known but no longer valid here (expired,
+    /// another connection's, revoked meanwhile) isn't a guess and gives its permit back (Ruling 12), an unknown one
+    /// uses it up. Any other bearer is refused without a lookup.
     /// </summary>
     private async Task ConnectionUrlAsync(HttpContext context, string id)
     {
@@ -131,8 +134,44 @@ public sealed class CallerMiddleware(
             return;
         }
 
+        var header = context.Request.Headers.Authorization.ToString();
+        var bearer = header.StartsWith(Scheme, StringComparison.OrdinalIgnoreCase) ? header[Scheme.Length..] : null;
+        if (bearer is not null && bearer.StartsWith(OAuthTokens.AccessPrefix, StringComparison.Ordinal))
+        {
+            var ip = WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
+            if (wrongKeys.TryReserve(ip) is { } retryAfter)
+            {
+                await TooManyAsync(context, retryAfter);
+                return;
+            }
+
+            RequestCaller? caller = null;
+            AccessResolution resolution;
+            try
+            {
+                var origin = OAuthUrls.Origin(context, options.Value.PublicUrl);
+                resolution = await tokens.ResolveAccessAsync(bearer, id, OAuthUrls.Resource(origin, id), context.RequestAborted);
+                if (resolution.Connection is { } connection) caller = await RequestCaller.ForConnectionAsync(connection, bearer, catalog, context.RequestAborted);
+            }
+            catch
+            {
+                // MongoDB unreachable or the request aborted: not a wrong key.
+                wrongKeys.Release(ip);
+                throw;
+            }
+
+            if (resolution.Known) wrongKeys.Release(ip);
+            else wrongKeys.Failed(ip);
+            if (caller is not null)
+            {
+                context.Features.Set(caller);
+                await next(context);
+                return;
+            }
+        }
+
         var challenge = $"Bearer resource_metadata=\"{OAuthUrls.ResourceMetadata(OAuthUrls.Origin(context, options.Value.PublicUrl), id)}\", scope=\"{OAuthScopes.Challenge}\"";
-        if (context.Request.Headers.Authorization.ToString().StartsWith(Scheme, StringComparison.OrdinalIgnoreCase)) challenge += ", error=\"invalid_token\"";
+        if (bearer is not null) challenge += ", error=\"invalid_token\"";
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         context.Response.Headers.WWWAuthenticate = challenge;
     }

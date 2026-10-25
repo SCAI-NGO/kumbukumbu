@@ -362,15 +362,17 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return doc is not null && doc.RevokedAt is null && !(now >= doc.ExpiresAt);
     }
 
-    /// <summary>Revoked, else expired, else by whether it was ever authorised. <see cref="ConnectionState.Connected"/>
-    /// needs a live refresh token, and none are issued yet.</summary>
+    /// <summary>Revoked, else expired, else by whether it was ever authorised and whether its tokens were revoked since
+    /// they were last issued: the token endpoint unsets <c>tokensRevokedAt</c> when it issues a pair, every
+    /// revocation of the tokens sets it, and the refresh token lives as long as the connection.</summary>
     private static (ConnectionState State, string? Reason) StateOf(ConnectionDocument doc, DateTime now)
     {
         if (doc.RevokedAt is not null) return (ConnectionState.Revoked, doc.RevokedReason ?? ConnectionReasons.Revoked);
         if (now >= doc.ExpiresAt) return (ConnectionState.Expired, "expired");
         // An authorised connection without tokens needs a reconnect; one never authorised has nothing to reconnect,
         // whatever revoked "its" tokens (a rights change, a password change) meanwhile.
-        return doc.AuthorisedAt is not null ? (ConnectionState.NeedsReconnect, doc.TokensRevokedReason) : (ConnectionState.Waiting, null);
+        if (doc.AuthorisedAt is null) return (ConnectionState.Waiting, null);
+        return doc.TokensRevokedAt is null ? (ConnectionState.Connected, null) : (ConnectionState.NeedsReconnect, doc.TokensRevokedReason);
     }
 
     private static ConnectionInfo Info(ConnectionDocument doc, ConnectionMeta meta, DateTime now)

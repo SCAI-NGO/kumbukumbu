@@ -60,6 +60,15 @@ public sealed class RestClient
         return new RestClient(api, username, session, user, userKey, vault);
     }
 
+    /// <summary>A new session of this user, e.g. after a test moved the clock past the old one's timeout.</summary>
+    public async Task<RestClient> SignInAgainAsync()
+    {
+        using var signIn = await SendAsync(_api, HttpMethod.Post, "/api/session", new { username = Username, password = Password }, session: null, bearer: null);
+        Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
+        var cookie = signIn.Headers.GetValues("Set-Cookie").First(v => v.StartsWith(CallerMiddleware.SessionCookie + "=", StringComparison.Ordinal));
+        return new RestClient(_api, Username, cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0], User, UserKey, Vault);
+    }
+
     /// <summary>An API key of this user for its vault, with <paramref name="right"/>.</summary>
     public async Task<string> KeyAsync(string name, KeyRight right)
     {

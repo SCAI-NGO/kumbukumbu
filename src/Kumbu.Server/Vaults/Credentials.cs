@@ -31,11 +31,18 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 }
 
+/// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): it may write
+/// only where a slot says so. Every other credential writes wherever it opens.</summary>
+public interface IRightsCredential
+{
+    bool CanWrite(string vault);
+}
+
 /// <summary>
 /// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
 /// request, so the rights <see cref="CanWrite"/> answers from are those of exactly the vaults the store sees.
 /// </summary>
-public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
+public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential, IRightsCredential
 {
     private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
 
@@ -50,6 +57,27 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
 
     /// <summary>Only for a vault opened with the right to write (named as the store names vaults, ordinally).
     /// Fails closed: false before the vaults were opened, and for a vault this key doesn't have.</summary>
+    public bool CanWrite(string vault) =>
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
+}
+
+/// <summary>
+/// A connection's access token: opens the vaults its own slots wrap, each with the right sealed into the slot, as
+/// <see cref="ApiKeyCredential"/>. Not a record, so that ToString can't print the token.
+/// </summary>
+public sealed class ConnectionCredential(string connectionId, string tokenId, string token) : ICredential, IRightsCredential
+{
+    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+
+    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
+
+    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForConnectionAsync(connectionId, tokenId, token, ct);
+
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+
+    /// <summary>As <see cref="ApiKeyCredential.CanWrite"/>: fails closed before the vaults were opened and for a vault it doesn't have.</summary>
     public bool CanWrite(string vault) =>
         _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
 }
