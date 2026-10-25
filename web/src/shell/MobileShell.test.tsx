@@ -190,6 +190,23 @@ describe("the shell", () => {
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["Keys", "API keys"],
+    ["Settings", "Settings"],
+    ["Admin", "Users"],
+  ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
+    signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
+    renderApp("/notes/Work/inbox.md");
+    const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
+    await userEvent.click(within(account).getByRole("link", { name: link }));
+    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+    expect(useEditor.getState().overlay).toBe("none");
+
+    await userEvent.click(screen.getByRole("link", { name: "Back to the notes" }));
+    await screen.findByRole("button", { name: "Open file tree" });
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+  });
+
   it.each(["admin", "primary_admin"])("shows the admin link to a %s", async (role) => {
     signedInApi({}, { ...user, role });
     renderApp("/notes/Work/inbox.md");

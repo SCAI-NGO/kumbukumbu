@@ -51,6 +51,8 @@ function AccountRow() {
   const role = useSession((s) => s.user?.role);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // The drawer's state outlives the page: left open, it would be open again on the way back to the notes.
+  const close = () => useEditor.getState().setOverlay("none");
   const [asking, setAsking] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -76,16 +78,16 @@ function AccountRow() {
   const link = "flex min-h-11 items-center gap-1.5 rounded-[8px] px-2 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent";
   return (
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
-      <Link to="/keys" className={link}>
+      <Link to="/keys" onClick={close} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
         Keys
       </Link>
-      <Link to="/settings" className={link}>
+      <Link to="/settings" onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />
         Settings
       </Link>
       {(role === "admin" || role === "primary_admin") && (
-        <Link to="/admin/users" className={link}>
+        <Link to="/admin/users" onClick={close} className={link}>
           <Shield size={16} aria-hidden className="text-muted" />
           Admin
         </Link>
