@@ -191,6 +191,11 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// scope; a provider that is unavailable leaves its vaults to the words, and the result says so in its reason.
     /// Notes whose current version isn't indexed yet count as pending, and so do notes embedded with another model:
     /// their vectors don't compare with the query's, so they are skipped until re-embedded.
+    /// <para>
+    /// The cosines of two providers' models end up in one list as they are, though they aren't on one scale. Measured
+    /// (docs/notes-search-external.md), that costs about a query of 37 against the better model alone, and
+    /// standardising each model's cosines didn't do better.
+    /// </para>
     /// </summary>
     public async Task<Kumbu.Core.Search.SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct)
     {

@@ -61,6 +61,21 @@ uv run --extra compare run_eval.py --model-dir models --compare   # plus other m
 sentence-transformers, bge-m3, multilingual-e5-large-instruct, multilingual-e5-base and qwen3-embedding-0.6b.
 Embedding the 238 sections takes about 6 s (arctic-m) or 15 s (arctic-l) on a CPU.
 
+An external provider with the OpenAI embeddings API runs as the server's `openai-compatible` driver calls it. The key
+is read from a file (`--openai-key-file`, or `$KUMBU_TEST_TENSORX_KEY_FILE`), never given on the command line:
+
+```sh
+KUMBU_TEST_TENSORX_KEY_FILE=~/keys/.tensorx-api-key uv run run_eval.py --model-dir models --models arctic-l \
+  --openai-url https://api.tensorx.ai/v1 --openai-model qwen/qwen3-embedding-8b --openai-variants 1024 1024+prompt \
+  --mixed arctic-l "qwen3-embedding-8b@1024 +prompt"
+```
+
+Each variant is the dimensions to ask for (`0`: the model's own), `+prompt` puts Qwen3-Embedding's query instruction
+before the queries. The provider's vectors are kept in `cache/` (not committed: it holds the corpus' vectors), so a
+second run sends only what is new. `--mixed A B` splits the corpus into vaults (its top-level folders), embeds every
+other one with B and the rest with A, and ranks across them as the server does; `docs/notes-search-external.md`
+has the results of 25 October 2026.
+
 The tables go to the terminal; `results.json` has the same numbers plus the rank of the gold section for every query
 (`results*.json` is not committed).
 

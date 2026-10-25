@@ -249,6 +249,33 @@ public sealed class OpenAiCompatibleDriverTests
         Assert.Empty(rig.Handler.Requests);
     }
 
+    /// <summary>The real TensorX API, where a key file is given (KUMBU_TEST_TENSORX_KEY_FILE): meaning across languages,
+    /// with the settings the README suggests. The key is read from the file and goes nowhere but the request.</summary>
+    [Fact]
+    public async Task TensorX_ranks_by_meaning()
+    {
+        var keyFile = Environment.GetEnvironmentVariable("KUMBU_TEST_TENSORX_KEY_FILE");
+        Assert.SkipUnless(keyFile is not null && File.Exists(keyFile), "KUMBU_TEST_TENSORX_KEY_FILE not set");
+
+        var options = new EmbeddingProviderOptions
+        {
+            Driver = EmbeddingDrivers.OpenAiCompatible, BaseUrl = "https://api.tensorx.ai/v1", Model = "qwen/qwen3-embedding-8b", ApiKeyFile = keyFile,
+            Dimensions = 1024, QueryPrompt = "Instruct: Given a search query, retrieve the note sections that answer it\nQuery: ",
+        };
+        Assert.Empty(KumbuOptionsValidator.ProviderFailures("tensorx", options));
+        var log = new CapturedLog();
+        using var http = new HttpClient();
+        var driver = new OpenAiCompatibleDriver("tensorx", options, EmbeddingProviderOptions.ReadKey(keyFile), http, log.CreateLogger("driver"));
+
+        var docs = await driver.EmbedAsync(["Katzen, Hunde, Hühner und Enten leben auf dem Hof.", "The gate service checks the rules at the entrance."], query: false, Ct);
+        var query = (await driver.EmbedAsync(["animals on a farm"], query: true, Ct))[0];
+
+        Assert.Equal(1024, driver.Dimensions);
+        Assert.True(Kumbu.Server.Search.Vectors.Dot(query, docs[0]) > Kumbu.Server.Search.Vectors.Dot(query, docs[1]) + 0.1);
+        Assert.Equal(1.0, Kumbu.Server.Search.Vectors.Dot(docs[0], docs[0]), 3);
+        Assert.DoesNotContain(EmbeddingProviderOptions.ReadKey(keyFile)!, string.Join("\n", log.Lines));
+    }
+
     [Fact]
     public async Task Neither_the_key_nor_a_text_reaches_the_log_or_an_error()
     {
