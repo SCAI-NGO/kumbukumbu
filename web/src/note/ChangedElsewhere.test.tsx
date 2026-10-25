@@ -140,6 +140,32 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(document.querySelector("[data-changed]")).toHaveTextContent("Second, changed by liz.");
   });
 
+  it("tries each new version once when reading it fails, rather than asking again and again", async () => {
+    setAutoRefresh(true);
+    texts.v3 = "# Plan\n\nThird.\n";
+    const server = newServer();
+    server.failNotes = true;
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2");
+    backToThePage();
+    await waitFor(() => expect(server.noteReads).toBe(2));
+    await settle();
+    backToThePage();
+    await settle();
+
+    expect(server.noteReads).toBe(2);
+    expect(screen.getByText("Second.")).toBeInTheDocument();
+
+    writeElsewhere(server, "v3");
+    backToThePage();
+    await waitFor(() => expect(server.noteReads).toBe(3));
+    await settle();
+    expect(server.noteReads).toBe(3);
+  });
+
   it("says when the note was moved or removed elsewhere", async () => {
     const server = newServer();
     api(server);

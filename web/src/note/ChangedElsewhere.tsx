@@ -24,8 +24,9 @@ export function useChangedElsewhere(
   const busy =
     useIsMutating({ mutationKey: ["save", path] }) + useIsMutating({ mutationKey: ["restore"] }) + useIsFetching({ queryKey: ["note", path], exact: true }) > 0;
   const data = poll.data;
+  // A failed poll keeps its last answer, which says nothing about now.
   const change =
-    !busy && shown && data && data.path === path && data.version !== shown.version && Date.parse(data.lastWriteAt) > Date.parse(shown.lastWriteAt) ? data : null;
+    !busy && !poll.isError && shown && data && data.path === path && data.version !== shown.version && Date.parse(data.lastWriteAt) > Date.parse(shown.lastWriteAt) ? data : null;
   const gone = !busy && poll.error instanceof HttpError && poll.error.status === 404;
   return { change, gone };
 }

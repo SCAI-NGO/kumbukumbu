@@ -109,7 +109,8 @@ export default function NoteView({ path }: { path: string }) {
       const top = scroller.current?.scrollTop ?? 0;
       const fresh = await note.refetch();
       refreshing.current = false;
-      if (!fresh.data) return;
+      // A failed read keeps the version shown; it is not tinted as if it were the new one.
+      if (fresh.isError || !fresh.data || fresh.data.version === note.data.version) return;
       keepScroll.current = top;
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
       setUpdatedBy(auto ? writer : null);
@@ -125,8 +126,12 @@ export default function NoteView({ path }: { path: string }) {
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();
   const newer = elsewhere.change;
+  // Each new version is taken once: a read that fails is not repeated on every render, only for the next version.
+  const tried = useRef(new Set<string>());
   useEffect(() => {
-    if (autoRefresh && newer) void refresh(writerOf(newer.lastWriter), true);
+    if (!autoRefresh || !newer || tried.current.has(`${newer.version}@${newer.lastWriteAt}`)) return;
+    tried.current.add(`${newer.version}@${newer.lastWriteAt}`);
+    void refresh(writerOf(newer.lastWriter), true);
   }, [autoRefresh, newer, refresh]);
   useEffect(() => {
     if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
