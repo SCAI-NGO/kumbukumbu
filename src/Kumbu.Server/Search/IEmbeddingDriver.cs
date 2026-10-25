@@ -97,6 +97,12 @@ public sealed class EmbeddingProviders
 public static class EmbeddingDrivers
 {
     /// <summary>The internal model's driver; not available for <c>Kumbu:Embeddings:Providers</c>.</summary>
+    /// <remarks>
+    /// Not in <see cref="Factories"/> on purpose: there is exactly one <see cref="OnnxEmbedder"/>, a hosted service that
+    /// downloads, checks and loads the model at startup, configured by <c>Kumbu:Search</c> and registered in Program.cs.
+    /// A second onnx provider would load a second model of 0.6 to 1.1 GB into the same process; until there is a reason
+    /// for that, the validator refuses <c>onnx</c> as an external provider's driver.
+    /// </remarks>
     public const string Onnx = "onnx";
 
     public const string OpenAiCompatible = "openai-compatible";
