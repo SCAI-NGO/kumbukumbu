@@ -17,5 +17,7 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
-      - run: dotnet build --configuration Release
+      # Locked: a project whose packages differ from its packages.lock.json fails here.
+      - run: dotnet restore --locked-mode
+      - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build
