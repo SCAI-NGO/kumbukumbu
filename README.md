@@ -50,7 +50,7 @@ Every request under `/mcp` and `/api` needs a **caller**, one of: a **session** 
 
 ### Accounts, API keys and the REST API
 
-Users sign in with a username and a password (at least 12 characters, not a common one) and own their vaults. Each user has a **user key** that opens their vaults; the password and the **recovery key** shown once at sign-up are two ways to unwrap it. An admin sees who exists and how many vaults and bytes they hold, never a note, and cannot reset a password: lose both password and recovery key, and the vaults are gone. Deactivating a user ends their sessions and revokes their API keys at once. A new recovery key (`POST /api/recovery-key`, body `{"currentPassword": …}`) needs the current password, as a password change needs the old one, so a stolen session alone can't make a recovery key and use it to set a new password; a wrong password answers `400`, like a wrong old password at `POST /api/password`. **Changing the password does not revoke API keys**, and the old recovery key keeps working too: after a suspected compromise, change the password, check `GET /api/keys` and revoke every key you don't recognise (or all of them), and make a new recovery key. How this works and why: CONCEPTS.md, chapter 10.
+Users sign in with a username and a password (at least 12 characters, not a common one) and own their vaults. Each user has a **user key** that opens their vaults; the password and the **recovery key** shown once at sign-up are two ways to unwrap it. An admin sees who exists and how many vaults and bytes they hold, never a note, and cannot reset a password: lose both password and recovery key, and the vaults are gone. Deactivating a user ends their sessions and revokes their API keys at once. A new recovery key (`POST /api/recovery-key`, body `{"currentPassword": …}`) needs the current password, as a password change needs the old one, so a stolen session alone can't make a recovery key and use it to set a new password; a wrong password answers `400`, like a wrong old password at `POST /api/password`. **Changing the password revokes every API key** unless you untick "Also revoke all API keys" (`POST /api/password` with `"revokeApiKeys": false`; left out, it is `true`); it does not replace the recovery key. **A recovery** (`POST /api/recover`) always revokes every API key and replaces the recovery key: the used one stops working, and the answer, `{"recoveryKey": …}`, carries the new one, shown once. After a suspected compromise, change the password with the box ticked, give the agents you still use new keys, and make a new recovery key. How this works and why: CONCEPTS.md, chapter 10.
 
 **The first admin.** On a public instance there is no seeded user. Set `KUMBU_PUBLIC_URL` (the address users reach the server at, e.g. `https://kumbu.example.org`, no path), start the server and run:
 
@@ -70,7 +70,7 @@ claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Author
 
 **Security notes for a public instance:**
 
-- Without `KUMBU_TRUSTED_PROXY`, the server sees the proxy's address for every client. Behind Traefik that means all clients share one IP, so one attacker's wrong keys lock **all** bearer users out for a minute. A CDN in front of Traefik has the same effect, since the server then sees the CDN's addresses. Set `KUMBU_TRUSTED_PROXY=true` only when the proxy is the container's only way in (no published port): the server then takes the client address from the last `X-Forwarded-For` entry the proxy appended. It refuses to start with it unless `KUMBU_PUBLIC_URL` is set.
+- Without `KUMBU_TRUSTED_PROXY`, the server sees the proxy's address for every client. Behind Traefik that means all clients share one IP, so one attacker's wrong keys lock **all** bearer users out for a minute. A CDN in front of Traefik has the same effect, since the server then sees the CDN's addresses. Set `KUMBU_TRUSTED_PROXY=true` only when the proxy is the container's only way in (no published port): the server then takes the client address from the last `X-Forwarded-For` entry the proxy appended, and whether the request came over https from `X-Forwarded-Proto` (for `Strict-Transport-Security`). It refuses to start with it unless `KUMBU_PUBLIC_URL` is set.
 - Sign-in is limited to 5 attempts a minute per username and 20 per client network. That also means anyone who knows a username can lock that user out of signing in for a minute. This is a deliberate trade-off against guessing passwords; bearer keys and sessions already issued are not affected.
 - Checking the current password, for a password change or a new recovery key, is limited to 5 attempts a minute per username (the two share the budget, apart from sign-in's), so a stolen session can't guess the password faster than signing in could.
 - Argon2 (64 MiB and a core per run) runs at most once per core at a time across the server; further sign-ins wait their turn, so many sign-ins from many addresses at once slow down instead of exhausting memory.
@@ -100,6 +100,8 @@ docker compose up --build
 curl localhost:8080/healthz       # ok
 docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'   # store these keys safely
 ```
+
+Building from source needs the override `compose.build.yaml`: `.envrc` selects it (`export COMPOSE_FILE=compose.yaml:compose.build.yaml`; run `direnv allow`), and without direnv put the same `COMPOSE_FILE=…` line in `.env` (it is in `.env.example`). Without it, `compose.yaml` alone pulls the published image `ghcr.io/scai-ngo/kumbukumbu:latest` (see Images and releases), and `--build` has nothing to build. The commands below that say `--build` assume the override.
 
 For the web app, set `KUMBU_PUBLIC_URL` in `.env` to the address you open it at (e.g. `http://localhost:8080`; run `docker compose up -d` again so it takes effect), then create the first admin and open the link it prints, `…/join#<code>`:
 
@@ -135,7 +137,7 @@ docker compose up --build -d     # rebuild the image; a plain restart keeps runn
 
 Then start a new client session. Without the rebuild, a restarted client loads the old server's tool descriptions; without the new session, the agent keeps working from the old command list.
 
-Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (optional; if set, at least 16 characters; without it the dev token opens nothing, and seeding and recovery keys are skipped), `Kumbu:PublicUrl` (`KUMBU_PUBLIC_URL`; an absolute http(s) address without a path; invitation links are built from it, `bootstrap-admin` needs it, and it is required when `Kumbu:Proxy:Trusted` is set), `Kumbu:Proxy:Trusted` (`KUMBU_TRUSTED_PROXY`, default false; behind a reverse proxy such as Traefik, take the client IP for rate limits from the last `X-Forwarded-For` entry; set it only when the proxy is the server's only way in, since any peer is trusted as the proxy; the server refuses to start with it unless `Kumbu:PublicUrl` is set, since the web app's requests are checked against that address), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose), `Kumbu:Search:Model` (`arctic-m`, the default, or `arctic-l`: 613 MB and a server of about 1 GB at about 26 ms per section, or 1.13 GB and about 3 GB at about 49 ms, measured on the test stack; each is kept in its own folder below the model path, and switching re-embeds every note when its vault is next unlocked, while search ranks the notes not yet re-embedded by words; the other model's folder stays, so switching back needs no download: `docker compose exec kumbu rm -r /models/arctic-l` frees it) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning. With Compose, set `KUMBU_DEV_TOKEN` (may be empty) and optionally `KUMBU_PUBLIC_URL`, `KUMBU_VAULTS`, `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_TRUSTED_PROXY`, `KUMBU_CHECKPOINT_LIMIT`, `KUMBU_SEARCH` and `KUMBU_SEARCH_MODEL` in `.env`.
+Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (optional; if set, at least 16 characters; without it the dev token opens nothing, and seeding and recovery keys are skipped), `Kumbu:PublicUrl` (`KUMBU_PUBLIC_URL`; an absolute http(s) address without a path; invitation links are built from it, `bootstrap-admin` needs it, and it is required when `Kumbu:Proxy:Trusted` is set; if it is https, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`, so pointing it at an apex domain such as `https://example.org` pins every subdomain of it to https for a year), `Kumbu:Proxy:Trusted` (`KUMBU_TRUSTED_PROXY`, default false; behind a reverse proxy such as Traefik, take the client IP for rate limits from the last `X-Forwarded-For` entry and the scheme from `X-Forwarded-Proto`; set it only when the proxy is the server's only way in, since any peer is trusted as the proxy; the server refuses to start with it unless `Kumbu:PublicUrl` is set, since the web app's requests are checked against that address), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose), `Kumbu:Search:Model` (`arctic-m`, the default, or `arctic-l`: 613 MB and a server of about 1 GB at about 26 ms per section, or 1.13 GB and about 3 GB at about 49 ms, measured on the test stack; each is kept in its own folder below the model path, and switching re-embeds every note when its vault is next unlocked, while search ranks the notes not yet re-embedded by words; the other model's folder stays, so switching back needs no download: `docker compose exec kumbu rm -r /models/arctic-l` frees it) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning. With Compose, set `KUMBU_DEV_TOKEN` (may be empty) and optionally `KUMBU_PUBLIC_URL`, `KUMBU_VAULTS`, `KUMBU_IMAGE` (server image, default `ghcr.io/scai-ngo/kumbukumbu:latest`; e.g. a pinned version), `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_TRUSTED_PROXY`, `KUMBU_CHECKPOINT_LIMIT`, `KUMBU_SEARCH` and `KUMBU_SEARCH_MODEL` in `.env`.
 
 ## Development
 
@@ -172,6 +174,34 @@ pnpm -C web gen:api   # regenerate src/api/schema.d.ts from a running server
 ```
 
 The dev server proxies to `http://localhost:8083`, so start the stack with `KUMBU_PORT=8083` (or change `server` in `web/vite.config.ts`). The server refuses a POST, PUT or DELETE from a browser unless its `Origin` header matches `KUMBU_PUBLIC_URL` (or, when that is unset, the request's own host). The proxy keeps the browser's host, so the Vite page at `:5173` fails with `403` ("This request didn't come from Kumbu's own pages") if `KUMBU_PUBLIC_URL` points elsewhere. For development either leave `KUMBU_PUBLIC_URL` empty or set it to `http://localhost:5173`; `bootstrap-admin` needs it, so for the first admin use the second and open the printed link as `http://localhost:5173/join#…`. Rebuild with `docker compose up -d --build` after changing it. `gen:api` reads `http://localhost:8083/api/openapi.json`; set `KUMBU_OPENAPI_URL` to use another address.
+
+## Images and releases
+
+GitHub Actions (`.github/workflows/docker.yml`) builds the image from the root `Dockerfile` and publishes it to `ghcr.io/scai-ngo/kumbukumbu`:
+
+| Event | Result | Tags |
+| --- | --- | --- |
+| Pull request | built, not pushed | none |
+| Push to `master` | built, pushed, signed | `master`, `sha-<commit>` |
+| Tag `vX.Y.Z` | built, pushed, signed | `X.Y.Z`, `X.Y`, `X`, `sha-<commit>`, `latest` |
+
+`:latest` moves **only** on a `v*.*.*` tag, never on a push to `master`, so a server that follows `:latest` (Komodo on the VPS does) updates on a deliberate release, not on every merge. Builds that are not a tag report themselves as `<version.txt>-pre.<run number>`; `version.txt` holds the next release's base version. The image carries its version in `/app/VERSION`: `docker run --rm --entrypoint cat ghcr.io/scai-ngo/kumbukumbu:latest /app/VERSION`.
+
+To release, set `version.txt` to the next version if it has changed, merge to `master`, and tag:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+A new GHCR package is private. For a server to pull it without credentials, make it public once (GitHub, the organisation's Packages, `kumbukumbu`, Package settings, Change visibility).
+
+Images are signed with cosign (keyless, through GitHub's OIDC identity). To verify one, with the tag or digest you pull:
+
+```sh
+cosign verify ghcr.io/scai-ngo/kumbukumbu:latest \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/SCAI-NGO/kumbukumbu/\.github/workflows/docker\.yml@'
+```
 
 ## More
 

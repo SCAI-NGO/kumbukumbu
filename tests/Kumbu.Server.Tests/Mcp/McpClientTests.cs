@@ -398,18 +398,19 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var users = new Kumbu.Server.Accounts.UserCatalog(
             app.Database,
             new Kumbu.Server.Accounts.Argon2Kdf(new Kumbu.Server.Accounts.Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)),
+            app.Services.GetRequiredService<Kumbu.Server.Accounts.ApiKeys>(),
             TimeProvider.System,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Kumbu.Server.Accounts.UserCatalog>.Instance);
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
         await users.CreateAsync(username, "correct horse battery staple", Kumbu.Server.Accounts.Roles.User, Ct);
-        var (user, userKey, _) = (await users.TrySignInAsync(username, "correct horse battery staple", Ct))!.Value;
+        var (user, userKey, readAt) = (await users.TrySignInAsync(username, "correct horse battery staple", Ct))!.Value;
         var catalog = app.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
         var reading = (await catalog.CreateForUserAsync("Reading", user.Id, userKey, Ct)).Id;
         var writing = (await catalog.CreateForUserAsync("Writing", user.Id, userKey, Ct)).Id;
         var keys = app.Services.GetRequiredService<Kumbu.Server.Accounts.ApiKeys>();
-        var (writer, _) = await keys.CreateAsync(user, userKey, "seeder", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Write }, Ct);
+        var (writer, _) = await keys.CreateAsync(user, userKey, readAt, "seeder", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Write }, Ct);
         var (reader, _) = await keys.CreateAsync(
-            user, userKey, "reader",
+            user, userKey, readAt, "reader",
             new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Read, [writing] = Kumbu.Server.Accounts.KeyRight.Write },
             Ct);
         string version;

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Buffers.Text;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -21,8 +23,11 @@ public sealed class SessionTests(MongoFixture fixture)
 
     private IMongoCollection<UserSlotDocument> Slots => _db.GetCollection<UserSlotDocument>("user_slots");
 
+    private ApiKeys Keys() =>
+        new(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<ApiKeys>.Instance);
+
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
 
     private Sessions Sessions() => new(_db, _time);
 
@@ -209,7 +214,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await Users().ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
         // A sign-in in the very millisecond of the change is refused too (see the next test), so a moment later.
@@ -226,7 +231,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await Users().ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         // As if the server had crashed between the new password slot and the deletion of the sessions.
         await Slots.InsertOneAsync(leftOver, cancellationToken: Ct);
 
@@ -243,7 +248,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
+        Assert.NotNull(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
         await Slots.InsertOneAsync(leftOver, cancellationToken: Ct);
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
@@ -260,7 +265,7 @@ public sealed class SessionTests(MongoFixture fixture)
         _time.Advance(TimeSpan.FromSeconds(1));
 
         // ... while the victim changes the password, which ends every session there is so far ...
-        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         _time.Advance(TimeSpan.FromSeconds(1));
 
         // ... and only then starts its session.
@@ -278,7 +283,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var (user, key, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
 
         // The clock stands still: MongoDB keeps milliseconds only, so a read and a change within one look alike.
-        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         var secret = await Sessions().StartAsync(user, key, readAt, Ct);
 
         var changedAt = (await _db.GetCollection<UserDocument>("users").Find(u => u.Id == user.Id).SingleAsync(Ct)).CredentialsChangedAt;

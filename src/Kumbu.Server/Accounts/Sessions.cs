@@ -61,10 +61,11 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     }
 
     /// <summary>
-    /// The user and their user key, or null if the session is unknown, ended, idle too long, past its absolute
-    /// limit, older than the user's last password change or recovery, or the user is inactive.
+    /// The user, their user key and when the session's credential was read (its <c>createdAt</c>), or null if
+    /// the session is unknown, ended, idle too long, past its absolute limit, older than the user's last password
+    /// change or recovery, or the user is inactive.
     /// </summary>
-    public async Task<(User User, byte[] UserKey)?> ResolveAsync(string secret, CancellationToken ct)
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct)
     {
         if (Decode(secret) is not { } bytes) return null;
         await EnsureReadyAsync(ct);
@@ -112,7 +113,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
                 cancellationToken: ct);
         }
 
-        return (user.ToUser(), userKey);
+        return (user.ToUser(), userKey, slot.CreatedAt);
     }
 
     /// <summary>Signs out: the session's slot is deleted, so its secret opens nothing any more.</summary>

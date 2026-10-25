@@ -12,7 +12,7 @@ function setup() {
   const onContinue = vi.fn();
   const router = createMemoryRouter(
     [
-      { path: "/", element: <RecoveryKeyReveal value={key} username="ada" onContinue={onContinue} /> },
+      { path: "/", element: <RecoveryKeyReveal value={key} onContinue={onContinue} /> },
       { path: "/elsewhere", element: <p>Elsewhere</p> },
     ],
     { future: routerFuture },
@@ -85,13 +85,24 @@ describe("RecoveryKeyReveal", () => {
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
-  it("puts the key into the downloaded file", async () => {
+  it("puts the key into the downloaded file, but neither the username nor the instance", async () => {
     let blob: Blob | undefined;
+    let name: string | undefined;
     vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: (b: Blob) => ((blob = b), "blob:kumbu/2"), revokeObjectURL: () => {} }));
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      name = this.download;
+    });
     setup();
     await userEvent.click(screen.getByRole("button", { name: "Download" }));
-    expect(await blob!.text()).toContain(key);
+
+    // A found file alone must not be enough to take the account over: it never says whose key it is or where.
+    expect(name).toBe("kumbu-recovery-key.txt");
+    const text = await blob!.text();
+    expect(text).toContain(key);
+    expect(text).toMatch(/together with your username/i);
+    expect(text).toMatch(/not on this device/);
+    expect(text).toMatch(/shown only once/);
+    expect(text).not.toContain(window.location.host || "localhost");
   });
 
   it("says so when copying fails, and doesn't count it as saved", async () => {

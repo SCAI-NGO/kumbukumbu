@@ -24,7 +24,7 @@ public sealed class AdminTests(MongoFixture fixture)
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
 
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
 
     private VaultCatalog Catalog() => new(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
 
@@ -125,8 +125,8 @@ public sealed class AdminTests(MongoFixture fixture)
         var otherSession = await Sessions().StartAsync(lea, key, _time.GetUtcNow().UtcDateTime, Ct);
         var vault = await Catalog().CreateForUserAsync("Notes", lea.Id, key, Ct);
         var keys = Keys();
-        var (laptop, _) = await keys.CreateAsync(lea, key, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
-        var (phone, _) = await keys.CreateAsync(lea, key, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
+        var (laptop, _) = await keys.CreateAsync(lea, key, _time.GetUtcNow().UtcDateTime, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (phone, _) = await keys.CreateAsync(lea, key, _time.GetUtcNow().UtcDateTime, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
         _time.Advance(TimeSpan.FromSeconds(1));
 
         Assert.True(await Admin().SetActiveAsync(admin, lea.Id, false, Ct));
@@ -151,7 +151,7 @@ public sealed class AdminTests(MongoFixture fixture)
         _time.Advance(TimeSpan.FromSeconds(1));
         var (_, freshKey, readAt) = (await Users().TrySignInAsync("lea", Password, Ct))!.Value;
         Assert.NotNull(await Sessions().ResolveAsync(await Sessions().StartAsync(lea, freshKey, readAt, Ct), Ct));
-        await keys.CreateAsync(lea, freshKey, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        await keys.CreateAsync(lea, freshKey, readAt, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public sealed class AdminTests(MongoFixture fixture)
         var admin = await UserAsync("anna", Roles.Admin);
         var (lea, key, session) = await SignedInAsync("lea");
         var vault = await Catalog().CreateForUserAsync("Notes", lea.Id, key, Ct);
-        var (laptop, _) = await Keys().CreateAsync(lea, key, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (laptop, _) = await Keys().CreateAsync(lea, key, _time.GetUtcNow().UtcDateTime, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
         _time.Advance(TimeSpan.FromSeconds(1));
 
         Assert.True(await Admin().SetActiveAsync(admin, lea.Id, true, Ct));
@@ -198,18 +198,26 @@ public sealed class AdminTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task A_key_created_while_the_user_was_inactive_is_revoked_on_reactivation()
+    public async Task A_key_creation_landing_after_a_deactivation_is_refused()
     {
-        // The race: a key-creation request whose session resolved just before the deactivation inserts its key after it.
+        // The race: a key-creation request whose session resolved just before the deactivation reaches the
+        // database after it. Its transaction checks the user again (active, credentials unchanged since the sign-in).
         var admin = await UserAsync("anna", Roles.Admin);
         var (lea, key, _) = await SignedInAsync("lea");
+        var readAt = _time.GetUtcNow().UtcDateTime;
         var vault = await Catalog().CreateForUserAsync("Notes", lea.Id, key, Ct);
+        _time.Advance(TimeSpan.FromSeconds(1));
         await Admin().SetActiveAsync(admin, lea.Id, false, Ct);
-        var (late, _) = await Keys().CreateAsync(lea, key, "late", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
 
+        await Assert.ThrowsAsync<CredentialsChangedException>(
+            () => Keys().CreateAsync(lea, key, readAt, "late", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct));
+
+        // Reactivating doesn't let the old sign-in make one either: the deactivation stamped the credentials.
+        _time.Advance(TimeSpan.FromSeconds(1));
         await Admin().SetActiveAsync(admin, lea.Id, true, Ct);
-
-        Assert.Null(await Keys().ResolveAsync(late, Ct));
+        await Assert.ThrowsAsync<CredentialsChangedException>(
+            () => Keys().CreateAsync(lea, key, readAt, "late", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct));
+        Assert.Equal(0, await _db.GetCollection<ApiKeyDocument>("api_keys").CountDocumentsAsync(k => k.User == lea.Id, cancellationToken: Ct));
         Assert.Equal(0, await _db.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Kind == SlotDocument.ApiKey, cancellationToken: Ct));
     }
 

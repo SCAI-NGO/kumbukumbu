@@ -31,7 +31,9 @@ public sealed record JoinedView(UserView User, string RecoveryKey);
 
 public sealed record RecoverRequest(string Username, string RecoveryKey, string NewPassword);
 
-public sealed record ChangePasswordRequest(string OldPassword, string NewPassword);
+/// <summary><c>revokeApiKeys</c> also revokes every API key of the user; true when left out, so an older client
+/// gets the safe behaviour: a key made from a stolen session doesn't outlive the password change.</summary>
+public sealed record ChangePasswordRequest(string OldPassword, string NewPassword, bool RevokeApiKeys = true);
 
 /// <summary>Always true: a changed password ends every session, this one too, so the web app signs in again.</summary>
 public sealed record PasswordChangedView(bool SignedOut);
@@ -143,15 +145,13 @@ public static class AccountApi
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
     }
 
-    private static async Task<NoContent> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>
+    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct))
-        {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
-        }
-
-        return TypedResults.NoContent();
+        var recoveryKey = await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
+            ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
+        return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
     private static Ok<SessionView> Session(RequestCaller caller) =>
@@ -169,7 +169,7 @@ public static class AccountApi
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await users.ChangePasswordAsync(user.Id, caller.UserKey!, body.OldPassword, body.NewPassword, ct))
+        if (!await users.ChangePasswordAsync(user, caller.UserKey!, body.OldPassword, body.NewPassword, body.RevokeApiKeys, ct))
         {
             throw ApiErrors.BadRequest("The current password is wrong.");
         }
@@ -213,7 +213,7 @@ public static class AccountApi
             vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
         }
 
-        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, body.Name, vaults, ct);
+        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 

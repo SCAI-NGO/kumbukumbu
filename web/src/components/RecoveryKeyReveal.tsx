@@ -7,9 +7,10 @@ import { CopyButton, LeaveDialog, useLeaveGuard } from "./shownOnce";
 /**
  * The recovery key, shown once. Continue unlocks only after the key was downloaded or copied and the user ticked
  * that it is stored; until it was downloaded or copied, leaving the page (reload, close, back, a link) asks once.
- * The key stays in component state: never in storage, a log or the URL.
+ * The key stays in component state: never in storage, a log or the URL. The downloaded file holds the key and how
+ * to keep it, but neither the username nor the instance: a file found on its own is not enough to take the account over.
  */
-export function RecoveryKeyReveal({ value, username, onContinue }: { value: string; username: string; onContinue(): void }) {
+export function RecoveryKeyReveal({ value, onContinue }: { value: string; onContinue(): void }) {
   const checkId = useId();
   const [saved, setSaved] = useState(false);
   const [stored, setStored] = useState(false);
@@ -22,11 +23,15 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
   };
 
   function download() {
-    const text = `Kumbu² recovery key for ${username}\n\n${value}\n\nWith it you can set a new password if you forget yours. Nobody else can.\n`;
+    const text =
+      `Kumbu² recovery key\n\n${value}\n\n` +
+      "Keep it somewhere safe, such as a password manager, and not on this device.\n" +
+      "Together with your username it sets a new password and opens your notes, so whoever has both has your account.\n" +
+      "It is shown only once: Kumbu² can't show it again.\n";
     const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `kumbu-recovery-key-${username}.txt`;
+    link.download = "kumbu-recovery-key.txt";
     link.click();
     // Not in the same tick: Safari can lose the download when the URL goes before it started.
     setTimeout(() => URL.revokeObjectURL(url), 1000);

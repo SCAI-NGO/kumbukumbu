@@ -77,7 +77,6 @@ function JoinForm({ code, role }: { code: string; role: string }) {
       <AuthScreen title="Your recovery key">
         <RecoveryKeyReveal
           value={joined.recoveryKey}
-          username={joined.user.username}
           onContinue={() => {
             join.reset();
             const view = { user: joined.user, previousSignInAt: null };

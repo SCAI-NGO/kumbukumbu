@@ -41,6 +41,10 @@ public static class ApiErrors
             if (e.RetryAfter is { } retryAfter) SetRetryAfter(context.HttpContext, retryAfter);
             return Result(e.Status, e.Message);
         }
+        catch (CredentialsChangedException e)
+        {
+            return Result(StatusCodes.Status401Unauthorized, e.Message);
+        }
         catch (NotPermittedException e)
         {
             return Result(StatusCodes.Status403Forbidden, e.Message);

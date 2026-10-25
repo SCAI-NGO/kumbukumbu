@@ -64,7 +64,7 @@ public sealed class RestClient
     public async Task<string> KeyAsync(string name, KeyRight right)
     {
         var vault = (await _api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(User.Id, UserKey, Ct)).Single(v => v.Name == Vault);
-        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(User, UserKey, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct);
+        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct);
         return key;
     }
 

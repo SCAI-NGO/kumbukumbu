@@ -13,18 +13,34 @@ public sealed class SessionOnlyMetadata
 /// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints.</summary>
 public static class Security
 {
+    /// <summary>
+    /// Only the app's own scripts, styles, images and connections. <c>base-uri</c> and <c>form-action</c> don't fall
+    /// back to <c>default-src</c>: no <c>&lt;base&gt;</c> may redirect relative URLs, and forms may only post to the
+    /// app (the web app's forms submit through fetch anyway). <c>object-src 'none'</c> is stricter than the
+    /// <c>'self'</c> it would inherit: no plug-in content at all.
+    /// </summary>
     public const string ContentSecurityPolicy =
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
+        "base-uri 'none'; form-action 'self'; object-src 'none'";
+
+    /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
+    public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
+
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host is "127.0.0.1" or "[::1]";
 
     /// <summary>
     /// The security headers, on every response (API, MCP, static files and errors alike), and
     /// <c>Cache-Control: no-store</c> on the API's. Added when the response
-    /// starts, so that a handler clearing the response doesn't drop them. HSTS only when users reach the instance
-    /// over https: on plain http a browser ignores it, and on localhost it would pin https for every local port.
+    /// starts, so that a handler clearing the response doesn't drop them. HSTS when the public URL is https or the
+    /// request came over https as the app sees it: behind a trusted proxy that is <c>X-Forwarded-Proto</c>
+    /// (see Program.cs), otherwise the connection itself, except to a loopback host (as ASP.NET's own UseHsts):
+    /// pinned there, the browser would force https on every local port for a year. Never on plain http: a browser
+    /// ignores it there, and on a plain-http localhost it would pin https for every local port.
     /// </summary>
     public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app, string? publicUrl)
     {
-        var hsts = publicUrl is not null && publicUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        var httpsPublicUrl = publicUrl is not null && publicUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         return app.Use((context, next) =>
         {
             context.Response.OnStarting(() =>
@@ -33,7 +49,7 @@ public static class Security
                 headers.XContentTypeOptions = "nosniff";
                 headers["Referrer-Policy"] = "same-origin";
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
-                if (hsts) headers.StrictTransportSecurity = "max-age=31536000";
+                if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
                 if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";

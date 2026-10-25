@@ -19,7 +19,8 @@ services:
       retries: 10
 
   kumbu:
-    build: .
+    # The published image; for local development compose.build.yaml adds `build: .` (see .envrc).
+    image: ${KUMBU_IMAGE:-ghcr.io/scai-ngo/kumbukumbu:latest}
     ports:
       # Localhost only. To reach it from other machines, drop "127.0.0.1:" on purpose:
       # traffic is plain HTTP and the only guard is a key.

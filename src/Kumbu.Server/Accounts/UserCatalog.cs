@@ -11,7 +11,7 @@ namespace Kumbu.Server.Accounts;
 /// the keys of their vaults; it is itself wrapped by the password (Argon2id) and by the recovery key. MongoDB
 /// holds the user key only wrapped, and never a password or recovery key.
 /// </summary>
-public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider time, ILogger<UserCatalog> log)
+public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, TimeProvider time, ILogger<UserCatalog> log)
 {
     private const string KeyIdLabel = "kumbu/v1/user-key-id";
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
@@ -114,16 +114,18 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     }
 
     /// <summary>
-    /// Forgot password: with the recovery key, sets a new password and ends every session of the user. False if
-    /// the user or key is unknown or wrong; <see cref="ArgumentException"/> if the new password is refused.
+    /// Forgot password: with the recovery key, sets a new password, ends every session of the user, revokes every
+    /// API key and replaces the recovery key, so the used one opens nothing any more. Returns the new recovery key,
+    /// formatted for humans; null if the user or key is unknown or wrong; <see cref="ArgumentException"/> if the
+    /// new password is refused.
     /// </summary>
-    public async Task<bool> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
+    public async Task<string?> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
     {
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
-        if (!RecoveryKey.TryParse(recoveryKey, out var key)) return false;
+        if (!RecoveryKey.TryParse(recoveryKey, out var key)) return null;
         var user = NormaliseUsername(username) is { } name ? await Users.Find(u => u.Username == name && u.Active).FirstOrDefaultAsync(ct) : null;
-        if (user is null || await FindSlotAsync(user.Id, UserSlotDocument.Recovery, ct) is not { } slot) return false;
+        if (user is null || await FindSlotAsync(user.Id, UserSlotDocument.Recovery, ct) is not { } slot) return null;
 
         byte[] userKey;
         try
@@ -132,30 +134,35 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         }
         catch (CryptographicException)
         {
-            return false;
+            return null;
         }
 
-        await SetPasswordAsync(user.Id, userKey, newPassword, ct);
-        log.LogInformation("User {Username} set a new password with their recovery key", user.Username);
-        return true;
+        // The new recovery slot replaces exactly the one just opened, together with the new password: of two
+        // recoveries racing with the same key only one gets through, and nobody is shown a key that doesn't work.
+        var newKey = RecoveryKey.New();
+        var replacement = new RecoveryReplacement(slot.Wrapped, RecoverySlot(user.Id, userKey, newKey));
+        if (!await SetPasswordAsync(user.ToUser(), userKey, newPassword, revokeApiKeys: true, ct, replacement)) return null;
+        log.LogInformation("User {Username} set a new password with their recovery key; the API keys are revoked and the recovery key replaced", user.Username);
+        return RecoveryKey.Format(newKey);
     }
 
     /// <summary>
     /// Replaces the password; false if <paramref name="oldPassword"/> is wrong or doesn't open
-    /// <paramref name="userKey"/>. Ends every session, as a changed password must.
+    /// <paramref name="userKey"/>. Ends every session, as a changed password must, and with
+    /// <paramref name="revokeApiKeys"/> revokes every API key of the user.
     /// </summary>
-    public async Task<bool> ChangePasswordAsync(string userId, byte[] userKey, string oldPassword, string newPassword, CancellationToken ct)
+    public async Task<bool> ChangePasswordAsync(User user, byte[] userKey, string oldPassword, string newPassword, bool revokeApiKeys, CancellationToken ct)
     {
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
-        if (await FindSlotAsync(userId, UserSlotDocument.Password, ct) is not { Salt: not null } slot
+        if (await FindSlotAsync(user.Id, UserSlotDocument.Password, ct) is not { Salt: not null } slot
             || await OpenPasswordSlotAsync(slot, oldPassword, ct) is not { } opened
             || !CryptographicOperations.FixedTimeEquals(opened, userKey))
         {
             return false;
         }
 
-        await SetPasswordAsync(userId, userKey, newPassword, ct);
+        await SetPasswordAsync(user, userKey, newPassword, revokeApiKeys, ct);
         return true;
     }
 
@@ -178,6 +185,18 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             return null;
         }
 
+        var recoveryKey = await ReplaceRecoveryKeyAsync(userId, userKey, ct);
+        log.LogInformation("User {Username} has a new recovery key", user.Username);
+        return recoveryKey;
+    }
+
+    /// <summary>
+    /// A new recovery key for <paramref name="userKey"/>, which the caller has checked is the user's. The slot is
+    /// replaced in one write, so there is always exactly one recovery slot: the old one until the write, the new
+    /// one after it.
+    /// </summary>
+    private async Task<string> ReplaceRecoveryKeyAsync(string userId, byte[] userKey, CancellationToken ct)
+    {
         var recoveryKey = RecoveryKey.New();
         var slot = RecoverySlot(userId, userKey, recoveryKey);
         await Slots.UpdateOneAsync(
@@ -185,7 +204,6 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             Builders<UserSlotDocument>.Update.Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
             new UpdateOptions { IsUpsert = true },
             ct);
-        log.LogInformation("User {Username} has a new recovery key", user.Username);
         return RecoveryKey.Format(recoveryKey);
     }
 
@@ -201,21 +219,70 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             : null;
     }
 
-    private async Task SetPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
+    /// <summary>The recovery slot that was opened (its sealed value) and the one to put in its place.</summary>
+    private sealed record RecoveryReplacement(byte[] Used, UserSlotDocument Slot);
+
+    /// <summary>
+    /// Sets the password, ends every session and, if asked, revokes every API key. With <paramref name="recovery"/>
+    /// the recovery slot is replaced in the same transaction as the password slot, only if it is still the one
+    /// that was opened; false (and no new password) if it isn't, or if a concurrent write got in the way.
+    /// </summary>
+    private async Task<bool> SetPasswordAsync(
+        User user, byte[] userKey, string password, bool revokeApiKeys, CancellationToken ct, RecoveryReplacement? recovery = null)
     {
+        var userId = user.Id;
         var slot = await PasswordSlotAsync(userId, userKey, password, ct);
         // Stamped before the new slot, so sessions of the old password are refused even if a crash leaves their
         // slots behind (a crash before the slot write only leaves the old password in place, signed out) ...
         await StampCredentialsChangedAsync(userId, ct);
-        await Slots.UpdateOneAsync(
-            s => s.User == userId && s.Kind == UserSlotDocument.Password,
-            Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
-            new UpdateOptions { IsUpsert = true },
-            ct);
+        // The keys go after the stamp, so a key whose creation raced it is either found here or refused (see
+        // ApiKeys.CreateAsync), and before the new password, so a crash in between leaves the keys revoked and the
+        // old password in place: the safe way round, and the user simply tries again.
+        if (revokeApiKeys) await keys.RevokeAllAsync(user, ct);
+
+        var passwordFilter = Builders<UserSlotDocument>.Filter.Where(s => s.User == userId && s.Kind == UserSlotDocument.Password);
+        var passwordUpdate = Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt);
+        if (recovery is null)
+        {
+            await Slots.UpdateOneAsync(passwordFilter, passwordUpdate, new UpdateOptions { IsUpsert = true }, ct);
+        }
+        else
+        {
+            using var session = await db.Client.StartSessionAsync(cancellationToken: ct);
+            session.StartTransaction();
+            try
+            {
+                await Slots.UpdateOneAsync(session, passwordFilter, passwordUpdate, new UpdateOptions { IsUpsert = true }, ct);
+                var filter = Builders<UserSlotDocument>.Filter;
+                var replaced = await Slots.UpdateOneAsync(
+                    session,
+                    filter.Eq(s => s.User, userId) & filter.Eq(s => s.Kind, UserSlotDocument.Recovery) & filter.Eq(s => s.Wrapped, recovery.Used),
+                    Builders<UserSlotDocument>.Update.Set(s => s.Wrapped, recovery.Slot.Wrapped).Set(s => s.CreatedAt, recovery.Slot.CreatedAt),
+                    cancellationToken: ct);
+                if (replaced.MatchedCount == 0)
+                {
+                    await session.AbortTransactionAsync(CancellationToken.None);
+                    return false;
+                }
+
+                await session.CommitTransactionAsync(CancellationToken.None);
+            }
+            catch (MongoException e) when (e.HasErrorLabel("TransientTransactionError"))
+            {
+                // A concurrent recovery wrote the same slots first. Not retried: the key it used is gone.
+                return false;
+            }
+        }
+
         // ... and again after it: a sign-in may have read the old slot between the first stamp and the write,
         // and its session's createdAt (the read time) is then before this one.
         await StampCredentialsChangedAsync(userId, ct);
+        // That sign-in passes the first stamp, so a key it made at once may have landed after the first
+        // revocation. Its read time is before the second stamp, so no further key can come from it: revoking
+        // once more here catches the last ones.
+        if (revokeApiKeys) await keys.RevokeAllAsync(user, ct);
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);
+        return true;
     }
 
     private Task StampCredentialsChangedAsync(string userId, CancellationToken ct) =>

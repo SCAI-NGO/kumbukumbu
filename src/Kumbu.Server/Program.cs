@@ -126,21 +126,23 @@ if (!TextOrder.IsCultureAware)
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
-var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
-app.UseSecurityHeaders(publicUrl);
-app.Use(ApiErrors.BadRequestsAsync);
-
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
     // can be pinned: any peer is trusted, which is safe only because the proxy is the container's only way in
     // (no published port). ForwardLimit 1 takes the rightmost X-Forwarded-For entry, the one Traefik appended;
-    // whatever a client put in the header itself is ignored.
-    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor, ForwardLimit = 1 };
+    // whatever a client put in the header itself is ignored. X-Forwarded-Proto (which Traefik overwrites) makes
+    // Request.IsHttps true for a request that reached Traefik over https, for HSTS. First, so that everything
+    // after sees the client's address and scheme. Without a trusted proxy neither header is read.
+    var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
     forwarded.KnownIPNetworks.Clear();
     forwarded.KnownProxies.Clear();
     app.UseForwardedHeaders(forwarded);
 }
+
+var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
+app.UseSecurityHeaders(publicUrl);
+app.Use(ApiErrors.BadRequestsAsync);
 
 // The web app (web/, built into wwwroot): index.html changes with every build and must be revalidated, the
 // hashed files under /assets never change. Before routing: static files need no caller.

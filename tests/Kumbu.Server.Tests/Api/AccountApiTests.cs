@@ -91,6 +91,48 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         return (await JsonAsync(created))["code"]!.GetValue<string>();
     }
 
+    /// <summary>A user who joined by invitation, with a vault <c>Arbeit</c> and two API keys for it: the username,
+    /// the recovery key from joining, the join's session and the keys.</summary>
+    private async Task<(string Username, string RecoveryKey, string Session, string[] Keys)> JoinedWithKeysAsync()
+    {
+        var code = await InvitationCodeAsync();
+        var username = NewUsername();
+        using var join = await SendAsync(HttpMethod.Post, "/api/join", new { code, username, password = Password });
+        var recoveryKey = (await JsonAsync(join))["recoveryKey"]!.GetValue<string>();
+        var session = SessionOf(join);
+        using var vault = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session);
+        Assert.Equal(HttpStatusCode.Created, vault.StatusCode);
+        var keys = new List<string>();
+        foreach (var (name, right) in new[] { ("laptop", "write"), ("phone", "read") })
+        {
+            using var created = await SendAsync(HttpMethod.Post, "/api/keys", new { name, vaults = new Dictionary<string, string> { ["Arbeit"] = right } }, session: session);
+            keys.Add((await JsonAsync(created))["key"]!.GetValue<string>());
+        }
+
+        foreach (var key in keys) Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), await KeyStatusAsync(key));
+        return (username, recoveryKey, session, [.. keys]);
+    }
+
+    /// <summary>What an API key gets on the REST API and on <c>/mcp</c>.</summary>
+    private async Task<(HttpStatusCode Api, HttpStatusCode Mcp)> KeyStatusAsync(string key)
+    {
+        using var api = await SendAsync(HttpMethod.Get, "/api/vaults", origin: null, bearer: key);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        request.Headers.Add("X-Forwarded-For", _ip);
+        using var http = Client();
+        using var mcp = await http.SendAsync(request, Ct);
+        return (api.StatusCode, mcp.StatusCode);
+    }
+
     private static string NewIp() => $"198.19.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
 
     [Fact]
@@ -343,9 +385,9 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     public async Task A_bearer_caller_needs_no_origin_but_is_refused_account_endpoints_even_as_an_admins_key()
     {
         var username = await NewUserAsync(Roles.Admin);
-        var (user, userKey, _) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
         var vault = await Api.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync("Notizen", user.Id, userKey, Ct);
-        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, readAt, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
 
         foreach (var (method, path) in new[]
                  {
@@ -487,6 +529,60 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         await SignInAsync(username, NewPassword);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Changing_the_password_revokes_every_api_key_unless_asked_to_keep_them(bool? revokeApiKeys)
+    {
+        var (username, _, session, keys) = await JoinedWithKeysAsync();
+        object body = revokeApiKeys is { } revoke
+            ? new { oldPassword = Password, newPassword = NewPassword, revokeApiKeys = revoke }
+            : new { oldPassword = Password, newPassword = NewPassword };
+
+        using var changed = await SendAsync(HttpMethod.Post, "/api/password", body, session: session);
+
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        // Left out, the flag is true: an older client gets the safe behaviour.
+        var revoked = revokeApiKeys ?? true;
+        var expected = revoked ? HttpStatusCode.Unauthorized : HttpStatusCode.OK;
+        foreach (var key in keys) Assert.Equal((expected, expected), await KeyStatusAsync(key));
+        using var list = await SendAsync(HttpMethod.Get, "/api/keys", session: await SignInAsync(username, NewPassword));
+        Assert.All((await JsonAsync(list)).AsArray(), k => Assert.Equal(revoked, k!["revokedAt"] is not null));
+    }
+
+    [Fact]
+    public async Task Recovery_revokes_every_api_key_and_replaces_the_used_recovery_key()
+    {
+        var (username, firstKey, session, keys) = await JoinedWithKeysAsync();
+        var other = await SignInAsync(username);
+
+        using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
+
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        var json = (await JsonAsync(recovered)).AsObject();
+        Assert.Equal(["recoveryKey"], json.Select(p => p.Key));
+        var secondKey = json["recoveryKey"]!.GetValue<string>();
+        Assert.True(RecoveryKey.TryParse(secondKey, out _));
+        Assert.NotEqual(firstKey, secondKey);
+        foreach (var key in keys) Assert.Equal((HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized), await KeyStatusAsync(key));
+        foreach (var old in new[] { session, other })
+        {
+            using var me = await SendAsync(HttpMethod.Get, "/api/session", session: old);
+            Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        }
+
+        // The used key can't take the account back; the new one can.
+        using var again = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = Password }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.Unauthorized, again.StatusCode);
+        Assert.DoesNotContain("recoveryKey", await again.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        using var list = await SendAsync(HttpMethod.Get, "/api/keys", session: await SignInAsync(username, NewPassword));
+        Assert.All((await JsonAsync(list)).AsArray(), k => Assert.NotNull(k!["revokedAt"]));
+        using var withNew = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = secondKey, newPassword = Password }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.OK, withNew.StatusCode);
+        await SignInAsync(username, Password);
+    }
+
     [Fact]
     public async Task The_recovery_key_sets_a_new_password_and_a_regenerated_one_replaces_it()
     {
@@ -505,7 +601,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var old = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
         Assert.Equal(HttpStatusCode.Unauthorized, old.StatusCode);
         using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = secondKey, newPassword = NewPassword }, ip: NewIp());
-        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
 
         using var oldSession = await SendAsync(HttpMethod.Get, "/api/session", session: SessionOf(join));
         Assert.Equal(HttpStatusCode.Unauthorized, oldSession.StatusCode);
@@ -534,7 +630,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var me = await SendAsync(HttpMethod.Get, "/api/session", session: session);
         Assert.Equal(HttpStatusCode.OK, me.StatusCode);
         using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
-        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
     }
 
     [Fact]
@@ -639,9 +735,9 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("same-origin", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.Equal(
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
             response.Headers.GetValues("Content-Security-Policy").Single());
-        Assert.StartsWith("max-age=", response.Headers.GetValues("Strict-Transport-Security").Single(), StringComparison.Ordinal);
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]
@@ -654,15 +750,95 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Null(health.Headers.CacheControl);
     }
 
-    [Fact]
-    public async Task Without_an_https_public_url_there_is_no_hsts()
-    {
-        using var http = Client(app);
+    private const string Hsts = "max-age=31536000; includeSubDomains";
 
-        using var response = await http.GetAsync("/healthz", Ct);
+    /// <summary>A GET of <c>/healthz</c> over plain http, optionally claiming https in <c>X-Forwarded-Proto</c>. To a
+    /// host that isn't loopback, as behind a proxy, since loopback never gets HSTS from the request alone.</summary>
+    private static async Task<HttpResponseMessage> PlainHttpAsync(WebApplicationFactory<Program> factory, string? forwardedProto = null)
+    {
+        using var http = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("http://kumbu.test") });
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/healthz");
+        if (forwardedProto is not null) request.Headers.Add("X-Forwarded-Proto", forwardedProto);
+        return await http.SendAsync(request, Ct);
+    }
+
+    /// <summary>Behind Traefik with a public URL that is (still) http: only the request tells whether it came over https.</summary>
+    private WebApplicationFactory<Program> HttpPublicUrlBehindProxy() => app.WithWebHostBuilder(b =>
+        b.UseSetting("Kumbu:Proxy:Trusted", "true").UseSetting("Kumbu:PublicUrl", "http://kumbu.test"));
+
+    [Fact]
+    public async Task An_https_public_url_sends_hsts_even_on_a_request_that_reached_the_app_over_http()
+    {
+        using var response = await PlainHttpAsync(Api);
+
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Fact]
+    public async Task A_request_over_https_behind_a_trusted_proxy_gets_hsts()
+    {
+        await using var proxied = HttpPublicUrlBehindProxy();
+
+        using var response = await PlainHttpAsync(proxied, forwardedProto: "https");
+
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Fact]
+    public async Task A_request_over_plain_http_behind_a_trusted_proxy_gets_no_hsts()
+    {
+        await using var proxied = HttpPublicUrlBehindProxy();
+
+        using var forwardedHttp = await PlainHttpAsync(proxied, forwardedProto: "http");
+        using var unforwarded = await PlainHttpAsync(proxied);
+
+        Assert.False(forwardedHttp.Headers.Contains("Strict-Transport-Security"));
+        Assert.False(unforwarded.Headers.Contains("Strict-Transport-Security"));
+    }
+
+    [Fact]
+    public async Task Over_plain_http_without_an_https_public_url_there_is_no_hsts()
+    {
+        using var response = await PlainHttpAsync(app);
 
         Assert.False(response.Headers.Contains("Strict-Transport-Security"));
         Assert.True(response.Headers.Contains("X-Content-Type-Options"));
+    }
+
+    [Fact]
+    public async Task Without_a_trusted_proxy_x_forwarded_proto_is_ignored()
+    {
+        using var response = await PlainHttpAsync(app, forwardedProto: "https");
+
+        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
+    }
+
+    [Fact]
+    public async Task A_request_that_reached_the_app_over_https_gets_hsts()
+    {
+        using var http = app.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://kumbu.test") });
+
+        using var response = await http.GetAsync("/healthz", Ct);
+
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Theory]
+    [InlineData("https://localhost")]
+    [InlineData("https://LocalHost:8443")]
+    [InlineData("https://127.0.0.1")]
+    [InlineData("https://[::1]:8443")]
+    public async Task Https_to_a_loopback_address_gets_no_hsts_unless_the_public_url_is_https(string address)
+    {
+        // As ASP.NET's own UseHsts: pinned, the browser would force https on every local port for a year.
+        using var http = app.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(address) });
+        using var publicHttp = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(address) });
+
+        using var response = await http.GetAsync("/healthz", Ct);
+        using var publicResponse = await publicHttp.GetAsync("/healthz", Ct);
+
+        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
+        Assert.Equal(Hsts, publicResponse.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]

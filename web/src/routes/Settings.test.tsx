@@ -66,8 +66,26 @@ describe("Settings", () => {
     await userEvent.click(within(form).getByRole("button", { name: "Change password" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
-    expect(bodies).toEqual([{ oldPassword: "old password here", newPassword: "a much longer new one" }]);
+    expect(bodies).toEqual([{ oldPassword: "old password here", newPassword: "a much longer new one", revokeApiKeys: true }]);
     expect(await screen.findByRole("status")).toHaveTextContent("Your password is changed");
+  });
+
+  it("revokes every API key with the password change unless told to keep them", async () => {
+    const bodies: unknown[] = [];
+    api({ "POST /api/password": async (r) => (bodies.push(await r.json()), json(200, { signedOut: true })) });
+    const router = renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Password" });
+    const revoke = within(form).getByLabelText("Also revoke all API keys");
+    expect(revoke).toBeChecked();
+    expect(form).toHaveTextContent("Agents using them will need new keys.");
+
+    await userEvent.click(revoke);
+    await userEvent.type(within(form).getByLabelText("Current password"), "old password here");
+    await userEvent.type(within(form).getByLabelText("New password"), "a much longer new one");
+    await userEvent.click(within(form).getByRole("button", { name: "Change password" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
+    expect(bodies).toEqual([{ oldPassword: "old password here", newPassword: "a much longer new one", revokeApiKeys: false }]);
   });
 
   it("shows the server's sentence when the password change is refused", async () => {

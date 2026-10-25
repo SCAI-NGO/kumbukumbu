@@ -20,10 +20,12 @@ public sealed class RequestCaller : ICaller
 {
     private readonly VaultCatalog _catalog;
 
-    private RequestCaller(CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null)
+    private RequestCaller(
+        CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null, DateTime? credentialReadAt = null)
     {
         Kind = kind;
         UserKey = userKey;
+        CredentialReadAt = credentialReadAt;
         User = user;
         Writer = writer;
         Credential = credential;
@@ -40,6 +42,9 @@ public sealed class RequestCaller : ICaller
     /// <summary>The user key, for a session only: what the account endpoints need to rewrap or list the user's slots.</summary>
     internal byte[]? UserKey { get; }
 
+    /// <summary>For a session only: when its password (or recovery key) was read, for checks against a later credentials change.</summary>
+    internal DateTime? CredentialReadAt { get; }
+
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
@@ -51,8 +56,8 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, new FixedCredential(devToken), catalog);
 
-    internal static RequestCaller ForSession(User user, byte[] userKey, VaultCatalog catalog) =>
-        new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey);
+    internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, VaultCatalog catalog) =>
+        new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey, credentialReadAt);
 
     /// <summary>An API key, its vaults already opened: <see cref="CanWrite"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
