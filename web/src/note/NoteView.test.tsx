@@ -373,6 +373,28 @@ describe("Embeds", () => {
   });
 });
 
+describe("Embeds and the note's own lines", () => {
+  it("jumps from the outline to the note's own heading, never to an embedded one on the same line number", async () => {
+    const ROADMAP = "/Work/projects/roadmap.md";
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "![[roadmap]]\n\n## Mine\n\ntext")),
+      [`GET /api/links${PLAN}`]: () => json(200, [{ line: 1, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] }]),
+      [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, "x\n\n## Theirs\n\ny", "r1")),
+      [`GET /api/links${ROADMAP}`]: () => json(200, []),
+    });
+    renderApp(planUrl);
+    const theirs = await screen.findByRole("heading", { name: "Theirs" });
+    expect(theirs).not.toHaveAttribute("data-line");
+    await userEvent.click(screen.getByRole("button", { name: "Outline" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Outline" })).getByRole("button", { name: "Mine" }));
+    expect(scrolled.at(-1)).toBe(screen.getByRole("heading", { name: "Mine" }));
+  });
+});
+
 describe("Outline and find in the note", () => {
   const long = ["# Plan", "", "Intro about the road.", "", "## Goals", "", "```", "# not a heading, road", "```", "", "### Road **ahead**", "", "The road `road` ends."].join("\n");
   const scrolled: Element[] = [];

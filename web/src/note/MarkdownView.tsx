@@ -87,6 +87,8 @@ interface Props {
   /** The note shown. With it, notes embedded on a line of their own (`![[plan]]`) show their text; without it
    * (inside an embedded note: one level deep) every embed stays a link. */
   path?: string;
+  /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
+  nested?: boolean;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
@@ -151,7 +153,7 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
       {note.isError && <p className="text-sm text-muted">{errorText(note.error)}</p>}
       {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
       {body !== null && (
-        <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} />
+        <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
       )}
     </section>
   );
@@ -206,6 +208,12 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   }
 }
 
+/** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
+function useLine(node: HastNode | undefined) {
+  const { nested } = useContext(NoteContext);
+  return nested ? undefined : node?.position?.start.line;
+}
+
 const calloutIcons: Record<CalloutKind, LucideIcon> = { note: Pencil, tip: Lightbulb, info: Info, warning: TriangleAlert, danger: OctagonAlert, quote: Quote };
 
 // Tokens only: the kinds differ by icon and title first; warnings and dangers also take the accent.
@@ -254,14 +262,14 @@ const components: Components = {
       </CalloutTitle>
     </summary>
   ),
-  h1: ({ node, ...props }) => <h1 data-line={node?.position?.start.line} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
+  h1: ({ node, ...props }) => <h1 data-line={useLine(node)} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
   h2: ({ node, ...props }) => (
-    <h2 data-line={node?.position?.start.line} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
+    <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
   ),
-  h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
-  h4: ({ node, ...props }) => <h4 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
-  h5: ({ node, ...props }) => <h5 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
-  h6: ({ node, ...props }) => <h6 data-line={node?.position?.start.line} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
+  h3: ({ node, ...props }) => <h3 data-line={useLine(node)} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
+  h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
+  h5: ({ node, ...props }) => <h5 data-line={useLine(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
+  h6: ({ node, ...props }) => <h6 data-line={useLine(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
   mark: ({ node, ...props }) => (
     <mark className={`rounded-[3px] ${node?.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
   ),
@@ -336,7 +344,7 @@ const components: Components = {
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path }: Props) {
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
@@ -344,7 +352,10 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
       [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
     [links, highlight, query, current],
   );
-  const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path }), [links, tasksDisabled, onToggleTask, onCreateMissing, path]);
+  const context = useMemo(
+    () => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path, nested }),
+    [links, tasksDisabled, onToggleTask, onCreateMissing, path, nested],
+  );
 
   return (
     <NoteContext.Provider value={context}>
