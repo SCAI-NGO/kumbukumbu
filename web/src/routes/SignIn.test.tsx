@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { safeNext } from "./SignIn";
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
   useSession.getState().reset();
+  useEditor.getState().reset();
 });
 
 const path = (router: ReturnType<typeof renderApp>) => {
@@ -32,6 +35,7 @@ describe("a session that ends mid-use", () => {
         signedIn = true;
         return json(200, { user, previousSignInAt: null });
       },
+      "GET /api/vaults": () => json(200, [{ name: "Arbeit", notes: 1 }]),
     });
 
     const router = renderApp("/notes/Arbeit/plan.md?line=4");
@@ -42,7 +46,7 @@ describe("a session that ends mid-use", () => {
     await signIn();
 
     await waitFor(() => expect(path(router)).toBe("/notes/Arbeit/plan.md?line=4"));
-    expect(await screen.findByText(/Signed in as Ada/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "plan" })).toBeInTheDocument();
     const body = await fetch.mock.calls.find(([r]) => r.method === "POST")![0].json();
     expect(body).toEqual({ username: "ada", password: "correct horse battery" });
   });
@@ -56,7 +60,11 @@ describe("a session that ends mid-use", () => {
   });
 
   it("never leaves the site after signing in", async () => {
-    fakeApi({ "POST /api/session": () => json(200, { user, previousSignInAt: null }), "GET /api/session": () => json(200, { user, previousSignInAt: null }) });
+    fakeApi({
+      "POST /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, []),
+    });
     const router = renderApp(`/signin?next=${encodeURIComponent("//evil.example/x")}`);
     await signIn();
     await waitFor(() => expect(path(router)).toBe("/"));

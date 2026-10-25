@@ -18,6 +18,18 @@ describe("api client", () => {
     expect(request.credentials).toBe("include");
   });
 
+  it("encodes each segment of a note path and keeps the slashes between them", async () => {
+    const fetch = fakeApi({ "GET /api/notes/My%20Vault/a%20b/c%25%3F.md": () => json(404, { error: "No." }) });
+    await api.GET("/api/notes/{vault}/{path}", { params: { path: { vault: "My Vault", path: "a b/c%?.md" } } });
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/api/notes/My%20Vault/a%20b/c%25%3F.md");
+  });
+
+  it("keeps a slash in any other parameter encoded", async () => {
+    const fetch = fakeApi({ "GET /api/vaults/a%2Fb/tree": () => json(404, { error: "No." }) });
+    await api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: "a/b" } } });
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/api/vaults/a%2Fb/tree");
+  });
+
   it("ends the session on a 401 from any signed-in request, with a message if one was running", async () => {
     useSession.getState().signedIn({ user, previousSignInAt: null });
     fakeApi({ "GET /api/keys": () => json(401, { error: "Sign in first." }) });

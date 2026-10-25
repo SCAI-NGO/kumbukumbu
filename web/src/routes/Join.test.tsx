@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 
@@ -10,8 +11,10 @@ const code = "inv_s3cr3t-code";
 const valid = { role: "user", expiresAt: "2026-11-01T00:00:00Z", valid: true };
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
   useSession.getState().reset();
+  useEditor.getState().reset();
 });
 
 describe("Join", () => {
@@ -69,6 +72,7 @@ describe("Join", () => {
       "POST /api/invitations/peek": () => json(200, valid),
       "POST /api/join": () => json(200, { user, recoveryKey: "RK-1234" }),
       "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, []),
     });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const router = renderApp(`/join#${code}`, queryClient);
@@ -81,7 +85,7 @@ describe("Join", () => {
     await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/"));
-    expect(await screen.findByText(/Signed in as Ada/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Create your first vault" })).toBeInTheDocument();
     // The key lives only in the reveal's state: nothing client-wide keeps it once the user is in.
     const cached = JSON.stringify([
       queryClient.getMutationCache().getAll().map((m) => m.state),

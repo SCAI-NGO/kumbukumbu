@@ -22,10 +22,19 @@ const sessionEnds: Middleware = {
   },
 };
 
+/** `{path}` (a note or folder path in its vault) keeps its slashes, each segment encoded; any other value is one segment. */
+function pathSerializer(pathname: string, params: Record<string, unknown>) {
+  return pathname.replace(/\{(\w+)\}/g, (_, name: string) => {
+    const value = String(params[name]);
+    return name === "path" ? value.split("/").map(encodeURIComponent).join("/") : encodeURIComponent(value);
+  });
+}
+
 export const api = createClient<paths>({
   // Absolute, as Request wants outside the browser too; same origin either way.
   baseUrl: window.location.origin,
   credentials: "include",
+  pathSerializer,
   // Looked up per call, so tests can stub it.
   fetch: (request) => globalThis.fetch(request),
 });

@@ -61,6 +61,26 @@ html {
   line-height: 1.6;
 }
 
+/* The drawer slides in from x−28 px, a sheet from y+24 px (MOBILE_EDITOR §6). */
+.k-drawer {
+  animation: k-in-left 0.18s ease-out;
+}
+.k-sheet {
+  animation: k-in-up 0.2s ease-out;
+}
+@keyframes k-in-left {
+  from {
+    transform: translateX(-28px);
+    opacity: 0.4;
+  }
+}
+@keyframes k-in-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0.4;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
