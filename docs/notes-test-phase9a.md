@@ -29,6 +29,8 @@ Window sizes: a laptop window (1248 × 674 viewport) and the narrowest window Ch
 
 ## Findings
 
+All five fixed on the branch before the merge (commits 96a88f2 to d3c540f, reviewed, checked again in the browser).
+
 1. **Ambiguous link candidates only in a tooltip.** `web/src/note/MarkdownView.tsx:131` shows the candidates as `title`; on a phone there is no way to see them or pick one. Suggestion: tapping opens a small list of the candidates.
 2. **A mixed list loses its bullets.** A list with one task item gets `contains-task-list` on the whole `<ul>`, which `MarkdownView.tsx` turns into `list-none`, so ordinary items in it show without a bullet (`- eins` next to `- [x] …`).
 3. **No feedback on „Copy key“.** `web/src/routes/KeyReveal.tsx:23` only records that it was saved; the button looks the same afterwards. The same pattern is in `RecoveryKeyReveal.tsx` and `InvitationReveal.tsx`. Note for the VPS: `navigator.clipboard` needs HTTPS; under plain HTTP copying fails and only the hand selection is left.
