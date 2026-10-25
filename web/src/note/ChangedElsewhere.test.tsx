@@ -209,6 +209,35 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(screen.getByText("Second.")).toBeInTheDocument();
   });
 
+  it("names where a note moved elsewhere went, with a link to it", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    server.gone = "There is no note at /Work/plan.md; it was moved to /Work/old ideas/plan.md on 2026-10-25 09:03 UTC (liz (mv)) (if it was removed, it is in the trash).";
+    backToThePage();
+
+    const shown = await bar();
+    expect(shown).toHaveTextContent("This note was moved elsewhere, to Work/old ideas/plan.md.");
+    await userEvent.click(within(shown).getByRole("link", { name: "Work/old ideas/plan.md" }));
+    await waitFor(() => expect(useEditor.getState().currentPath).toBe("/Work/old ideas/plan.md"));
+  });
+
+  it("doesn't link to where a note went when it isn't there any more", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    server.gone =
+      "There is no note at /Work/plan.md; it was moved to /Work/b.md on 2026-10-25 09:03 UTC (liz (mv)), and is not there any more ('trash' may list it) (if it was removed, it is in the trash).";
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent("This note was moved or removed elsewhere.");
+    expect(within(await bar()).queryByRole("link")).not.toBeInTheDocument();
+  });
+
   it("is not asked for while the page is hidden", async () => {
     const fetch = api(newServer());
     renderApp("/notes/Work/plan.md");

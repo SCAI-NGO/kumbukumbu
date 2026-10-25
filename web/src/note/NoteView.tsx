@@ -13,7 +13,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
-import { BarButton, ChangeText, ElsewhereBar, useChangedElsewhere, useTimeout, writerOf } from "./ChangedElsewhere";
+import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout, writerOf } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -233,7 +233,9 @@ export default function NoteView({ path }: { path: string }) {
     <>
       <AgentBanner change={change} />
       {elsewhere.gone ? (
-        <ElsewhereBar>This note was moved or removed elsewhere.</ElsewhereBar>
+        <ElsewhereBar>
+          <GoneText movedTo={elsewhere.movedTo} />
+        </ElsewhereBar>
       ) : newer && !autoRefresh ? (
         <ElsewhereBar actions={<BarButton onClick={() => void refresh(writerOf(newer.lastWriter), false)}>Refresh</BarButton>}>
           <ChangeText change={newer} />

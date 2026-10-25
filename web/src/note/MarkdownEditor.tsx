@@ -7,7 +7,7 @@ import { useSaveNote, type NoteView } from "../api/notes";
 import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { BarButton, ChangeText, ElsewhereBar, type useChangedElsewhere } from "./ChangedElsewhere";
+import { BarButton, ChangeText, ElsewhereBar, GoneText, type useChangedElsewhere } from "./ChangedElsewhere";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
@@ -171,7 +171,7 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
             </>
           }
         >
-          This note was moved or removed elsewhere. Your text is kept here, but no longer saved: copy it, or save it as a new note.
+          <GoneText movedTo={elsewhere?.movedTo ?? null} /> Your text is kept here, but no longer saved: copy it, or save it as a new note.
           {keepProblem && <span className="block text-text">{keepProblem}</span>}
         </ElsewhereBar>
       )}

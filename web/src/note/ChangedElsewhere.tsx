@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useIsFetching, useIsMutating } from "@tanstack/react-query";
 import { useEffect, useRef, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
+import { noteUrl } from "../api/paths";
 import { useSession } from "../state/session";
 import { ago } from "./AgentBanner";
 
@@ -19,7 +21,7 @@ export const writerOf = (label: string) => label.split(" (")[0];
 export function useChangedElsewhere(
   path: string,
   shown: { version: string; lastWriteAt: string } | undefined,
-): { change: NoteVersion | null; gone: boolean } {
+): { change: NoteVersion | null; gone: boolean; movedTo: string | null } {
   const poll = useVersionPoll(path, shown !== undefined);
   const busy =
     useIsMutating({ mutationKey: ["save", path] }) + useIsMutating({ mutationKey: ["restore"] }) + useIsFetching({ queryKey: ["note", path], exact: true }) > 0;
@@ -28,7 +30,30 @@ export function useChangedElsewhere(
   const change =
     !busy && !poll.isError && shown && data && data.path === path && data.version !== shown.version && Date.parse(data.lastWriteAt) > Date.parse(shown.lastWriteAt) ? data : null;
   const gone = !busy && poll.error instanceof HttpError && poll.error.status === 404;
-  return { change, gone };
+  return { change, gone, movedTo: gone ? movedTo((poll.error as HttpError).message) : null };
+}
+
+/**
+ * Where a moved note is now, from the 404's sentence (`Moves.HintAsync` on the server: "; it was moved to
+ * /Work/b.md on 2026-10-25 09:03 UTC (liz)"); null if it wasn't moved, or isn't there any more either.
+ */
+export function movedTo(message: string): string | null {
+  const m = /; it was moved to (\/.+?\.md) on \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC /.exec(message);
+  return m && !message.includes(", and is not there any more") ? m[1] : null;
+}
+
+/** "This note was moved elsewhere, to <link>", or "… moved or removed elsewhere." */
+export function GoneText({ movedTo }: { movedTo: string | null }) {
+  if (!movedTo) return <>This note was moved or removed elsewhere.</>;
+  return (
+    <>
+      This note was moved elsewhere, to{" "}
+      <Link to={noteUrl(movedTo)} className="font-medium text-accent-text underline underline-offset-2">
+        {movedTo.slice(1)}
+      </Link>
+      .
+    </>
+  );
 }
 
 const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
