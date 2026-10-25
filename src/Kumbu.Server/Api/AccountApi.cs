@@ -148,19 +148,27 @@ public static class AccountApi
         // The account exists now, whatever happens next: the recovery key must reach the user even if signing in
         // fails (deactivated in the meantime), so that case answers without a cookie rather than with an error.
         // Signing in costs a second Argon2 run, for a user key the service doesn't hand out at creation.
-        if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt))
+        if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt)
+            && await TryStartSessionAsync(sessions, signedIn, userKey, readAt) is { } secret)
         {
-            try
-            {
-                SetSessionCookie(http, await sessions.StartAsync(signedIn, userKey, readAt, CancellationToken.None));
-            }
-            catch (CredentialsChangedException)
-            {
-                // Deactivated or deleted between the sign-in and the session: still no error, for the recovery key's sake.
-            }
+            SetSessionCookie(http, secret);
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
+    }
+
+    /// <summary>A session for a user who just signed in, or null if they were deactivated or deleted in between:
+    /// joining then still answers, without a cookie, so the recovery key reaches the user.</summary>
+    internal static async Task<string?> TryStartSessionAsync(Sessions sessions, User user, byte[] userKey, DateTime readAt)
+    {
+        try
+        {
+            return await sessions.StartAsync(user, userKey, readAt, CancellationToken.None);
+        }
+        catch (CredentialsChangedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>

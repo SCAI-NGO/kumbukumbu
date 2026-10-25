@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -214,6 +215,36 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.NotNull((await JsonAsync(response))["error"]);
+    }
+
+    [Theory]
+    [InlineData("deactivated")]
+    [InlineData("deleted")]
+    public async Task A_join_whose_session_cannot_start_any_more_still_answers_without_a_cookie(string what)
+    {
+        // Between the join's sign-in and its session: the user is deactivated, or gone.
+        var username = await NewUserAsync();
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+        var users = app.Database.GetCollection<UserDocument>("users");
+        if (what == "deactivated") await users.UpdateOneAsync(u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        else await users.DeleteOneAsync(u => u.Id == user.Id, Ct);
+
+        var sessions = Api.Services.GetRequiredService<Sessions>();
+        Assert.Null(await Kumbu.Server.Api.AccountApi.TryStartSessionAsync(sessions, user, userKey, readAt));
+
+        Assert.Equal(0, await app.Database.GetCollection<UserSlotDocument>("user_slots")
+            .CountDocumentsAsync(sl => sl.User == user.Id && sl.Kind == UserSlotDocument.Session, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task A_session_starts_for_a_user_who_is_still_there()
+    {
+        var username = await NewUserAsync();
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+
+        var secret = await Kumbu.Server.Api.AccountApi.TryStartSessionAsync(Api.Services.GetRequiredService<Sessions>(), user, userKey, readAt);
+
+        Assert.NotNull(await Api.Services.GetRequiredService<Sessions>().ResolveAsync(secret!, Ct));
     }
 
     [Fact]
