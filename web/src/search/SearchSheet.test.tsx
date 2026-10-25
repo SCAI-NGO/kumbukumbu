@@ -89,7 +89,7 @@ describe("the search sheet", () => {
     const paths = ["/Work/a.md", "/Work/b.md", "/Work/c.md", "/Work/d.md", "/Work/e.md", "/Work/f.md"];
     renderApp("/notes/Work/inbox.md");
     await screen.findByRole("heading", { name: "inbox" });
-    paths.forEach((p) => useEditor.getState().openNote(p));
+    act(() => paths.forEach((p) => useEditor.getState().openNote(p)));
     act(() => useEditor.getState().setOverlay("search"));
     const list = within(sheet()).getByRole("list", { name: "Recent notes" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
