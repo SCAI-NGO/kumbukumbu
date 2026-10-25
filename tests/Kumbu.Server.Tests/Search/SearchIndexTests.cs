@@ -261,6 +261,33 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_query_is_embedded_by_all_providers_at_the_same_time()
+    {
+        var (s, remote) = await TwoProvidersAsync();
+        var internalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var remoteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Each provider's query waits until the other one has started: one after the other would never finish.
+        s.Embedder.BeforeEmbed = async query =>
+        {
+            if (!query) return;
+            internalStarted.TrySetResult();
+            await remoteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        };
+        remote.BeforeEmbed = async query =>
+        {
+            if (!query) return;
+            remoteStarted.TrySetResult();
+            await internalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        };
+
+        var result = await s.Store.SearchAsync(P("/"), "hens", 10, Ct);
+
+        Assert.Equal((SemanticState.Ready, (string?)null), (result.State, result.Reason));
+        Assert.Equal(["/Private/diary.md", "/Work/farm.md"], result.Hits.Select(h => h.Path.Value).Distinct().Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task Switching_a_vault_to_another_provider_embeds_it_again_and_survives_a_restart()
     {
         var (s, remote) = await TwoProvidersAsync();

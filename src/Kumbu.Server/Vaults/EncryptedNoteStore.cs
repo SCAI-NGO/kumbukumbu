@@ -215,9 +215,10 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         var pending = 0;
         var searched = false;
         var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<UnlockedVault> Vaults)>();
-        foreach (var group in groups)
+        // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
+        var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
+        foreach (var (group, (state, reason, vector)) in groups.Zip(queries))
         {
-            var (state, reason, vector) = await EmbedQueryAsync(group.Key, query, ct);
             if (vector is null)
             {
                 unavailable.Add((state, reason!, [.. group]));

@@ -176,6 +176,34 @@ public sealed class OpenAiCompatibleDriverTests
         await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["a"], query: true, Ct));
 
         Assert.Equal(OpenAiCompatibleDriver.QueryRetries + 1, rig.Handler.Requests.Count);
+        Assert.Equal([OpenAiCompatibleDriver.QueryRetryDelay], rig.Delays);
+    }
+
+    [Fact]
+    public async Task A_query_does_not_wait_out_a_long_retry_after_but_fails_at_once()
+    {
+        var rig = Make(new FakeHandler(Status(HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(7)), Vectors()));
+
+        await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["a"], query: true, Ct));
+
+        Assert.Single(rig.Handler.Requests);
+        Assert.Empty(rig.Delays);
+    }
+
+    [Fact]
+    public async Task A_query_has_a_short_timeout_of_its_own_and_is_not_retried_after_it()
+    {
+        var hanging = new HangingOnceHandler();
+        var rig = Make(new FakeHandler(Vectors()));
+        var options = new EmbeddingProviderOptions { Driver = EmbeddingDrivers.OpenAiCompatible, BaseUrl = "https://api.example.org/v1", Model = "m", TimeoutSeconds = 30 };
+        var driver = new OpenAiCompatibleDriver("example", options, Key, () => new HttpClient(hanging, disposeHandler: false), rig.Log.CreateLogger("driver"), rig.Clock, (_, _) => Task.CompletedTask);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        var e = await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => driver.EmbedAsync(["a"], query: true, Ct));
+
+        Assert.Contains($"didn't answer within {OpenAiCompatibleDriver.QueryTimeout.TotalSeconds:0} s", e.Message);
+        Assert.Equal(1, hanging.Requests);
+        Assert.InRange(watch.Elapsed.TotalSeconds, 4, 15);
     }
 
     [Fact]

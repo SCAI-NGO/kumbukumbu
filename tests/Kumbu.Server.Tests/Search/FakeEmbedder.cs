@@ -40,18 +40,27 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready, stri
         return _ready.Task.WaitAsync(ct);
     }
 
-    public Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct)
+    /// <summary>Awaited before each call (query or not), to hold a call up or to change something in between.</summary>
+    public Func<bool, Task>? BeforeEmbed { get; set; }
+
+    public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct)
+    {
+        if (BeforeEmbed is { } before) await before(query);
+        return Embed(texts, query);
+    }
+
+    private float[][] Embed(IReadOnlyList<string> texts, bool query)
     {
         if (Failure is not null) throw Failure;
         if (texts.Count > MaxBatch) throw new ArgumentException($"At most {MaxBatch} texts per call", nameof(texts));
         Embedded += texts.Count;
         lock (Seen) Seen.AddRange(texts.Select(t => (t, query)));
-        return Task.FromResult(texts.Select(t =>
+        return [.. texts.Select(t =>
         {
             var v = new float[Dimensions];
             foreach (var term in Bm25.Terms(t)) v[(int)(Fnv1a(term) % (uint)v.Length)] += 1;
             return Vectors.Normalized(v);
-        }).ToArray());
+        })];
     }
 
     /// <summary>FNV-1a over UTF-8: the same in every process, unlike <c>string.GetHashCode</c>, so which words

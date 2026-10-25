@@ -13,7 +13,8 @@ namespace Kumbu.Server.Search;
 /// server here, and only here: nothing of them is logged, nor put in an exception message.
 /// <para>
 /// Transient failures (no answer in time, 408, 429, 5xx) are retried with exponential backoff and jitter, honouring
-/// <c>Retry-After</c>; a search query is retried once only, so that a search doesn't hang. When a call fails anyway,
+/// <c>Retry-After</c>. A search query fails fast instead, and its vaults are ranked by words: at most
+/// <see cref="QueryTimeout"/>, and one retry after <see cref="QueryRetryDelay"/> unless the provider asks to wait longer. When a call fails anyway,
 /// the provider pauses for <see cref="Pause"/>: searches say it is unavailable at once, and the index waits.
 /// </para>
 /// </summary>
@@ -22,6 +23,14 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     public static readonly TimeSpan Pause = TimeSpan.FromMinutes(1);
     public const int Retries = 4;
     public const int QueryRetries = 1;
+
+    /// <summary>A search waits at most this long for the provider (or <c>TimeoutSeconds</c>, if shorter); then it
+    /// ranks the vault by words.</summary>
+    public static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>A query's one retry comes this soon, and only if the provider doesn't ask to wait longer.</summary>
+    public static readonly TimeSpan QueryRetryDelay = TimeSpan.FromMilliseconds(500);
+
     private static readonly TimeSpan MaxDelay = TimeSpan.FromSeconds(16);
 
     private readonly string _name;
@@ -75,12 +84,15 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
         var input = query && _options.QueryPrompt is { Length: > 0 } prompt ? [.. texts.Select(t => prompt + t)] : texts;
         var body = new EmbeddingsRequest(_options.Model, input, _options.Dimensions);
         var retries = query ? QueryRetries : Retries;
+        var limit = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+        if (query && limit > QueryTimeout) limit = QueryTimeout;
         for (var attempt = 0; ; attempt++)
         {
             TimeSpan? retryAfter = null;
             string problem;
+            var timedOut = false;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
+            timeout.CancelAfter(limit);
             try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint) { Content = JsonContent.Create(body) };
@@ -105,7 +117,8 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                problem = $"didn't answer within {_options.TimeoutSeconds} s";
+                problem = $"didn't answer within {limit.TotalSeconds:0} s";
+                timedOut = true;
             }
             catch (HttpRequestException e)
             {
@@ -118,7 +131,10 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
             }
 
             if (attempt >= retries) throw Fail(problem, providerDown: true);
-            var delay = retryAfter ?? Backoff(attempt);
+
+            // A search fails fast and ranks by words: no retry after it has waited out a timeout, nor a long wait.
+            var delay = query ? retryAfter ?? QueryRetryDelay : retryAfter ?? Backoff(attempt);
+            if (query && (timedOut || delay > TimeSpan.FromSeconds(1))) throw Fail(problem, providerDown: true);
             _log.LogWarning("Embedding provider {Provider} {Problem}; attempt {Attempt} of {Attempts}, again in {Seconds:0.0} s",
                 _name, problem, attempt + 1, retries + 1, delay.TotalSeconds);
             await _delay(delay, ct);
