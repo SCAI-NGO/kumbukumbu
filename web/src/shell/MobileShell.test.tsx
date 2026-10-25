@@ -37,7 +37,8 @@ const workTree = {
 const homeTree = { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [note("/Home/garden.md")] } };
 
 const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null };
-const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention", external: true, available: true, reason: null };
+// The admin wrote the description as a sentence: the dialog doesn't add a second full stop.
+const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention.", external: true, available: true, reason: null };
 
 function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
   return fakeApi({
@@ -194,8 +195,13 @@ describe("the shell", () => {
     expect(warning).toHaveTextContent("So is the text of every search that includes Work: also a search across all your vaults, whether you make it or an agent with a key for Work does.");
     expect(warning).toHaveTextContent("The notes of your other vaults are not sent; only the searches that include Work are.");
     expect(warning).toHaveTextContent("What TensorX promises: EU, zero data retention.");
+    expect(warning.textContent).not.toContain("..");
     expect(warning).toHaveTextContent("Kumbu² can't check or enforce what happens to your text there.");
     expect(fetch.mock.calls.some(([r]) => r.method === "PUT")).toBe(false);
+    // A screen reader hears the warning with the button that acts on it.
+    expect(within(dialog).getByRole("button", { name: "Send to TensorX" })).toHaveAccessibleDescription(
+      expect.stringContaining("The text of every section in Work is sent to TensorX"),
+    );
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Send to TensorX" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search by meaning in Work" })).not.toBeInTheDocument());

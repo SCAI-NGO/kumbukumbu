@@ -7,6 +7,9 @@ import type { EmbeddingProvider } from "../api/notes";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 
+/** A text from the server or the admin as a sentence: one full stop at the end, whether it brought one or not. */
+const sentence = (text: string) => text.replace(/[.\s]+$/, "") + ".";
+
 /**
  * Where a vault's search by meaning runs: on this server, or at one of the external providers the admin set up. Before
  * an external one is chosen, the dialog says in plain words what that sends, to whom, and that their promise is theirs.
@@ -81,14 +84,14 @@ export default function EmbeddingsDialog({
                   {p.name === current && <span className="text-muted"> (now)</span>}
                 </span>
                 <span className="text-sm text-muted">{p.external ? p.description || "An external service." : "Nothing leaves this server."}</span>
-                {!p.available && p.reason && <span className="text-sm text-muted">Not available right now: {p.reason}.</span>}
+                {!p.available && p.reason && <span className="text-sm text-muted">Not available right now: {sentence(p.reason)}</span>}
               </span>
             </label>
           ))}
         </fieldset>
 
         {picked?.external && chosen !== current && (
-          <div role="note" className="flex flex-col gap-2 rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
+          <div id={`${id}-warning`} role="note" className="flex flex-col gap-2 rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
             <p>
               <strong className="text-text">The text of every section in {vault} is sent to {picked.label}</strong>, now for the notes already there and
               from then on for every change.
@@ -98,7 +101,7 @@ export default function EmbeddingsDialog({
               make it or an agent with a key for {vault} does.
             </p>
             <p>It is sent encrypted on the way, but {picked.label} reads it in order to answer.</p>
-            {picked.description && <p>What {picked.label} promises: {picked.description}.</p>}
+            {picked.description && <p>What {picked.label} promises: {sentence(picked.description)}</p>}
             <p>
               That promise is theirs: Kumbu² can't check or enforce what happens to your text there. The notes of your other vaults are not sent; only
               the searches that include {vault} are.
@@ -106,7 +109,7 @@ export default function EmbeddingsDialog({
           </div>
         )}
         {!picked?.external && chosen !== current && before?.external && (
-          <p role="note" className="rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
+          <p id={`${id}-warning`} role="note" className="rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
             The notes are embedded on this server again, and nothing more is sent to {before.label}. What was sent before stays under their terms.
           </p>
         )}
@@ -116,7 +119,12 @@ export default function EmbeddingsDialog({
           <button type="button" onClick={onClose} className={secondaryButtonClass}>
             Cancel
           </button>
-          <button type="submit" disabled={save.isPending || chosen === current} className={primaryButtonClass}>
+          <button
+            type="submit"
+            disabled={save.isPending || chosen === current}
+            aria-describedby={chosen !== current && (picked?.external || before?.external) ? `${id}-warning` : undefined}
+            className={primaryButtonClass}
+          >
             {picked?.external && chosen !== current ? `Send to ${picked.label}` : "Use this server"}
           </button>
         </div>
