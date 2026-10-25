@@ -3139,6 +3139,7 @@ export interface components {
         };
         RestoreRequest: {
             version?: null | string;
+            expected?: null | string;
         };
         SearchResultView: {
             path: string;

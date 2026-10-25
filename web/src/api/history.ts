@@ -27,14 +27,15 @@ function vaultChanged(queryClient: QueryClient, vault: string, { notes = true } 
 
 /**
  * Restores a note (`restore <path> [version]`): an existing note goes back to `version` of its history, as a new
- * version of its own; a removed one comes back from the trash (the one with `version`, else the latest).
+ * version of its own; a removed one comes back from the trash (the one with `version`, else the latest). With
+ * `expected`, the server refuses (409) if the note isn't at that version any more.
  */
 export function useRestoreNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: ["restore"],
-    mutationFn: ({ path, version }: { path: string; version?: string }) =>
-      call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null } })),
+    mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }) =>
+      call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null, ...(expected ? { expected } : {}) } })),
     onSuccess: (note: NoteView) => {
       // The restored note itself is what came back.
       queryClient.setQueryData(["note", note.path], note);

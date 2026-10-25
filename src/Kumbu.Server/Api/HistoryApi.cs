@@ -10,8 +10,9 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace Kumbu.Server.Api;
 
 /// <summary><c>version</c>: one from the note's history; left out for a note in the trash, the most recently
-/// removed one at the path comes back.</summary>
-public sealed record RestoreRequest(string? Version = null);
+/// removed one at the path comes back. <c>expected</c>: the version the caller believes is current, so a restore
+/// never goes on top of a newer write it hasn't seen (409 with the note as it is, as a write's).</summary>
+public sealed record RestoreRequest(string? Version = null, string? Expected = null);
 
 /// <summary>The open note's version and last write, without its content: what the web app polls.</summary>
 public sealed record NoteVersionView(string Path, string Version, string LastWriter, DateTime LastWriteAt);
@@ -75,13 +76,14 @@ public static class HistoryApi
     /// <c>restore &lt;path&gt; [version]</c>: an existing note goes back to a version of its history, as a new
     /// version (the one it replaces stays in the history); a removed one comes back from the trash.
     /// </summary>
-    private static async Task<Ok<NoteView>> RestoreAsync(
+    private static async Task<Results<Ok<NoteView>, Conflict<ConflictView>>> RestoreAsync(
         string vault, string? path, RestoreRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await NoteApi.RequireVaultAsync(store, notePath, ct);
         NoteApi.Refuse(caller, "restore", notePath);
         var existing = await store.GetAsync(notePath, ct);
+        if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return NoteApi.Conflict(existing, body.Expected);
         var result = await writer.RestoreAsync(notePath, body.Version, ct);
         if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(NoteView.From(now));
 

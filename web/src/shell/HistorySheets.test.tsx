@@ -75,7 +75,31 @@ describe("a note's history", () => {
     await userEvent.click(screen.getByRole("button", { name: "Restore this version" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
-    expect(await restore!.json()).toEqual({ version: "v1" });
+    expect(await restore!.json()).toEqual({ version: "v1", expected: "v2" });
+  });
+
+  it("says when a newer version arrived before the restore, and shows the list as it is now", async () => {
+    let historyReads = 0;
+    api({
+      "GET /api/history/Work/inbox.md": () => {
+        historyReads++;
+        return json(200, [
+          { version: "v2", writtenAt: "2026-10-25T09:00:00Z", writer: "liz", lines: 3, size: 21, current: true, changeset: null },
+          { version: "v1", writtenAt: "2026-10-24T09:00:00Z", writer: "ada", lines: 3, size: 15, current: false, changeset: null },
+        ]);
+      },
+      "POST /api/restore/Work/inbox.md": () => json(409, { error: "/Work/inbox.md has changed since version v2 (it is now v5).", current: { content: "x", version: "v5" } }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const versions = await within(await screen.findByRole("dialog", { name: "History" })).findByRole("list", { name: "Versions" });
+    await userEvent.click(within(versions).getAllByRole("button")[1]);
+    await userEvent.click(await screen.findByRole("button", { name: "Restore this version" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("A newer version arrived meanwhile");
+    await waitFor(() => expect(historyReads).toBe(2));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("doesn't read the open note again, which would replace the text on screen", async () => {

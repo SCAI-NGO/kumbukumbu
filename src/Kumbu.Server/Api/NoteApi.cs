@@ -259,7 +259,7 @@ public static class NoteApi
         return existing is null ? TypedResults.Created(ApiPaths.Url("notes", notePath), view) : TypedResults.Ok(view);
     }
 
-    private static Conflict<ConflictView> Conflict(StoredNote current, string? version) => TypedResults.Conflict(new ConflictView(
+    internal static Conflict<ConflictView> Conflict(StoredNote current, string? version) => TypedResults.Conflict(new ConflictView(
         version is null
             ? $"{current.Path.Value} exists already; to overwrite it, send its version."
             : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",

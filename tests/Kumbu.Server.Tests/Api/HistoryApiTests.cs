@@ -65,6 +65,27 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_restore_on_top_of_a_version_that_is_no_longer_current_is_a_409_with_the_note_as_it_is()
+    {
+        var user = await UserAsync();
+        var (first, second, _) = await TwoVersionsAsync(user);
+
+        using var stale = await user.SendAsync(HttpMethod.Post, user.Url("plan.md", "restore"), new { version = first, expected = first });
+
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        var body = await JsonAsync(stale);
+        Assert.False(string.IsNullOrEmpty(Text(body, "error")));
+        Assert.Equal(second, Text(body["current"], "version"));
+        Assert.Equal("# Plan\n\nLions now.\n", Text(body["current"], "content"));
+        Assert.Equal(second, Text(await user.ReadAsync("plan.md"), "version"));
+
+        using var current = await user.SendAsync(HttpMethod.Post, user.Url("plan.md", "restore"), new { version = first, expected = second });
+
+        Assert.Equal(HttpStatusCode.OK, current.StatusCode);
+        Assert.Equal("# Plan\n\nZebras first.\n", Text(await user.ReadAsync("plan.md"), "content"));
+    }
+
+    [Fact]
     public async Task A_restored_version_is_embedded_again()
     {
         var user = await UserAsync("Zoo");

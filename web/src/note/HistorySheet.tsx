@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useRestoreNote } from "../api/history";
 import { useHistory, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
@@ -22,7 +24,7 @@ export default function HistorySheet({ path, onClose }: { path: string; onClose(
   if (chosen) {
     return (
       <Sheet title={chosen.current ? "Current version" : timeText(chosen.writtenAt)} onClose={onClose} onBack={() => setChosen(null)} backLabel="All versions">
-        <VersionView path={path} entry={chosen} onBack={() => setChosen(null)} onRestored={onClose} />
+        <VersionView path={path} entry={chosen} expected={history.data?.[0]?.version} onBack={() => setChosen(null)} onRestored={onClose} />
       </Sheet>
     );
   }
@@ -67,7 +69,9 @@ const lineClass = {
 };
 
 /** One version: rendered, or as its line diff to the current one; restoring it is a new write. */
-function VersionView({ path, entry, onBack, onRestored }: { path: string; entry: HistoryEntry; onBack(): void; onRestored(): void }) {
+/** `expected`: the current version as the list says; a restore never goes on top of a newer one it hasn't shown. */
+function VersionView({ path, entry, expected, onBack, onRestored }: { path: string; entry: HistoryEntry; expected: string | undefined; onBack(): void; onRestored(): void }) {
+  const queryClient = useQueryClient();
   const version = useNoteVersion(path, entry.version);
   // The text shown, as it is: a read now would replace it under the reader.
   const current = useNote(path, { refetchOnMount: false });
@@ -121,7 +125,13 @@ function VersionView({ path, entry, onBack, onRestored }: { path: string; entry:
             </>
           )
         ))}
-      {restore.isError && <FormError>{errorText(restore.error)}</FormError>}
+      {restore.isError && (
+        <FormError>
+          {restore.error instanceof HttpError && restore.error.status === 409
+            ? "A newer version arrived meanwhile, so nothing was restored. The list of versions shows it now; look again before restoring."
+            : errorText(restore.error)}
+        </FormError>
+      )}
       {!entry.current && (
         <div className="sticky bottom-0 flex flex-col gap-2 bg-surface pt-1">
           <p className="text-sm text-text-body">Restoring makes this text the current version. Nothing is lost: the version it replaces stays in the history.</p>
@@ -132,7 +142,17 @@ function VersionView({ path, entry, onBack, onRestored }: { path: string; entry:
             <button
               type="button"
               disabled={restore.isPending || same}
-              onClick={() => restore.mutate({ path, version: entry.version }, { onSuccess: onRestored })}
+              onClick={() =>
+                restore.mutate(
+                  { path, version: entry.version, expected },
+                  {
+                    onSuccess: onRestored,
+                    onError: (err) => {
+                      if (err instanceof HttpError && err.status === 409) void queryClient.invalidateQueries({ queryKey: ["history", path] });
+                    },
+                  },
+                )
+              }
               className="min-h-11 flex-1 rounded-[10px] bg-accent px-4 font-medium text-on-accent disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               Restore this version
