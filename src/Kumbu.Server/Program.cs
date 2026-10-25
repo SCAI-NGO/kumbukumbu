@@ -10,6 +10,7 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -169,10 +170,14 @@ app.UseStaticFiles(webApp);
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
+app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
 app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
 app.MapMcp("/mcp");
+// One URL per connection (Ruling 18): CallerMiddleware answers for an unknown id and, until a token is valid, 401.
+app.MapMcp("/mcp/c/{id}");
+app.MapDiscovery();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
 app.MapConnectionApi();

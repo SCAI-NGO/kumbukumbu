@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.OAuth;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 using ConnectionInfo = Kumbu.Server.Accounts.ConnectionInfo;
@@ -47,7 +48,7 @@ public static class ConnectionApi
     {
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var list = await connections.ListAsync(caller.User!, caller.UserKey!, ct);
-        var origin = Origin(http, options.Value);
+        var origin = OAuthUrls.Origin(http, options.Value.PublicUrl);
         return TypedResults.Ok(list.Select(c => View(c, names, origin)).ToArray());
     }
 
@@ -57,7 +58,7 @@ public static class ConnectionApi
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
         var info = await connections.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
-        return TypedResults.Created($"/api/connections/{info.Id}", View(info, names, Origin(http, options.Value)));
+        return TypedResults.Created($"/api/connections/{info.Id}", View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<Ok<ConnectionView>> SetVaultsAsync(
@@ -66,21 +67,17 @@ public static class ConnectionApi
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
         var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
-        return TypedResults.Ok(View(info, names, Origin(http, options.Value)));
+        return TypedResults.Ok(View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");
 
-    /// <summary>The public URL if set (behind a proxy the request's own host may be an internal one), else the request's origin.</summary>
-    private static string Origin(HttpContext http, KumbuOptions options) =>
-        options.PublicUrl is { Length: > 0 } url ? url.TrimEnd('/') : $"{http.Request.Scheme}://{http.Request.Host}";
-
     /// <summary>A vault the connection was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
     private static ConnectionView View(ConnectionInfo info, Dictionary<string, string> names, string origin) => new(
         info.Id,
         info.Name,
-        $"{origin}/mcp/c/{info.Id}",
+        OAuthUrls.Resource(origin, info.Id),
         info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
         info.CreatedAt,
         info.LastUsedAt,

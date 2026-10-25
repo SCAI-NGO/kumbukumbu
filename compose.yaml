@@ -79,6 +79,7 @@ services:
       # send their own X-Forwarded-For and pick the IP that rate limits count against.
       Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
+      Kumbu__OAuth__AccessTokenMinutes: ${KUMBU_OAUTH_ACCESS_TOKEN_MINUTES:-60}
       # The embedding model for semsearch, downloaded here on the first start (about 630 MB for arctic-m, 1.1 GB for arctic-l).
       Kumbu__Search__ModelPath: /models
       Kumbu__Search__Enabled: ${KUMBU_SEARCH:-true}

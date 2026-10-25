@@ -50,6 +50,17 @@ public sealed class KumbuOptions
     public SearchOptions Search { get; set; } = new();
 
     public EmbeddingsOptions Embeddings { get; set; } = new();
+
+    public OAuthOptions OAuth { get; set; } = new();
+}
+
+public sealed class OAuthOptions
+{
+    /// <summary>How long an app connection's access token lasts (<c>KUMBU_OAUTH_ACCESS_TOKEN_MINUTES</c>).</summary>
+    public int AccessTokenMinutes { get; set; } = 60;
+
+    /// <summary>Test and development only: lets a client metadata document be fetched over http from a loopback address.</summary>
+    public bool AllowLoopbackClients { get; set; }
 }
 
 /// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one only when

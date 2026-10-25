@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
@@ -28,11 +29,13 @@ public sealed class BackgroundMetadata
 /// segments case-insensitively, so <c>/MCP</c> reaches <c>MapMcp("/mcp")</c>), also without an endpoint, unless an
 /// anonymous endpoint is mapped there itself (an anonymous fallback doesn't count).</item>
 /// </list>
-/// Everything else (the web app's static files, later) is anonymous. Runs after routing and before the MCP SDK
+/// Everything else (the web app's static files, later) is anonymous. A connection's URL, <c>/mcp/c/{id}</c>, is
+/// answered before all that (<see cref="ConnectionUrlAsync"/>). Runs after routing and before the MCP SDK
 /// sees the request; never logs a key or a cookie.
 /// </summary>
 public sealed class CallerMiddleware(
-    RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys)
+    RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
+    Connections connections)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -44,6 +47,12 @@ public sealed class CallerMiddleware(
 
     public async Task InvokeAsync(HttpContext context)
     {
+        if (ConnectionIdSegment(context) is { } segment)
+        {
+            await ConnectionUrlAsync(context, segment);
+            return;
+        }
+
         if (!NeedsCaller(context))
         {
             await next(context);
@@ -95,6 +104,37 @@ public sealed class CallerMiddleware(
 
         context.Features.Set(caller);
         await next(context);
+    }
+
+    /// <summary>The third segment of <c>/mcp/c/{id}…</c> (the prefix case-insensitive, as routing is), else null.</summary>
+    private static string? ConnectionIdSegment(HttpContext context)
+    {
+        var path = context.Request.Path;
+        if (!path.StartsWithSegments("/mcp/c", StringComparison.OrdinalIgnoreCase, out var rest)) return null;
+        var segments = rest.Value!.Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length == 0 ? null : segments[0];
+    }
+
+    /// <summary>
+    /// A connection's own URL takes only its access tokens, which no one holds yet: API keys, the dev token and the
+    /// cookie are not resolved here, so a credential for <c>/mcp</c> opens nothing on it. An id that is no
+    /// connection's is a 404 (Ruling 18), like its metadata URL; a known one, in any state, is a 401 with the
+    /// challenge that leads an app to the metadata. A presented bearer is not counted as a wrong key: every one is
+    /// wrong for now, and the limiter is per address.
+    /// </summary>
+    private async Task ConnectionUrlAsync(HttpContext context, string id)
+    {
+        if (!OAuthUrls.IsConnectionId(id) || await connections.FindAsync(id, context.RequestAborted) is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsJsonAsync(new { error = "Not found." });
+            return;
+        }
+
+        var challenge = $"Bearer resource_metadata=\"{OAuthUrls.ResourceMetadata(OAuthUrls.Origin(context, options.Value.PublicUrl), id)}\", scope=\"{OAuthScopes.Challenge}\"";
+        if (context.Request.Headers.Authorization.ToString().StartsWith(Scheme, StringComparison.OrdinalIgnoreCase)) challenge += ", error=\"invalid_token\"";
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        context.Response.Headers.WWWAuthenticate = challenge;
     }
 
     private static bool NeedsCaller(HttpContext context)

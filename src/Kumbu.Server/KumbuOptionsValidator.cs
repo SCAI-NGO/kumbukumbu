@@ -8,6 +8,8 @@ namespace Kumbu.Server;
 public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
 {
     public const string MongoMessage = "Kumbu:Mongo:ConnectionString must be set";
+    public const string AccessTokenMinutesMessage = "Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440";
+
     public const string CheckpointLimitMessage = "Kumbu:Vaults:CheckpointLimit must be 0 or more";
 
     public const string PublicUrlMessage =
@@ -55,6 +57,11 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
         if (options.Vaults.CheckpointLimit < 0)
         {
             failures.Add(CheckpointLimitMessage);
+        }
+
+        if (options.OAuth.AccessTokenMinutes is < 5 or > 1440)
+        {
+            failures.Add(AccessTokenMinutesMessage);
         }
 
         if (!ModelFiles.Catalogue.ContainsKey(options.Search.Model))

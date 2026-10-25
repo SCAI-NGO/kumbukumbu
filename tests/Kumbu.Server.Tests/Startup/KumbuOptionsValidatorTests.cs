@@ -49,6 +49,23 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Equal(["Kumbu:Mongo:ConnectionString must be set"], result.Failures);
     }
 
+    [Theory]
+    [InlineData(4, false)]
+    [InlineData(5, true)]
+    [InlineData(60, true)]
+    [InlineData(1440, true)]
+    [InlineData(1441, false)]
+    public void Access_token_minutes_are_validated(int minutes, bool valid)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.OAuth.AccessTokenMinutes = minutes;
+
+        var result = Validate(options);
+
+        if (valid) Assert.False(result.Failed);
+        else Assert.Equal(["Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440"], result.Failures);
+    }
+
     [Fact]
     public void UnknownSearchModelFails()
     {
