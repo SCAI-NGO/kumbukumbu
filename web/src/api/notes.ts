@@ -84,9 +84,28 @@ export const useLinks = (path: string, version: string | undefined) =>
 export const useBacklinks = (path: string) =>
   useQuery({ queryKey: ["backlinks", path], queryFn: () => call(api.GET("/api/backlinks/{vault}/{path}", { params: params(path) })) });
 
-/** Notes last written by one of the user's keys since `since` (session only): the agent banner. */
-export const useChanges = (since: string) =>
-  useQuery({ queryKey: ["changes", since], queryFn: () => call(api.GET("/api/changes", { params: { query: { since } } })) });
+/** Notes last written by one of the user's keys since `since` (session only): the agent banner. Not asked without a time. */
+export const useChanges = (since: string | null) =>
+  useQuery({
+    queryKey: ["changes", since],
+    queryFn: () => call(api.GET("/api/changes", { params: { query: { since: since! } } })),
+    enabled: since !== null,
+  });
+
+export type HistoryEntry = components["schemas"]["HistoryEntryView"];
+
+/** The note's versions, newest first; asked only while `enabled`. */
+export const useHistory = (path: string, enabled: boolean) =>
+  useQuery({ queryKey: ["history", path], queryFn: () => call(api.GET("/api/history/{vault}/{path}", { params: params(path) })), enabled });
+
+/** One version of the note by its token (`?version=`); a version's text never changes, so it is kept as it is. */
+export const useNoteVersion = (path: string, version: string | null) =>
+  useQuery({
+    queryKey: ["note", path, "version", version],
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: { ...params(path), query: { version: version! } } })),
+    enabled: version !== null,
+    staleTime: Infinity,
+  });
 
 export type SaveResult = { saved: NoteView } | { conflict: { content: string; version: string } };
 
@@ -106,7 +125,10 @@ export function useSaveNote(path: string) {
       const now = "saved" in result ? result.saved : result.conflict;
       queryClient.setQueryData<NoteView>(["note", path], (old) => old && { ...old, ...now });
       // The banner counts the last write; after the user's own it no longer applies.
-      if ("saved" in result) void queryClient.invalidateQueries({ queryKey: ["changes"] });
+      if ("saved" in result) {
+        void queryClient.invalidateQueries({ queryKey: ["changes"] });
+        void queryClient.invalidateQueries({ queryKey: ["history", path] });
+      }
     },
   });
 }
@@ -131,7 +153,7 @@ export function useDeleteNote() {
       return next;
     },
     onSuccess: (_, path) => {
-      for (const key of ["note", "links", "backlinks"]) queryClient.removeQueries({ queryKey: [key, path] });
+      for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key, path] });
       void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(path)] });
       void queryClient.invalidateQueries({ queryKey: ["vaults"] });
       // Links to it lead nowhere now, and it no longer links to anything.

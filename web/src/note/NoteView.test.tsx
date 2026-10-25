@@ -214,6 +214,74 @@ describe("the note view", () => {
     expect(within(banner).getByRole("button", { name: "Hide" })).toBeInTheDocument();
   });
 
+  it("on Show, tints the blocks changed since the version the user last saw, read through ?version=", async () => {
+    const earlier = source.replace("- [x] read", "- [ ] read").replace("See [[Home/garden]] and [[todo]].", "");
+    const asked: (string | null)[] = [];
+    noteApi({
+      "GET /api/changes": () => json(200, [{ path: PLAN, writer: "liz", lastWriteAt: new Date().toISOString(), version: "v1" }]),
+      [`GET /api/history${PLAN}`]: () =>
+        json(200, [
+          { version: "v1", writtenAt: new Date().toISOString(), writer: "liz", lines: 11, current: true, changeset: "c3" },
+          { version: "v0b", writtenAt: new Date(Date.now() - 60_000).toISOString(), writer: "liz (mv)", lines: 11, current: false, changeset: "c2" },
+          { version: "v0a", writtenAt: "2026-10-20T08:00:00Z", writer: "ada", lines: 10, current: false, changeset: "c1" },
+        ]),
+      [`GET /api/notes${PLAN}`]: (r) => {
+        const version = new URL(r.url).searchParams.get("version");
+        asked.push(version);
+        return version === "v0a" ? json(200, { ...noteView(PLAN, earlier, "v0a"), current: false }) : json(200, noteView(PLAN, source));
+      },
+    });
+    renderApp(planUrl);
+    const banner = await screen.findByRole("region", { name: "Agent changes" });
+    expect(document.querySelector("[data-changed]")).toBeNull();
+    await userEvent.click(within(banner).getByRole("button", { name: "Show" }));
+
+    await waitFor(() => expect(document.querySelectorAll("[data-changed]")).toHaveLength(2));
+    expect([...document.querySelectorAll("[data-changed]")].map((e) => e.textContent?.trim())).toEqual(["read", "See Home/garden and todo."]);
+    expect(document.querySelector("[data-changed]")).toHaveAttribute("data-writer", "liz");
+    expect(asked).toContain("v0a");
+
+    await userEvent.click(within(banner).getByRole("button", { name: "Hide" }));
+    expect(document.querySelector("[data-changed]")).toBeNull();
+  });
+
+  it("tints the whole note when the agent wrote it from the start", async () => {
+    const asked: (string | null)[] = [];
+    noteApi({
+      "GET /api/changes": () => json(200, [{ path: PLAN, writer: "liz", lastWriteAt: new Date().toISOString(), version: "v1" }]),
+      [`GET /api/history${PLAN}`]: () => json(200, [{ version: "v1", writtenAt: new Date().toISOString(), writer: "liz", lines: 11, current: true, changeset: "c1" }]),
+      [`GET /api/notes${PLAN}`]: (r) => {
+        asked.push(new URL(r.url).searchParams.get("version"));
+        return json(200, noteView(PLAN, source));
+      },
+    });
+    renderApp(planUrl);
+    await userEvent.click(within(await screen.findByRole("region", { name: "Agent changes" })).getByRole("button", { name: "Show" }));
+    await waitFor(() => expect(document.querySelectorAll("[data-changed]").length).toBeGreaterThan(3));
+    expect(screen.getByRole("heading", { name: "Goals" })).toHaveAttribute("data-changed");
+    expect(screen.getByLabelText("Frontmatter")).toHaveAttribute("data-changed");
+    expect(asked.every((v) => v === null)).toBe(true);
+  });
+
+  it("asks for no changes and shows no banner on the first sign-in ever", async () => {
+    const fetch = noteApi({}, null);
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    expect(screen.queryByRole("region", { name: "Agent changes" })).not.toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => new URL(r.url).pathname === "/api/changes")).toBe(false);
+  });
+
+  it("says so in the delete dialog when it couldn't check the links to the note", async () => {
+    noteApi({ [`GET /api/backlinks${PLAN}`]: () => json(500, {}) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete plan?" });
+    expect(await within(dialog).findByText("Couldn't check which notes link here.")).toBeInTheDocument();
+    expect(within(dialog).queryByText("No other note links here.")).not.toBeInTheDocument();
+  });
+
   it("shows no banner when no agent changed this note", async () => {
     noteApi({ "GET /api/changes": () => json(200, [{ path: "/Work/other.md", writer: "bob", lastWriteAt: "2026-10-25T08:00:00Z", version: "x" }]) });
     renderApp(planUrl);

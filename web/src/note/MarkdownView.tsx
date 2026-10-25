@@ -1,12 +1,43 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
 import { Check } from "lucide-react";
-import { createContext, memo, useContext, useMemo, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { noteUrl } from "../api/paths";
 import { remarkWikiLinks, type LinkView } from "./wikiLinks";
+
+/** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
+export interface Highlight {
+  lines: Set<number> | "all";
+  writer: string;
+}
+
+interface MdBlock {
+  type: string;
+  children?: MdBlock[];
+  position?: { start: { line: number }; end: { line: number } };
+  data?: { hProperties?: Record<string, unknown> };
+}
+
+/** Marks each block (each item, in a list) with a changed source line; index.css tints them and names the writer. */
+function remarkChanged({ highlight }: { highlight: Highlight | null }) {
+  return (tree: MdBlock) => {
+    if (!highlight) return;
+    const touched = (node: MdBlock) => {
+      if (highlight.lines === "all") return true;
+      const { start, end } = node.position ?? { start: { line: 0 }, end: { line: -1 } };
+      for (let line = start.line; line <= end.line; line++) if (highlight.lines.has(line)) return true;
+      return false;
+    };
+    for (const block of tree.children ?? []) {
+      for (const node of block.type === "list" ? (block.children ?? []) : [block]) {
+        if (touched(node)) node.data = { ...node.data, hProperties: { ...node.data?.hProperties, dataChanged: true, dataWriter: highlight.writer } };
+      }
+    }
+  };
+}
 
 type HastNode = NonNullable<ExtraProps["node"]>;
 type HastChild = HastNode["children"][number];
@@ -42,18 +73,20 @@ interface Props {
   onToggleTask(line: number): void;
   /** A tap on a link to a note that doesn't exist yet, with its target as written. */
   onCreateMissing(target: string): void;
+  /** Agent highlights while "Show" is on, else null. */
+  highlight?: Highlight | null;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
+const NoteContext = createContext<Omit<Props, "source" | "highlight">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
 
-function TaskItem({ node, children }: { node: HastNode; children: ReactNode }) {
+function TaskItem({ node, children, ...rest }: { node: HastNode; children: ReactNode } & ComponentPropsWithoutRef<"li">) {
   const { tasksDisabled, onToggleTask } = useContext(NoteContext);
   const checked = taskChecked(node);
   const line = node.position!.start.line;
   return (
-    <li className="my-0.5 flex items-start gap-1">
+    <li className="my-0.5 flex items-start gap-1" {...rest}>
       <button
         type="button"
         role="checkbox"
@@ -120,7 +153,11 @@ const components: Components = {
   ),
   ol: ({ node: _, ...props }) => <ol className="my-3 list-decimal pl-6" {...props} />,
   li: ({ node, children, className: __, ...props }) =>
-    node && isTaskItem(node) ? <TaskItem node={node}>{children}</TaskItem> : <li className="my-1 marker:text-dim" {...props}>{children}</li>,
+    node && isTaskItem(node) ? (
+      <TaskItem node={node} {...props}>
+        {children}
+      </TaskItem>
+    ) : <li className="my-1 marker:text-dim" {...props}>{children}</li>,
   // The task's checkbox is the button of its item, above.
   input: ({ node: _, type, ...props }) => (type === "checkbox" ? null : <input type={type} {...props} />),
   blockquote: ({ node: _, ...props }) => <blockquote className="my-3 border-l-[3px] border-accent pl-3.5 text-text-body [&>p]:my-1" {...props} />,
@@ -154,8 +191,11 @@ const components: Components = {
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing }: Props) {
-  const remarkPlugins = useMemo(() => [remarkGfm, [remarkWikiLinks, { links: links ?? [] }]] as const, [links]);
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null }: Props) {
+  const remarkPlugins = useMemo(
+    () => [remarkGfm, [remarkWikiLinks, { links: links ?? [] }], [remarkChanged, { highlight }]] as const,
+    [links, highlight],
+  );
   const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing }), [links, tasksDisabled, onToggleTask, onCreateMissing]);
 
   return (

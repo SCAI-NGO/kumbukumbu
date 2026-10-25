@@ -15,10 +15,22 @@ const link = (line: number, raw: string, kind: string, path: string | null = nul
   candidates,
 });
 
-function show(source: string, links: LinkView[] = [], handlers: Partial<{ onToggleTask(line: number): void; onCreateMissing(target: string): void }> = {}) {
+function show(
+  source: string,
+  links: LinkView[] = [],
+  handlers: Partial<{ onToggleTask(line: number): void; onCreateMissing(target: string): void }> = {},
+  highlight: { lines: Set<number> | "all"; writer: string } | null = null,
+) {
   render(
     <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <MarkdownView source={source} links={links} tasksDisabled={false} onToggleTask={handlers.onToggleTask ?? vi.fn()} onCreateMissing={handlers.onCreateMissing ?? vi.fn()} />
+      <MarkdownView
+        source={source}
+        links={links}
+        tasksDisabled={false}
+        onToggleTask={handlers.onToggleTask ?? vi.fn()}
+        onCreateMissing={handlers.onCreateMissing ?? vi.fn()}
+        highlight={highlight}
+      />
     </MemoryRouter>,
   );
 }
@@ -128,5 +140,32 @@ describe("MarkdownView", () => {
     expect(screen.getByText("img.png")).not.toHaveAttribute("href");
     expect(screen.getByText("Self")).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(1);
+  });
+
+  it("matches links whose backslash escapes Markdown took out, as in an Obsidian table", () => {
+    // The server's raw keeps the backslashes; the rendered text has none.
+    show("| Note | Why |\n| --- | --- |\n| [[plan\\|the plan]] | [[a\\_b]] |", [
+      { line: 3, raw: "[[plan\\|the plan]]", target: "plan", kind: "note", path: "/V/plan.md", candidates: [] },
+      { line: 3, raw: "[[a\\_b]]", target: "a\\_b", kind: "not_found", path: null, candidates: [] },
+    ]);
+    expect(screen.getByRole("link", { name: "the plan" })).toHaveAttribute("href", "/notes/V/plan.md");
+    expect(screen.getByRole("button", { name: "Create the note “a\\_b”" })).toBeInTheDocument();
+  });
+
+  it("tints the blocks whose source lines changed, with the writer's name", () => {
+    show("# Title\n\nkept\n\nnew text\n\n- one\n- two changed", [], {}, { lines: new Set([5, 8]), writer: "liz" });
+    const tinted = [...document.querySelectorAll("[data-changed]")];
+    expect(tinted.map((e) => e.textContent)).toEqual(["new text", "two changed"]);
+    expect(tinted.every((e) => e.getAttribute("data-writer") === "liz")).toBe(true);
+  });
+
+  it("tints every block of a note the agent wrote from the start", () => {
+    show("# Title\n\ntext\n\n- [ ] task", [], {}, { lines: "all", writer: "liz" });
+    expect([...document.querySelectorAll("[data-changed]")].map((e) => e.tagName)).toEqual(["H1", "P", "LI"]);
+  });
+
+  it("tints nothing without highlights", () => {
+    show("# Title\n\ntext");
+    expect(document.querySelector("[data-changed]")).toBeNull();
   });
 });

@@ -8,7 +8,7 @@ import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
-import AgentBanner from "./AgentBanner";
+import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
 import MarkdownView from "./MarkdownView";
 import { taskToggle } from "./taskToggle";
@@ -43,6 +43,11 @@ export default function NoteView({ path }: { path: string }) {
   const navigate = useNavigate();
   const [notice, setNotice] = useState<Notice | null>(null);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
+  const change = useAgentChange(path);
+  const highlight = useAgentHighlight(path, change, note.data?.content);
+  // The frontmatter's lines are 2 to its closing line (`parts.frontmatter` has one line fewer than that).
+  const frontmatterChanged =
+    !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
 
   const toggleTask = useCallback(
     (line: number) => {
@@ -78,7 +83,7 @@ export default function NoteView({ path }: { path: string }) {
 
   return (
     <>
-      <AgentBanner path={path} />
+      <AgentBanner change={change} />
       <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
         <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>
         {notice && (
@@ -95,12 +100,13 @@ export default function NoteView({ path }: { path: string }) {
             {parts.frontmatter !== null && (
               <pre
                 aria-label="Frontmatter"
+                {...(frontmatterChanged ? { "data-changed": true, "data-writer": highlight!.writer } : {})}
                 className="mb-4 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6] whitespace-pre-wrap text-muted"
               >
                 {parts.frontmatter}
               </pre>
             )}
-            <MarkdownView source={parts.body} links={links.data} tasksDisabled={save.isPending} onToggleTask={toggleTask} onCreateMissing={createMissing} />
+            <MarkdownView source={parts.body} links={links.data} tasksDisabled={save.isPending} onToggleTask={toggleTask} onCreateMissing={createMissing} highlight={highlight} />
           </article>
         )}
         {note.data && <BacklinksList path={path} />}
@@ -138,6 +144,8 @@ export function DeleteNoteDialog({ path, onClose }: { path: string; onClose(): v
         <p className="text-text-body">It goes to the vault's trash.</p>
         {backlinks.isPending ? (
           <p className="text-sm text-muted">Looking for notes that link here …</p>
+        ) : backlinks.isError ? (
+          <p className="text-sm text-muted">Couldn't check which notes link here.</p>
         ) : sources.length === 0 ? (
           <p className="text-sm text-muted">No other note links here.</p>
         ) : (

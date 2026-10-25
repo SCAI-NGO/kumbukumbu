@@ -15,6 +15,9 @@ interface MdNode {
 // As the server finds them (Kumbu.Core WikiLink): `[[target#Heading|alias]]`, an embed with `!`.
 const wikiLink = /!?\[\[([^[\]\n]+?)\]\]/g;
 
+/** Markdown's backslash escapes (CommonMark: before any ASCII punctuation) taken out. */
+const unescape = (raw: string) => raw.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+
 /** What a link shows: its alias, else its target (and heading, `plan › Goals`). */
 export function linkLabel(raw: string) {
   const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
@@ -34,7 +37,15 @@ export function linkLabel(raw: string) {
 export function remarkWikiLinks({ links }: { links: LinkView[] }) {
   return (tree: MdNode) => {
     const answers = new Map<string, number[]>();
-    links.forEach((l, i) => answers.set(`${l.line}\u0000${l.raw}`, [...(answers.get(`${l.line}\u0000${l.raw}`) ?? []), i]));
+    // Markdown takes backslash escapes out of the text (`[[plan\|alias]]` in a table, `[[a\_b]]`), the server's
+    // raw keeps them: such a link is also known by its raw without them, where that is no other link's key.
+    const unescaped = new Map<string, number[]>();
+    links.forEach((l, i) => {
+      const key = `${l.line}\u0000${l.raw}`;
+      answers.set(key, [...(answers.get(key) ?? []), i]);
+      const plain = `${l.line}\u0000${unescape(l.raw)}`;
+      if (plain !== key) unescaped.set(plain, [...(unescaped.get(plain) ?? []), i]);
+    });
     const seen = new Map<string, number>();
 
     const replace = (node: MdNode): MdNode[] => {
@@ -53,7 +64,7 @@ export function remarkWikiLinks({ links }: { links: LinkView[] }) {
         const key = `${line}\u0000${m[0]}`;
         const nth = seen.get(key) ?? 0;
         seen.set(key, nth + 1);
-        const index = answers.get(key)?.[nth] ?? -1;
+        const index = (answers.get(key) ?? unescaped.get(key))?.[nth] ?? -1;
 
         if (m.index > last) out.push({ type: "text", value: value.slice(last, m.index) });
         out.push({

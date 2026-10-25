@@ -1209,7 +1209,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    version?: string;
+                };
                 header?: never;
                 path: {
                     vault: string;
@@ -2080,6 +2082,7 @@ export interface components {
             lastWriter: string;
             /** Format: date-time */
             lastWriteAt: string;
+            current: boolean;
         };
         PasswordChangedView: {
             signedOut: boolean;

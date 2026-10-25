@@ -81,6 +81,23 @@ html {
   }
 }
 
+/* A block an agent changed while "Show" is on (MOBILE_EDITOR §5): an accent tint, the key's name top right. */
+[data-changed] {
+  position: relative;
+  margin-inline: -8px;
+  padding: 4px 52px 4px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+[data-changed]::after {
+  content: attr(data-writer);
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font: 500 11px/1.4 var(--font-mono);
+  color: var(--accent-text);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
