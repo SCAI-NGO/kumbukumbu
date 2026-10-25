@@ -32,6 +32,9 @@ export function splitFrontmatter(source: string): { frontmatter: string | null; 
   };
 }
 
+/** Whether the body opens with its own `# Heading` (the frontmatter's lines are empty in it, as are blank ones). */
+const startsWithH1 = (body: string) => /^#[ \t]+\S/.test(body.trimStart());
+
 /** The notice under the title: a write that lost to a newer version, or one that failed. */
 type Notice = { kind: "conflict" } | { kind: "error"; text: string };
 
@@ -126,7 +129,8 @@ export default function NoteView({ path }: { path: string }) {
     <>
       <AgentBanner change={change} />
       <div {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
-        <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>
+        {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
+        {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
         {notice && (
           <p
             role={notice.kind === "conflict" ? "status" : "alert"}

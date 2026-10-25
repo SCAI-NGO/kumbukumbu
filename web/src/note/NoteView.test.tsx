@@ -77,6 +77,21 @@ describe("the note view", () => {
     expect(within(view()).queryByText("tags: [work]", { selector: "p" })).not.toBeInTheDocument();
   });
 
+  it("shows one title: the note's own H1 replaces the file name's", async () => {
+    noteApi();
+    renderApp(planUrl);
+    expect(await screen.findByRole("heading", { level: 1, name: "Plan" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("shows the file name as the title of a note without an H1", async () => {
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "---\ntags: [x]\n---\n\nJust text.\n\n## Goals\n")) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 2, name: "Goals" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("plan");
+  });
+
   it("shows the links as the server resolved them, never across vaults", async () => {
     const fetch = noteApi();
     renderApp(planUrl);
