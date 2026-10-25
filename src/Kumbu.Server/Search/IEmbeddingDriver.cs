@@ -10,6 +10,7 @@ namespace Kumbu.Server.Search;
 /// </summary>
 public interface IEmbeddingDriver
 {
+    /// <summary>Whether a search query can be embedded now; the index asks <see cref="WhenReadyAsync"/> instead.</summary>
     SemanticState State { get; }
 
     /// <summary>

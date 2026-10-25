@@ -211,6 +211,23 @@ public sealed class OpenAiCompatibleDriverTests
     }
 
     [Fact]
+    public async Task A_failed_query_pauses_the_searches_but_not_the_indexing()
+    {
+        var rig = Make(new FakeHandler(Status(HttpStatusCode.ServiceUnavailable), Status(HttpStatusCode.ServiceUnavailable), Vectors()));
+
+        await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["q"], query: true, Ct));
+        var delays = rig.Delays.Count;
+
+        // Searches answer "unavailable" at once for a minute; the index neither waits nor is refused.
+        Assert.Equal(SemanticState.Off, rig.Driver.State);
+        await Assert.ThrowsAsync<EmbeddingUnavailableException>(() => rig.Driver.EmbedAsync(["q"], query: true, Ct));
+        await rig.Driver.WhenReadyAsync(Ct);
+        Assert.Equal(delays, rig.Delays.Count);
+        Assert.Single(await rig.Driver.EmbedAsync(["a note"], query: false, Ct));
+        Assert.Equal(3, rig.Handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task A_query_does_not_wait_out_a_long_retry_after_but_fails_at_once()
     {
         var rig = Make(new FakeHandler(Status(HttpStatusCode.TooManyRequests, TimeSpan.FromSeconds(7)), Vectors()));
