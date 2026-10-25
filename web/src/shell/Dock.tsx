@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Ellipsis, FilePlus, Folder, Plus, Search, Upload } from "lucide-react";
+import { useRef } from "react";
 import { Menu, type MenuItem } from "../components/Menu";
 import { useEditor } from "../state/editor";
 
@@ -11,13 +12,14 @@ export default function Dock(props: { newNote: (() => void) | null; upload: (() 
   const { newNote, upload, noteActions } = props;
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
+  const standIn = useRef<HTMLInputElement>(null);
   const items: MenuItem[] = [
     { label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote },
     { label: "Upload", icon: Upload, onSelect: () => upload?.(), disabled: !upload },
   ];
 
   return (
-    <nav aria-label="Vault actions" className="flex flex-none items-center gap-2.5 border-t border-line bg-bg px-3 pt-2.5 pb-[max(20px,env(safe-area-inset-bottom))]">
+    <nav aria-label="Vault actions" className="relative flex flex-none items-center gap-2.5 border-t border-line bg-bg px-3 pt-2.5 pb-[max(20px,env(safe-area-inset-bottom))]">
       <button
         type="button"
         aria-label="Files"
@@ -26,9 +28,22 @@ export default function Dock(props: { newNote: (() => void) | null; upload: (() 
       >
         <Folder size={22} strokeWidth={1.8} aria-hidden />
       </button>
+      {/* iOS raises the keyboard only for a focus inside the tap, and the search sheet may still be loading then:
+          this field takes the focus at once, keeping the keyboard up until the sheet's input takes it over. */}
+      <input
+        ref={standIn}
+        aria-hidden
+        tabIndex={-1}
+        data-focus-return="dock-search"
+        className="pointer-events-none absolute size-px text-[16px] opacity-0"
+      />
       <button
+        id="dock-search"
         type="button"
-        onClick={() => setOverlay("search")}
+        onClick={() => {
+          standIn.current?.focus({ preventScroll: true });
+          setOverlay("search");
+        }}
         className="flex h-12 min-w-0 flex-1 items-center gap-2.5 rounded-full border border-line bg-surface pr-2 pl-4 text-left text-muted focus-visible:outline-2 focus-visible:outline-accent"
       >
         <Search size={20} strokeWidth={1.9} aria-hidden />

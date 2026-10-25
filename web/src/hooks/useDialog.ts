@@ -8,7 +8,8 @@ const stack: HTMLElement[] = [];
 
 /**
  * What `aria-modal` promises: focus moves in on open (to `[data-autofocus]`, else the first control), Tab stays
- * inside, Escape calls `onClose` wherever focus is, and focus goes back to the opener on close.
+ * inside, Escape calls `onClose` wherever focus is, and focus goes back to the opener on close. An opener that only
+ * held the focus for a moment (`data-focus-return="<id>"`, the dock's keyboard stand-in) hands it to that element.
  */
 export function useDialog<T extends HTMLElement>(onClose: () => void) {
   const ref = useRef<T>(null);
@@ -17,7 +18,8 @@ export function useDialog<T extends HTMLElement>(onClose: () => void) {
 
   useEffect(() => {
     const dialog = ref.current!;
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const opener = active?.dataset.focusReturn ? document.getElementById(active.dataset.focusReturn) : active;
     stack.push(dialog);
     (dialog.querySelector<HTMLElement>("[data-autofocus]") ?? dialog.querySelector<HTMLElement>(focusable) ?? dialog).focus();
 

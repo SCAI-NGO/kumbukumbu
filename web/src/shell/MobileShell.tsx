@@ -20,7 +20,8 @@ import TreeDrawer from "./TreeDrawer";
 // Loaded on first use, which keeps the main bundle under Vite's 500 kB warning: upload is seldom used, and search
 // has its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
-const SearchSheet = lazy(() => import("../search/SearchSheet"));
+const loadSearch = () => import("../search/SearchSheet");
+const SearchSheet = lazy(loadSearch);
 
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
@@ -85,6 +86,11 @@ export default function MobileShell() {
   useEffect(() => {
     if (path && path !== useEditor.getState().currentPath) useEditor.getState().openNote(path);
   }, [path]);
+
+  // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field).
+  useEffect(() => {
+    void loadSearch().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!activeVault && vaults.data?.length) setActiveVault(vaults.data[0].name);
