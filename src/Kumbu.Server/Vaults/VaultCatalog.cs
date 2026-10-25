@@ -592,8 +592,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await vault.Gate.WaitAsync(ct);
         try
         {
+            // Deleted since the request read it (here, or in another process: then only its document is gone).
+            if (vault.Deleted || IsDeleted(vault.Id)) throw new VaultDeletedException();
             var result = await Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(provider)), cancellationToken: ct);
-            if (result.MatchedCount == 0) throw new VaultUnavailableException("The vault doesn't exist any more.");
+            if (result.MatchedCount == 0) throw new VaultDeletedException();
             vault.EmbeddingProvider = provider;
         }
         finally

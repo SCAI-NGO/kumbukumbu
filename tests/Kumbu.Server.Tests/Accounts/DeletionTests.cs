@@ -301,6 +301,22 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Choosing_a_provider_for_a_vault_deleted_meanwhile_says_it_was_deleted()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var vault = await FilledVaultAsync(lea, key, "Tagebuch");
+        // Locked, as a request that read the vault just before the deletion holds it: nobody marks this object deleted.
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog().Sweep();
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
+
+        await Assert.ThrowsAsync<VaultDeletedException>(() => Catalog().SetEmbeddingProviderAsync(vault, "remote", Ct));
+        // Without the tombstone too (the vault went in another process): its document is gone.
+        var other = new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
+        await Assert.ThrowsAsync<VaultDeletedException>(() => other.SetEmbeddingProviderAsync(vault, "remote", Ct));
+    }
+
+    [Fact]
     public async Task An_older_vault_object_waiting_in_the_index_queue_brings_no_embedding_back()
     {
         var (lea, key, _) = await SignedInAsync("lea");
