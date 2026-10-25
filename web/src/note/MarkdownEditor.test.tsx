@@ -484,3 +484,48 @@ describe("Done", () => {
     expect(queryClient.getQueryData<{ version: string }>(["note", PLAN])?.version).toBe("v2");
   });
 });
+
+describe("[[ completion", () => {
+  const listbox = () => screen.queryByRole("listbox", { name: "Notes to link" });
+
+  it("lists the vault's notes as the name is typed, and Enter inserts the link", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control}{Enter}See [[[[");
+    // The note itself isn't offered.
+    expect(within(listbox()!).getAllByRole("option").map((o) => o.textContent)).toEqual(["roadmapWork / projects"]);
+    await u.type(editorBox(), "ro");
+    expect(within(listbox()!).getByRole("option", { selected: true })).toHaveTextContent("roadmap");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source}\nSee [[roadmap]]`);
+    expect(editorBox().selectionStart).toBe(editorBox().value.length);
+    expect(listbox()).toBeNull();
+  });
+
+  it("inserts on a tap and keeps the textarea focused; Escape closes the list", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[road");
+    await u.click(within(listbox()!).getByRole("option"));
+    expect(editorBox().value).toBe(`${source} [[roadmap]]`);
+    expect(editorBox()).toHaveFocus();
+
+    await u.type(editorBox(), " [[[[r");
+    expect(listbox()).not.toBeNull();
+    await u.keyboard("{Escape}");
+    expect(listbox()).toBeNull();
+    await u.type(editorBox(), "o");
+    expect(listbox()).toBeNull();
+  });
+
+  it("completes the [[ ]] the toolbar inserted", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} ");
+    await u.click(screen.getByRole("button", { name: "Wiki link" }));
+    await u.type(editorBox(), "road", { skipClick: true });
+    expect(screen.getByRole("listbox", { name: "Notes to link" })).toBeInTheDocument();
+    await u.keyboard("{Tab}");
+    expect(editorBox().value).toBe(`${source} [[roadmap]]`);
+  });
+});
