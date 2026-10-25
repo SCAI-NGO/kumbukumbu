@@ -111,6 +111,41 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_earlier_version_is_read_by_its_token_and_says_it_is_not_the_current_one()
+    {
+        var user = await UserAsync();
+        var key = await user.KeyAsync("liz", KeyRight.Read);
+        var writer = await user.KeyAsync("agent", KeyRight.Write);
+        var first = await user.CreateAsync("plan.md", "one\n");
+        // Another writer starts a changeset of its own, so the history keeps the user's version.
+        using var byAgent = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "two\n", version = first }, bearer: writer);
+        var second = (await JsonAsync(byAgent))["version"]!.GetValue<string>();
+
+        using var earlier = await user.GetAsync($"{user.Url("plan.md")}?version={first}");
+        using var asKey = await user.GetAsync($"{user.Url("plan.md")}?version={first}", bearer: key);
+        using var latest = await user.GetAsync($"{user.Url("plan.md")}?version={second}");
+        using var unknown = await user.GetAsync($"{user.Url("plan.md")}?version=0000deadbeef");
+
+        Assert.Equal(HttpStatusCode.OK, earlier.StatusCode);
+        var old = await JsonAsync(earlier);
+        Assert.Equal("one\n", old["content"]!.GetValue<string>());
+        Assert.Equal(first, old["version"]!.GetValue<string>());
+        Assert.False(old["current"]!.GetValue<bool>());
+        Assert.Equal(user.Username, old["lastWriter"]!.GetValue<string>());
+        Assert.Equal("one\n", (await JsonAsync(asKey))["content"]!.GetValue<string>());
+
+        var now = await JsonAsync(latest);
+        Assert.Equal("two\n", now["content"]!.GetValue<string>());
+        Assert.True(now["current"]!.GetValue<bool>());
+        var plain = await user.ReadAsync("plan.md");
+        Assert.Equal(second, plain["version"]!.GetValue<string>());
+        Assert.True(plain["current"]!.GetValue<bool>());
+
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.Contains("has no version 0000deadbeef", (await JsonAsync(unknown))["error"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Paths_with_spaces_and_umlauts_work_in_urls()
     {
         var user = await UserAsync("Bücher");

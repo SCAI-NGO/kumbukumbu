@@ -27,10 +27,12 @@ public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFold
 /// <summary><c>size</c> in bytes (UTF-8).</summary>
 public sealed record TreeNote(string Name, string Path, int Size);
 
-/// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.</summary>
-public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt)
+/// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
+/// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
+/// can't go on top of), with the writer and time of that version in <c>lastWriter</c> and <c>lastWriteAt</c>.</summary>
+public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt, bool Current)
 {
-    public static NoteView From(StoredNote note) => new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt);
+    public static NoteView From(StoredNote note) => new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt, Current: true);
 }
 
 /// <summary>Without <c>version</c> a note is created; with it, the note is overwritten if it is still at that version.</summary>
@@ -151,11 +153,18 @@ public static class NoteApi
         }
     }
 
-    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
+    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner.</summary>
+    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        return TypedResults.Ok(NoteView.From(note));
+        if (version is null) return TypedResults.Ok(NoteView.From(note));
+
+        // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
+        var found = NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version)
+            ?? throw ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current));
     }
 
     private static async Task<Results<Created<NoteView>, Ok<NoteView>, Conflict<ConflictView>>> WriteAsync(

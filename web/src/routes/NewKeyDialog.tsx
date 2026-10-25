@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useId, useState, type FormEvent } from "react";
+import { api, call } from "../api/client";
+import { errorText } from "../api/error-text";
+import { useVaults } from "../api/notes";
+import type { components } from "../api/schema";
+import { FormError, labelClass, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
+import { useDialog } from "../hooks/useDialog";
+
+type Created = components["schemas"]["CreatedApiKeyView"];
+type Right = "none" | "read" | "write";
+
+const rights: { value: Right; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "read", label: "Read" },
+  { value: "write", label: "Read and write" },
+];
+
+/** Asks for a key's name and its right per vault; the server says what a name may be. */
+export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; onCreated(created: Created): void }) {
+  const id = useId();
+  const queryClient = useQueryClient();
+  const dialog = useDialog<HTMLFormElement>(onClose);
+  const vaults = useVaults();
+  const [name, setName] = useState("");
+  const [chosen, setChosen] = useState<Record<string, Right>>({});
+
+  const granted = Object.fromEntries(Object.entries(chosen).filter(([, right]) => right !== "none"));
+  const ready = name.trim() !== "" && Object.keys(granted).length > 0;
+
+  const create = useMutation({
+    mutationFn: () => call(api.POST("/api/keys", { body: { name, vaults: granted } })),
+    // The result carries the key: it goes to the reveal's state, not the client-wide mutation cache.
+    gcTime: 0,
+    onSuccess: (created) => {
+      void queryClient.invalidateQueries({ queryKey: ["keys"] });
+      onCreated(created);
+    },
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (ready) create.mutate();
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
+      <form
+        ref={dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        onSubmit={submit}
+        className="k-sheet flex max-h-dvh w-full max-w-md flex-col gap-4 overflow-y-auto rounded-t-[16px] border border-line bg-surface p-4 pb-[max(20px,env(safe-area-inset-bottom))] sm:rounded-[16px]"
+      >
+        <h2 id={`${id}-title`} className="text-[22px] font-bold text-text">
+          New API key
+        </h2>
+        <TextField label="Name" value={name} onChange={setName} autoComplete="off" />
+
+        <div className="flex flex-col gap-3">
+          <p className={labelClass}>Vaults</p>
+          {vaults.isPending && <p className="text-muted">Loading your vaults…</p>}
+          {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
+          {vaults.data?.length === 0 && <p className="text-text-body">You have no vault yet. Make one first.</p>}
+          {vaults.data?.map((vault) => (
+            <fieldset key={vault.name} className="flex flex-col gap-1">
+              <legend className="mb-1 text-text">{vault.name}</legend>
+              <div className="flex rounded-[10px] border border-line bg-surface-2 p-0.5">
+                {rights.map((right) => (
+                  <label
+                    key={right.value}
+                    className="flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-text-body has-checked:bg-accent has-checked:text-on-accent has-focus-visible:outline-2 has-focus-visible:outline-accent"
+                  >
+                    <input
+                      type="radio"
+                      name={`${id}-${vault.name}`}
+                      value={right.value}
+                      checked={(chosen[vault.name] ?? "none") === right.value}
+                      onChange={() => setChosen({ ...chosen, [vault.name]: right.value })}
+                      className="sr-only"
+                    />
+                    {right.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+          <p className="text-sm text-muted">A key needs a name and at least one vault it may read.</p>
+        </div>
+
+        {create.isError && <FormError>{errorText(create.error)}</FormError>}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className={secondaryButtonClass}>
+            Cancel
+          </button>
+          <button type="submit" disabled={create.isPending || !ready} className={primaryButtonClass}>
+            Create key
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}

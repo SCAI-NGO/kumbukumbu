@@ -6,3 +6,7 @@
 .github/
 vaults/
 .env
+**/node_modules/
+web/dist/
+# A local build's copy of the web app; the image builds its own.
+src/Kumbu.Server/wwwroot/
