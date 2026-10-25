@@ -50,3 +50,6 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - The first tap on Search focuses a stand-in field in the dock inside the tap, so iOS raises the keyboard while the search sheet loads; the sheet's input then takes the focus over. Verified in tests only, not yet on an iPhone. Find in the note focuses its field as it opens, without a stand-in.
 - iOS Safari and Android's gesture navigation use a swipe from the screen's left edge for "back"; the drawer's edge swipe competes with them there.
 - Notes are text only; attachments are left to a later, carefully designed version.
+- Rename or move offers the vault's existing folders only; moving into a new folder isn't offered yet (make a note there first).
+- A missing link tapped inside an embedded note creates the note in the embedding note's folder, not the embedded one's.
+- Notes whose path contains `#`, `|`, `[` or `]` can't be named by a wiki link, so the `[[` list leaves them out.
