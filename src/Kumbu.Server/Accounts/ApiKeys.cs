@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Crypto;
-using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
@@ -57,13 +55,11 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     private const int Base62Length = 43;
 
     private const int PrefixLength = 8;
-    private const int MaxNameLength = 64;
 
     private const string Base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     private const string LookupLabel = "kumbu/v1/api-key-lookup";
     private const string WriterLabel = "kumbu/v1/api-key-writer";
     private const string MetaLabel = "kumbu/v1/api-key-meta";
-    private const string NameIdLabel = "kumbu/v1/api-key-name-id";
 
     /// <summary>The lifetimes a key can be given at creation, in days; without one it never expires.</summary>
     public static readonly IReadOnlySet<int> ExpiryDays = new HashSet<int> { 30, 90, 365 };
@@ -92,7 +88,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
         int? expiresInDays = null)
     {
-        var clean = CheckName(user, name);
+        var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
         if (expiresInDays is { } days && !ExpiryDays.Contains(days))
         {
@@ -113,7 +109,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
             User = user.Id,
             Lookup = Lookup(key),
             Prefix = key.Substring(KeyPrefix.Length, PrefixLength),
-            NameId = NameId(userKey, user.Id, clean),
+            NameId = WriterNames.NameId(userKey, user.Id, clean),
             Meta = VaultCrypto.Seal(MetaKey(userKey, user.Id), JsonSerializer.SerializeToUtf8Bytes(meta), MetaContext(id)),
             Writer = VaultCrypto.Seal(WriterKey(key), Encoding.UTF8.GetBytes(clean), WriterContext(id, expiresAt)),
             CreatedAt = Now,
@@ -139,6 +135,9 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                             Builders<UserDocument>.Update.Inc(u => u.KeysCreated, 1),
                             cancellationToken: token);
                         if (current.MatchedCount == 0) throw new CredentialsChangedException();
+                        // Names are unique across keys and connections. A connection made at the same time with
+                        // this name writes the user document too: one of the two conflicts and, retried, sees the other.
+                        if (await Connections.NameTakenAsync(s, db, user.Id, doc.NameId, Now, token)) throw new ApiKeyNameTakenException(clean);
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);
@@ -312,38 +311,22 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         return new ResolvedApiKey(user.ToUser(), doc.Id, name);
     }
 
+    /// <summary>
+    /// Inside a connection's creation: whether a key of the user that is neither revoked nor expired has the name
+    /// with <paramref name="nameId"/>. An expired key's name is free even before it is retired.
+    /// </summary>
+    internal static Task<bool> NameTakenAsync(IClientSessionHandle session, IMongoDatabase db, string userId, byte[]? nameId, DateTime now, CancellationToken ct)
+    {
+        var f = Builders<ApiKeyDocument>.Filter;
+        return db.GetCollection<ApiKeyDocument>("api_keys")
+            .Find(session, f.Eq(k => k.User, userId) & f.Eq(k => k.NameId, nameId) & f.Eq(k => k.RevokedAt, null) & (f.Eq(k => k.ExpiresAt, null) | f.Gt(k => k.ExpiresAt, now)))
+            .AnyAsync(ct);
+    }
+
     public static bool LooksLikeKey(string presented) => presented.StartsWith(KeyPrefix, StringComparison.Ordinal);
 
     private static bool IsWellFormed(string presented) =>
         presented.Length == KeyPrefix.Length + Base62Length && LooksLikeKey(presented) && presented.AsSpan(KeyPrefix.Length).IndexOfAnyExcept(Base62) < 0;
-
-    /// <summary>
-    /// The name, trimmed. Its writes carry it as their writer label, so it must stay apart from the other labels:
-    /// not the user's own username (their writes in the web app) nor <c>dev</c> or <c>seed</c>, and without
-    /// <c>" ("</c>, which the history puts between a writer and the tool ("laptop (mv)").
-    /// </summary>
-    private static string CheckName(User user, string name)
-    {
-        var clean = name.Normalize(NormalizationForm.FormC).Trim();
-        if (clean.Length is 0 or > MaxNameLength) throw new ArgumentException($"An API key's name has 1 to {MaxNameLength} characters.", nameof(name));
-        // Format characters (zero-width, bidi overrides) are invisible too: "chris\u200B" would show as "chris".
-        if (clean.Any(c => char.IsControl(c) || char.GetUnicodeCategory(c) == UnicodeCategory.Format))
-        {
-            throw new ArgumentException("An API key's name can't contain control or invisible formatting characters.", nameof(name));
-        }
-        if (clean.Contains(" (", StringComparison.Ordinal)) throw new ArgumentException("An API key's name can't contain \" (\".", nameof(name));
-        if (string.Equals(clean, user.Username, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("An API key can't be named like you: its writes would look like your own.", nameof(name));
-        }
-
-        if (clean.Equals(Writers.Dev, StringComparison.OrdinalIgnoreCase) || clean.Equals(Writers.Seed, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException($"'{clean}' is reserved for the server's own writes.", nameof(name));
-        }
-
-        return clean;
-    }
 
     private static string EncodeBase62(byte[] bytes)
     {
@@ -374,10 +357,6 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     private static byte[] WriterKey(string key) => VaultCrypto.Derive(key, WriterLabel, []);
 
     private static byte[] MetaKey(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, MetaLabel, Encoding.UTF8.GetBytes(userId));
-
-    /// <summary>A keyed hash of the lower-cased name, so MongoDB keeps a user's key names unique without seeing one.</summary>
-    private static byte[] NameId(byte[] userKey, string userId, string name) =>
-        VaultCrypto.Mac(VaultCrypto.Derive(userKey, NameIdLabel, Encoding.UTF8.GetBytes(userId)), name.ToLowerInvariant());
 
     private static string MetaContext(string keyId) => $"api-key:{keyId}:meta";
 
@@ -458,7 +437,7 @@ public sealed class ApiKeyDocument
     public DateTime? ExpiresAt { get; set; }
 }
 
-public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key named '{name}'.");
+public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key or connection named '{name}'.");
 
 /// <summary>The session that asked is older than the user's last password change or recovery, or the user was
 /// deactivated meanwhile: it may not make anything that outlives it.</summary>

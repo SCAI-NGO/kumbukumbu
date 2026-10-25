@@ -61,6 +61,12 @@ public sealed class UserDocument
     [BsonElement("keysCreated")]
     public long KeysCreated { get; set; }
 
+    /// <summary>How many connections the user has created; incremented in each connection's transaction, for the same
+    /// reason as <see cref="KeysCreated"/>, and so that a key and a connection made with one name at once conflict
+    /// (see <see cref="Connections.CreateAsync"/>).</summary>
+    [BsonElement("connectionsCreated")]
+    public long ConnectionsCreated { get; set; }
+
     /// <summary>How many vaults the user has created; incremented in each vault's transaction, for the same reason
     /// as <see cref="KeysCreated"/>: a concurrent deletion of the account conflicts with it.</summary>
     [BsonElement("vaultsCreated")]

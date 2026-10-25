@@ -262,22 +262,21 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     }
 
     /// <summary>
-    /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
-    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
-    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
-    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction.
+    /// The vault keys of <paramref name="vaultIds"/>, opened from the user's own slots: <see cref="ArgumentException"/>
+    /// (its message starting with <paramref name="noun"/>, "An API key", "A connection") if a vault isn't the user's
+    /// or no longer exists. What an API key or a connection is given must be the user's own.
     /// </summary>
-    internal async Task<IReadOnlyList<SlotDocument>> ApiKeySlotsAsync(
-        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+    internal async Task<IReadOnlyDictionary<string, byte[]>> UserVaultKeysAsync(
+        string userId, byte[] userKey, IReadOnlyCollection<string> vaultIds, string noun, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var ids = vaults.Keys.ToList();
+        var ids = vaultIds.ToList();
         var userSlots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
             & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(userKey, userId)) & Builders<SlotDocument>.Filter.In(s => s.Vault, ids)).ToListAsync(ct);
         var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => v.Id).ToListAsync(ct)).ToHashSet();
 
-        var result = new List<SlotDocument>();
-        foreach (var (vaultId, right) in vaults)
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var vaultId in ids)
         {
             byte[]? vaultKey = null;
             foreach (var slot in userSlots.Where(s => s.Vault == vaultId))
@@ -292,19 +291,32 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 }
             }
 
-            if (vaultKey is null || !existing.Contains(vaultId)) throw new ArgumentException("An API key can only be given vaults of your own.", nameof(vaults));
-            result.Add(new SlotDocument
-            {
-                Vault = vaultId,
-                Kind = SlotDocument.ApiKey,
-                KeyId = keyId,
-                Wrapped = VaultCrypto.Seal(
-                    ApiKeyKek(apiKey, vaultId), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKey, Accounts.KeyRights.ToText(right))), ApiKeySlotContext(vaultId, keyId)),
-                CreatedAt = Now,
-            });
+            if (vaultKey is null || !existing.Contains(vaultId)) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
+            result[vaultId] = vaultKey;
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
+    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
+    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
+    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction.
+    /// </summary>
+    internal async Task<IReadOnlyList<SlotDocument>> ApiKeySlotsAsync(
+        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+    {
+        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
+        return [.. vaults.Select(v => new SlotDocument
+        {
+            Vault = v.Key,
+            Kind = SlotDocument.ApiKey,
+            KeyId = keyId,
+            Wrapped = VaultCrypto.Seal(
+                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))), ApiKeySlotContext(v.Key, keyId)),
+            CreatedAt = Now,
+        })];
     }
 
     /// <summary>

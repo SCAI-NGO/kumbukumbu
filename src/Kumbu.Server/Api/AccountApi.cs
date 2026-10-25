@@ -242,14 +242,7 @@ public static class AccountApi
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
-        var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
-        var vaults = new Dictionary<string, KeyRight>();
-        foreach (var (name, rightText) in body.Vaults)
-        {
-            var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
-            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
-        }
-
+        var vaults = RightsByVaultId(body.Vaults, names);
         var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
@@ -302,8 +295,23 @@ public static class AccountApi
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         await invitations.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such open invitation.");
 
+    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>) by vault id; 400 for a vault the caller
+    /// has no such name for or another right.</summary>
+    internal static Dictionary<string, KeyRight> RightsByVaultId(IReadOnlyDictionary<string, string> requested, Dictionary<string, string> names)
+    {
+        var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
+        var vaults = new Dictionary<string, KeyRight>();
+        foreach (var (name, rightText) in requested)
+        {
+            var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
+            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
+        }
+
+        return vaults;
+    }
+
     /// <summary>The caller's vaults, id → name. Opening them is what a session does on every vault request anyway.</summary>
-    private static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
+    internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
 
     /// <summary>A vault the key was given but that no longer opens for the user isn't listed: it has no name to show.</summary>

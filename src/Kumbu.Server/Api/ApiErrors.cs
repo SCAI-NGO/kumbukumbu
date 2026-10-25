@@ -49,7 +49,7 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
-        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or PrimaryAdminExistsException or VaultNameTakenException)
+        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or PrimaryAdminExistsException or VaultNameTakenException)
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
         }
