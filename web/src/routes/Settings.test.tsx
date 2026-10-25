@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -178,6 +178,17 @@ describe("Settings", () => {
     await userEvent.click(within(section("Sessions")).getByRole("button", { name: "Sign out other sessions" }));
     expect(await within(section("Sessions")).findByText("Every other session has ended.")).toBeInTheDocument();
     expect(ended).toBe(1);
+  });
+
+  it("mounts the deletion dialog inside the tap, a field focused, for iOS to raise the keyboard", async () => {
+    api({ "GET /api/keys": () => json(200, []) });
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+
+    fireEvent.click(await within(vaultsSection).findByRole("button", { name: "Delete Diary" }));
+
+    expect(screen.getByRole("alertdialog", { name: "Delete Diary?" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your password")).toHaveFocus();
   });
 
   it("deletes a vault only with the password and its name typed exactly", async () => {

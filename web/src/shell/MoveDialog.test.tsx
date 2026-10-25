@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { movedPath, useEditor } from "../state/editor";
@@ -77,6 +77,20 @@ describe("the store after a move", () => {
 });
 
 describe("Rename or move", () => {
+  it("mounts the dialog inside the tap, its name field focused, for iOS to raise the keyboard", async () => {
+    api(() => json(500, { error: "" }));
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    // The shell fetched the dialog ahead; give that a moment to land.
+    await new Promise((r) => setTimeout(r, 50));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+
+    // Within the click itself: rendered directly, not suspending for a chunk already in.
+    expect(screen.getByRole("dialog", { name: "Rename or move inbox" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveFocus();
+  });
+
   it("renames the open note from its menu, says the links were rewritten, and opens it at its new place", async () => {
     const { moves } = api(() => json(200, { message: "moved /Work/inbox.md to /Work/archive/todo.md; rewrote 2 links in /Work/archive/old.md", path: "/Work/archive/todo.md", version: "v2" }));
     const router = renderApp("/notes/Work/inbox.md");

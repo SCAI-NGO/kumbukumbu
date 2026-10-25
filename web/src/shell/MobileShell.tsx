@@ -21,7 +21,15 @@ import TreeDrawer from "./TreeDrawer";
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
-const MoveDialog = lazy(() => import("./MoveDialog"));
+// Its name field is focused on open, and iOS raises the keyboard only for a focus inside the tap: fetched ahead, and
+// once loaded rendered directly (React.lazy would suspend on first render even then, mounting it in a later task).
+let LoadedMoveDialog: (typeof import("./MoveDialog"))["default"] | null = null;
+const loadMoveDialog = () =>
+  import("./MoveDialog").then((m) => {
+    LoadedMoveDialog = m.default;
+    return m;
+  });
+const MoveDialog = lazy(loadMoveDialog);
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 const TrashSheet = lazy(() => import("./TrashSheet"));
 const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
@@ -108,9 +116,11 @@ export default function MobileShell() {
     if (path && path !== useEditor.getState().currentPath) useEditor.getState().openNote(path);
   }, [path]);
 
-  // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field).
+  // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field), and
+  // Rename or move finds its dialog loaded.
   useEffect(() => {
     void loadSearch().catch(() => {});
+    void loadMoveDialog().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -174,9 +184,13 @@ export default function MobileShell() {
       )}
       {moving && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setMoving(null)} />}>
-          <Suspense>
-            <MoveDialog subject={moving} onClose={() => setMoving(null)} />
-          </Suspense>
+          {LoadedMoveDialog ? (
+            <LoadedMoveDialog subject={moving} onClose={() => setMoving(null)} />
+          ) : (
+            <Suspense>
+              <MoveDialog subject={moving} onClose={() => setMoving(null)} />
+            </Suspense>
+          )}
         </LoadBoundary>
       )}
       {history && (
