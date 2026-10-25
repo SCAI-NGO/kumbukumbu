@@ -24,8 +24,15 @@ public sealed class OpenAiCompatibleDriverTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            Requests.Add((request, JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!));
-            return await answers[Math.Min(Requests.Count - 1, answers.Length - 1)](request);
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!;
+            int n;
+            lock (Requests)
+            {
+                Requests.Add((request, body));
+                n = Requests.Count;
+            }
+
+            return await answers[Math.Min(n - 1, answers.Length - 1)](request);
         }
     }
 
@@ -166,6 +173,30 @@ public sealed class OpenAiCompatibleDriverTests
         Assert.Equal(OpenAiCompatibleDriver.Retries + 1, rig.Handler.Requests.Count);
         await rig.Driver.WhenReadyAsync(Ct);
         Assert.Equal(SemanticState.Ready, rig.Driver.State);
+    }
+
+    [Fact]
+    public async Task Failures_from_many_calls_at_once_leave_one_consistent_pause()
+    {
+        var rig = Make(new FakeHandler(Status(HttpStatusCode.Unauthorized)));
+
+        var calls = Enumerable.Range(0, 32).Select(i => Task.Run(async () =>
+        {
+            try
+            {
+                await rig.Driver.EmbedAsync(["a"], query: false, Ct);
+            }
+            catch (EmbeddingUnavailableException)
+            {
+            }
+
+            // State and reason are read together, while other calls write them.
+            _ = (rig.Driver.State, rig.Driver.Reason);
+        }));
+        await Task.WhenAll(calls);
+
+        Assert.Equal(SemanticState.Off, rig.Driver.State);
+        Assert.StartsWith("the embedding provider Example answered 401 Unauthorized", rig.Driver.Reason);
     }
 
     [Fact]

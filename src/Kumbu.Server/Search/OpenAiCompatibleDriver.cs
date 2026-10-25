@@ -42,8 +42,12 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Uri _endpoint;
     private int _dimensions;
-    private DateTimeOffset _pausedUntil = DateTimeOffset.MinValue;
-    private string? _failure;
+
+    /// <summary>Until when the provider pauses, and why: one immutable record, replaced whole, so that callers on other
+    /// threads never see the time of one failure with the reason of another.</summary>
+    private volatile PauseState? _pause;
+
+    private sealed record PauseState(DateTimeOffset Until, string Reason);
 
     public OpenAiCompatibleDriver(
         string name, EmbeddingProviderOptions options, string? apiKey, Func<HttpClient> http, ILogger log,
@@ -63,15 +67,15 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
 
     public int MaxBatch => _options.MaxBatch;
 
-    public SemanticState State => Paused ? SemanticState.Off : SemanticState.Ready;
+    public SemanticState State => CurrentPause is null ? SemanticState.Ready : SemanticState.Off;
 
-    public string? Reason => Paused ? _failure : null;
+    public string? Reason => CurrentPause?.Reason;
 
-    private bool Paused => _time.GetUtcNow() < _pausedUntil;
+    private PauseState? CurrentPause => _pause is { } p && _time.GetUtcNow() < p.Until ? p : null;
 
     public Task WhenReadyAsync(CancellationToken ct)
     {
-        var left = _pausedUntil - _time.GetUtcNow();
+        var left = (_pause?.Until ?? DateTimeOffset.MinValue) - _time.GetUtcNow();
         return left > TimeSpan.Zero ? _delay(left, ct) : Task.CompletedTask;
     }
 
@@ -79,7 +83,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     {
         if (texts.Count == 0) return [];
         if (texts.Count > MaxBatch) throw new ArgumentException($"At most {MaxBatch} texts per call", nameof(texts));
-        if (Paused) throw new EmbeddingUnavailableException(_failure ?? Unavailable("is paused after a failure"), providerDown: true);
+        if (CurrentPause is { } paused) throw new EmbeddingUnavailableException(paused.Reason, providerDown: true);
 
         var input = query && _options.QueryPrompt is { Length: > 0 } prompt ? [.. texts.Select(t => prompt + t)] : texts;
         var body = new EmbeddingsRequest(_options.Model, input, _options.Dimensions);
@@ -165,11 +169,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private EmbeddingUnavailableException Fail(string problem, bool providerDown)
     {
         var message = Unavailable(problem);
-        if (providerDown)
-        {
-            _failure = message + $"; it is tried again in {Pause.TotalMinutes:0} minute";
-            _pausedUntil = _time.GetUtcNow() + Pause;
-        }
+        if (providerDown) _pause = new PauseState(_time.GetUtcNow() + Pause, message + $"; it is tried again in {Pause.TotalMinutes:0} minute");
 
         _log.LogError("Embedding provider {Provider} {Problem}", _name, problem);
         return new EmbeddingUnavailableException(message, providerDown);
