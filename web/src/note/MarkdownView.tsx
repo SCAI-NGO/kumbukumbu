@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
 import { Check } from "lucide-react";
-import { createContext, memo, useContext, useMemo, type ComponentPropsWithoutRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { noteUrl } from "../api/paths";
+import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
@@ -108,6 +109,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
 function WikiLink({ index, children }: { index: number; children: ReactNode }) {
   const { links, onCreateMissing } = useContext(NoteContext);
   const link = links?.[index];
+  const [choosing, setChoosing] = useState(false);
   switch (link?.kind) {
     case undefined:
       return <span>{children}</span>;
@@ -130,10 +132,18 @@ function WikiLink({ index, children }: { index: number; children: ReactNode }) {
       );
     case "ambiguous":
       return (
-        <span title={`Several notes match: ${link.candidates.join(", ")}`} className="text-text-body underline decoration-dim decoration-dotted underline-offset-[3px]">
-          {children}
-          <span className="ml-1 rounded-[4px] bg-surface-2 px-1 font-mono text-[11px] text-muted no-underline">{link.candidates.length} notes</span>
-        </span>
+        <>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => setChoosing(true)}
+            className="text-left text-text-body underline decoration-dim decoration-dotted underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            {children}
+            <span className="ml-1 rounded-[4px] bg-surface-2 px-1 font-mono text-[11px] text-muted no-underline">{link.candidates.length} notes</span>
+          </button>
+          {choosing && <AmbiguousLinkDialog target={link.target} candidates={link.candidates} onClose={() => setChoosing(false)} />}
+        </>
       );
     default:
       // A heading of this note (`self`) or an attachment: named, not opened.

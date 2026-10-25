@@ -74,11 +74,43 @@ describe("MarkdownView", () => {
     expect(onCreateMissing).toHaveBeenCalledWith("new idea");
   });
 
-  it("marks an ambiguous link with its candidate count and links nowhere", () => {
-    show("[[plan]]", [link(1, "[[plan]]", "ambiguous", null, ["/V/a/plan.md", "/V/b/plan.md"])]);
-    expect(screen.queryByRole("link")).not.toBeInTheDocument();
-    expect(screen.getByText("plan")).toBeInTheDocument();
-    expect(screen.getByText("2 notes")).toBeInTheDocument();
+  describe("an ambiguous link", () => {
+    const ambiguous = () => show("[[plan]]", [link(1, "[[plan]]", "ambiguous", null, ["/V/a/plan.md", "/V/b/c/plan.md"])]);
+
+    it("is a button with the candidate count, and opens nothing until tapped", () => {
+      ambiguous();
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /plan/ })).toHaveTextContent("2 notes");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("lists every candidate with its folder, and following one closes the dialog", async () => {
+      ambiguous();
+      await userEvent.click(screen.getByRole("button", { name: /plan/ }));
+      const dialog = screen.getByRole("dialog", { name: "Several notes match “plan”" });
+      const [first, second] = within(dialog).getAllByRole("link");
+      expect(first).toHaveAttribute("href", "/notes/V/a/plan.md");
+      expect(first).toHaveTextContent("V / a");
+      expect(second).toHaveAttribute("href", "/notes/V/b/c/plan.md");
+      expect(second).toHaveTextContent("V / b / c");
+      expect(first).toHaveClass("min-h-11");
+
+      await userEvent.click(second);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("closes on Cancel and on Escape, giving focus back to the link", async () => {
+      ambiguous();
+      const opener = screen.getByRole("button", { name: /plan/ });
+      await userEvent.click(opener);
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+
+      await userEvent.click(opener);
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
   });
 
   it("never turns a link into a cross-vault one: without the API's answer it stays text", () => {
