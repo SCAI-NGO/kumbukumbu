@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/admin-client/src/routes/users/actions.tsx)
 import { useId, useState } from "react";
-import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
-import { useDialog } from "../../hooks/useDialog";
+import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
+import { useDialog } from "../hooks/useDialog";
 
-/** A confirmation that is only possible after typing `word`: for actions that lock someone out or let them back in. */
+/** A confirmation that is only possible after typing `word` exactly: for actions that lock someone out, let them back in or delete for good. */
 export default function ConfirmTyped({
   title,
   text,

@@ -55,6 +55,8 @@ interface EditorState {
   setShowAgentHighlights(show: boolean): void;
   /** A deleted note: it leaves the recent notes, and is no longer the open one. */
   forgetNote(path: string): void;
+  /** A deleted vault: its notes leave the recent notes, the open note and the draft, and it is no longer active. */
+  forgetVault(vault: string): void;
   reset(): void;
 }
 
@@ -108,5 +110,16 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
   forgetNote: (path) =>
     set((s) => ({ recentPaths: s.recentPaths.filter((p) => p !== path), currentPath: s.currentPath === path ? null : s.currentPath })),
+  forgetVault: (vault) =>
+    set((s) => {
+      const outside = (path: string | null | undefined) => path != null && vaultOf(path) !== vault;
+      return {
+        recentPaths: s.recentPaths.filter(outside),
+        currentPath: outside(s.currentPath) ? s.currentPath : null,
+        draft: outside(s.draft?.path) ? s.draft : null,
+        activeVault: s.activeVault === vault ? null : s.activeVault,
+        expandedFolders: Object.fromEntries(Object.entries(s.expandedFolders).filter(([folder]) => outside(folder))),
+      };
+    }),
   reset: () => set(initial),
 }));

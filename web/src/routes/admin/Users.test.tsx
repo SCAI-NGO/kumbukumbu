@@ -105,6 +105,40 @@ describe("Admin users", () => {
     await vi.waitFor(() => expect(patches).toEqual([{ active: true }]));
   });
 
+  it("offers deletion only for a deactivated user, and deletes after the username was typed", async () => {
+    const bodies: unknown[] = [];
+    api(admin, {
+      "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { active: false })]),
+      "POST /api/admin/users/u2/delete": async (r) => {
+        bodies.push(await r.json());
+        return noContent();
+      },
+    });
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    expect(within(card("Ada")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    expect(within(card("Root")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+
+    await userEvent.click(bob.getByRole("button", { name: "Delete Bob" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Bob?" });
+    expect(dialog).toHaveTextContent("their 2 vaults");
+    const confirm = within(dialog).getByRole("button", { name: "Delete" });
+    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "Bob");
+    expect(confirm).toBeDisabled();
+    await userEvent.clear(within(dialog).getByLabelText(/Type bob to confirm/));
+    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
+    await userEvent.click(confirm);
+    await vi.waitFor(() => expect(bodies).toEqual([{ confirm: "bob" }]));
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("offers no deletion of an active user", async () => {
+    api();
+    renderApp("/admin/users");
+    await screen.findByRole("listitem", { name: "Bob" });
+    expect(within(card("Bob")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+  });
+
   it("changes a role", async () => {
     const patches: unknown[] = [];
     api(admin, {

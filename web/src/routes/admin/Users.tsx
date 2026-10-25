@@ -5,10 +5,10 @@ import { useState } from "react";
 import { api, call } from "../../api/client";
 import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
+import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, secondaryButtonClass } from "../../components/form";
 import { useSession } from "../../state/session";
 import AdminOnly, { useIsAdmin } from "./AdminOnly";
-import ConfirmTyped from "./ConfirmTyped";
 
 type AdminUser = components["schemas"]["AdminUserView"];
 
@@ -28,6 +28,7 @@ export default function Users() {
   const users = useQuery({ queryKey: ["admin", "users"], queryFn: () => call(api.GET("/api/admin/users")), enabled: useIsAdmin() === true });
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
+  const [deleting, setDeleting] = useState<AdminUser | null>(null);
 
   return (
     <AdminOnly title="Users">
@@ -35,11 +36,12 @@ export default function Users() {
       {users.data && (
         <ul className="flex flex-col gap-3">
           {users.data.map((user) => (
-            <UserItem key={user.id} user={user} self={user.id === me} onToggle={() => setTarget(user)} />
+            <UserItem key={user.id} user={user} self={user.id === me} onToggle={() => setTarget(user)} onDelete={() => setDeleting(user)} />
           ))}
         </ul>
       )}
       {target && <ToggleDialog user={target} onClose={() => setTarget(null)} />}
+      {deleting && <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />}
     </AdminOnly>
   );
 }
@@ -57,7 +59,7 @@ function useUpdate(user: AdminUser, onDone?: () => void) {
   });
 }
 
-function UserItem({ user, self, onToggle }: { user: AdminUser; self: boolean; onToggle(): void }) {
+function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: boolean; onToggle(): void; onDelete(): void }) {
   const update = useUpdate(user);
   const primary = user.role === "primary_admin";
   const makeAdmin = user.role !== "admin";
@@ -100,9 +102,38 @@ function UserItem({ user, self, onToggle }: { user: AdminUser; self: boolean; on
               {user.active ? "Deactivate" : "Reactivate"}
             </button>
           )}
+          {/* Only a deactivated user can be deleted: two deliberate steps, the first of which can be undone. */}
+          {!self && !user.active && (
+            <button type="button" onClick={onDelete} aria-label={`Delete ${user.display}`} className={secondaryButtonClass}>
+              Delete
+            </button>
+          )}
         </div>
       )}
     </li>
+  );
+}
+
+function DeleteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
+  const queryClient = useQueryClient();
+  const remove = useMutation({
+    mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { confirm: user.username } })),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      onClose();
+    },
+  });
+  return (
+    <ConfirmTyped
+      title={`Delete ${user.display}?`}
+      text={`Their account goes for good, with ${user.vaults === 1 ? "their vault" : `their ${user.vaults} vaults`} and every note in them, the history, trash and checkpoints, and their API keys. Nobody can bring it back. The invitations they made stay.`}
+      word={user.username}
+      action="Delete"
+      pending={remove.isPending}
+      error={remove.isError ? errorText(remove.error) : null}
+      onConfirm={() => remove.mutate()}
+      onClose={onClose}
+    />
   );
 }
 
