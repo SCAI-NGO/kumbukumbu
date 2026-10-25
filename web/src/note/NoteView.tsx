@@ -75,7 +75,7 @@ export default function NoteView({ path }: { path: string }) {
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
-  const elsewhere = useChangedElsewhere(path, note.data?.version);
+  const elsewhere = useChangedElsewhere(path, note.data);
   const username = useSession((s) => s.user?.username);
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);

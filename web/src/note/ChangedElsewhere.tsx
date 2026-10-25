@@ -10,19 +10,22 @@ import { ago } from "./AgentBanner";
 export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
- * A version of the open note that this view hasn't seen, written elsewhere (an agent, another tab or device), or
- * `gone` when the note isn't at its path any more. Every version the view has held counts as seen, and nothing
- * counts while the view's own save or restore is under way, or the note is being read again: their answer is the
- * version they bring, which the view then holds.
+ * A write of the open note made elsewhere (an agent, another tab or device): the server's version differs from the
+ * one shown and was written after it. A version is a hash of the text, so going back to a text shown before (a
+ * restore) is a change too; the time tells it from an older answer. `gone` when the note isn't at its path any more.
+ * Nothing counts while the view's own save or restore is under way, or the note is being read again: their answer
+ * is the version they bring, which the view then holds.
  */
-export function useChangedElsewhere(path: string, version: string | undefined): { change: NoteVersion | null; gone: boolean } {
-  const seen = useRef(new Set<string>());
-  if (version !== undefined) seen.current.add(version);
-  const poll = useVersionPoll(path, version !== undefined);
+export function useChangedElsewhere(
+  path: string,
+  shown: { version: string; lastWriteAt: string } | undefined,
+): { change: NoteVersion | null; gone: boolean } {
+  const poll = useVersionPoll(path, shown !== undefined);
   const busy =
     useIsMutating({ mutationKey: ["save", path] }) + useIsMutating({ mutationKey: ["restore"] }) + useIsFetching({ queryKey: ["note", path], exact: true }) > 0;
   const data = poll.data;
-  const change = !busy && data && data.path === path && !seen.current.has(data.version) ? data : null;
+  const change =
+    !busy && shown && data && data.path === path && data.version !== shown.version && Date.parse(data.lastWriteAt) > Date.parse(shown.lastWriteAt) ? data : null;
   const gone = !busy && poll.error instanceof HttpError && poll.error.status === 404;
   return { change, gone };
 }
