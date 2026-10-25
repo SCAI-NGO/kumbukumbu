@@ -8,7 +8,7 @@ import { PasswordField } from "../components/PasswordField";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useSession } from "../state/session";
 import { applyScheme, storedScheme } from "../theme/apply";
-import { schemes } from "../theme/schemes";
+import { schemes, type Scheme, type Tokens } from "../theme/schemes";
 
 export default function Settings() {
   return (
@@ -46,7 +46,6 @@ const follow = "system";
 /** Kept in this browser only, and only the scheme's name (there is no account setting for it). */
 function SchemeSection() {
   const [chosen, setChosen] = useState(() => storedScheme() ?? follow);
-  const options = [{ id: follow, name: "Follow the system" }, ...schemes];
 
   const choose = (id: string) => {
     setChosen(id);
@@ -55,22 +54,40 @@ function SchemeSection() {
 
   return (
     <Section title="Colour scheme">
-      <div role="radiogroup" aria-label="Colour scheme" className="flex flex-col">
-        {options.map((option) => (
-          <label key={option.id} className="flex min-h-11 cursor-pointer items-center gap-3 text-text">
-            <input
-              type="radio"
-              name="scheme"
-              value={option.id}
-              checked={chosen === option.id}
-              onChange={() => choose(option.id)}
-              className="size-5 shrink-0 accent-accent"
-            />
-            {option.name}
-          </label>
-        ))}
+      <div role="radiogroup" aria-label="Colour scheme" className="flex flex-col gap-4">
+        <SchemeOption id={follow} name="Follow the system" chosen={chosen} onChoose={choose} />
+        <SchemeGroup title="Dark" list={schemes.filter((s) => !s.light)} chosen={chosen} onChoose={choose} />
+        <SchemeGroup title="Light" list={schemes.filter((s) => s.light)} chosen={chosen} onChoose={choose} />
       </div>
     </Section>
+  );
+}
+
+function SchemeGroup({ title, list, chosen, onChoose }: { title: string; list: readonly Scheme[]; chosen: string; onChoose: (id: string) => void }) {
+  return (
+    <div role="group" aria-label={title} className="flex flex-col">
+      <h3 className="font-mono text-xs uppercase tracking-[0.08em] text-muted">{title}</h3>
+      {list.map((scheme) => (
+        <SchemeOption key={scheme.id} id={scheme.id} name={scheme.name} tokens={scheme.tokens} chosen={chosen} onChoose={onChoose} />
+      ))}
+    </div>
+  );
+}
+
+function SchemeOption({ id, name, tokens, chosen, onChoose }: { id: string; name: string; tokens?: Tokens; chosen: string; onChoose: (id: string) => void }) {
+  return (
+    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-text">
+      <input type="radio" name="scheme" value={id} checked={chosen === id} onChange={() => onChoose(id)} className="size-5 shrink-0 accent-accent" />
+      {name}
+      {tokens && (
+        // The scheme's own ground, surface and accent, so the choice is visible before it is made.
+        <span aria-hidden className="ml-auto flex h-6 w-14 shrink-0 overflow-hidden rounded border border-line" data-testid={`swatch-${id}`}>
+          <span className="flex-1" style={{ background: tokens.bg }} />
+          <span className="flex-1" style={{ background: tokens.surface2 }} />
+          <span className="flex-1" style={{ background: tokens.accent }} />
+        </span>
+      )}
+    </label>
   );
 }
 
