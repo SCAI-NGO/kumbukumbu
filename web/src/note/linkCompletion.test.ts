@@ -46,6 +46,12 @@ describe("rankNotes", () => {
     expect(rankNotes(all, "proj")).toEqual(["/W/projects/beta.md"]);
   });
 
+  it("leaves out notes no link can name: #, |, [ or ] in their path", () => {
+    const odd = ["/W/C# notes.md", "/W/a|b.md", "/W/[draft] plan.md", "/W/x#y/plan.md", "/W/plain plan.md"];
+    expect(rankNotes(odd, "")).toEqual(["/W/plain plan.md"]);
+    expect(rankNotes(odd, "plan")).toEqual(["/W/plain plan.md"]);
+  });
+
   it("lists every note for an empty query, in text order, at most eight", () => {
     expect(rankNotes(all, "")).toEqual(["/W/projects/beta.md", "/W/plan.md", "/W/old/plans.md", "/W/roadmap.md", "/W/x/unplanned.md"]);
     expect(rankNotes(Array.from({ length: 12 }, (_, i) => `/W/n${i}.md`), "")).toHaveLength(8);

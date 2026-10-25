@@ -38,11 +38,18 @@ export function linkTarget(path: string, all: string[]): string {
   return `/${segments.join("/")}`;
 }
 
+/**
+ * Whether a wiki link can name the note: `#` starts a heading, `|` an alias, and `[` `]` end the link, in any
+ * form of it (name or full path), so a note with one of them in its path can't be linked to and isn't offered.
+ */
+export const linkable = (path: string) => !/[#|[\]]/.test(linkPath(path));
+
 const MAX = 8;
 
 /**
  * The notes for a query, best first: names starting with it, then names containing it, then notes whose folder
- * contains it; each group in text order. An empty query lists the vault's notes in text order.
+ * contains it; each group in text order. An empty query lists the vault's notes in text order. Notes no link can
+ * name (`linkable`) are left out.
  */
 export function rankNotes(paths: string[], query: string): string[] {
   const q = query.trim().toLowerCase();
@@ -54,6 +61,7 @@ export function rankNotes(paths: string[], query: string): string[] {
     return -1;
   };
   return paths
+    .filter(linkable)
     .map((p) => ({ p, r: rank(p) }))
     .filter(({ r }) => r >= 0)
     .sort((a, b) => a.r - b.r || name(a.p).localeCompare(name(b.p)) || a.p.localeCompare(b.p))
