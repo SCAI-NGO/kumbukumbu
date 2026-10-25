@@ -29,6 +29,9 @@ if (bootstrapCommand)
 // ASP.NET logs every request line at Information ("Request starting POST /api/..."), endpoint matches and
 // results: nothing an operator needs, and a URL may carry something secret. Warnings and errors stay.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+// HttpClientFactory logs four lines per outgoing request: for an external embedding provider, one set per search
+// query, which would put when someone searched into the log. Failures are logged by the drivers themselves.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))

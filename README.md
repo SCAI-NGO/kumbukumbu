@@ -43,7 +43,7 @@ The server also serves a web app, built from `web/` into the image. It works on 
 Be clear about what this does not cover (concept §3):
 
 - Vaults that open with the dev token (the seeded ones, a single-user setup) are only as safe as the server's configuration: whoever has **both** the database and `.env` can read them. A vault that belongs to a user opens only with that user's password or recovery key (see Accounts); the dev token does not open it. Encryption protects the database and its backups, not a machine where both are stored.
-- The running server sees plaintext in memory; that's how search works. An operator of the running server is trusted. The embedding model runs inside the server process, so notes never go to an outside service to be embedded; the embeddings are sealed like the notes.
+- The running server sees plaintext in memory; that's how search works. An operator of the running server is trusted. The embedding model runs inside the server process, so notes never go to an outside service to be embedded, unless the admin configured an external embedding provider **and** a vault's owner chose it for that vault (below); the embeddings are sealed like the notes either way.
 - The AI provider of a connected client sees what the agent reads. This is not end-to-end encryption.
 
 Every request under `/mcp` and `/api` needs a **caller**, one of: a **session** (cookie `kumbu_session`, accepted under `/api` only; `/mcp` takes bearer keys only), an **API key** (`Authorization: Bearer kumbu_…`), or the optional **dev token** (also a bearer). Without one, `/api` answers `401` with a JSON `{"error": …}`. `GET /healthz`, `GET /api/openapi.json`, the sign-in, join, recover and invitation-peek endpoints, and paths outside `/mcp` and `/api` need none. After 20 wrong bearer keys in a minute from one client network, every bearer key from it gets `429` until the minute has passed. Traffic is plain HTTP; put TLS in front (below). The dev token is optional: without it, it opens nothing, which is what a public instance wants. If set, the server refuses to start unless it is at least 16 characters; use a random one (`openssl rand -hex 32`), since the vault keys of seeded vaults are derived from it. Compose publishes port 8080 (or `KUMBU_PORT`) on **localhost only** (`127.0.0.1:${KUMBU_PORT:-8080}:8080` in `compose.yaml`). To reach it from other machines, remove the `127.0.0.1:` prefix deliberately, knowing that anyone on the network who learns a key can read and change what it opens.
@@ -89,6 +89,49 @@ docker compose exec kumbu sh -c 'rm /recovery/*.recovery-key.txt'
 ```
 
 Without the dev token and without the recovery key, a vault can't be opened by anyone, including you. While some vaults don't open with the dev token, the server creates no new vaults: one of the locked ones might be the vault a folder belongs to. To change the dev token: set the new `KUMBU_DEV_TOKEN` and `KUMBU_RECOVERY_KEYS=<key>,<key>` in `.env`, start once (the log says `Recovery key opened vault …`), then remove `KUMBU_RECOVERY_KEYS` again. The old token keeps its slots.
+
+### External embedding providers
+
+Search by meaning runs on the server by default (`KUMBU_SEARCH_MODEL`, arctic-m or arctic-l). An admin can also offer **external embedding providers**: services with the OpenAI embeddings API (`POST {BaseUrl}/embeddings`). Configuring one sends nothing anywhere. Each vault's owner then chooses, in the web app (the vault's ⋯ menu in the drawer, "Search by meaning…") or with `PUT /api/vaults/{vault}/embeddings` (body `{"provider": "tensorx"}`, sessions only; `GET /api/embeddings` lists the providers), whether that vault uses one. From then on **the text of every section of that vault and every search query over it is sent to the provider**; the vault is embedded again in the background, and found by words until it is. What the provider keeps is its promise, not something Kumbu² can enforce; the web app says so before the switch. Switching back to `internal` stops the sending. Details: `docs/security-architecture.md` §5.5.
+
+A provider is configuration under `Kumbu:Embeddings:Providers:<name>` (environment: `Kumbu__Embeddings__Providers__<name>__<Setting>`), with `<name>` of lowercase letters, digits and `-` (not `internal`):
+
+| Setting | Meaning | Example |
+|---|---|---|
+| `Driver` | The protocol; `openai-compatible` | `openai-compatible` |
+| `BaseUrl` | The API's base; `https://` (plain `http://` only to a loopback address) | `https://api.tensorx.ai/v1` |
+| `Model` | The model to ask for | `qwen/qwen3-embedding-8b` |
+| `ApiKeyFile` | A file holding the API key (a Docker secret); never the key itself in the environment. Optional only for a loopback provider. Read once at startup | `/run/secrets/tensorx-api-key` |
+| `Dimensions` | Optional: the vectors' length to ask for; unset, the model's own | `1024` |
+| `QueryPrompt` | Optional: put before every search query, for models that want an instruction | see below |
+| `Label`, `Description` | What owners see before they choose; the description is the provider's promise in a few words | `TensorX`, `EU (Ireland), zero data retention by policy` |
+| `MaxBatch`, `TimeoutSeconds` | Optional: texts per request (default 32), seconds per request (default 30) | `32`, `30` |
+
+The server refuses to start if a provider's URL isn't https, its key file is missing or empty, or a setting is out of range. Failed requests are retried (timeouts, 429, 5xx, with backoff); a provider that keeps failing pauses for a minute, its vaults are searched by words meanwhile, and the search says so. Switching or removing a provider re-embeds; a provider removed from the configuration leaves its vaults without search by meaning until their owner picks another. `KUMBU_SEARCH=false` switches off the internal model only. Across vaults on different models, each vault's sections are scored by their own model and ranked together; measured on the evaluation corpus, that costs about one query in 37 against the better model alone (`docs/notes-search-external.md`).
+
+**Example: TensorX** with Qwen3-Embedding 8B, as evaluated (`docs/notes-search-external.md`: as good as arctic-l with the query prompt, a quarter worse without it). Put the key in a file outside the repository, then add a `compose.override.yaml` next to `compose.yaml` (Compose reads it automatically; with `COMPOSE_FILE` set, append `:compose.override.yaml`):
+
+```yaml
+services:
+  kumbu:
+    environment:
+      Kumbu__Embeddings__Providers__tensorx__Driver: openai-compatible
+      Kumbu__Embeddings__Providers__tensorx__BaseUrl: https://api.tensorx.ai/v1
+      Kumbu__Embeddings__Providers__tensorx__Model: qwen/qwen3-embedding-8b
+      Kumbu__Embeddings__Providers__tensorx__Dimensions: "1024"
+      Kumbu__Embeddings__Providers__tensorx__QueryPrompt: "Instruct: Given a search query, retrieve the note sections that answer it\nQuery: "
+      Kumbu__Embeddings__Providers__tensorx__ApiKeyFile: /run/secrets/tensorx-api-key
+      Kumbu__Embeddings__Providers__tensorx__Label: TensorX
+      Kumbu__Embeddings__Providers__tensorx__Description: EU (Ireland), zero data retention by policy
+    secrets:
+      - tensorx-api-key
+
+secrets:
+  tensorx-api-key:
+    file: ~/keys/.tensorx-api-key   # readable by the container's user (uid 1654, "app"), e.g. mode 644 or group-readable
+```
+
+`docker compose up -d` again; the providers appear in the vault's menu. A new key in the file needs a restart (`docker compose restart kumbu`).
 
 ## Quickstart
 
@@ -137,7 +180,7 @@ docker compose up --build -d     # rebuild the image; a plain restart keeps runn
 
 Then start a new client session. Without the rebuild, a restarted client loads the old server's tool descriptions; without the new session, the agent keeps working from the old command list.
 
-Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (optional; if set, at least 16 characters; without it the dev token opens nothing, and seeding and recovery keys are skipped), `Kumbu:PublicUrl` (`KUMBU_PUBLIC_URL`; an absolute http(s) address without a path; invitation links are built from it, `bootstrap-admin` needs it, and it is required when `Kumbu:Proxy:Trusted` is set; if it is https, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`, so pointing it at an apex domain such as `https://example.org` pins every subdomain of it to https for a year), `Kumbu:Proxy:Trusted` (`KUMBU_TRUSTED_PROXY`, default false; behind a reverse proxy such as Traefik, take the client IP for rate limits from the last `X-Forwarded-For` entry and the scheme from `X-Forwarded-Proto`; set it only when the proxy is the server's only way in, since any peer is trusted as the proxy; the server refuses to start with it unless `Kumbu:PublicUrl` is set, since the web app's requests are checked against that address), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose), `Kumbu:Search:Model` (`arctic-m`, the default, or `arctic-l`: 613 MB and a server of about 1 GB at about 26 ms per section, or 1.13 GB and about 3 GB at about 49 ms, measured on the test stack; each is kept in its own folder below the model path, and switching re-embeds every note when its vault is next unlocked, while search ranks the notes not yet re-embedded by words; the other model's folder stays, so switching back needs no download: `docker compose exec kumbu rm -r /models/arctic-l` frees it) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning. With Compose, set `KUMBU_DEV_TOKEN` (may be empty) and optionally `KUMBU_PUBLIC_URL`, `KUMBU_VAULTS`, `KUMBU_IMAGE` (server image, default `ghcr.io/scai-ngo/kumbukumbu:latest`; e.g. a pinned version), `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_TRUSTED_PROXY`, `KUMBU_CHECKPOINT_LIMIT`, `KUMBU_SEARCH` and `KUMBU_SEARCH_MODEL` in `.env`.
+Configuration (environment variables use `__` for `:`): `Kumbu:DevToken` (optional; if set, at least 16 characters; without it the dev token opens nothing, and seeding and recovery keys are skipped), `Kumbu:PublicUrl` (`KUMBU_PUBLIC_URL`; an absolute http(s) address without a path; invitation links are built from it, `bootstrap-admin` needs it, and it is required when `Kumbu:Proxy:Trusted` is set; if it is https, every response carries `Strict-Transport-Security: max-age=31536000; includeSubDomains`, so pointing it at an apex domain such as `https://example.org` pins every subdomain of it to https for a year), `Kumbu:Proxy:Trusted` (`KUMBU_TRUSTED_PROXY`, default false; behind a reverse proxy such as Traefik, take the client IP for rate limits from the last `X-Forwarded-For` entry and the scheme from `X-Forwarded-Proto`; set it only when the proxy is the server's only way in, since any peer is trusted as the proxy; the server refuses to start with it unless `Kumbu:PublicUrl` is set, since the web app's requests are checked against that address), `Kumbu:Mongo:ConnectionString` (required), `Kumbu:Mongo:Database` (default `kumbu`), `Kumbu:Seed:Path` (folder to load vaults from; if it does not exist the server logs an error and starts without seeding), `Kumbu:Recovery:Path` (directory new vaults' recovery keys are written to; without it vaults get none), `Kumbu:Recovery:Keys` (recovery keys to give the dev token access at startup), `Kumbu:Vaults:IdleMinutes` (default 15) and `Kumbu:Vaults:MemoryLimitMegabytes` (default 512) for unlocked vaults, `Kumbu:Vaults:CheckpointLimit` (default 10) for named checkpoints per vault, `Kumbu:Search:Enabled` (default true), `Kumbu:Search:ModelPath` (default `models`; `/models` in Compose), `Kumbu:Search:Model` (`arctic-m`, the default, or `arctic-l`: 613 MB and a server of about 1 GB at about 26 ms per section, or 1.13 GB and about 3 GB at about 49 ms, measured on the test stack; each is kept in its own folder below the model path, and switching re-embeds every note when its vault is next unlocked, while search ranks the notes not yet re-embedded by words; the other model's folder stays, so switching back needs no download: `docker compose exec kumbu rm -r /models/arctic-l` frees it) and `Kumbu:Search:Threads` (default 0: half the cores) for search by meaning (`Kumbu:Search:Enabled=false` switches off the internal model only), and `Kumbu:Embeddings:Providers:<name>:…` for external embedding providers (see "External embedding providers"). With Compose, set `KUMBU_DEV_TOKEN` (may be empty) and optionally `KUMBU_PUBLIC_URL`, `KUMBU_VAULTS`, `KUMBU_IMAGE` (server image, default `ghcr.io/scai-ngo/kumbukumbu:latest`; e.g. a pinned version), `KUMBU_MONGO_IMAGE`, `KUMBU_PORT` (host port, default 8080), `KUMBU_RECOVERY_KEYS`, `KUMBU_TRUSTED_PROXY`, `KUMBU_CHECKPOINT_LIMIT`, `KUMBU_SEARCH` and `KUMBU_SEARCH_MODEL` in `.env`.
 
 ## Development
 
