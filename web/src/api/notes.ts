@@ -107,17 +107,23 @@ export const useNoteVersion = (path: string, version: string | null) =>
     staleTime: Infinity,
   });
 
+/** Browsers refuse keepalive requests above 64 KiB (counted over all of them in flight); this leaves room. */
+const KEEPALIVE_LIMIT = 60_000;
+
 export type SaveResult = { saved: NoteView } | { conflict: { content: string; version: string } };
 
 /**
  * Writes the note on top of `version`. A 409 is an answer, not a failure: the note changed elsewhere, and its
- * current text and version come back so the view can show them instead of overwriting them.
+ * current text and version come back so the view can show them instead of overwriting them. `keepalive` (the page
+ * is going away) is honoured up to the browsers' limit; a larger note goes as a normal request and may not arrive.
  */
 export function useSaveNote(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ content, version }: { content: string; version: string }): Promise<SaveResult> => {
-      const { data, error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body: { content, version } });
+    mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
+      const body = { content, version };
+      const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;
+      const { data, error, response } = await api.PUT("/api/notes/{vault}/{path}", { params: params(path), body, keepalive: keepalive && small });
       if (response.status === 409 && error && "current" in error) return { conflict: error.current };
       return { saved: await call(Promise.resolve({ data, error, response })) };
     },

@@ -10,6 +10,7 @@ import { fakeApi, json, renderApp, user } from "../test/app";
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
 afterEach(() => {
   cleanup();
+  keepalives.length = 0;
   vi.useRealTimers();
   vi.unstubAllGlobals();
   useSession.getState().reset();
@@ -33,6 +34,7 @@ const tree = {
 };
 
 type Put = { content: string; version: string };
+const keepalives: boolean[] = [];
 type Answer = (body: Put) => Response;
 
 const ok: Answer = (body) => json(200, noteView(PLAN, body.content, `v${Number(body.version.slice(1)) + 1}`));
@@ -52,6 +54,7 @@ function editorApi(answers: Answer[] = [ok], getNote = () => json(200, noteView(
     [`PUT /api/notes${PLAN}`]: async (r) => {
       const body = (await r.json()) as Put;
       puts.push(body);
+      keepalives.push(r.keepalive);
       return answers[Math.min(puts.length - 1, answers.length - 1)](body);
     },
     "GET /api/notes/*": (r) => json(200, noteView(decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), "Roadmap text.", "r1")),
@@ -110,6 +113,41 @@ describe("Write mode", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     act(() => void document.dispatchEvent(new Event("visibilitychange")));
     await waitFor(() => expect(puts[1]).toEqual({ content: `${source}ab`, version: "v2" }));
+  });
+
+  it("sends the save of a hidden or closing page with keepalive, and a large note as a normal request", async () => {
+    const puts = editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "a");
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => void document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(puts).toHaveLength(1));
+
+    await u.type(editorBox(), "b");
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    await waitFor(() => expect(puts).toHaveLength(2));
+
+    // keepalive bodies may not exceed 64 KB; the browser would refuse the request.
+    fireEvent.change(editorBox(), { target: { value: "x".repeat(70_000) } });
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    await waitFor(() => expect(puts).toHaveLength(3));
+    expect(keepalives).toEqual([true, true, false]);
+  });
+
+  it("asks before the page closes while text is unsaved", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    // jsdom's Event has the legacy boolean returnValue; what the handler assigns is caught instead.
+    const closing = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      let returnValue: unknown;
+      Object.defineProperty(event, "returnValue", { set: (v) => (returnValue = v), get: () => returnValue });
+      window.dispatchEvent(event);
+      return { prevented: event.defaultPrevented, returnValue };
+    };
+    expect(closing()).toEqual({ prevented: false, returnValue: undefined });
+    await u.type(editorBox(), "a");
+    expect(closing()).toEqual({ prevented: true, returnValue: "" });
   });
 
   it("never sends a newer version it only read: an agent's write in the meantime ends in the conflict toast", async () => {

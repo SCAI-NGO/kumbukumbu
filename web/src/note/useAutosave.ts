@@ -7,6 +7,8 @@ export const AUTOSAVE_DELAY = 800;
 
 /** The note as the server has it after a write by someone else: what a 409 answered. */
 export type Conflict = { content: string; version: string };
+/** `keepalive`: the page is going away, and the request has to outlive it. */
+export type SaveOptions = { keepalive: boolean };
 export type AutosaveStatus = "saved" | "pending" | "saving" | "conflict" | "error";
 
 /**
@@ -14,7 +16,7 @@ export type AutosaveStatus = "saved" | "pending" | "saving" | "conflict" | "erro
  * (never one only read from the cache, which may already hold an agent's newer write). A 409 pauses saving and
  * keeps the user's text until they choose: `reload` takes the newer text, `keepMine` writes theirs on top of it.
  */
-export function useAutosave(initial: { content: string; version: string }, save: (content: string, version: string) => Promise<SaveResult>) {
+export function useAutosave(initial: { content: string; version: string }, save: (content: string, version: string, options: SaveOptions) => Promise<SaveResult>) {
   const [value, setValue] = useState(initial.content);
   const [status, setStatus] = useState<AutosaveStatus>("saved");
   const [conflict, setConflict] = useState<Conflict | null>(null);
@@ -29,11 +31,14 @@ export function useAutosave(initial: { content: string; version: string }, save:
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
     inFlight: null as Promise<void> | null,
     again: false,
+    /** The next save is the last one before the page goes away. */
+    keepalive: false,
     conflict: null as Conflict | null,
     failed: false,
   }).current;
 
-  const run = useCallback((): Promise<void> => {
+  const run = useCallback((keepalive = false): Promise<void> => {
+    if (keepalive) s.keepalive = true;
     clearTimeout(s.timer);
     s.timer = undefined;
     if (s.conflict) return Promise.resolve();
@@ -47,10 +52,12 @@ export function useAutosave(initial: { content: string; version: string }, save:
       return Promise.resolve();
     }
     const content = s.text;
+    const options = { keepalive: s.keepalive };
+    s.keepalive = false;
     s.failed = false;
     setStatus("saving");
     s.inFlight = saveRef
-      .current(content, s.version)
+      .current(content, s.version, options)
       .then(
         (result) => {
           if ("saved" in result) {
@@ -90,7 +97,8 @@ export function useAutosave(initial: { content: string; version: string }, save:
     [s, run],
   );
 
-  const saveNow = useCallback(() => void run(), [run]);
+  /** Saves at once (blur; with `keepalive` when the page is hidden or closing). */
+  const saveNow = useCallback((options?: SaveOptions) => void run(options?.keepalive), [run]);
 
   /** Saves everything still pending and answers whether all of it is saved; a failed save is tried once more. */
   const flush = useCallback(async () => {
@@ -140,7 +148,10 @@ export function useAutosave(initial: { content: string; version: string }, save:
   useEffect(
     () => () => {
       clearTimeout(s.timer);
-      if (!s.conflict && !s.inFlight && s.text !== s.saved) void saveRef.current(s.text, s.version).catch(() => {});
+      if (s.conflict || s.text === s.saved) return;
+      // A save in flight still sends what was typed after it started, once it returns.
+      if (s.inFlight) s.again = true;
+      else void saveRef.current(s.text, s.version, { keepalive: false }).catch(() => {});
     },
     [s],
   );

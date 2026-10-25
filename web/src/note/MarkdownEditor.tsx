@@ -14,7 +14,7 @@ import { useAutosave } from "./useAutosave";
  */
 export default function MarkdownEditor({ path, note }: { path: string; note: NoteView }) {
   const save = useSaveNote(path);
-  const autosave = useAutosave(note, (content, version) => save.mutateAsync({ content, version }));
+  const autosave = useAutosave(note, (content, version, options) => save.mutateAsync({ content, version, ...options }));
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved } = autosave;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
@@ -29,12 +29,22 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   }, [flush]);
 
   useEffect(() => {
-    const onHidden = () => document.visibilityState === "hidden" && saveNow();
-    const warn = (e: BeforeUnloadEvent) => unresolved() && e.preventDefault();
+    // Mobile browsers rarely fire beforeunload (iOS Safari never): hidden and pagehide are the last moments to
+    // save, and keepalive lets the request outlive the page. Nothing is kept on the device instead (no plaintext).
+    const leaving = () => saveNow({ keepalive: true });
+    const onHidden = () => document.visibilityState === "hidden" && leaving();
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!unresolved()) return;
+      e.preventDefault();
+      // Older browsers ask only when returnValue is set.
+      e.returnValue = "";
+    };
     document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("pagehide", leaving);
     window.addEventListener("beforeunload", warn);
     return () => {
       document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("pagehide", leaving);
       window.removeEventListener("beforeunload", warn);
     };
   }, [saveNow, unresolved]);
@@ -82,7 +92,7 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
         ref={textarea}
         value={value}
         onChange={(e) => change(e.target.value)}
-        onBlur={saveNow}
+        onBlur={() => saveNow()}
         spellCheck={false}
         className="min-h-0 w-full flex-1 resize-none border-0 bg-bg px-[22px] py-5 font-mono text-[16px] leading-[1.65] text-text-body caret-accent outline-none"
       />

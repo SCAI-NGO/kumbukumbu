@@ -7,14 +7,16 @@ import { useAutosave } from "./useAutosave";
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-type Call = { content: string; version: string; answer(result: SaveResult | Error): void };
+type Call = { content: string; version: string; keepalive: boolean; answer(result: SaveResult | Error): void };
 
 /** A save whose answers the test gives by hand, so it can type while one is in flight. */
 function fakeSave() {
   const calls: Call[] = [];
   const save = vi.fn(
-    (content: string, version: string) =>
-      new Promise<SaveResult>((resolve, reject) => calls.push({ content, version, answer: (r) => (r instanceof Error ? reject(r) : resolve(r)) })),
+    (content: string, version: string, options?: { keepalive: boolean }) =>
+      new Promise<SaveResult>((resolve, reject) =>
+        calls.push({ content, version, keepalive: options?.keepalive ?? false, answer: (r) => (r instanceof Error ? reject(r) : resolve(r)) }),
+      ),
   );
   return { calls, save };
 }
@@ -71,6 +73,29 @@ describe("autosave", () => {
     await settle();
     await act(() => vi.advanceTimersByTimeAsync(800));
     expect(calls).toHaveLength(1);
+  });
+
+  it("sends the save of a page going away with keepalive, also when it has to wait for the one in flight", async () => {
+    const { calls, current } = setup();
+    act(() => current().change("one"));
+    act(() => current().saveNow());
+    expect(calls[0].keepalive).toBe(false);
+    act(() => current().change("one two"));
+    act(() => current().saveNow({ keepalive: true }));
+    calls[0].answer(saved("one", "v2"));
+    await settle();
+    expect(calls[1]).toMatchObject({ content: "one two", version: "v2", keepalive: true });
+  });
+
+  it("still sends the keystrokes typed during a save when the editor goes away meanwhile", async () => {
+    const { calls, current, hook } = setup();
+    act(() => current().change("one"));
+    act(() => current().saveNow());
+    act(() => current().change("one two"));
+    hook.unmount();
+    calls[0].answer(saved("one", "v2"));
+    await settle();
+    expect(calls[1]).toMatchObject({ content: "one two", version: "v2" });
   });
 
   it("on a 409 keeps the user's text, pauses, and saves on top of the newer version only on keep mine", async () => {
