@@ -27,7 +27,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private readonly string _name;
     private readonly EmbeddingProviderOptions _options;
     private readonly string? _apiKey;
-    private readonly HttpClient _http;
+    private readonly Func<HttpClient> _http;
     private readonly ILogger _log;
     private readonly TimeProvider _time;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay;
@@ -37,7 +37,7 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
     private string? _failure;
 
     public OpenAiCompatibleDriver(
-        string name, EmbeddingProviderOptions options, string? apiKey, HttpClient http, ILogger log,
+        string name, EmbeddingProviderOptions options, string? apiKey, Func<HttpClient> http, ILogger log,
         TimeProvider? time = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         (_name, _options, _apiKey, _http, _log) = (name, options, apiKey, http, log);
@@ -46,8 +46,6 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
         _endpoint = new Uri(options.BaseUrl.TrimEnd('/') + "/embeddings");
         _dimensions = options.Dimensions ?? 0;
         ModelKey = $"{name}:{options.Model}" + (options.Dimensions is { } d ? $"@{d}" : "");
-        // The client's own timeout would cut a retry loop short; each attempt has its own below.
-        _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public string ModelKey { get; }
@@ -87,7 +85,10 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
             {
                 using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint) { Content = JsonContent.Create(body) };
                 if (_apiKey is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-                using var response = await _http.SendAsync(request, timeout.Token);
+                using var http = _http();
+                // The attempt's own timeout (above) applies, not the client's default of 100 s.
+                http.Timeout = Timeout.InfiniteTimeSpan;
+                using var response = await http.SendAsync(request, timeout.Token);
                 if (response.IsSuccessStatusCode) return Vectors(await response.Content.ReadFromJsonAsync<EmbeddingsResponse>(timeout.Token), texts.Count);
 
                 // The body isn't read: an error message may quote the input.

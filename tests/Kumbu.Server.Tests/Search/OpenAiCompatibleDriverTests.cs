@@ -81,7 +81,7 @@ public sealed class OpenAiCompatibleDriverTests
         var log = new CapturedLog();
         var clock = new Clock();
         var driver = new OpenAiCompatibleDriver(
-            "example", options, key, new HttpClient(handler), log.CreateLogger("driver"), clock,
+            "example", options, key, () => new HttpClient(handler, disposeHandler: false), log.CreateLogger("driver"), clock,
             (delay, _) =>
             {
                 delays.Add(delay);
@@ -208,7 +208,7 @@ public sealed class OpenAiCompatibleDriverTests
         // The first attempt hangs until its own timeout (1 s) cancels it.
         var hanging = new HangingOnceHandler();
         var rig = Make(new FakeHandler(Vectors()), o => o.TimeoutSeconds = 1);
-        rig = rig with { Driver = new OpenAiCompatibleDriver("example", new EmbeddingProviderOptions { Driver = EmbeddingDrivers.OpenAiCompatible, BaseUrl = "https://api.example.org/v1", Model = "m", TimeoutSeconds = 1 }, Key, new HttpClient(hanging), rig.Log.CreateLogger("driver"), rig.Clock, (_, _) => Task.CompletedTask) };
+        rig = rig with { Driver = new OpenAiCompatibleDriver("example", new EmbeddingProviderOptions { Driver = EmbeddingDrivers.OpenAiCompatible, BaseUrl = "https://api.example.org/v1", Model = "m", TimeoutSeconds = 1 }, Key, () => new HttpClient(hanging, disposeHandler: false), rig.Log.CreateLogger("driver"), rig.Clock, (_, _) => Task.CompletedTask) };
 
         var vectors = await rig.Driver.EmbedAsync(["a"], query: false, Ct);
 
@@ -264,8 +264,8 @@ public sealed class OpenAiCompatibleDriverTests
         };
         Assert.Empty(KumbuOptionsValidator.ProviderFailures("tensorx", options));
         var log = new CapturedLog();
-        using var http = new HttpClient();
-        var driver = new OpenAiCompatibleDriver("tensorx", options, EmbeddingProviderOptions.ReadKey(keyFile), http, log.CreateLogger("driver"));
+        using var handler = new HttpClientHandler();
+        var driver = new OpenAiCompatibleDriver("tensorx", options, EmbeddingProviderOptions.ReadKey(keyFile), () => new HttpClient(handler, disposeHandler: false), log.CreateLogger("driver"));
 
         var docs = await driver.EmbedAsync(["Katzen, Hunde, Hühner und Enten leben auf dem Hof.", "The gate service checks the rules at the entrance."], query: false, Ct);
         var query = (await driver.EmbedAsync(["animals on a farm"], query: true, Ct))[0];

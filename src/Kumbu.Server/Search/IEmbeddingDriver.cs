@@ -105,7 +105,7 @@ public static class EmbeddingDrivers
         {
             [OpenAiCompatible] = (name, o, http, logs) => new OpenAiCompatibleDriver(
                 name, o, EmbeddingProviderOptions.ReadKey(o.ApiKeyFile),
-                http.CreateClient(HttpClientName(name)), logs.CreateLogger<OpenAiCompatibleDriver>()),
+                () => http.CreateClient(HttpClientName(name)), logs.CreateLogger<OpenAiCompatibleDriver>()),
         };
 
     public static IReadOnlyCollection<string> External => Factories.Keys;
