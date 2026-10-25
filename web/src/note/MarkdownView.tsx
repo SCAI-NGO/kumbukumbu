@@ -86,7 +86,7 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   const checked = taskChecked(node);
   const line = node.position!.start.line;
   return (
-    <li className="my-0.5 flex items-start gap-1" {...rest}>
+    <li className="k-task my-0.5 flex list-none items-start gap-1" {...rest}>
       <button
         type="button"
         role="checkbox"
@@ -148,9 +148,19 @@ const components: Components = {
   ),
   h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
   p: ({ node: _, ...props }) => <p className="my-3" {...props} />,
-  ul: ({ node: _, className, ...props }) => (
-    <ul className={`my-3 ${className?.includes("contains-task-list") ? "list-none pl-1" : "list-disc pl-6"}`} {...props} />
-  ),
+  // Only tasks: no bullets. A mix keeps the disc for ordinary items; the tasks (`k-task`) give theirs up and move
+  // left so their checkbox stands where a bullet would, with their text close to the ordinary items'.
+  ul: ({ node, className, ...props }) => {
+    const items = node?.children.filter((c) => c.type === "element" && c.tagName === "li") ?? [];
+    const onlyTasks = !!className?.includes("contains-task-list") && items.every((li) => li.type === "element" && isTaskItem(li));
+    const mixed = !!className?.includes("contains-task-list") && !onlyTasks;
+    return (
+      <ul
+        className={`my-3 ${onlyTasks ? "list-none pl-1" : "list-disc pl-6"} ${mixed ? "[&>.k-task]:-ml-[22px] [&>.k-task>div]:-ml-3" : ""}`}
+        {...props}
+      />
+    );
+  },
   ol: ({ node: _, ...props }) => <ol className="my-3 list-decimal pl-6" {...props} />,
   li: ({ node, children, className: __, ...props }) =>
     node && isTaskItem(node) ? (

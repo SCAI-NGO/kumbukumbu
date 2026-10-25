@@ -93,6 +93,33 @@ describe("MarkdownView", () => {
     expect(screen.getAllByText("[[plan]]")).toHaveLength(2);
   });
 
+  describe("lists", () => {
+    const bulleted = (li: HTMLElement) => li.closest("ul")!.classList.contains("list-disc") && !li.classList.contains("list-none");
+
+    it("keeps the bullets of ordinary items in a list that also has a task", () => {
+      show("- eins\n\n- [x] zwei");
+      const [eins, zwei] = screen.getAllByRole("listitem");
+      expect(bulleted(eins)).toBe(true);
+      expect(bulleted(zwei)).toBe(false);
+      expect(screen.getByRole("checkbox", { name: "zwei" })).toBeInTheDocument();
+    });
+
+    it("gives only the ordinary item of a tight mixed list a bullet", () => {
+      show("- a\n- [ ] b");
+      const [a, b] = screen.getAllByRole("listitem");
+      expect(bulleted(a)).toBe(true);
+      expect(bulleted(b)).toBe(false);
+    });
+
+    it("shows a list of only tasks without bullets", () => {
+      show("- [ ] a\n- [x] b");
+      const list = screen.getByRole("list");
+      expect(list).toHaveClass("list-none");
+      expect(list).not.toHaveClass("list-disc");
+      for (const li of screen.getAllByRole("listitem")) expect(bulleted(li)).toBe(false);
+    });
+  });
+
   it("toggles a task by its source line", async () => {
     const onToggleTask = vi.fn();
     show("# Plan\n\n- [ ] write\n- [x] read", [], { onToggleTask });
