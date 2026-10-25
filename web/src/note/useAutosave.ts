@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { SaveResult } from "../api/notes";
+
+/** MOBILE_EDITOR §7: a save 800 ms after the last keystroke. */
+export const AUTOSAVE_DELAY = 800;
+
+/** The note as the server has it after a write by someone else: what a 409 answered. */
+export type Conflict = { content: string; version: string };
+export type AutosaveStatus = "saved" | "pending" | "saving" | "conflict" | "error";
+
+/**
+ * The text being written and its saves. Saves go one at a time, each on the version the previous one returned
+ * (never one only read from the cache, which may already hold an agent's newer write). A 409 pauses saving and
+ * keeps the user's text until they choose: `reload` takes the newer text, `keepMine` writes theirs on top of it.
+ */
+export function useAutosave(initial: { content: string; version: string }, save: (content: string, version: string) => Promise<SaveResult>) {
+  const [value, setValue] = useState(initial.content);
+  const [status, setStatus] = useState<AutosaveStatus>("saved");
+  const [conflict, setConflict] = useState<Conflict | null>(null);
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  // The live state, read by timers and promises that outlast a render.
+  const s = useRef({
+    text: initial.content,
+    /** What the server holds at `version`, as far as this editor knows. */
+    saved: initial.content,
+    version: initial.version,
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    inFlight: null as Promise<void> | null,
+    again: false,
+    conflict: null as Conflict | null,
+    failed: false,
+  }).current;
+
+  const run = useCallback((): Promise<void> => {
+    clearTimeout(s.timer);
+    s.timer = undefined;
+    if (s.conflict) return Promise.resolve();
+    if (s.inFlight) {
+      s.again = true;
+      return s.inFlight;
+    }
+    if (s.text === s.saved) {
+      s.failed = false;
+      setStatus("saved");
+      return Promise.resolve();
+    }
+    const content = s.text;
+    s.failed = false;
+    setStatus("saving");
+    s.inFlight = saveRef
+      .current(content, s.version)
+      .then(
+        (result) => {
+          if ("saved" in result) {
+            s.version = result.saved.version;
+            s.saved = content;
+          } else {
+            s.conflict = result.conflict;
+          }
+        },
+        () => {
+          s.failed = true;
+        },
+      )
+      .then(() => {
+        s.inFlight = null;
+        const again = s.again;
+        s.again = false;
+        if (s.conflict) {
+          setConflict(s.conflict);
+          setStatus("conflict");
+        } else if (s.failed) setStatus("error");
+        else if (again) void run();
+        else setStatus(s.text === s.saved ? "saved" : "pending");
+      });
+    return s.inFlight;
+  }, [s]);
+
+  const change = useCallback(
+    (text: string) => {
+      s.text = text;
+      setValue(text);
+      if (s.conflict) return;
+      clearTimeout(s.timer);
+      s.timer = setTimeout(() => void run(), AUTOSAVE_DELAY);
+      if (!s.inFlight && !s.failed) setStatus("pending");
+    },
+    [s, run],
+  );
+
+  const saveNow = useCallback(() => void run(), [run]);
+
+  /** Saves everything still pending and answers whether all of it is saved; a failed save is tried once more. */
+  const flush = useCallback(async () => {
+    if (s.failed && !s.conflict) s.failed = false;
+    for (;;) {
+      if (s.inFlight) {
+        await s.inFlight;
+        continue;
+      }
+      if (s.conflict || s.failed) return false;
+      if (s.text === s.saved) return true;
+      await run();
+    }
+  }, [s, run]);
+
+  /** The user's text goes on top of the newer version; a further write meanwhile is another conflict. */
+  const keepMine = useCallback(() => {
+    if (!s.conflict) return Promise.resolve();
+    s.version = s.conflict.version;
+    s.saved = s.conflict.content;
+    s.conflict = null;
+    setConflict(null);
+    return run();
+  }, [s, run]);
+
+  /** The newer version replaces the user's text; that is what they chose. */
+  const reload = useCallback(() => {
+    if (!s.conflict) return;
+    clearTimeout(s.timer);
+    s.text = s.saved = s.conflict.content;
+    s.version = s.conflict.version;
+    s.conflict = null;
+    setConflict(null);
+    setValue(s.text);
+    setStatus("saved");
+  }, [s]);
+
+  const retry = useCallback(() => {
+    s.failed = false;
+    void run();
+  }, [s, run]);
+
+  /** Anything unsaved, in flight, failed or in conflict: leaving now could lose text. */
+  const unresolved = useCallback(() => !!(s.conflict || s.failed || s.inFlight || s.text !== s.saved), [s]);
+
+  // Leaving without the guards (signed out, say): what can still be saved is sent.
+  useEffect(
+    () => () => {
+      clearTimeout(s.timer);
+      if (!s.conflict && !s.inFlight && s.text !== s.saved) void saveRef.current(s.text, s.version).catch(() => {});
+    },
+    [s],
+  );
+
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved };
+}

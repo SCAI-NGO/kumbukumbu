@@ -25,10 +25,15 @@ interface EditorState {
   showAgentHighlights: boolean;
   /** The last notes opened, newest first. */
   recentPaths: string[];
+  /** Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure). */
+  beforeRead: (() => Promise<boolean>) | null;
 
   /** Opens a note: overlays close, its vault becomes active and its folder chain opens in the drawer. */
   openNote(path: string, mode?: Mode): void;
   setMode(mode: Mode): void;
+  /** Ends Write mode (Done, the Read toggle): only once the editor has saved everything. */
+  endWrite(): Promise<void>;
+  setBeforeRead(guard: (() => Promise<boolean>) | null): void;
   setOverlay(overlay: Overlay): void;
   toggleFolder(path: string): void;
   setActiveVault(vault: string): void;
@@ -50,6 +55,7 @@ const initial = {
   searchMode: "hybrid" as SearchMode,
   showAgentHighlights: false,
   recentPaths: [],
+  beforeRead: null,
 };
 
 /** `/Work/projects/deep` → `/Work/projects`, `/Work/projects/deep` (the vault's root is always open). */
@@ -58,7 +64,7 @@ function chain(folder: string) {
   return segments.slice(2).map((_, i) => segments.slice(0, i + 3).join("/"));
 }
 
-export const useEditor = create<EditorState>()((set) => ({
+export const useEditor = create<EditorState>()((set, get) => ({
   ...initial,
   openNote: (path, mode = "read") =>
     set((s) => ({
@@ -70,6 +76,11 @@ export const useEditor = create<EditorState>()((set) => ({
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
     })),
   setMode: (mode) => set({ mode }),
+  endWrite: async () => {
+    const guard = get().beforeRead;
+    if (!guard || (await guard())) set({ mode: "read" });
+  },
+  setBeforeRead: (beforeRead) => set({ beforeRead }),
   setOverlay: (overlay) => set({ overlay }),
   toggleFolder: (path) => set((s) => ({ expandedFolders: { ...s.expandedFolders, [path]: !s.expandedFolders[path] } })),
   setActiveVault: (activeVault) => set({ activeVault }),

@@ -10,6 +10,7 @@ import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
+import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
 import { taskToggle } from "./taskToggle";
 
@@ -33,10 +34,15 @@ export function splitFrontmatter(source: string): { frontmatter: string | null; 
 /** The notice under the title: a write that lost to a newer version, or one that failed. */
 type Notice = { kind: "conflict" } | { kind: "error"; text: string };
 
-/** Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. */
+/**
+ * Read mode (MOBILE_EDITOR §4): the agent banner, the rendered note, and the notes linking to it. Write mode: the
+ * editor with its toolbar, in place of the dock.
+ */
 export default function NoteView({ path }: { path: string }) {
   const note = useNote(path);
-  const links = useLinks(path, note.data?.version);
+  const mode = useEditor((s) => s.mode);
+  // Every save is a new version; the links are only asked for once they are shown again.
+  const links = useLinks(path, mode === "read" ? note.data?.version : undefined);
   const save = useSaveNote(path);
   const createNote = useCreateNote();
   const openNote = useEditor((s) => s.openNote);
@@ -80,6 +86,11 @@ export default function NoteView({ path }: { path: string }) {
     },
     [path, createNote, openNote, navigate],
   );
+
+  if (mode === "write") {
+    if (note.data) return <MarkdownEditor path={path} note={note.data} />;
+    return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
+  }
 
   return (
     <>
