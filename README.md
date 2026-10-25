@@ -104,7 +104,7 @@ A provider is configuration under `Kumbu:Embeddings:Providers:<name>` (environme
 | `ApiKeyFile` | A file holding the API key (a Docker secret); never the key itself in the environment. Optional only for a loopback provider. Read once at startup | `/run/secrets/tensorx-api-key` |
 | `Dimensions` | Optional: the vectors' length to ask for; unset, the model's own | `1024` |
 | `QueryPrompt` | Optional: put before every search query, for models that want an instruction | see below |
-| `Label`, `Description` | What owners see before they choose; the description is the provider's promise in a few words | `TensorX`, `EU (Ireland), zero data retention by policy` |
+| `Label`, `Description` | What owners see before they choose; the description is the provider's promise in a few words, as the provider states it | `TensorX`, `As TensorX states: EU (Ireland), zero data retention` |
 | `MaxBatch`, `TimeoutSeconds` | Optional: texts per request (default 32), seconds per request (default 30) | `32`, `30` |
 
 The server refuses to start if a provider's URL isn't https, its key file is missing or empty, or a setting is out of range. Failed requests are retried (timeouts, 429, 5xx, with backoff; a search waits at most 5 s for a provider, asks all providers at once, and otherwise ranks by words); a provider that keeps failing pauses for a minute; its vaults are searched by words meanwhile (in a search across vaults, merged by rank with the others' results by meaning), and the search says so. Switching or removing a provider re-embeds; a provider removed from the configuration leaves its vaults without search by meaning until their owner picks another. `KUMBU_SEARCH=false` switches off the internal model only. Across vaults on different models, each vault's sections are scored by their own model and ranked together; measured on the evaluation corpus, that costs about one query in 37 against the better model alone (`docs/notes-search-external.md`).
@@ -122,7 +122,7 @@ services:
       Kumbu__Embeddings__Providers__tensorx__QueryPrompt: "Instruct: Given a search query, retrieve the note sections that answer it\nQuery: "
       Kumbu__Embeddings__Providers__tensorx__ApiKeyFile: /run/secrets/tensorx-api-key
       Kumbu__Embeddings__Providers__tensorx__Label: TensorX
-      Kumbu__Embeddings__Providers__tensorx__Description: EU (Ireland), zero data retention by policy
+      Kumbu__Embeddings__Providers__tensorx__Description: "As TensorX states: EU (Ireland), zero data retention"
     secrets:
       - tensorx-api-key
 
@@ -156,7 +156,7 @@ After joining you see the recovery key once; keep it safe. Then open `http://loc
 
 Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know:
 
-- **Search by meaning needs the embedding model** ([snowflake-arctic-embed-m-v2.0](https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0), 16-bit, about 630 MB). The server downloads it once on the first start into the `models` volume, pinned to one revision and checked against its SHA-256, and runs it in-process with ONNX Runtime; after that it works offline. Until it is loaded, and with `KUMBU_SEARCH=false`, `semsearch` ranks by words and says so. Indexing runs in the background after every write and when a vault is unlocked; a note takes some tens of milliseconds per section on a CPU.
+- **Search by meaning needs the embedding model** ([snowflake-arctic-embed-m-v2.0](https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0), 16-bit, about 630 MB). The server downloads it once on the first start into the `models` volume, pinned to one revision and checked against its SHA-256, and runs it in-process with ONNX Runtime; after that it works offline. Until it is loaded, and with `KUMBU_SEARCH=false` (which switches off the internal model only: vaults opted in to an external provider keep searching by meaning), `semsearch` ranks by words and says so. Indexing runs in the background after every write and when a vault is unlocked; a note takes some tens of milliseconds per section on a CPU.
 - **MongoDB runs as a single-node replica set**, since it has transactions only then. `compose.yaml` sets this up and needs no manual step: a fixed host name and a health check that initiates the set on the first start. Running MongoDB yourself, start it with `--replSet rs0`, initiate the set, and add `?directConnection=true` to the connection string; a standalone MongoDB is refused with a message that says so.
 - **MongoDB is the source of truth.** Agents' changes live there; Kumbu² never writes back to `./vaults`.
 - Seeding is for starting from scratch: at startup each folder becomes an encrypted vault (an empty folder an empty vault), or fills one that is still empty. A vault that already holds notes (or trash) is left alone, so later changes on disk are not loaded. One catch: a vault whose notes were all removed, with the trash expired after 30 days, counts as empty and is filled again on the next start. To load the folders again, `docker compose down -v` wipes the database, **including every change agents made and the vaults' keys**; the next start creates new vaults with new recovery keys.
