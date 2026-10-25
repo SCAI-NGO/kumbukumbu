@@ -32,8 +32,14 @@ export function splitFrontmatter(source: string): { frontmatter: string | null; 
   };
 }
 
-/** Whether the body opens with its own `# Heading` (the frontmatter's lines are empty in it, as are blank ones). */
-const startsWithH1 = (body: string) => /^#[ \t]+\S/.test(body.trimStart());
+/**
+ * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
+ * are empty in it; leading blank lines go, but not indentation: four spaces make a code block, not a heading.
+ */
+const startsWithH1 = (body: string) => {
+  const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
+  return /^ {0,3}#(?:[ \t]|$)/.test(first.split("\n", 1)[0]) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
+};
 
 /** The notice under the title: a write that lost to a newer version, or one that failed. */
 type Notice = { kind: "conflict" } | { kind: "error"; text: string };

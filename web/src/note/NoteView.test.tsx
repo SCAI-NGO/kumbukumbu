@@ -84,6 +84,21 @@ describe("the note view", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
+  it("counts a setext H1 as the note's own title", async () => {
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "\nPlan\n====\n\n## Goals\n")) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 2, name: "Goals" });
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Plan");
+  });
+
+  it("keeps the file name's title when the first line is an indented code block, not a heading", async () => {
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "    # x\n\n## Goals\n")) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 2, name: "Goals" });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("plan");
+  });
+
   it("shows the file name as the title of a note without an H1", async () => {
     noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "---\ntags: [x]\n---\n\nJust text.\n\n## Goals\n")) });
     renderApp(planUrl);
