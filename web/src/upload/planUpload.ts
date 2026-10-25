@@ -3,6 +3,8 @@
 /** The server's limits per request (UploadApi.MaxFiles, MaxBytes: UTF-8 bytes of the files' text). */
 export const MAX_FILES = 200;
 export const MAX_BYTES = 5_000_000;
+/** The most a note may have (NoteWriter.MaxBytes): the server refuses a larger file, so it isn't sent. */
+export const MAX_NOTE_BYTES = 1_048_576;
 
 export interface Skipped {
   path: string;
@@ -17,7 +19,7 @@ export interface UploadFile {
 // The server's sentences, so its list and this one read alike.
 const NOT_MARKDOWN = "not a Markdown file (.md or .markdown)";
 const OBSIDIAN = "Obsidian's settings or trash, not a note";
-const TOO_LARGE = "larger than 5 MB, the most one upload takes";
+const TOO_LARGE = `larger than ${MAX_NOTE_BYTES} bytes (1 MiB), the limit for a note`;
 
 const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
 
@@ -28,14 +30,14 @@ function reasonAgainst(path: string): string | null {
 }
 
 /**
- * Which files to read and send: Markdown only, nothing of Obsidian's settings or trash, nothing larger than one
- * request takes. Decided by path and size alone, so skipped files are never read. The server checks again.
+ * Which files to read and send: Markdown only, nothing of Obsidian's settings or trash, nothing larger than a
+ * note may be. Decided by path and size alone, so skipped files are never read. The server checks again.
  */
 export function planUpload<T extends { path: string; size: number }>(files: T[]): { keep: T[]; skipped: Skipped[] } {
   const keep: T[] = [];
   const skipped: Skipped[] = [];
   for (const file of files) {
-    const reason = reasonAgainst(file.path) ?? (file.size > MAX_BYTES ? TOO_LARGE : null);
+    const reason = reasonAgainst(file.path) ?? (file.size > MAX_NOTE_BYTES ? TOO_LARGE : null);
     if (reason) skipped.push({ path: file.path, reason });
     else keep.push(file);
   }
@@ -45,8 +47,8 @@ export function planUpload<T extends { path: string; size: number }>(files: T[])
 const encoder = new TextEncoder();
 
 /**
- * The files in requests the server takes, in order: at most 200 files and 5 MB of text each. A file over that
- * once read (its text can be larger than the file, if it wasn't UTF-8) is skipped.
+ * The files in requests the server takes, in order: at most 200 files and 5 MB of text each. A file larger
+ * than a note may be once read (its text can be larger than the file, if it wasn't UTF-8) is skipped.
  */
 export function toBatches(files: UploadFile[]): { batches: UploadFile[][]; skipped: Skipped[] } {
   const batches: UploadFile[][] = [];
@@ -54,7 +56,7 @@ export function toBatches(files: UploadFile[]): { batches: UploadFile[][]; skipp
   let bytes = 0;
   for (const file of files) {
     const size = encoder.encode(file.content).length;
-    if (size > MAX_BYTES) {
+    if (size > MAX_NOTE_BYTES) {
       skipped.push({ path: file.path, reason: TOO_LARGE });
       continue;
     }

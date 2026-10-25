@@ -124,6 +124,13 @@ describe("the upload", () => {
     expect(sent[0].paths).toEqual(bulk);
     expect(within(list).getAllByRole("checkbox").map((c) => c.getAttribute("aria-label"))).toEqual(["Replace Vault/notes/b.md", "Replace Vault/notes/deep/c.md"]);
 
+    expect(within(list).getByText("2 new notes wait for this choice")).toBeInTheDocument();
+    // A choice is required: Escape doesn't close the sheet and drop the held notes, "Skip all" has the focus.
+    expect(within(list).getByRole("button", { name: "Skip all" })).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Upload" })).toBeInTheDocument();
+    expect(within(sheet).queryByRole("button", { name: /Cancel|Close/ })).not.toBeInTheDocument();
+
     await userEvent.click(within(list).getByRole("checkbox", { name: "Replace Vault/notes/b.md" }));
     await userEvent.click(within(sheet).getByRole("button", { name: "Replace 1 selected" }));
 
@@ -215,6 +222,25 @@ describe("the upload", () => {
     expect(sent).toEqual([]);
     await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
     await waitFor(() => expect(sent).toEqual([{ url: "/api/upload/Work/projects", onConflict: "ask", paths: ["dropped.md"] }]));
+  });
+});
+
+describe("the open sheet", () => {
+  it("keeps a drop anywhere on the page from opening the file in place of the app", async () => {
+    uploadApi([]);
+    renderApp("/notes/Work/inbox.md");
+    await openFromDock();
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(over);
+    document.body.dispatchEvent(drop);
+    expect(over.defaultPrevented).toBe(true);
+    expect(drop.defaultPrevented).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const later = new Event("drop", { bubbles: true, cancelable: true });
+    document.body.dispatchEvent(later);
+    expect(later.defaultPrevented).toBe(false);
   });
 });
 

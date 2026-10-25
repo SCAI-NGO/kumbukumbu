@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { MAX_BYTES, MAX_FILES, planUpload, toBatches } from "./planUpload";
+import { MAX_FILES, MAX_NOTE_BYTES, planUpload, toBatches } from "./planUpload";
 
 const entry = (path: string, size = 10) => ({ path, size });
 
@@ -34,10 +34,10 @@ describe("planUpload", () => {
     expect(skipped.map((s) => s.reason)).toEqual(Array(4).fill("Obsidian's settings or trash, not a note"));
   });
 
-  it("skips a file larger than one request takes, without reading it", () => {
-    const { keep, skipped } = planUpload([entry("big.md", MAX_BYTES + 1), entry("fits.md", MAX_BYTES)]);
+  it("skips a file larger than a note may be (1 MiB), without reading it", () => {
+    const { keep, skipped } = planUpload([entry("big.md", MAX_NOTE_BYTES + 1), entry("fits.md", MAX_NOTE_BYTES)]);
     expect(keep.map((k) => k.path)).toEqual(["fits.md"]);
-    expect(skipped).toEqual([{ path: "big.md", reason: "larger than 5 MB, the most one upload takes" }]);
+    expect(skipped).toEqual([{ path: "big.md", reason: "larger than 1048576 bytes (1 MiB), the limit for a note" }]);
   });
 });
 
@@ -51,14 +51,15 @@ describe("toBatches", () => {
   });
 
   it("puts at most 5 MB of UTF-8 into a batch, counting multi-byte characters", () => {
-    // "ü" is two bytes: each file is 2 MB, so two fit and a third doesn't.
-    const files = ["a", "b", "c"].map((n) => ({ path: `${n}.md`, content: "ü".repeat(1_000_000) }));
-    expect(toBatches(files).batches.map((b) => b.map((f) => f.path))).toEqual([["a.md", "b.md"], ["c.md"]]);
+    // "ü" is two bytes: each file is 1 MB, so five fit and a sixth doesn't.
+    const files = ["a", "b", "c", "d", "e", "f"].map((n) => ({ path: `${n}.md`, content: "ü".repeat(500_000) }));
+    expect(toBatches(files).batches.map((b) => b.map((f) => f.path))).toEqual([["a.md", "b.md", "c.md", "d.md", "e.md"], ["f.md"]]);
   });
 
-  it("skips a file whose text alone is over the limit", () => {
-    const { batches, skipped } = toBatches([{ path: "huge.md", content: "ü".repeat(2_500_001) }, { path: "a.md", content: "a" }]);
+  it("skips a file whose text, once read, is larger than a note may be", () => {
+    // 524,289 two-byte characters: 1 MiB and two bytes, though a file of that text in Latin-1 is half the size.
+    const { batches, skipped } = toBatches([{ path: "huge.md", content: "ü".repeat(524_289) }, { path: "a.md", content: "a" }]);
     expect(batches).toEqual([[{ path: "a.md", content: "a" }]]);
-    expect(skipped).toEqual([{ path: "huge.md", reason: "larger than 5 MB, the most one upload takes" }]);
+    expect(skipped).toEqual([{ path: "huge.md", reason: "larger than 1048576 bytes (1 MiB), the limit for a note" }]);
   });
 });

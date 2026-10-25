@@ -55,7 +55,7 @@ function SkippedList({ skipped }: { skipped: Skipped[] }) {
   if (skipped.length === 0) return null;
   return (
     <details className="rounded-[10px] border border-line bg-surface-2 px-3 py-2">
-      <summary className="min-h-8 cursor-pointer text-sm text-text-body">{count(skipped.length, "file", "files")} skipped</summary>
+      <summary className="flex min-h-11 cursor-pointer items-center text-sm text-text-body">{count(skipped.length, "file", "files")} skipped</summary>
       <ul aria-label="Skipped files" className="mt-1.5 flex max-h-48 flex-col gap-1.5 overflow-y-auto">
         {skipped.map((s, i) => (
           <li key={`${i}${s.path}`} className="flex flex-col">
@@ -80,10 +80,11 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
   const run = useRef<Run>(emptyRun());
   const [vault, ...rest] = folder.split("/").slice(1);
   const inVault = rest.join("/");
-  const running = view.kind === "reading" || view.kind === "running";
-  // A batch in flight is finished first: closing then would leave the user without the summary.
+  // A batch in flight is finished first: closing then would leave the user without the summary. Conflicts need a
+  // choice: closing would drop the held new notes of their batches without a word.
+  const busy = view.kind === "reading" || view.kind === "running" || view.kind === "conflicts";
   const close = () => {
-    if (!running) setOverlay("none");
+    if (!busy) setOverlay("none");
   };
   const dialog = useDialog<HTMLDivElement>(close);
 
@@ -159,6 +160,26 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
     void take(dropped);
   }, []);
 
+  // Each step replaces the controls the focus was on: it moves to the step's default (Skip all, Retry, Done).
+  useEffect(() => {
+    (dialog.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialog.current)?.focus();
+  }, [view.kind, dialog]);
+
+  // A drop that misses the drop zone would make the browser open the file in place of the app, run and all.
+  useEffect(() => {
+    const swallow = (e: globalThis.DragEvent) => {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", swallow);
+    window.addEventListener("drop", swallow);
+    return () => {
+      window.removeEventListener("dragover", swallow);
+      window.removeEventListener("drop", swallow);
+    };
+  }, []);
+
   const onDragOver = (e: DragEvent) => {
     if (view.kind === "pick" && e.dataTransfer.types.includes("Files")) e.preventDefault();
   };
@@ -179,6 +200,7 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
         role="dialog"
         aria-modal="true"
         aria-labelledby="upload-title"
+        tabIndex={-1}
         onDragOver={onDragOver}
         onDrop={onDrop}
         className="k-sheet flex max-h-full w-full max-w-md flex-col gap-3 overflow-y-auto rounded-[16px] border border-line bg-surface p-[18px]"
@@ -244,7 +266,7 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
           </div>
         )}
 
-        {view.kind === "conflicts" && <ConflictList paths={r.conflicts} onDecide={decide} />}
+        {view.kind === "conflicts" && <ConflictList paths={r.conflicts} waiting={r.held.length - r.conflicts.length} onDecide={decide} />}
 
         {view.kind === "failed" && (
           <>
