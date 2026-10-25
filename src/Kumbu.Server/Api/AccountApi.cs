@@ -150,7 +150,14 @@ public static class AccountApi
         // Signing in costs a second Argon2 run, for a user key the service doesn't hand out at creation.
         if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt))
         {
-            SetSessionCookie(http, await sessions.StartAsync(signedIn, userKey, readAt, CancellationToken.None));
+            try
+            {
+                SetSessionCookie(http, await sessions.StartAsync(signedIn, userKey, readAt, CancellationToken.None));
+            }
+            catch (CredentialsChangedException)
+            {
+                // Deactivated or deleted between the sign-in and the session: still no error, for the recovery key's sake.
+            }
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));

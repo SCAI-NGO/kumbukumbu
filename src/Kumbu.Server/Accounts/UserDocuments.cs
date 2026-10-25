@@ -61,6 +61,15 @@ public sealed class UserDocument
     [BsonElement("keysCreated")]
     public long KeysCreated { get; set; }
 
+    /// <summary>How many vaults the user has created; incremented in each vault's transaction, for the same reason
+    /// as <see cref="KeysCreated"/>: a concurrent deletion of the account conflicts with it.</summary>
+    [BsonElement("vaultsCreated")]
+    public long VaultsCreated { get; set; }
+
+    /// <summary>How many sessions the user has started; incremented in each session's transaction, likewise.</summary>
+    [BsonElement("sessionsStarted")]
+    public long SessionsStarted { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

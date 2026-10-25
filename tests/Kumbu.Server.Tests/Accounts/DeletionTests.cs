@@ -223,6 +223,21 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task After_the_account_is_gone_no_vault_or_session_can_be_made_for_it()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        Assert.True(await Deletion().DeleteOwnAccountAsync(lea, key, Password, "lea", Ct));
+
+        // A request whose session was checked just before the deletion, arriving after it.
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Spät", lea.Id, key, Ct));
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Sessions().StartAsync(lea, key, Now, Ct));
+
+        Assert.Equal(0, await CountAsync("slots", "owner", lea.Id));
+        Assert.Equal(0, await Raw("vaults").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
+        Assert.Equal(0, await CountAsync("user_slots", "user", lea.Id));
+    }
+
+    [Fact]
     public async Task Deleting_ones_account_needs_the_password_and_the_username_typed_and_never_the_primary_admin()
     {
         var (lea, key, _) = await SignedInAsync("lea");

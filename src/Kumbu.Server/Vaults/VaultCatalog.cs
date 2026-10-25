@@ -37,6 +37,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     internal IMongoCollection<VaultDocument> Vaults { get; } = db.GetCollection<VaultDocument>("vaults");
 
+    private IMongoCollection<Accounts.UserDocument> Users { get; } = db.GetCollection<Accounts.UserDocument>("users");
+
     internal IMongoCollection<SlotDocument> Slots { get; } = db.GetCollection<SlotDocument>("slots");
 
     internal IMongoCollection<SealedDocument> Notes { get; } = db.GetCollection<SealedDocument>("notes");
@@ -157,7 +159,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>
     /// Creates a vault owned by a user: its key wrapped by <paramref name="userKey"/> and nothing else, so the
     /// user's recovery key reaches it through the user key. Throws <see cref="VaultNameTakenException"/> if the
-    /// user has a vault of that name (compared case-insensitively), also when another create won a race.
+    /// user has a vault of that name (compared case-insensitively), also when another create won a race, and
+    /// <see cref="Accounts.CredentialsChangedException"/> if the user no longer exists or is inactive.
     /// </summary>
     public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -202,7 +205,20 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         try
         {
             var meta = VaultCrypto.Seal(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(new VaultMeta(name)), $"vault:{id}");
-            await Vaults.InsertOneAsync(new VaultDocument { Id = id, Meta = meta, CreatedAt = Now }, cancellationToken: ct);
+            var doc = new VaultDocument { Id = id, Meta = meta, CreatedAt = Now };
+            using var session = await StartSessionAsync(ct);
+            await session.WithTransactionAsync(
+                async (s, token) =>
+                {
+                    // A real write to the owner's document, in the vault's transaction: it conflicts with a deletion of
+                    // the account running at the same time (retried, then refused), so no vault outlives its owner.
+                    var owner = await Users.UpdateOneAsync(
+                        s, u => u.Id == userId && u.Active, Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
+                    if (owner.MatchedCount == 0) throw new Accounts.CredentialsChangedException();
+                    await Vaults.InsertOneAsync(s, doc, cancellationToken: token);
+                    return true;
+                },
+                cancellationToken: ct);
         }
         catch
         {
