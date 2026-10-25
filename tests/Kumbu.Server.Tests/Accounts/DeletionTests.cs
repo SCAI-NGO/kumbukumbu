@@ -207,6 +207,53 @@ public sealed class DeletionTests(MongoFixture fixture)
         await AssertGoneAsync(diary.Id);
     }
 
+    /// <summary>An embedder that holds every embedding until the test lets it go, and says when one has begun.</summary>
+    private sealed class SlowEmbedder : Kumbu.Server.Search.IEmbedder
+    {
+        private readonly Search.FakeEmbedder _inner = new();
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Kumbu.Core.Search.SemanticState State => _inner.State;
+
+        public string Model => _inner.Model;
+
+        public string? Reason => _inner.Reason;
+
+        public Task WhenReadyAsync(CancellationToken ct) => _inner.WhenReadyAsync(ct);
+
+        public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct)
+        {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(ct);
+            return await _inner.EmbedAsync(texts, query, ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_deletion_during_a_slow_embedding_leaves_no_embedding_behind()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var stale = await FilledVaultAsync(lea, key, "Tagebuch");
+        // Locked, so the deletion doesn't wait for this object's index gate: the indexing runs alongside it.
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog().Sweep();
+        var embedder = new SlowEmbedder();
+        using var index = new Kumbu.Server.Search.SearchIndex(Catalog(), embedder, NullLogger<Kumbu.Server.Search.SearchIndex>.Instance);
+
+        // Past the first tombstone check and into the embedding when the deletion comes.
+        var indexing = index.IndexAsync(stale, P("/Tagebuch/plan.md"), Ct);
+        await embedder.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
+        embedder.Release.SetResult();
+        await indexing;
+
+        Assert.Equal(0, await CountAsync("embeddings", "vault", stale.Id));
+        await AssertGoneAsync(stale.Id);
+    }
+
     [Fact]
     public async Task An_older_vault_object_waiting_in_the_index_queue_brings_no_embedding_back()
     {

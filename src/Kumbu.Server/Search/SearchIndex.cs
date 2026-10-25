@@ -122,6 +122,8 @@ public sealed class SearchIndex : BackgroundService
             }
 
             var embeddings = new NoteEmbeddings(_embedder.Model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
+            // Again: embedding takes seconds, and the vault may have been deleted meanwhile.
+            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update
