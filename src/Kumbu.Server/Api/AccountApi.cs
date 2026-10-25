@@ -66,8 +66,8 @@ public sealed record UpdateUserRequest(bool? Active = null, string? Role = null)
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
 public sealed record DeleteAccountRequest(string Password, string Confirm);
 
-/// <summary>Deleting a deactivated user: <c>confirm</c> is their username, typed out.</summary>
-public sealed record DeleteUserRequest(string Confirm);
+/// <summary>Deleting a deactivated user: the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
+public sealed record DeleteUserRequest(string Password, string Confirm);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -113,7 +113,7 @@ public static class AccountApi
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404);
-        account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404);
+        account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404, 429);
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
@@ -261,8 +261,14 @@ public static class AccountApi
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
     }
 
-    private static async Task<NoContent> DeleteUserAsync(string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, CancellationToken ct) =>
-        await deletion.DeleteUserAsync(caller.User!, id, body.Confirm, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such user.");
+    private static async Task<NoContent> DeleteUserAsync(
+        string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        return await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound("There is no such user.");
+    }
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());

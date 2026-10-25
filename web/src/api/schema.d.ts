@@ -2265,6 +2265,7 @@ export interface components {
             confirm: string;
         };
         DeleteUserRequest: {
+            password: string;
             confirm: string;
         };
         DeleteVaultRequest: {

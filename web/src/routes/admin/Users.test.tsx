@@ -105,7 +105,7 @@ describe("Admin users", () => {
     await vi.waitFor(() => expect(patches).toEqual([{ active: true }]));
   });
 
-  it("offers deletion only for a deactivated user, and deletes after the username was typed", async () => {
+  it("offers deletion only for a deactivated user, and deletes with the username typed and the admin's password", async () => {
     const bodies: unknown[] = [];
     api(admin, {
       "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { active: false })]),
@@ -127,8 +127,10 @@ describe("Admin users", () => {
     expect(confirm).toBeDisabled();
     await userEvent.clear(within(dialog).getByLabelText(/Type bob to confirm/));
     await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
     await userEvent.click(confirm);
-    await vi.waitFor(() => expect(bodies).toEqual([{ confirm: "bob" }]));
+    await vi.waitFor(() => expect(bodies).toEqual([{ password: "admin password, long", confirm: "bob" }]));
     await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
   });
 

@@ -116,8 +116,10 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
 
 function DeleteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
   const queryClient = useQueryClient();
+  // The admin's own password, read through the closure: the mutation cache keeps no variables of it.
+  const [password, setPassword] = useState("");
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { confirm: user.username } })),
+    mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { password, confirm: user.username } })),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       onClose();
@@ -133,6 +135,8 @@ function DeleteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
       error={remove.isError ? errorText(remove.error) : null}
       onConfirm={() => remove.mutate()}
       onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
     />
   );
 }

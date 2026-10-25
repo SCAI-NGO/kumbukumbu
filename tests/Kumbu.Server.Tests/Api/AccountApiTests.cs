@@ -414,7 +414,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
                  {
                      (HttpMethod.Get, "/api/admin/users", null),
                      (HttpMethod.Patch, "/api/admin/users/someone", new { active = false }),
-                     (HttpMethod.Post, "/api/admin/users/someone/delete", new { confirm = "someone" }),
+                     (HttpMethod.Post, "/api/admin/users/someone/delete", new { password = Password, confirm = "someone" }),
                      (HttpMethod.Get, "/api/admin/invitations", null),
                      (HttpMethod.Post, "/api/admin/invitations", new { role = "user" }),
                      (HttpMethod.Delete, "/api/admin/invitations/something", null),
@@ -475,6 +475,21 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Deleting_a_user_takes_five_checks_of_the_admins_password_a_minute_then_429()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        for (var i = 0; i < 5; i++)
+        {
+            using var refused = await SendAsync(HttpMethod.Post, "/api/admin/users/someone/delete", new { password = NewPassword, confirm = "someone" }, session: admin);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/admin/users/someone/delete", new { password = Password, confirm = "someone" }, session: admin);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+    }
+
+    [Fact]
     public async Task Deleting_ones_account_needs_the_password_and_the_username_and_ends_the_session()
     {
         var username = await NewUserAsync();
@@ -503,17 +518,20 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         var username = await NewUserAsync();
         var id = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value.User.Id;
 
-        using var active = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { confirm = username }, session: admin);
+        using var active = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
         Assert.Equal(HttpStatusCode.Forbidden, active.StatusCode);
         using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { active = false }, session: admin);
         Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
-        using var mistyped = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { confirm = "someone" }, session: admin);
+        using var mistyped = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = "someone" }, session: admin);
         Assert.Equal(HttpStatusCode.BadRequest, mistyped.StatusCode);
+        using var wrongPassword = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = NewPassword, confirm = username }, session: admin);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        Assert.Equal("Your password is wrong.", (await JsonAsync(wrongPassword))["error"]!.GetValue<string>());
 
-        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { confirm = username }, session: admin);
+        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
 
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
-        using var again = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { confirm = username }, session: admin);
+        using var again = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
         Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
         using var list = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
         Assert.DoesNotContain(username, await list.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);

@@ -63,12 +63,15 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
     /// <summary>
     /// An admin deletes a deactivated user; false if there is no such user. <paramref name="confirm"/> must be their
-    /// username (any case). Only a deactivated user: deactivating first ended their sessions and revoked their keys,
-    /// and takes a deliberate step of its own. Never the primary admin.
+    /// username (any case), and <paramref name="password"/> the admin's own (it must open <paramref name="actorKey"/>),
+    /// so a stolen admin session alone deletes nobody. Only a deactivated user: deactivating first ended their
+    /// sessions and revoked their keys, and takes a deliberate step of its own. Never the primary admin.
     /// </summary>
-    public async Task<bool> DeleteUserAsync(User actor, string userId, string confirm, CancellationToken ct)
+    public async Task<bool> DeleteUserAsync(User actor, byte[] actorKey, string password, string userId, string confirm, CancellationToken ct)
     {
         var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        // Before anything about the target: without the password, nobody learns whether the user exists.
+        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
         var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
         if (target is null) return false;
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deleted.");
