@@ -227,6 +227,33 @@ public sealed class UserCatalogTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Of_two_recoveries_with_the_same_key_exactly_one_succeeds_and_its_new_key_works()
+    {
+        var db = fixture.NewDatabase();
+        var users = Catalog(db);
+        // A few rounds, so that at least some of them really overlap.
+        for (var round = 0; round < 5; round++)
+        {
+            var username = $"racer{round}";
+            var (_, recoveryKey) = await users.CreateAsync(username, Password, Roles.User, Ct);
+            var first = "first new passphrase " + round;
+            var second = "second new passphrase " + round;
+
+            var results = await Task.WhenAll(
+                Task.Run(() => users.RecoverAsync(username, recoveryKey, first, Ct), Ct),
+                Task.Run(() => users.RecoverAsync(username, recoveryKey, second, Ct), Ct));
+
+            var won = Assert.Single(results, r => r is not null)!;
+            var winner = results[0] is not null ? first : second;
+            var loser = results[0] is not null ? second : first;
+            Assert.NotNull(await users.TrySignInAsync(username, winner, Ct));
+            Assert.Null(await users.TrySignInAsync(username, loser, Ct));
+            Assert.Null(await users.RecoverAsync(username, recoveryKey, Password, Ct));
+            Assert.NotNull(await users.RecoverAsync(username, won, Password, Ct));
+        }
+    }
+
+    [Fact]
     public async Task Recovery_with_a_wrong_or_malformed_key_changes_nothing()
     {
         var users = Catalog();
