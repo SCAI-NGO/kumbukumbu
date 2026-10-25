@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { create } from "zustand";
 import { folderOf, vaultOf } from "../api/paths";
+import type { Picked } from "../upload/collectFiles";
 
 export type Mode = "read" | "write";
-export type Overlay = "none" | "tree" | "search";
+export type Overlay = "none" | "tree" | "search" | "upload";
 export type SearchMode = "hybrid" | "meaning" | "exact";
 
 const RECENT = 5;
@@ -27,6 +28,8 @@ interface EditorState {
   recentPaths: string[];
   /** A search result's section, to scroll to once its note is shown (`line` is the section's first source line). */
   scrollTarget: { path: string; line: number } | null;
+  /** The upload sheet's folder (`/Work/projects`), and the files dropped there if it opened with a drop. */
+  upload: { folder: string; dropped: Picked[] | null } | null;
   /** Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure). */
   beforeRead: (() => Promise<boolean>) | null;
 
@@ -38,6 +41,8 @@ interface EditorState {
   setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: (() => Promise<boolean>) | null): void;
   setOverlay(overlay: Overlay): void;
+  /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */
+  openUpload(folder: string, dropped?: Picked[]): void;
   toggleFolder(path: string): void;
   setActiveVault(vault: string): void;
   setSearchQuery(query: string): void;
@@ -60,6 +65,7 @@ const initial = {
   recentPaths: [],
   beforeRead: null,
   scrollTarget: null,
+  upload: null,
 };
 
 /** `/Work/projects/deep` → `/Work/projects`, `/Work/projects/deep` (the vault's root is always open). */
@@ -87,6 +93,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setBeforeRead: (beforeRead) => set({ beforeRead }),
   setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
+  openUpload: (folder, dropped) => set({ overlay: "upload", upload: { folder, dropped: dropped ?? null } }),
   toggleFolder: (path) => set((s) => ({ expandedFolders: { ...s.expandedFolders, [path]: !s.expandedFolders[path] } })),
   setActiveVault: (activeVault) => set({ activeVault }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
@@ -14,6 +14,9 @@ import Dock from "./Dock";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
+
+// Seldom used: loaded on first use, which keeps the main bundle under Vite's 500 kB warning.
+const UploadSheet = lazy(() => import("../upload/UploadSheet"));
 
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
@@ -64,7 +67,7 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
-  const { recentPaths, overlay, mode, activeVault, openNote, setOverlay, setActiveVault } = useEditor();
+  const { recentPaths, overlay, mode, activeVault, upload, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
@@ -107,12 +110,18 @@ export default function MobileShell() {
       {(!path || mode === "read") && (
         <Dock
           newNote={dockFolder ? () => newNote(dockFolder) : null}
+          upload={dockFolder ? () => openUpload(dockFolder) : null}
           noteActions={path ? [{ label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) }] : null}
         />
       )}
 
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
       {overlay === "search" && <SearchSheet />}
+      {overlay === "upload" && upload && (
+        <Suspense>
+          <UploadSheet folder={upload.folder} dropped={upload.dropped} />
+        </Suspense>
+      )}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
         <NewVaultDialog

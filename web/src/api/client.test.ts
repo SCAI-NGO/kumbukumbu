@@ -24,6 +24,14 @@ describe("api client", () => {
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/api/notes/My%20Vault/a%20b/c%25%3F.md");
   });
 
+  it("encodes each segment of an upload's folder, and leaves an empty folder (the vault's root) out", async () => {
+    const fetch = fakeApi({ "POST /api/upload/*": () => json(400, { error: "No." }) });
+    const body = { files: [{ path: "a.md", content: "a" }], onConflict: "ask" };
+    await api.POST("/api/upload/{vault}/{folder}", { params: { path: { vault: "My Vault", folder: "a b/c%" } }, body });
+    await api.POST("/api/upload/{vault}/{folder}", { params: { path: { vault: "My Vault", folder: "" } }, body });
+    expect(fetch.mock.calls.map((c) => new URL(c[0].url).pathname)).toEqual(["/api/upload/My%20Vault/a%20b/c%25", "/api/upload/My%20Vault"]);
+  });
+
   it("keeps a slash in any other parameter encoded", async () => {
     const fetch = fakeApi({ "GET /api/vaults/a%2Fb/tree": () => json(404, { error: "No." }) });
     await api.GET("/api/vaults/{vault}/tree", { params: { path: { vault: "a/b" } } });

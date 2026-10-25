@@ -22,11 +22,19 @@ const sessionEnds: Middleware = {
   },
 };
 
-/** `{path}` (a note or folder path in its vault) keeps its slashes, each segment encoded; any other value is one segment. */
+/** The `{**…}` parameters of the API: a path within a vault. */
+const multiSegment = new Set(["path", "folder"]);
+
+/**
+ * `{path}` and `{folder}` (a path in its vault) keep their slashes, each segment encoded; any other value is one
+ * segment. An empty `{folder}` (the vault's root) leaves its slash out too: `/api/upload/Work`.
+ */
 function pathSerializer(pathname: string, params: Record<string, unknown>) {
-  return pathname.replace(/\{(\w+)\}/g, (_, name: string) => {
+  return pathname.replace(/\/?\{(\w+)\}/g, (match, name: string) => {
     const value = String(params[name]);
-    return name === "path" ? value.split("/").map(encodeURIComponent).join("/") : encodeURIComponent(value);
+    const slash = match.startsWith("/") ? "/" : "";
+    if (!multiSegment.has(name)) return slash + encodeURIComponent(value);
+    return value === "" ? "" : slash + value.split("/").map(encodeURIComponent).join("/");
   });
 }
 

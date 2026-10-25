@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, KeyRound, LogOut, Settings, Shield } from "lucide-react";
+import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, KeyRound, LogOut, Settings, Shield, Upload } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -32,9 +32,12 @@ function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0):
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
-/** The menu of a folder (the vault's root too); later steps add to the list (Upload here). */
+/** The menu of a folder (the vault's root too). */
 function FolderMenu({ folder, onNewNote }: { folder: TreeFolder; onNewNote(folder: string): void }) {
-  const items: MenuItem[] = [{ label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) }];
+  const items: MenuItem[] = [
+    { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
+    { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+  ];
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />

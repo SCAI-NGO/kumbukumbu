@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Ellipsis, FilePlus, Folder, Plus, Search } from "lucide-react";
+import { Ellipsis, FilePlus, Folder, Plus, Search, Upload } from "lucide-react";
 import { Menu, type MenuItem } from "../components/Menu";
 import { useEditor } from "../state/editor";
 
 /**
  * The bottom of Read mode: files, search (showing its mode), the open note's actions and "+", all in the thumb's
- * reach. `newNote` is null while there is no vault, `noteActions` while no note is open.
+ * reach. `newNote` and `upload` are null while there is no vault, `noteActions` while no note is open.
  */
-export default function Dock({ newNote, noteActions }: { newNote: (() => void) | null; noteActions: MenuItem[] | null }) {
+export default function Dock(props: { newNote: (() => void) | null; upload: (() => void) | null; noteActions: MenuItem[] | null }) {
+  const { newNote, upload, noteActions } = props;
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
-  const items: MenuItem[] = [{ label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote }];
+  const items: MenuItem[] = [
+    { label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote },
+    { label: "Upload", icon: Upload, onSelect: () => upload?.(), disabled: !upload },
+  ];
 
   return (
     <nav aria-label="Vault actions" className="flex flex-none items-center gap-2.5 border-t border-line bg-bg px-3 pt-2.5 pb-[max(20px,env(safe-area-inset-bottom))]">

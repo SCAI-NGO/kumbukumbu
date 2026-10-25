@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
+import { collectFromDrop } from "../upload/collectFiles";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
 import { secondaryButtonClass } from "../components/form";
@@ -48,6 +49,7 @@ export default function NoteView({ path }: { path: string }) {
   const openNote = useEditor((s) => s.openNote);
   const navigate = useNavigate();
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
   const highlight = useAgentHighlight(path, change, note.data?.content);
@@ -102,10 +104,28 @@ export default function NoteView({ path }: { path: string }) {
     return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
   }
 
+  // Files dropped on the note go into its folder, by way of the upload sheet (which asks before sending).
+  const dropTarget = {
+    onDragOver: (e: DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      setDropping(true);
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+    },
+    onDrop: (e: DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      setDropping(false);
+      void collectFromDrop(e.dataTransfer.items).then((picked) => useEditor.getState().openUpload(folderOf(path), picked));
+    },
+  };
+
   return (
     <>
       <AgentBanner change={change} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
+      <div {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>
         {notice && (
           <p
