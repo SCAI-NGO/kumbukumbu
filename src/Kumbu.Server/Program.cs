@@ -72,6 +72,7 @@ builder.Services.AddSingleton<Admin>();
 builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
+builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
@@ -180,6 +181,7 @@ app.MapMcp("/mcp");
 // One URL per connection (Ruling 18): CallerMiddleware answers for an unknown id and, until a token is valid, 401.
 app.MapMcp("/mcp/c/{id}");
 app.MapDiscovery();
+app.MapOAuthEndpoints();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
 app.MapConnectionApi();

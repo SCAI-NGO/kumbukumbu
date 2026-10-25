@@ -243,7 +243,7 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     }
 
     /// <summary>Absolute, no fragment, no credentials; https, or http to a loopback host (a native app's listener).</summary>
-    private static bool IsAcceptableRedirect(string value) =>
+    internal static bool IsAcceptableRedirect(string value) =>
         value.Length <= MaxUrlLength
         && !value.Contains('#', StringComparison.Ordinal)
         && Uri.TryCreate(value, UriKind.Absolute, out var uri)
@@ -253,7 +253,7 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     internal static bool IsLoopbackHost(Uri uri) => uri.Host is "localhost" or "127.0.0.1" or "[::1]";
 
     /// <summary>Trimmed, without control or format characters (they could hide or reorder text on the consent page), at most 100 characters.</summary>
-    private static string CleanName(string raw)
+    internal static string CleanName(string raw)
     {
         var sb = new StringBuilder(raw.Length);
         for (var i = 0; i < raw.Length; i++)

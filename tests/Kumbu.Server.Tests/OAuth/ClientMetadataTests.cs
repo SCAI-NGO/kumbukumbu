@@ -351,7 +351,7 @@ public sealed class ClientMetadataTests
     }
 
     [Fact]
-    public async Task A_non_url_client_id_resolves_to_nothing_for_now()
+    public async Task A_malformed_client_id_resolves_to_nothing_without_touching_the_store()
     {
         var clients = new OAuthClients(null!, Fetcher(), TimeProvider.System);
 
