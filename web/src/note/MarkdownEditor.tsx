@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction } from "react-router-dom";
 import { useSaveNote, type NoteView } from "../api/notes";
@@ -16,6 +17,7 @@ import { useAutosave } from "./useAutosave";
  */
 export default function MarkdownEditor({ path, note }: { path: string; note: NoteView }) {
   const save = useSaveNote(path);
+  const queryClient = useQueryClient();
   const [draft] = useState(() => {
     const { draft } = useEditor.getState();
     const mine = draft?.path === path && draft.username === useSession.getState().user?.username;
@@ -51,9 +53,15 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   }, [path, unsaved]);
 
   useEffect(() => {
-    useEditor.getState().setBeforeRead(flush);
+    useEditor.getState().setBeforeRead(async () => {
+      const done = await flush();
+      // A read of the note that started before the last save (a focus refetch) may answer after it, with the
+      // older version: asked again, Read mode shows what was saved.
+      if (done) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
+      return done;
+    });
     return () => useEditor.getState().setBeforeRead(null);
-  }, [flush]);
+  }, [flush, queryClient, path]);
 
   useEffect(() => {
     // Mobile browsers rarely fire beforeunload (iOS Safari never): hidden and pagehide are the last moments to

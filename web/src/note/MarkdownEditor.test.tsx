@@ -445,3 +445,42 @@ describe("Signing out mid-edit", () => {
     expect(useEditor.getState().draft).toBeNull();
   });
 });
+
+describe("Done", () => {
+  it("asks for the note again, so a read that started before the last save can't leave an older version on screen", async () => {
+    let gets = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let server = noteView(PLAN, source, "v1");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    editorApi(
+      [
+        (body) => {
+          server = noteView(PLAN, body.content, "v2");
+          return json(200, server);
+        },
+      ],
+      () => json(200, server),
+      {
+        [`GET /api/notes${PLAN}`]: async () => {
+          gets += 1;
+          const answer = noteView(PLAN, server.content, server.version);
+          // The second read is a focus refetch that the server answers late, with what it had then.
+          if (gets === 2) await gate;
+          return json(200, answer);
+        },
+      },
+    );
+    const { u } = await openInWrite(queryClient);
+    void queryClient.refetchQueries({ queryKey: ["note", PLAN], exact: true });
+    await u.type(editorBox(), "{Enter}- [[ ] new task");
+    await u.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(useEditor.getState().mode).toBe("read"));
+    await act(async () => release());
+
+    await waitFor(() => expect(queryClient.getQueryData<{ version: string }>(["note", PLAN])?.version).toBe("v2"));
+    expect(await screen.findByRole("checkbox", { name: "new task" })).toBeInTheDocument();
+    await wait(100);
+    expect(queryClient.getQueryData<{ version: string }>(["note", PLAN])?.version).toBe("v2");
+  });
+});

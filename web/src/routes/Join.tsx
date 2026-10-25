@@ -25,7 +25,14 @@ const unusable: Record<string, string> = {
 export default function Join() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [code] = useState(() => decodeURIComponent(location.hash.slice(1)));
+  const [code] = useState(() => {
+    try {
+      return decodeURIComponent(location.hash.slice(1));
+    } catch {
+      // A garbled link (a cut-off escape such as `%E0`) holds no usable code.
+      return "";
+    }
+  });
 
   useEffect(() => {
     if (location.hash) navigate({ pathname: "/join" }, { replace: true });

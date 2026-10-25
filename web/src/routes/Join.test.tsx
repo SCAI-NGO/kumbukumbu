@@ -54,6 +54,13 @@ describe("Join", () => {
     expect(await screen.findByText("This link has no invitation in it. Open the full link you were sent.")).toBeInTheDocument();
   });
 
+  it("says so when the link's code is garbled", async () => {
+    // A cut-off percent escape: decoding it throws.
+    fakeApi({});
+    renderApp("/join#%E0");
+    expect(await screen.findByText("This link has no invitation in it. Open the full link you were sent.")).toBeInTheDocument();
+  });
+
   it("shows the server's sentence when joining is refused", async () => {
     fakeApi({
       "POST /api/invitations/peek": () => json(200, valid),
