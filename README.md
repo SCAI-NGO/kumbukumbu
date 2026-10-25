@@ -34,7 +34,7 @@ Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folde
 
 ### The web app
 
-The server also serves a web app, built from `web/` into the image. It works on a phone first and on a laptop too: sign in, browse vaults and folders, read and edit notes in Markdown (saved automatically, with a conflict prompt if an agent wrote in the meantime), search by words and meaning, upload Markdown files or folders, make API keys, and, for admins, manage users and invitations. It talks only to the REST API, with the same-origin session cookie. Notes are text only for now.
+The server also serves a web app, built from `web/` into the image. It works on a phone first and on a laptop too: sign in, browse vaults and folders, read and edit notes in Markdown (saved automatically, with a conflict prompt if an agent wrote in the meantime), see a note's earlier versions and restore one (the note's ⋯ menu, "History"), bring back removed notes from a vault's trash and make, restore (after a preview of exactly what changes) or remove a vault's named checkpoints (the vault's ⋯ menu in the drawer, "Trash" and "Checkpoints"; removing a checkpoint is for good), search by words and meaning, upload Markdown files or folders, see when the open note changes elsewhere (an agent, another tab or device; a bar offers the new version, which never replaces the text on screen by itself unless "Refresh Read mode automatically" is on in Settings, and never in Write mode), make API keys, and, for admins, manage users and invitations. It talks only to the REST API, with the same-origin session cookie. Notes are text only for now.
 
 ## Security
 

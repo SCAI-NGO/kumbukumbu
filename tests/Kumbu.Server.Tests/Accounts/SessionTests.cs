@@ -110,6 +110,24 @@ public sealed class SessionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_request_that_does_not_touch_the_session_leaves_its_idle_clock_running()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var sessions = Sessions();
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
+
+        // The web app's poll of the open note's version, every few seconds while the page is visible.
+        for (var minutes = 5; minutes < 30; minutes += 5)
+        {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            Assert.NotNull(await sessions.ResolveAsync(secret, Ct, touch: false));
+        }
+
+        _time.Advance(TimeSpan.FromMinutes(6));
+        Assert.Null(await sessions.ResolveAsync(secret, Ct, touch: false));
+    }
+
+    [Fact]
     public async Task A_session_ends_after_12_hours_despite_activity()
     {
         var (user, key, readAt) = await SignedInAsync();

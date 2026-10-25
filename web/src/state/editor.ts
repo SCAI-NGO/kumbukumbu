@@ -70,7 +70,7 @@ interface EditorState {
   forgetNote(path: string): void;
   /** A moved note (or folder, `from` ending in `/`): the open note, the recent notes and the open folders follow it. */
   moved(from: string, to: string): void;
-  /** A deleted vault: its notes leave the recent notes, the open note and the draft, and it is no longer active. */
+  /** A deleted vault: its notes leave the recent notes, the open note and the draft, an upload sheet for it closes, and it is no longer active. */
   forgetVault(vault: string): void;
   reset(): void;
 }
@@ -150,7 +150,10 @@ export const useEditor = create<EditorState>()((set, get) => ({
   forgetVault: (vault) =>
     set((s) => {
       const outside = (path: string | null | undefined) => path != null && vaultOf(path) !== vault;
+      // An upload sheet for a folder of the vault would send its files to a vault that is gone.
+      const upload = s.upload && !outside(s.upload.folder) ? { upload: null, overlay: s.overlay === "upload" ? ("none" as Overlay) : s.overlay } : {};
       return {
+        ...upload,
         recentPaths: s.recentPaths.filter(outside),
         currentPath: outside(s.currentPath) ? s.currentPath : null,
         draft: outside(s.draft?.path) ? s.draft : null,

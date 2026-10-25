@@ -4,15 +4,20 @@ import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
+import type { NoteVersion } from "../api/history";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
+import { useSession } from "../state/session";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
+import { storedAutoRefresh } from "./autoRefresh";
+import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout, writerOf } from "./ChangedElsewhere";
+import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
-import MarkdownView from "./MarkdownView";
+import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
@@ -38,6 +43,9 @@ function EditorLoadFailed() {
   }, []);
   return <LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />;
 }
+
+/** One write of the note: a version alone may come back (a restore), its time doesn't. */
+const versionKey = (v: { version: string; lastWriteAt: string }) => `${v.version}@${v.lastWriteAt}`;
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
 
@@ -70,7 +78,16 @@ export default function NoteView({ path }: { path: string }) {
   const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
-  const highlight = useAgentHighlight(path, change, note.data?.content);
+  const agentHighlight = useAgentHighlight(path, change, note.data?.content);
+  const elsewhere = useChangedElsewhere(path, note.data);
+  const username = useSession((s) => s.user?.username);
+  // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
+  const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
+  const [updatedBy, setUpdatedBy] = useState<string | null>(null);
+  // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
+  const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
+  useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
+  const highlight = refreshed && refreshed.version === note.data?.version ? refreshed : agentHighlight;
   // The frontmatter's lines are 2 to its closing line (`parts.frontmatter` has one line fewer than that).
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
@@ -85,6 +102,46 @@ export default function NoteView({ path }: { path: string }) {
   // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
   const scrollTarget = useEditor((s) => s.scrollTarget);
   const article = useRef<HTMLElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const keepScroll = useRef<number | null>(null);
+  const refreshing = useRef(false);
+
+  /** Takes the version written elsewhere: the reader stays where they were, and what changed is tinted. */
+  const refresh = useCallback(
+    async (newer: NoteVersion, auto: boolean) => {
+      if (refreshing.current || !note.data) return;
+      refreshing.current = true;
+      const writer = writerOf(newer.lastWriter);
+      const before = note.data.content;
+      const top = scroller.current?.scrollTop ?? 0;
+      const fresh = await note.refetch();
+      refreshing.current = false;
+      // A failed read keeps the version shown; it is not tinted as if it were the new one.
+      if (fresh.isError || !fresh.data) return setRefreshFailed(versionKey(newer));
+      setRefreshFailed(null);
+      if (fresh.data.version === note.data.version) return;
+      keepScroll.current = top;
+      setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
+      setUpdatedBy(auto ? writer : null);
+    },
+    [note],
+  );
+  useLayoutEffect(() => {
+    if (keepScroll.current === null || !scroller.current) return;
+    scroller.current.scrollTop = keepScroll.current;
+    keepScroll.current = null;
+  }, [note.data?.content]);
+
+  // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
+  const autoRefresh = mode === "read" && storedAutoRefresh();
+  const newer = elsewhere.change;
+  // Each new version is taken once: a read that fails is not repeated on every render, only for the next version.
+  const tried = useRef(new Set<string>());
+  useEffect(() => {
+    if (!autoRefresh || !newer || tried.current.has(versionKey(newer))) return;
+    tried.current.add(versionKey(newer));
+    void refresh(newer, true);
+  }, [autoRefresh, newer, refresh]);
   useEffect(() => {
     if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
     const headings = [...article.current.querySelectorAll<HTMLElement>("[data-line]")].filter((h) => Number(h.dataset.line) <= scrollTarget.line);
@@ -151,10 +208,10 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <LoadBoundary fallback={<EditorLoadFailed />}>
           {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} />
+            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} />
           ) : (
             <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} />
+              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} />
             </Suspense>
           )}
         </LoadBoundary>
@@ -184,7 +241,23 @@ export default function NoteView({ path }: { path: string }) {
   return (
     <>
       <AgentBanner change={change} />
-      <div {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      {elsewhere.gone ? (
+        <ElsewhereBar>
+          <GoneText movedTo={elsewhere.movedTo} />
+        </ElsewhereBar>
+      ) : newer && (!autoRefresh || refreshFailed === versionKey(newer)) ? (
+        <ElsewhereBar actions={<BarButton onClick={() => void refresh(newer, false)}>Refresh</BarButton>}>
+          <ChangeText change={newer} />
+          {refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>}
+        </ElsewhereBar>
+      ) : (
+        updatedBy && (
+          <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
+            {updatedBy === username ? "Updated: you changed this note elsewhere" : `Updated by ${updatedBy}`}
+          </p>
+        )
+      )}
+      <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
         {notice && (

@@ -221,6 +221,73 @@ public class CheckpointTests
     }
 
     [Fact]
+    public async Task AWholeCheckpointRestoreNamesEveryChangeThenAppliesItsPlan()
+    {
+        var checkpoints = new Checkpoints(_store, _writer, new Plans(), limit: 3);
+        await Run("mkcp /Demo/arbeit before");
+        await Write("/Demo/arbeit/plan.md", "# Plan\nJanus\nMore\n");
+        await Write("/Demo/arbeit/new.md", "new\n");
+        await _writer.RemoveAsync(P("/Demo/arbeit/sub/todo.md"), CancellationToken.None);
+
+        var (preview, error) = await checkpoints.PreviewWholeAsync("Demo", "before", CancellationToken.None);
+
+        Assert.Null(error);
+        Assert.Equal("/Demo/arbeit/", preview!.Checkpoint.Scope);
+        Assert.Equal(
+            [
+                new RestoreChange(RestoreChangeKind.Trash, P("/Demo/arbeit/new.md"), null, null),
+                new RestoreChange(RestoreChangeKind.Changed, P("/Demo/arbeit/plan.md"), null, (1, 2)),
+                new RestoreChange(RestoreChangeKind.Back, P("/Demo/arbeit/sub/todo.md"), null, null),
+            ],
+            preview.Changes);
+        Assert.NotNull(preview.Plan);
+        Assert.Equal("# Plan\nJanus\nMore\n", await Content("/Demo/arbeit/plan.md"));
+
+        var applied = await checkpoints.ApplyWholeAsync("Demo", "before", preview.Plan!, CancellationToken.None);
+
+        Assert.Equal("restored /Demo/arbeit/ to checkpoint 'before': 1 changed, 1 back, 0 moved back, 1 to the trash", applied.Output);
+        Assert.Equal("# Plan\nHecate\n", await Content("/Demo/arbeit/plan.md"));
+        Assert.StartsWith("restore: plan", (await checkpoints.ApplyWholeAsync("Demo", "before", preview.Plan!, CancellationToken.None)).Output);
+        var (again, _) = await checkpoints.PreviewWholeAsync("Demo", "before", CancellationToken.None);
+        Assert.Empty(again!.Changes);
+        Assert.Null(again.Plan);
+    }
+
+    [Fact]
+    public async Task AWholeRestoreOfANoteCheckpointPreviewsToo()
+    {
+        var checkpoints = new Checkpoints(_store, _writer, new Plans(), limit: 3);
+        await Run("mkcp /Demo/welcome.md w");
+        await Write("/Demo/welcome.md", "changed\n");
+
+        var (preview, _) = await checkpoints.PreviewWholeAsync("Demo", "w", CancellationToken.None);
+
+        Assert.Equal([new RestoreChange(RestoreChangeKind.Changed, P("/Demo/welcome.md"), null, (1, 1))], preview!.Changes);
+        Assert.Equal("changed\n", await Content("/Demo/welcome.md"));
+        Assert.False((await checkpoints.ApplyWholeAsync("Demo", "w", preview.Plan!, CancellationToken.None)).IsError);
+        var note = (await _store.GetAsync(P("/Demo/welcome.md"), CancellationToken.None))!;
+        Assert.Equal("hi [[plan]]\n", note.Content);
+        Assert.Equal("dev (restore)", note.LastWriter);
+        Assert.Equal("changed\n", note.History[0].Content);
+    }
+
+    [Fact]
+    public async Task AWholeRestoreIsRefusedToAReaderAndForAMissingCheckpoint()
+    {
+        var reader = new NoteWriter(_store, _time, new FixedCaller("liz", _ => false));
+        var checkpoints = new Checkpoints(_store, reader, new Plans(), limit: 3);
+        await Run("mkcp /Demo w");
+
+        var (preview, refused) = await checkpoints.PreviewWholeAsync("Demo", "w", CancellationToken.None);
+        var (_, missing) = await new Checkpoints(_store, _writer, new Plans()).PreviewWholeAsync("Demo", "nope", CancellationToken.None);
+
+        Assert.Null(preview);
+        Assert.Equal(ShellResult.Error("restore: this key can only read vault Demo"), refused);
+        Assert.Equal(ShellResult.Error("restore: no checkpoint 'nope' in Demo ('lscp /Demo' lists them)"), missing);
+        Assert.True((await checkpoints.ApplyWholeAsync("Demo", "w", "0123", CancellationToken.None)).IsError);
+    }
+
+    [Fact]
     public async Task AFolderRestoreStopsIfANoteChangedOrAppearedSinceThePreview()
     {
         await Run("mkcp /Demo/arbeit before");

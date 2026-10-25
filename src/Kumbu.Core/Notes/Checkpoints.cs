@@ -10,6 +10,42 @@ namespace Kumbu.Core.Notes;
 /// <summary>A previewed restore of a folder: the call that made it and every note in scope, at its version then.</summary>
 public sealed record RestorePlan(string Scope, string Name, IReadOnlyList<(VaultPath Path, string Version)> Current, DateTime Created);
 
+public enum RestoreChangeKind
+{
+    /// <summary>The note gets its content then.</summary>
+    Changed,
+
+    /// <summary>The note was removed since and comes back.</summary>
+    Back,
+
+    /// <summary>The note was made since and goes to the trash.</summary>
+    Trash,
+
+    /// <summary>The note was moved since (from <see cref="RestoreChange.From"/>) and moves back.</summary>
+    Moved,
+}
+
+/// <summary>
+/// One note a restore to a checkpoint changes, at its path in the checkpoint. <paramref name="Lines"/>: the lines
+/// added and removed by the restore, for a note whose content changes (null for one that only comes back, goes
+/// to the trash, or moves back unchanged).
+/// </summary>
+public sealed record RestoreChange(RestoreChangeKind Kind, VaultPath Path, VaultPath? From, (int Added, int Removed)? Lines);
+
+/// <summary>
+/// What a restore to a checkpoint would do, before it does it: the notes it changes (in text order), the links
+/// outside that follow notes moved back, and the links outside that would lead nowhere. <paramref name="Plan"/>
+/// applies it, null when there is nothing to restore.
+/// </summary>
+public sealed record RestorePreview(
+    Checkpoint Checkpoint,
+    string Where,
+    IReadOnlyList<RestoreChange> Changes,
+    int RewrittenLinks,
+    IReadOnlyList<VaultPath> RewrittenIn,
+    IReadOnlyList<string> Broken,
+    string? Plan);
+
 /// <summary>
 /// Named checkpoints (concept §4): <c>mkcp</c>, <c>lscp</c>, <c>rmcp</c>, and what <c>diff</c> and
 /// <c>restore</c> do with one. Reading from a checkpoint (<c>--checkpoint</c>) goes through a
@@ -314,42 +350,91 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         return null;
     }
 
-    private async Task<ShellResult> PreviewAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    /// <summary>
+    /// The restore of a whole checkpoint, as the web app offers it: a preview with a plan first, for a note too
+    /// (where <c>restore --checkpoint</c> restores at once), applied by <see cref="ApplyWholeAsync"/>.
+    /// </summary>
+    public async Task<(RestorePreview? Preview, ShellResult? Error)> PreviewWholeAsync(string vault, string name, CancellationToken ct)
+    {
+        var vaultPath = VaultPath.Root.Child(vault);
+        if (writer.Caller.Refuse("restore", vaultPath) is { } refused) return (null, refused);
+        var (view, error) = await OpenAsync("restore", vault, name, ct);
+        if (view is null) return (null, error);
+        var (preview, current) = await PreviewOfAsync(view, view.Checkpoint.Path, ct);
+        if (preview.Plan is { } token) plans.Add(token, new RestorePlan(view.Checkpoint.Path.Value, name, current, writer.Now), writer.Now);
+        return (preview, null);
+    }
+
+    /// <summary>Applies the plan of <see cref="PreviewWholeAsync"/>: all of it, or nothing if a note changed since.</summary>
+    public async Task<ShellResult> ApplyWholeAsync(string vault, string name, string token, CancellationToken ct)
+    {
+        var vaultPath = VaultPath.Root.Child(vault);
+        if (writer.Caller.Refuse("restore", vaultPath) is { } refused) return refused;
+        var (view, error) = await OpenAsync("restore", vault, name, ct);
+        if (view is null) return error!;
+        return await ApplyAsync(view, view.Checkpoint.Path, token, writer.Caller.Writer, ct);
+    }
+
+    /// <summary>The preview of a restore of <paramref name="scope"/>, and the versions its plan depends on.</summary>
+    private async Task<(RestorePreview Preview, IReadOnlyList<(VaultPath Path, string Version)> Current)> PreviewOfAsync(
+        CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
         var work = await PlanAsync(view, scope, ct);
-        var where = Where(checkpoint, scope);
-        if (work.IsEmpty) return ShellResult.Ok($"{where} already matches checkpoint '{checkpoint.Name}'; nothing to restore");
-
-        var rows = new List<(string Path, string Row)>();
-        foreach (var (path, (now, then)) in work.Changed) rows.Add((path.Value, $"  changed     {path.Value}  {Delta(now.Content, then)}"));
-        foreach (var path in work.Back.Keys) rows.Add((path.Value, $"  back        {path.Value}"));
-        foreach (var note in work.Trash) rows.Add((note.Path.Value, $"  to trash    {note.Path.Value}  (created since)"));
+        var changes = new List<RestoreChange>();
+        foreach (var (path, (now, then)) in work.Changed) changes.Add(new(RestoreChangeKind.Changed, path, null, TextDiff.Count(now.Content, then)));
+        foreach (var path in work.Back.Keys) changes.Add(new(RestoreChangeKind.Back, path, null, null));
+        foreach (var note in work.Trash) changes.Add(new(RestoreChangeKind.Trash, note.Path, null, null));
         foreach (var (to, (now, then)) in work.Moved)
         {
-            rows.Add((to.Value, $"  moved back  {now.Path.Value} → {to.Value}{(now.Content == then ? "" : "  " + Delta(now.Content, then))}"));
+            changes.Add(new(RestoreChangeKind.Moved, to, now.Path, now.Content == then ? null : TextDiff.Count(now.Content, then)));
         }
+
+        var (_, inScope) = await BothAsync(view, scope, ct);
+        var current = work.Current(inScope).ToList();
+        var token = work.IsEmpty
+            ? null
+            : VersionToken.Of(string.Join('\n', [scope.Value, checkpoint.Name, checkpoint.CreatedAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), .. current.Select(c => $"{c.Path.Value} {c.Version}")]));
+        var preview = new RestorePreview(
+            checkpoint,
+            Where(checkpoint, scope),
+            [.. changes.OrderBy(c => c.Path.Value, TextOrder.Default)],
+            work.Rewrites.Values.Sum(l => l.Count),
+            [.. work.Rewrites.Keys.OrderBy(p => p.Value, StringComparer.Ordinal)],
+            [.. work.Broken.Select(b => b[2..])],
+            token);
+        return (preview, current);
+    }
+
+    private async Task<ShellResult> PreviewAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    {
+        var checkpoint = view.Checkpoint;
+        var (preview, current) = await PreviewOfAsync(view, scope, ct);
+        var where = preview.Where;
+        if (preview.Plan is not { } token) return ShellResult.Ok($"{where} already matches checkpoint '{checkpoint.Name}'; nothing to restore");
 
         var lines = new List<string>
         {
             $"restore {where} to checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {checkpoint.CreatedBy}):",
         };
-        lines.AddRange(rows.OrderBy(r => r.Path, TextOrder.Default).Select(r => r.Row));
-        if (work.Rewrites.Count > 0)
+        lines.AddRange(preview.Changes.Select(c => c.Kind switch
         {
-            var count = work.Rewrites.Values.Sum(l => l.Count);
-            lines.Add($"Links follow the notes moved back: {Count(count, "link")} rewritten in {string.Join(", ", work.Rewrites.Keys.Select(p => p.Value).Order(StringComparer.Ordinal))}.");
+            RestoreChangeKind.Changed => $"  changed     {c.Path.Value}  {Delta(c.Lines!.Value)}",
+            RestoreChangeKind.Back => $"  back        {c.Path.Value}",
+            RestoreChangeKind.Trash => $"  to trash    {c.Path.Value}  (created since)",
+            _ => $"  moved back  {c.From!.Value} → {c.Path.Value}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
+        }));
+        if (preview.RewrittenLinks > 0)
+        {
+            lines.Add($"Links follow the notes moved back: {Count(preview.RewrittenLinks, "link")} rewritten in {string.Join(", ", preview.RewrittenIn.Select(p => p.Value))}.");
         }
 
-        if (work.Broken.Count > 0)
+        if (preview.Broken.Count > 0)
         {
-            lines.Add($"After the restore, {Count(work.Broken.Count, "link")} outside {where} would lead nowhere:");
-            lines.AddRange(work.Broken);
+            lines.Add($"After the restore, {Count(preview.Broken.Count, "link")} outside {where} would lead nowhere:");
+            lines.AddRange(preview.Broken.Select(b => "  " + b));
         }
 
-        var (_, inScope) = await BothAsync(view, scope, ct);
-        var current = work.Current(inScope).ToList();
-        var token = VersionToken.Of(string.Join('\n', [scope.Value, checkpoint.Name, checkpoint.CreatedAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), .. current.Select(c => $"{c.Path.Value} {c.Version}")]));
         lines.AddRange([
             "",
             $"plan: {token}",
@@ -359,7 +444,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var text = Lines.Join(lines);
         if (text.Length > OutputLimit.MaxChars)
         {
-            return ShellResult.Error($"restore: {Count(rows.Count, "note")} differ from checkpoint '{checkpoint.Name}', too many for one preview; restore a smaller folder");
+            return ShellResult.Error($"restore: {Count(preview.Changes.Count, "note")} differ from checkpoint '{checkpoint.Name}', too many for one preview; restore a smaller folder");
         }
 
         plans.Add(token, new RestorePlan(scope.Value, checkpoint.Name, current, writer.Now), writer.Now);
@@ -426,11 +511,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         return ShellResult.Error($"restore: nothing was restored: {reason}; preview again");
     }
 
-    private static string Delta(string from, string to)
-    {
-        var (added, removed) = TextDiff.Count(from, to);
-        return $"+{added} -{removed}";
-    }
+    private static string Delta(string from, string to) => Delta(TextDiff.Count(from, to));
+
+    private static string Delta((int Added, int Removed) lines) => $"+{lines.Added} -{lines.Removed}";
 
     /// <summary>The notes in scope as the checkpoint holds them, and as they are now.</summary>
     private async Task<(Dictionary<VaultPath, string> Then, Dictionary<VaultPath, StoredNote> Now)> BothAsync(
