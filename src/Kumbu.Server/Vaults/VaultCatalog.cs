@@ -234,6 +234,31 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     }
 
     /// <summary>
+    /// The id of the user's vault named exactly <paramref name="name"/>, or null. Finds its slot by the keyed name hash
+    /// and opens only that one vault's name, without unlocking it or any other vault of the user.
+    /// </summary>
+    internal async Task<string?> FindForUserAsync(string userId, byte[] userKey, string name, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<SlotDocument>.Filter;
+        var slot = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, UserLookup(userKey, userId))
+            & f.Eq(s => s.NameId, VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)))).FirstOrDefaultAsync(ct);
+        if (slot is null || await Vaults.Find(v => v.Id == slot.Vault).FirstOrDefaultAsync(ct) is not { } doc) return null;
+        try
+        {
+            var vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+            var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
+            // The name hash is case-insensitive; the name asked for must match exactly.
+            return string.Equals(meta.Name, name, StringComparison.Ordinal) ? doc.Id : null;
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
     /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
     /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.

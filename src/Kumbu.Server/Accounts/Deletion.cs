@@ -35,12 +35,11 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
         if (!string.Equals(confirm, name, StringComparison.Ordinal)) throw new ArgumentException("Type the vault's name exactly to confirm.", nameof(confirm));
         // Before the lookup: without the password, nobody learns whether a vault of that name exists.
         if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new ArgumentException("The password is wrong.", nameof(password));
-        // Only the owner's user key opens a vault through a user slot: nobody else finds it by name.
-        var vault = (await catalog.OpenForUserAsync(user.Id, userKey, ct)).FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.Ordinal));
-        if (vault is null) return null;
+        // Only the owner's user key finds a vault through a user slot: nobody else finds it by name.
+        if (await catalog.FindForUserAsync(user.Id, userKey, name, ct) is not { } vaultId) return null;
 
-        var documents = await catalog.DeleteVaultsAsync([vault.Id], (_, _) => Task.CompletedTask, ct);
-        log.LogInformation("User {Username} deleted vault {VaultId} ({Documents} documents)", user.Username, vault.Id, documents);
+        var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct);
+        log.LogInformation("User {Username} deleted vault {VaultId} ({Documents} documents)", user.Username, vaultId, documents);
         return new DeletionSummary(1, 0, documents);
     }
 

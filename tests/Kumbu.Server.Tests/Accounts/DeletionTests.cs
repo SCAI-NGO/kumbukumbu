@@ -109,6 +109,22 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Finding_the_vault_to_delete_unlocks_none_of_the_users_vaults()
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        var work = await FilledVaultAsync(lea, key, "Arbeit");
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog().Sweep();
+
+        Assert.NotNull(await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct));
+
+        Assert.Equal(0, Catalog().OpenCount);
+        await AssertGoneAsync(diary.Id);
+        await AssertIntactAsync(work.Id);
+    }
+
+    [Fact]
     public async Task A_vault_is_deleted_only_with_its_name_typed_exactly_and_only_by_its_owner()
     {
         var (lea, key, _) = await SignedInAsync("lea");
@@ -179,7 +195,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         using var index = new Kumbu.Server.Search.SearchIndex(Catalog(), new Search.FakeEmbedder(), NullLogger<Kumbu.Server.Search.SearchIndex>.Instance);
         index.Enqueue(stale, [P("/Tagebuch/plan.md")]);
 
-        // The deletion unlocks a new object of the vault to find it; the one in the queue is older.
+        // Locked, the vault is in no working set: only the object in the queue is left, and nobody marks it deleted.
         await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
         Assert.False(stale.Deleted);
         await index.IndexAsync(stale, P("/Tagebuch/plan.md"), Ct);
