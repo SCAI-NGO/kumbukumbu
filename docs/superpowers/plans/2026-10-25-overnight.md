@@ -76,3 +76,10 @@ Entry points: note ⋯ menu ("History"), drawer vault ⋯ menu ("Trash", "Checkp
 ## Order
 
 Wave 1 in parallel worktrees: T1, T2, T4, T6. Wave 2 after they are merged into the integration branch: T3 and T5 in parallel. Then a final whole-branch review, one fix wave, and the pull request.
+
+### T5, added (Chris, 2026-10-25): changes made elsewhere to the open note
+
+When the note on screen changes elsewhere (an agent over MCP, another tab or device), show it; never replace the text on screen by itself (ruling: no auto-update by default, it moves text under the reader's eye).
+- Detection: while the page is visible, poll the open note's version cheaply every few seconds (use `/api/changes` or a version-only read, whichever is cheaper — check); no polling while hidden; check at once on becoming visible again.
+- Read mode: a quiet bar "<writer label> changed this note just now · Refresh"; Refresh loads the new version, keeps the scroll position as far as possible, and tints the changed blocks like the agent banner does.
+- Write mode: the same bar before any save conflict: "View the new version" (opens the existing diff/conflict choice) or keep writing; nothing is overwritten.
