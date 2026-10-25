@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { useId, type KeyboardEvent } from "react";
+import { flushSync } from "react-dom";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useVisualViewport } from "../hooks/useVisualViewport";
@@ -69,8 +70,12 @@ export function FindBar() {
   const { find, setFind, setNoteTool } = useEditor();
   const keyboard = useVisualViewport();
   const close = () => {
-    setNoteTool(null);
-    setFind({ query: "", index: 0, count: 0 });
+    // The dock comes back in this bar's place; the focus goes to the menu find was opened from.
+    flushSync(() => {
+      setNoteTool(null);
+      setFind({ query: "", index: 0, count: 0 });
+    });
+    document.querySelector<HTMLElement>('nav[aria-label="Vault actions"] button[aria-label="Note actions"]')?.focus();
   };
   const step = (by: number) => find.count && setFind({ index: (find.index + by + find.count) % find.count });
   const onKeyDown = (e: KeyboardEvent) => {

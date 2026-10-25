@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
@@ -57,7 +57,9 @@ export default function NoteView({ path }: { path: string }) {
   const noteTool = useEditor((s) => s.noteTool);
   const find = useEditor((s) => s.find);
   const headings = useMemo(() => (noteTool === "outline" ? outline(parts.body) : []), [noteTool, parts.body]);
-  const finding = noteTool === "find" && find.query !== "" ? { query: find.query, current: find.index } : null;
+  // Typing stays quick in a long note: the marks follow the query when React has time.
+  const query = useDeferredValue(find.query);
+  const finding = noteTool === "find" && query !== "" ? { query, current: find.index } : null;
 
   // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
   const scrollTarget = useEditor((s) => s.scrollTarget);
@@ -72,9 +74,14 @@ export default function NoteView({ path }: { path: string }) {
   // Find in the note: the note says how many matches it marked, and the current one comes into view.
   useEffect(() => {
     if (noteTool !== "find" || mode !== "read" || !article.current) return;
-    const marks = article.current.querySelectorAll<HTMLElement>("mark[data-find]");
-    if (marks.length !== useEditor.getState().find.count) useEditor.getState().setFind({ count: marks.length });
-    article.current.querySelector<HTMLElement>("mark[data-current]")?.scrollIntoView({ block: "center" });
+    const count = article.current.querySelectorAll<HTMLElement>("mark[data-find]").length;
+    const { find } = useEditor.getState();
+    // Fewer matches than before (an edit, a longer query): the current one is the last that is left.
+    if (count !== find.count || (count > 0 && find.index >= count)) useEditor.getState().setFind({ count, index: Math.min(find.index, Math.max(0, count - 1)) });
+    const current = article.current.querySelector<HTMLElement>("mark[data-current]");
+    // A match in a folded callout is shown by unfolding it.
+    current?.closest("details")?.setAttribute("open", "");
+    current?.scrollIntoView({ block: "center" });
   }, [noteTool, mode, finding?.query, finding?.current, note.data?.content]);
 
   const jump = (line: number) => {

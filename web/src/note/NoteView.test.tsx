@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -462,5 +462,30 @@ describe("Outline and find in the note", () => {
     expect(screen.queryByRole("search", { name: "Find in note" })).not.toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Vault actions" })).toBeInTheDocument();
     expect(marks()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Note actions" })).toHaveFocus();
+  });
+
+  it("unfolds a folded callout to show the match, keeps the index within the matches, and forgets the query on another note", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    const folded = "Road one, road two, road three.\n\n> [!tip]- Hidden\n> the road inside";
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, folded)) });
+    renderApp(planUrl);
+    await screen.findByText(/Road one/);
+    act(() => useEditor.getState().setNoteTool("find"));
+    const input = await screen.findByRole("searchbox", { name: "Find in note" });
+    await userEvent.type(input, "road");
+    const status = () => within(screen.getByRole("search", { name: "Find in note" })).getByRole("status");
+    await waitFor(() => expect(status()).toHaveTextContent("1 of 4"));
+    await userEvent.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(status()).toHaveTextContent("4 of 4");
+    await waitFor(() => expect(document.querySelector("details")).toHaveAttribute("open"));
+
+    // An index past the matches (fewer of them since) comes back to the last one.
+    act(() => useEditor.getState().setFind({ index: 9 }));
+    await waitFor(() => expect(status()).toHaveTextContent("4 of 4"));
+
+    act(() => useEditor.getState().openNote("/Work/inbox.md"));
+    expect(useEditor.getState().find).toEqual({ query: "", index: 0, count: 0 });
+    expect(useEditor.getState().noteTool).toBeNull();
   });
 });

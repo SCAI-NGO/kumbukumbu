@@ -105,6 +105,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
       mode: s.draft?.path === path ? "write" : mode,
       overlay: "none",
       noteTool: s.currentPath === path ? s.noteTool : null,
+      find: s.currentPath === path ? s.find : initial.find,
       activeVault: vaultOf(path),
       expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(folderOf(path)).map((f) => [f, true])) },
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
