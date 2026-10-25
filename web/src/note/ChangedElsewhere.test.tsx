@@ -24,8 +24,8 @@ const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], not
 const texts: Record<string, string> = { v1: "# Plan\n\nFirst.\n\nSecond.\n", v2: "# Plan\n\nFirst.\n\nSecond, changed by liz.\n" };
 
 /** The note as the server holds it: its version (a hash of the text, so a text written again has its version again), and the minute of its last write. */
-type Server = { version: string; writer: string; at: number; gone: string | null; failNotes: boolean; noteReads: number };
-const newServer = (): Server => ({ version: "v1", writer: "ada", at: 0, gone: null, failNotes: false, noteReads: 0 });
+type Server = { version: string; writer: string; at: number; gone: string | null; failNotes: boolean; noteReads: number; gate: Promise<void> | null };
+const newServer = (): Server => ({ version: "v1", writer: "ada", at: 0, gone: null, failNotes: false, noteReads: 0, gate: null });
 const iso = (minute: number) => new Date(Date.UTC(2026, 9, 25, 9, minute)).toISOString();
 const note = (s: Server) => ({ path: PLAN, content: texts[s.version], version: s.version, lastWriter: s.writer, lastWriteAt: iso(s.at), current: true });
 
@@ -41,8 +41,9 @@ function api(server: Server, puts: unknown[] = []) {
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal" }]),
     "GET /api/vaults/Work/tree": () => json(200, tree),
-    "GET /api/notes/Work/plan.md": () => {
+    "GET /api/notes/Work/plan.md": async () => {
       server.noteReads++;
+      if (server.gate) await server.gate;
       return server.failNotes && server.noteReads > 1 ? json(500, { error: "" }) : json(200, note(server));
     },
     "GET /api/version/Work/plan.md": () =>
@@ -94,6 +95,26 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect([...document.querySelectorAll("[data-changed]")].map((e) => e.textContent?.trim())).toEqual(["Second, changed by liz."]);
     expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the reader where they were on Refresh", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    const scroller = (await screen.findByRole("article")).parentElement!;
+    scroller.scrollTop = 120;
+    writeElsewhere(server, "v2");
+    backToThePage();
+    let release!: () => void;
+    server.gate = new Promise((r) => (release = r));
+
+    await userEvent.click(within(await bar()).getByRole("button", { name: "Refresh" }));
+    // The new text moves the page meanwhile, as a browser may when the content changes.
+    scroller.scrollTop = 0;
+    release();
+
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(scroller.scrollTop).toBe(120);
   });
 
   it("is shown when the text goes back to a version shown before (a restore)", async () => {
