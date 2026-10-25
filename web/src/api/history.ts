@@ -12,10 +12,14 @@ export type NoteVersion = components["schemas"]["NoteVersionView"];
 
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
-/** Every note of the vault may read differently now: its tree, notes, links, history and search are asked again. */
-function vaultChanged(queryClient: QueryClient, vault: string) {
+/**
+ * Every note of the vault may read differently now: its tree, notes, links, history and search are asked again.
+ * `notes: false` after one note's restore: the other notes' text is as it was, and reading the open one again
+ * would replace its text on screen.
+ */
+function vaultChanged(queryClient: QueryClient, vault: string, { notes = true } = {}) {
   const inIt = (k: unknown) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`));
-  for (const key of ["tree", "note", "links", "backlinks", "history", "trash", "checkpoints"]) {
+  for (const key of ["tree", ...(notes ? ["note"] : []), "links", "backlinks", "history", "trash", "checkpoints"]) {
     void queryClient.invalidateQueries({ queryKey: [key], predicate: (q) => q.queryKey.some(inIt) });
   }
   for (const key of ["vaults", "changes", "search"]) void queryClient.invalidateQueries({ queryKey: [key] });
@@ -32,8 +36,9 @@ export function useRestoreNote() {
     mutationFn: ({ path, version }: { path: string; version?: string }) =>
       call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null } })),
     onSuccess: (note: NoteView) => {
+      // The restored note itself is what came back.
       queryClient.setQueryData(["note", note.path], note);
-      vaultChanged(queryClient, vaultOf(note.path));
+      vaultChanged(queryClient, vaultOf(note.path), { notes: false });
     },
   });
 }

@@ -18,7 +18,11 @@ const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], not
 const contents: Record<string, string> = { v1: "# Inbox\n\nOld line.\n", v2: "# Inbox\n\nNew line.\n" };
 const noteView = (version: string, current = true) => ({ path: INBOX, content: contents[version], version, lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z", current });
 
+/** How often the open note was read without `?version=`: each read after the first would replace the text shown. */
+let noteReads = 0;
+
 function api(extra: Parameters<typeof fakeApi>[0] = {}) {
+  noteReads = 0;
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal" }]),
@@ -26,6 +30,7 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
     "GET /api/vaults/Work/tree": () => json(200, tree),
     "GET /api/notes/Work/inbox.md": (r) => {
       const version = new URL(r.url).searchParams.get("version");
+      if (!version) noteReads++;
       return json(200, version ? noteView(version, version === "v2") : noteView("v2"));
     },
     "GET /api/version/Work/inbox.md": () => json(200, { path: INBOX, version: "v2", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
@@ -71,6 +76,26 @@ describe("a note's history", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
     expect(await restore!.json()).toEqual({ version: "v1" });
+  });
+
+  it("doesn't read the open note again, which would replace the text on screen", async () => {
+    api({
+      "GET /api/history/Work/inbox.md": () =>
+        json(200, [
+          { version: "v2", writtenAt: "2026-10-25T09:00:00Z", writer: "liz", lines: 3, size: 21, current: true, changeset: null },
+          { version: "v1", writtenAt: "2026-10-24T09:00:00Z", writer: "ada", lines: 3, size: 15, current: false, changeset: null },
+        ]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const versions = await within(await screen.findByRole("dialog", { name: "History" })).findByRole("list", { name: "Versions" });
+    await userEvent.click(within(versions).getAllByRole("button")[1]);
+    await userEvent.click(await screen.findByRole("button", { name: "Changes since" }));
+    await screen.findByRole("list", { name: "Changes since" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(noteReads).toBe(1);
   });
 
   it("offers no restore of the current version, and goes back to the list", async () => {
@@ -137,6 +162,8 @@ describe("the trash", () => {
     expect(await within(dialog).findByText("The trash is empty.")).toBeInTheDocument();
     const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
     expect(await restore!.json()).toEqual({ version: "t1" });
+    // The open note is another one: it isn't read again.
+    expect(noteReads).toBe(1);
   });
 
   it("says why a restore didn't go through", async () => {

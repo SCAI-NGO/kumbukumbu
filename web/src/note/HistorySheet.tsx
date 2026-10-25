@@ -69,7 +69,8 @@ const lineClass = {
 /** One version: rendered, or as its line diff to the current one; restoring it is a new write. */
 function VersionView({ path, entry, onBack, onRestored }: { path: string; entry: HistoryEntry; onBack(): void; onRestored(): void }) {
   const version = useNoteVersion(path, entry.version);
-  const current = useNote(path);
+  // The text shown, as it is: a read now would replace it under the reader.
+  const current = useNote(path, { refetchOnMount: false });
   const restore = useRestoreNote();
   const [tab, setTab] = useState<"rendered" | "changes">("rendered");
   const body = useMemo(() => splitFrontmatter(version.data?.content ?? "").body, [version.data?.content]);

@@ -77,14 +77,16 @@ export function useCreateNote() {
 /**
  * The note as the server has it. Not read again by itself when the page comes back into view or online: that would
  * replace the text under the reader's eye. A change made elsewhere is shown instead (`useChangedElsewhere`), and
- * taken when the user says so.
+ * taken when the user says so. `refetchOnMount: false` for a view next to the note (its history), which must not
+ * read it again either.
  */
-export const useNote = (path: string) =>
+export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMount?: boolean } = {}) =>
   useQuery({
     queryKey: ["note", path],
     queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    refetchOnMount,
   });
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
