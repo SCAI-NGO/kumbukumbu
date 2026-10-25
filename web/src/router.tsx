@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { Outlet, useLocation, useNavigate, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
+import { RouteError } from "./components/AppError";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -54,6 +55,7 @@ const lazyPage = (load: () => Promise<{ default: () => JSX.Element }>) => async 
 export const routes: RouteObject[] = [
   {
     element: <Root />,
+    errorElement: <RouteError />,
     // Blank while a lazy page loads on the first visit.
     HydrateFallback: () => null,
     children: [
@@ -62,6 +64,8 @@ export const routes: RouteObject[] = [
       { path: "/forgot", element: <ForgotPassword /> },
       {
         element: <RequireSession />,
+        // A page that fails takes only its own place; Root still sends a session that ended to sign-in.
+        errorElement: <RouteError />,
         children: [
           {
             element: <MobileShell />,

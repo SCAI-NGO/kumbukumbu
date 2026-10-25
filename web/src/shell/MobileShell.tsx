@@ -5,6 +5,7 @@ import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
 import { Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
+import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
@@ -118,9 +119,11 @@ export default function MobileShell() {
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
       {overlay === "search" && <SearchSheet />}
       {overlay === "upload" && upload && (
-        <Suspense>
-          <UploadSheet folder={upload.folder} dropped={upload.dropped} />
-        </Suspense>
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
+          <Suspense>
+            <UploadSheet folder={upload.folder} dropped={upload.dropped} />
+          </Suspense>
+        </LoadBoundary>
       )}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
