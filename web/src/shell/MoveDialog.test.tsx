@@ -56,6 +56,26 @@ describe("movedPath", () => {
   });
 });
 
+describe("the store after a move", () => {
+  it("carries the draft and the upload folder along, and opens the target's folder chain", () => {
+    useEditor.setState({
+      draft: { username: "ada", path: "/W/p/a.md", text: "t", version: "v1" },
+      upload: { folder: "/W/p/deep", dropped: null },
+      expandedFolders: { "/W/p": true },
+    });
+    useEditor.getState().moved("/W/p/", "/W/x/y/p");
+    const s = useEditor.getState();
+    expect(s.draft?.path).toBe("/W/x/y/p/a.md");
+    expect(s.upload?.folder).toBe("/W/x/y/p/deep");
+    expect(s.expandedFolders).toEqual({ "/W/x/y/p": true, "/W/x": true, "/W/x/y": true });
+
+    useEditor.getState().moved("/W/x/y/p/a.md", "/W/z/b.md");
+    expect(useEditor.getState().draft?.path).toBe("/W/z/b.md");
+    expect(useEditor.getState().upload?.folder).toBe("/W/x/y/p/deep");
+    expect(useEditor.getState().expandedFolders["/W/z"]).toBe(true);
+  });
+});
+
 describe("Rename or move", () => {
   it("renames the open note from its menu, says the links were rewritten, and opens it at its new place", async () => {
     const { moves } = api(() => json(200, { message: "moved /Work/inbox.md to /Work/archive/todo.md; rewrote 2 links in /Work/archive/old.md", path: "/Work/archive/todo.md", version: "v2" }));

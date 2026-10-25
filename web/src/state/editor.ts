@@ -132,11 +132,17 @@ export const useEditor = create<EditorState>()((set, get) => ({
   moved: (from, to) =>
     set((s) => {
       const map = (p: string) => movedPath(p, from, to);
-      const folders = Object.entries(s.expandedFolders).map(([f, open]) => [from.endsWith("/") ? movedPath(`${f}/`, from, to).replace(/\/$/, "") : f, open]);
+      // A folder (`/Work/projects`) moves with a folder move only.
+      const mapFolder = (f: string) => (from.endsWith("/") ? movedPath(`${f}/`, from, to).replace(/\/$/, "") : f);
+      const folders = Object.entries(s.expandedFolders).map(([f, open]) => [mapFolder(f), open]);
+      // Where it went is shown open in the drawer, as opening a note there would.
+      const target = chain(folderOf(to.replace(/\/$/, ""))).map((f) => [f, true]);
       return {
         currentPath: s.currentPath && map(s.currentPath),
         recentPaths: s.recentPaths.map(map),
-        expandedFolders: Object.fromEntries(folders),
+        expandedFolders: Object.fromEntries([...folders, ...target]),
+        draft: s.draft && { ...s.draft, path: map(s.draft.path) },
+        upload: s.upload && { ...s.upload, folder: mapFolder(s.upload.folder) },
       };
     }),
   reset: () => set(initial),
