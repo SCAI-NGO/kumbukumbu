@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
-import { Check } from "lucide-react";
+import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
 import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { noteUrl } from "../api/paths";
+import { errorText } from "../api/error-text";
+import { useLinks, useNote } from "../api/notes";
+import { noteUrl, titleOf } from "../api/paths";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
-import { remarkWikiLinks, type LinkView } from "./wikiLinks";
+import { remarkCallouts, type CalloutKind } from "./callouts";
+import { remarkFind } from "./findInNote";
+import { section } from "./outline";
+import { splitFrontmatter } from "./properties";
+import { embedHeading, remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -76,11 +82,23 @@ interface Props {
   onCreateMissing(target: string): void;
   /** Agent highlights while "Show" is on, else null. */
   highlight?: Highlight | null;
+  /** Find in the note: matches are marked, `current` (0-based) as the current one. */
+  find?: { query: string; current: number } | null;
+  /** The note shown. With it, notes embedded on a line of their own (`![[plan]]`) show their text; without it
+   * (inside an embedded note: one level deep) every embed stays a link. */
+  path?: string;
+  /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
+  nested?: boolean;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source" | "highlight">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
+const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find">>({
+  links: undefined,
+  tasksDisabled: true,
+  onToggleTask: () => {},
+  onCreateMissing: () => {},
+});
 
 function TaskItem({ node, children, ...rest }: { node: HastNode; children: ReactNode } & ComponentPropsWithoutRef<"li">) {
   const { tasksDisabled, onToggleTask } = useContext(NoteContext);
@@ -106,10 +124,49 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   );
 }
 
-function WikiLink({ index, children }: { index: number; children: ReactNode }) {
-  const { links, onCreateMissing } = useContext(NoteContext);
+/**
+ * An embedded note (`![[plan]]`, `![[plan#Goals]]`): its text (or the heading's section) in a frame, with the way
+ * to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks don't tick from here.
+ */
+function EmbeddedNote({ path, heading }: { path: string; heading: string | null }) {
+  const note = useNote(path);
+  const links = useLinks(path, note.data?.version);
+  const { onCreateMissing } = useContext(NoteContext);
+  const body = useMemo(() => {
+    if (!note.data) return null;
+    const { body } = splitFrontmatter(note.data.content);
+    return heading === null ? body : section(body, heading);
+  }, [note.data, heading]);
+  const title = heading ? `${titleOf(path)} › ${heading}` : titleOf(path);
+
+  return (
+    <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
+      <Link
+        to={noteUrl(path)}
+        className="-mx-1 flex min-h-11 items-center gap-1.5 rounded-[6px] px-1 font-mono text-[12px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <CornerDownRight size={14} aria-hidden className="flex-none" />
+        <span className="truncate">{title}</span>
+        <span className="sr-only">(open the note)</span>
+      </Link>
+      {note.isPending && <p className="text-sm text-muted">Loading …</p>}
+      {note.isError && <p className="text-sm text-muted">{errorText(note.error)}</p>}
+      {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
+      {body !== null && (
+        <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} nested />
+      )}
+    </section>
+  );
+}
+
+function WikiLink({ index, embed, children }: { index: number; embed: unknown; children: ReactNode }) {
+  const { links, onCreateMissing, path } = useContext(NoteContext);
   const link = links?.[index];
   const [choosing, setChoosing] = useState(false);
+  // Only a note, never this one, and only from the note shown (not from inside an embedded one).
+  if (embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
+    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
+  }
   switch (link?.kind) {
     case undefined:
       return <span>{children}</span>;
@@ -151,13 +208,83 @@ function WikiLink({ index, children }: { index: number; children: ReactNode }) {
   }
 }
 
+/** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
+function useLine(node: HastNode | undefined) {
+  const { nested } = useContext(NoteContext);
+  return nested ? undefined : node?.position?.start.line;
+}
+
+const calloutIcons: Record<CalloutKind, LucideIcon> = { note: Pencil, tip: Lightbulb, info: Info, warning: TriangleAlert, danger: OctagonAlert, quote: Quote };
+
+// Tokens only: the kinds differ by icon and title first; warnings and dangers also take the accent.
+const calloutBox: Record<CalloutKind, string> = {
+  note: "border-l-dim bg-surface",
+  tip: "border-l-dim bg-surface",
+  info: "border-l-dim bg-surface",
+  warning: "border-l-accent bg-surface",
+  danger: "border-l-accent bg-accent/10",
+  quote: "border-l-muted bg-surface italic",
+};
+const calloutClass = (kind: CalloutKind) => `k-callout my-3 rounded-[10px] border border-l-[3px] border-line px-3.5 py-2.5 text-text-body [&>p]:my-1.5 ${calloutBox[kind]}`;
+const kindOf = (node: HastNode | undefined, key: "dataCallout" | "dataCalloutTitle") => (node?.properties[key] as CalloutKind | undefined) ?? "note";
+
+function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldable: boolean; children: ReactNode }) {
+  const Icon = calloutIcons[kind];
+  const accent = kind === "warning" || kind === "danger";
+  return (
+    <>
+      <Icon size={17} strokeWidth={2} aria-hidden className={`flex-none ${accent ? "text-accent-text" : "text-muted"}`} />
+      <span className="min-w-0 flex-1 font-semibold not-italic text-text">{children}</span>
+      {foldable && <ChevronRight size={16} aria-hidden className="k-fold flex-none text-dim transition-transform" />}
+    </>
+  );
+}
+
 const components: Components = {
-  h1: ({ node, ...props }) => <h1 data-line={node?.position?.start.line} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
-  h2: ({ node, ...props }) => (
-    <h2 data-line={node?.position?.start.line} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
+  // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
+  aside: ({ node, children, ...props }) =>
+    node?.properties.dataCallout ? (
+      <aside {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
+        {children}
+      </aside>
+    ) : (
+      <aside {...props}>{children}</aside>
+    ),
+  details: ({ node, children, ...props }) => (
+    <details {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
+      {children}
+    </details>
   ),
-  h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
-  p: ({ node: _, ...props }) => <p className="my-3" {...props} />,
+  summary: ({ node, children, ...props }) => (
+    <summary {...props} className="-my-1.5 flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-[6px] focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+      <CalloutTitle kind={kindOf(node, "dataCalloutTitle")} foldable>
+        {children}
+      </CalloutTitle>
+    </summary>
+  ),
+  h1: ({ node, ...props }) => <h1 data-line={useLine(node)} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => (
+    <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
+  ),
+  h3: ({ node, ...props }) => <h3 data-line={useLine(node)} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
+  h4: ({ node, ...props }) => <h4 data-line={useLine(node)} className="mt-4 mb-1.5 text-[16px] font-bold text-text" {...props} />,
+  h5: ({ node, ...props }) => <h5 data-line={useLine(node)} className="mt-4 mb-1.5 text-[15px] font-bold text-text-body" {...props} />,
+  h6: ({ node, ...props }) => <h6 data-line={useLine(node)} className="mt-4 mb-1.5 text-[14px] font-semibold text-muted" {...props} />,
+  mark: ({ node, ...props }) => (
+    <mark className={`rounded-[3px] ${node?.properties.dataCurrent ? "bg-accent text-on-accent" : "bg-accent/30 text-text"}`} {...props} />
+  ),
+  p: ({ node, children, ...props }) =>
+    node?.properties.dataCalloutTitle ? (
+      <p {...props} className="flex items-center gap-2">
+        <CalloutTitle kind={kindOf(node, "dataCalloutTitle")} foldable={false}>
+          {children}
+        </CalloutTitle>
+      </p>
+    ) : (
+      <p className="my-3" {...props}>
+        {children}
+      </p>
+    ),
   // Only tasks: no bullets. A mix keeps the disc for ordinary items; the tasks (`k-task`) give theirs up and move
   // left so their checkbox stands where a bullet would, with their text close to the ordinary items'.
   ul: ({ node, className, ...props }) => {
@@ -207,16 +334,28 @@ const components: Components = {
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
-    return typeof index === "number" ? <WikiLink index={index}>{children}</WikiLink> : <span {...props}>{children}</span>;
+    return typeof index === "number" ? (
+      <WikiLink index={index} embed={node?.properties.dataEmbed}>
+        {children}
+      </WikiLink>
+    ) : (
+      <span {...props}>{children}</span>
+    );
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null }: Props) {
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false }: Props) {
+  const query = find?.query ?? "";
+  const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
-    () => [remarkGfm, [remarkWikiLinks, { links: links ?? [] }], [remarkChanged, { highlight }]] as const,
-    [links, highlight],
+    () =>
+      [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
+    [links, highlight, query, current],
   );
-  const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing }), [links, tasksDisabled, onToggleTask, onCreateMissing]);
+  const context = useMemo(
+    () => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path, nested }),
+    [links, tasksDisabled, onToggleTask, onCreateMissing, path, nested],
+  );
 
   return (
     <NoteContext.Provider value={context}>

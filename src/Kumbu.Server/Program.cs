@@ -29,6 +29,9 @@ if (bootstrapCommand)
 // ASP.NET logs every request line at Information ("Request starting POST /api/..."), endpoint matches and
 // results: nothing an operator needs, and a URL may carry something secret. Warnings and errors stay.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+// HttpClientFactory logs four lines per outgoing request: for an external embedding provider, one set per search
+// query, which would put when someone searched into the log. Failures are logged by the drivers themselves.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
@@ -36,7 +39,7 @@ builder.Services.AddOptions<KumbuOptions>()
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
 
 builder.Services.AddSingleton<IMongoClient>(sp =>
-    new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ConnectionString));
+    new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ClientSettings()));
 builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton(TimeProvider.System);
@@ -44,8 +47,12 @@ builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<OnnxEmbedder>();
-builder.Services.AddSingleton<IEmbedder>(sp => sp.GetRequiredService<OnnxEmbedder>());
+builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
+// The internal model and the external providers the admin configured; each vault uses one of them.
+builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
+    sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
+    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
@@ -58,6 +65,7 @@ builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<AccountLimits>();
@@ -167,6 +175,7 @@ app.MapMcp("/mcp");
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
 app.MapNoteApi();
+app.MapHistoryApi();
 app.MapUploadApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they

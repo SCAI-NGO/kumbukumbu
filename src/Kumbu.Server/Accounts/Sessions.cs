@@ -39,33 +39,49 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// nothing here checks it, and the session would hand on whatever key it got. <paramref name="credentialReadAt"/>
     /// is when that credential was read, before Argon2; it becomes the session's <c>createdAt</c>, so a password
     /// change that lands while the sign-in is still in Argon2 refuses the session too.
+    /// <see cref="CredentialsChangedException"/> if the user no longer exists (deleted meanwhile) or is inactive.
     /// </summary>
     public async Task<string> StartAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var secret = RandomNumberGenerator.GetBytes(SecretBytes);
         var now = Now;
-        await Slots.InsertOneAsync(
-            new UserSlotDocument
-            {
-                User = user.Id,
-                Kind = UserSlotDocument.Session,
-                Lookup = Lookup(secret),
-                Wrapped = VaultCrypto.Seal(Kek(secret, user.Id), userKey, SlotContext(user.Id)),
-                CreatedAt = credentialReadAt,
-                ExpiresAt = now + AbsoluteTimeout,
-                LastUsedAt = now,
-            },
-            cancellationToken: ct);
+        var slot = new UserSlotDocument
+        {
+            User = user.Id,
+            Kind = UserSlotDocument.Session,
+            Lookup = Lookup(secret),
+            Wrapped = VaultCrypto.Seal(Kek(secret, user.Id), userKey, SlotContext(user.Id)),
+            CreatedAt = credentialReadAt,
+            ExpiresAt = now + AbsoluteTimeout,
+            LastUsedAt = now,
+        };
+        using (var session = await db.Client.StartSessionAsync(cancellationToken: ct))
+        {
+            await session.WithTransactionAsync(
+                async (s, token) =>
+                {
+                    // A real write to the user's document, as for a new vault: a deletion of the account at the same
+                    // time conflicts with it, so no session slot is left behind for a user who is gone.
+                    var current = await Users.UpdateOneAsync(
+                        s, u => u.Id == user.Id && u.Active, Builders<UserDocument>.Update.Inc(u => u.SessionsStarted, 1), cancellationToken: token);
+                    if (current.MatchedCount == 0) throw new CredentialsChangedException();
+                    await Slots.InsertOneAsync(s, slot, cancellationToken: token);
+                    return true;
+                },
+                cancellationToken: ct);
+        }
+
         return Base64Url.EncodeToString(secret);
     }
 
     /// <summary>
     /// The user, their user key and when the session's credential was read (its <c>createdAt</c>), or null if
     /// the session is unknown, ended, idle too long, past its absolute limit, older than the user's last password
-    /// change or recovery, or the user is inactive.
+    /// change or recovery, or the user is inactive. Without <paramref name="touch"/> the request doesn't count as the
+    /// session's use: the web app's poll in the background must not keep a session alive that nobody uses.
     /// </summary>
-    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct)
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
     {
         if (Decode(secret) is not { } bytes) return null;
         await EnsureReadyAsync(ct);
@@ -103,7 +119,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             return null;
         }
 
-        if (now - lastUsedAt >= LastUsedGranularity)
+        if (touch && now - lastUsedAt >= LastUsedGranularity)
         {
             // Conditional, so of concurrent requests only one writes.
             var stale = now - LastUsedGranularity;

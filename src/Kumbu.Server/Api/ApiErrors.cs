@@ -57,6 +57,10 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status400BadRequest, e.Message);
         }
+        catch (Kumbu.Server.Vaults.VaultDeletedException e)
+        {
+            return Result(StatusCodes.Status404NotFound, e.Message);
+        }
         // Exactly ArgumentException: the services throw it for input they refuse, with a sentence meant for the
         // user. Its subclasses (ArgumentNullException, ...) come from bugs and say nothing a user could act on.
         catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))

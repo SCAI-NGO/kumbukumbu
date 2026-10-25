@@ -8,6 +8,13 @@ using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server.Auth;
 
+/// <summary>Marks an endpoint the web app calls in the background (the open note's version, every few seconds): with
+/// a session, it doesn't count as the session's use, so the idle timeout still ends a session left alone.</summary>
+public sealed class BackgroundMetadata
+{
+    public static readonly BackgroundMetadata Instance = new();
+}
+
 /// <summary>
 /// Resolves every request that needs one to a <see cref="RequestCaller"/>: a bearer key (the dev token when
 /// configured, or an API key) or, under <c>/api</c> only, the session cookie. Which requests need one
@@ -74,7 +81,8 @@ public sealed class CallerMiddleware(
             // page on a sibling subdomain (same site, so SameSite=Strict doesn't stop it) post a blind no-cors
             // tools/call with the user's session.
             caller = context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
-                     && await sessions.ResolveAsync(secret, context.RequestAborted) is var (user, userKey, readAt)
+                     && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
+                         is var (user, userKey, readAt)
                 ? RequestCaller.ForSession(user, userKey, readAt, catalog)
                 : null;
         }

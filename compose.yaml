@@ -2,7 +2,26 @@ services:
   mongo:
     image: ${KUMBU_MONGO_IMAGE:-mongo:8}
     # A single-node replica set: MongoDB has transactions only on a replica set.
-    command: ["--replSet", "rs0", "--bind_ip_all"]
+    # Optional authentication: with KUMBU_MONGO_PASSWORD set (or KUMBU_MONGO_PASSWORD_FILE naming a Docker secret
+    # inside the container, see the README), MongoDB requires a login. A replica set with
+    # authentication needs a key file (its members authenticate each other with it, even a single one); it is
+    # generated once, here, inside the data volume, never in the repository. The root user `kumbu` is created by
+    # the health check below through MongoDB's localhost exception, which holds only while no user exists.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        pwd="$$KUMBU_MONGO_PASSWORD"
+        if [ -z "$$pwd" ] && [ -n "$$KUMBU_MONGO_PASSWORD_FILE" ]; then pwd="$$(cat "$$KUMBU_MONGO_PASSWORD_FILE")"; fi
+        if [ -z "$$pwd" ]; then exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all; fi
+        key=/data/db/kumbu.keyfile
+        if [ ! -s "$$key" ]; then (umask 077; tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 756 > "$$key"); fi
+        chown mongodb:mongodb "$$key"
+        chmod 400 "$$key"
+        exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile "$$key"
+    environment:
+      KUMBU_MONGO_PASSWORD: ${KUMBU_MONGO_PASSWORD:-}
     # The replica set config stores the member's host; the default hostname (the container id)
     # changes whenever the container is recreated, and the node would lose its own set.
     hostname: mongo
@@ -10,8 +29,23 @@ services:
       - mongo-data:/data/db
     healthcheck:
       # Initiates the set on the first start (idempotent), then reports whether this node is the
-      # writable primary, which takes a few seconds after every start.
-      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }; quit(db.hello().isWritablePrimary ? 0 : 1)"]
+      # writable primary, which takes a few seconds after every start. With a password, it signs in first;
+      # while no user exists yet, it initiates the set and creates the root user once the node is primary.
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - |
+          const file = process.env.KUMBU_MONGO_PASSWORD_FILE;
+          const pwd = process.env.KUMBU_MONGO_PASSWORD || (file ? require('fs').readFileSync(file, 'utf8').replace(/[\r\n]+$$/, '') : '');
+          const admin = db.getSiblingDB('admin');
+          let signedIn = !pwd;
+          if (pwd) { try { admin.auth('kumbu', pwd); signedIn = true; } catch (e) {} }
+          try { rs.status() } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }
+          if (!db.hello().isWritablePrimary) quit(1);
+          if (!signedIn) { admin.createUser({ user: 'kumbu', pwd, roles: ['root'] }); admin.auth('kumbu', pwd); }
+          quit(0);
       interval: 5s
       timeout: 10s
       start_period: 30s
@@ -30,6 +64,9 @@ services:
         condition: service_healthy
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
+      # Optional; set, the server signs in to MongoDB as `kumbu` (see the mongo service). Empty, it doesn't.
+      # Kumbu__Mongo__PasswordFile in its place reads it from a file (a Docker secret, see the README).
+      Kumbu__Mongo__Password: ${KUMBU_MONGO_PASSWORD:-}
       # Optional: empty, the dev token opens nothing (a public instance), and seeding is skipped.
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:-}
       # Where users reach the server; invitation links (and `kumbu bootstrap-admin`) are built from it.

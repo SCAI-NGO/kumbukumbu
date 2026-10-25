@@ -46,8 +46,8 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.UseSetting("Kumbu:Search:Enabled", "false");
         builder.ConfigureServices(services =>
         {
-            services.RemoveAll<Kumbu.Server.Search.IEmbedder>();
-            services.AddSingleton<Kumbu.Server.Search.IEmbedder>(Embedder);
+            services.RemoveAll<Kumbu.Server.Search.IEmbeddingDriver>();
+            services.AddSingleton<Kumbu.Server.Search.IEmbeddingDriver>(Embedder);
         });
     }
 

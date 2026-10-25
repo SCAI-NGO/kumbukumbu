@@ -8,14 +8,28 @@ using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
 
-public sealed record VaultView(string Name, int Notes);
+/// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to,
+/// <c>internal</c> (the model on this server) unless its owner chose an external one.</summary>
+public sealed record VaultView(string Name, int Notes, string Embeddings);
+
+/// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
+/// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
+/// switched off, or failing).</summary>
+public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason);
+
+/// <summary><c>provider</c>: the name of one of <c>GET /api/embeddings</c>, <c>internal</c> for the model on this server.</summary>
+public sealed record SetEmbeddingsRequest(string Provider);
 
 public sealed record CreateVaultRequest(string Name);
+
+/// <summary>The owner's current password, and <c>confirm</c>: the vault's name, typed out exactly.</summary>
+public sealed record DeleteVaultRequest(string Password, string Confirm);
 
 /// <summary>A vault's notes as folders and notes, each level folders first, then notes, both in text order (as <c>ls</c>).
 /// <c>damaged</c>: stored notes of the vault that don't open (their paths are what doesn't open, so they aren't in the tree).</summary>
@@ -58,8 +72,9 @@ public sealed record LinkView(int Line, string Raw, string Target, string Kind, 
 /// <summary>A line linking to the note, 1-based; <c>ambiguous</c>: its link matches several notes, this one among them.</summary>
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
-/// <summary>A version of a note, newest first; <c>changeset</c> the short id of its changeset, if it is in one.</summary>
-public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, bool Current, string? Changeset);
+/// <summary>A version of a note, newest first; <c>size</c> in bytes (UTF-8), <c>changeset</c> the short id of its
+/// changeset, if it is in one.</summary>
+public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -78,7 +93,8 @@ public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt
 /// The vault and note endpoints under <c>/api</c> (accounts design §4): the same code paths as the <c>sh</c>
 /// commands and the write tools, so the web app sees the notes, links, history and search an agent sees. Every
 /// caller may read (a session, an API key, the dev token) what its credential opens; writes follow
-/// <see cref="ICaller.CanWrite"/>. Creating a vault and the agent banner's changes need the user key: sessions only.
+/// <see cref="ICaller.CanWrite"/>. Creating or deleting a vault and the agent banner's changes need the user key:
+/// sessions only.
 /// </summary>
 public static class NoteApi
 {
@@ -91,7 +107,10 @@ public static class NoteApi
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/vaults", ListVaultsAsync).Errors(401);
         api.MapPost("/vaults", CreateVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 409);
+        api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429);
         api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404);
+        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
+        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404);
         api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413);
@@ -106,15 +125,46 @@ public static class NoteApi
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403);
     }
 
-    private static async Task<Ok<VaultView[]>> ListVaultsAsync(INoteStore store, CancellationToken ct)
+    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)
     {
+        var providers = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.EmbeddingProvider, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
-            views.Add(new VaultView(name, (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count));
+            views.Add(new VaultView(name, (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count, providers[name]));
         }
 
         return TypedResults.Ok(views.ToArray());
+    }
+
+    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index) =>
+        TypedResults.Ok(index.Providers.All
+            .Select(p => new EmbeddingProviderView(p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason))
+            .ToArray());
+
+    /// <summary>
+    /// The owner points a vault at another embedding provider (sessions only: a session opens its user's own vaults
+    /// and nothing else). The vault is embedded again with it, in the background; until a note is, it is found by
+    /// words. Choosing an external provider is what sends the vault's text there, so the web app asks first.
+    /// </summary>
+    private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
+        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, CancellationToken ct)
+    {
+        var root = ApiPaths.Parse(vault, null, note: false);
+        var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
+            ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
+        if (index.Providers.Get(body.Provider) is null)
+        {
+            throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
+        }
+
+        if (unlocked.EmbeddingProvider != body.Provider)
+        {
+            await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
+            index.CatchUp(unlocked);
+        }
+
+        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -126,7 +176,18 @@ public static class NoteApi
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
         await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal));
+    }
+
+    /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
+    private static async Task<NoContent> DeleteVaultAsync(
+        string vault, DeleteVaultRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        // The same budget as the other password checks behind a session.
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        return await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct) is not null
+            ? TypedResults.NoContent()
+            : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
 
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)
@@ -198,7 +259,7 @@ public static class NoteApi
         return existing is null ? TypedResults.Created(ApiPaths.Url("notes", notePath), view) : TypedResults.Ok(view);
     }
 
-    private static Conflict<ConflictView> Conflict(StoredNote current, string? version) => TypedResults.Conflict(new ConflictView(
+    internal static Conflict<ConflictView> Conflict(StoredNote current, string? version) => TypedResults.Conflict(new ConflictView(
         version is null
             ? $"{current.Path.Value} exists already; to overwrite it, send its version."
             : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
@@ -288,7 +349,7 @@ public static class NoteApi
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
         return TypedResults.Ok(NoteHistory.Versions(note)
-            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, v.Current, v.Changeset?.Short))
+            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short))
             .ToArray());
     }
 
@@ -340,6 +401,10 @@ public static class NoteApi
             { MeaningUnavailable: true } => $"Search by meaning isn't available: {reason}.",
             { Semantic.State: not SemanticState.Ready } => $"Ranked by words only: {reason}.",
             { FellBackToWords: true } => "Ranked by words only: nothing is indexed for meaning yet.",
+            { Semantic: { State: SemanticState.Ready, WordsOnlyVaults.Count: > 0, Reason: { } partial } } when searchMode == SearchMode.Meaning =>
+                $"Search by meaning isn't available for some vaults, so their notes aren't in these results ({partial}). Hybrid or exact search finds them by words.",
+            { Semantic: { State: SemanticState.Ready, WordsOnlyVaults.Count: > 0, Reason: { } partial } } =>
+                $"Search by meaning isn't available for some vaults, so their notes are ranked by words ({partial}).",
             _ => null,
         };
         return TypedResults.Ok(new SearchView(
@@ -403,7 +468,7 @@ public static class NoteApi
         if (caller.Refuse(command, path) is { } refused) throw new ApiException(StatusCodes.Status403Forbidden, refused.Output);
     }
 
-    private static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
+    internal static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
         ApiErrors.NotFound(await store.IsDamagedAsync(path, ct)
             ? Damage.Message("read", path)
             : $"There is no note at {path.Value}{await Moves.HintAsync(store, path, ct)} (if it was removed, it is in the trash).");

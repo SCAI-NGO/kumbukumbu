@@ -1,22 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { AccountScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { useVaults } from "../api/notes";
+import ConfirmTyped from "../components/ConfirmTyped";
+import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
 import { applyScheme, storedScheme } from "../theme/apply";
-import { schemes } from "../theme/schemes";
+import { schemes, type Scheme, type Tokens } from "../theme/schemes";
 
 export default function Settings() {
   return (
     <AccountScreen title="Settings">
       <SchemeSection />
+      <ElsewhereSection />
       <PasswordSection />
       <RecoverySection />
       <SessionsSection />
+      <VaultsSection />
+      <DeleteAccountSection />
     </AccountScreen>
   );
 }
@@ -46,7 +53,6 @@ const follow = "system";
 /** Kept in this browser only, and only the scheme's name (there is no account setting for it). */
 function SchemeSection() {
   const [chosen, setChosen] = useState(() => storedScheme() ?? follow);
-  const options = [{ id: follow, name: "Follow the system" }, ...schemes];
 
   const choose = (id: string) => {
     setChosen(id);
@@ -55,22 +61,67 @@ function SchemeSection() {
 
   return (
     <Section title="Colour scheme">
-      <div role="radiogroup" aria-label="Colour scheme" className="flex flex-col">
-        {options.map((option) => (
-          <label key={option.id} className="flex min-h-11 cursor-pointer items-center gap-3 text-text">
-            <input
-              type="radio"
-              name="scheme"
-              value={option.id}
-              checked={chosen === option.id}
-              onChange={() => choose(option.id)}
-              className="size-5 shrink-0 accent-accent"
-            />
-            {option.name}
-          </label>
-        ))}
+      <div role="radiogroup" aria-label="Colour scheme" className="flex flex-col gap-4">
+        <SchemeOption id={follow} name="Follow the system" chosen={chosen} onChoose={choose} />
+        <SchemeGroup title="Dark" list={schemes.filter((s) => !s.light)} chosen={chosen} onChoose={choose} />
+        <SchemeGroup title="Light" list={schemes.filter((s) => s.light)} chosen={chosen} onChoose={choose} />
       </div>
     </Section>
+  );
+}
+
+/** Kept in this browser only, like the scheme: Write mode is never refreshed by itself, whatever is chosen here. */
+function ElsewhereSection() {
+  const id = useId();
+  const [on, setOn] = useState(storedAutoRefresh);
+  return (
+    <Section title="Changes made elsewhere">
+      <label className="flex min-h-11 cursor-pointer items-start gap-3 text-text">
+        <input
+          type="checkbox"
+          checked={on}
+          aria-describedby={`${id}-what`}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            setAutoRefresh(e.target.checked);
+          }}
+          className="mt-0.5 size-5 shrink-0 accent-accent"
+        />
+        Refresh Read mode automatically
+      </label>
+      <p id={`${id}-what`} className="text-sm text-text-body">
+        When the note you are reading is changed by an agent, another tab or another device, it is shown at once, with what changed tinted. Off, a bar
+        says so and you refresh when you are ready. Write mode never replaces your text by itself. Kept on this device only.
+      </p>
+    </Section>
+  );
+}
+
+function SchemeGroup({ title, list, chosen, onChoose }: { title: string; list: readonly Scheme[]; chosen: string; onChoose: (id: string) => void }) {
+  return (
+    <div role="group" aria-label={title} className="flex flex-col">
+      <h3 className="font-mono text-xs uppercase tracking-[0.08em] text-muted">{title}</h3>
+      {list.map((scheme) => (
+        <SchemeOption key={scheme.id} id={scheme.id} name={scheme.name} tokens={scheme.tokens} chosen={chosen} onChoose={onChoose} />
+      ))}
+    </div>
+  );
+}
+
+function SchemeOption({ id, name, tokens, chosen, onChoose }: { id: string; name: string; tokens?: Tokens; chosen: string; onChoose: (id: string) => void }) {
+  return (
+    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-text">
+      <input type="radio" name="scheme" value={id} checked={chosen === id} onChange={() => onChoose(id)} className="size-5 shrink-0 accent-accent" />
+      {name}
+      {tokens && (
+        // The scheme's own ground, surface and accent, so the choice is visible before it is made.
+        <span aria-hidden className="ml-auto flex h-6 w-14 shrink-0 overflow-hidden rounded border border-line" data-testid={`swatch-${id}`}>
+          <span className="flex-1" style={{ background: tokens.bg }} />
+          <span className="flex-1" style={{ background: tokens.surface2 }} />
+          <span className="flex-1" style={{ background: tokens.accent }} />
+        </span>
+      )}
+    </label>
   );
 }
 
@@ -172,6 +223,128 @@ function RecoverySection() {
             {replaced && <Done>Your new recovery key is in place; the old one no longer works.</Done>}
             <button type="submit" disabled={regenerate.isPending || !password} className={secondaryButtonClass}>
               Make a new recovery key
+            </button>
+          </form>
+        </>
+      )}
+    </Section>
+  );
+}
+
+/** Deleting a vault, with its name typed: the one place in the app that removes notes beyond the trash. */
+function VaultsSection() {
+  const vaults = useVaults();
+  const [deleting, setDeleting] = useState<string | null>(null);
+  return (
+    <Section title="Vaults">
+      <p className="text-text-body">
+        Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults; a key that had only this one is revoked.
+      </p>
+      {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
+      {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}
+      {vaults.data && vaults.data.length > 0 && (
+        <ul className="flex flex-col gap-2">
+          {vaults.data.map((vault) => (
+            <li key={vault.name} className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 break-words text-text">{vault.name}</span>
+              <span className="shrink-0 text-sm text-muted">
+                {vault.notes} {vault.notes === 1 ? "note" : "notes"}
+              </span>
+              <button type="button" onClick={() => setDeleting(vault.name)} aria-label={`Delete ${vault.name}`} className={`${secondaryButtonClass} shrink-0`}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {deleting !== null && <DeleteVaultDialog vault={deleting} onClose={() => setDeleting(null)} />}
+    </Section>
+  );
+}
+
+function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
+  const queryClient = useQueryClient();
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  const remove = useMutation({
+    mutationFn: () => call(api.POST("/api/vaults/{vault}/delete", { params: { path: { vault } }, body: { password, confirm: vault } })),
+    onSuccess: async () => {
+      useEditor.getState().forgetVault(vault);
+      // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
+      await Promise.all(["vaults", "keys", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      onClose();
+    },
+  });
+  return (
+    <ConfirmTyped
+      title={`Delete ${vault}?`}
+      text="The vault goes for good, with every note in it, their history, the trash and the checkpoints. Nobody can bring it back. An API key that had only this vault is revoked."
+      word={vault}
+      action="Delete vault"
+      pending={remove.isPending}
+      error={remove.isError ? errorText(remove.error) : null}
+      onConfirm={() => remove.mutate()}
+      onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
+    />
+  );
+}
+
+/** Needs the password and the username typed out, so neither a stolen session nor a slip deletes the account. */
+function DeleteAccountSection() {
+  const id = useId();
+  const me = useSession((s) => s.user);
+  const queryClient = useQueryClient();
+  const [password, setPassword] = useState("");
+  const [typed, setTyped] = useState("");
+  const remove = useMutation({
+    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed } })),
+    onSuccess: () => {
+      setPassword("");
+      queryClient.clear();
+      useEditor.getState().reset();
+      useSession.getState().end("Your account is deleted, with all your vaults and notes.");
+    },
+  });
+
+  if (!me) return null;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (password && typed === me.username) remove.mutate();
+  };
+
+  return (
+    <Section title="Delete account">
+      {me.role === "primary_admin" ? (
+        <p className="text-text-body">As the primary admin you can't delete your account: the server always needs one.</p>
+      ) : (
+        <>
+          <p className="text-text-body">
+            Deletes your account for good: every vault with all its notes, their history, the trash and the checkpoints, your API keys and your sessions.
+            Agents using your keys stop working at once. Nobody can bring it back, not even an admin.
+          </p>
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${id}-confirm`} className={labelClass}>
+                Type {me.username} to confirm
+              </label>
+              <input
+                id={`${id}-confirm`}
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                className={inputClass}
+              />
+            </div>
+            {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
+            <button type="submit" disabled={remove.isPending || !password || typed !== me.username} className={primaryButtonClass}>
+              Delete my account
             </button>
           </form>
         </>

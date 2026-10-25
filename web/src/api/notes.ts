@@ -7,11 +7,16 @@ import type { components } from "./schema";
 export type TreeFolder = components["schemas"]["TreeFolder"];
 export type TreeView = components["schemas"]["TreeView"];
 export type NoteView = components["schemas"]["NoteView"];
+export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
 
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
 export const useVaults = () => useQuery({ queryKey: ["vaults"], queryFn: () => call(api.GET("/api/vaults")) });
+
+/** The server's embedding providers, the internal model first. */
+export const useEmbeddingProviders = () =>
+  useQuery({ queryKey: ["embeddings"], queryFn: () => call(api.GET("/api/embeddings")), staleTime: 60_000 });
 
 export const useTree = (vault: string | null) =>
   useQuery({
@@ -69,8 +74,20 @@ export function useCreateNote() {
   });
 }
 
-export const useNote = (path: string) =>
-  useQuery({ queryKey: ["note", path], queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })) });
+/**
+ * The note as the server has it. Not read again by itself when the page comes back into view or online: that would
+ * replace the text under the reader's eye. A change made elsewhere is shown instead (`useChangedElsewhere`), and
+ * taken when the user says so. `refetchOnMount: false` for a view next to the note (its history), which must not
+ * read it again either.
+ */
+export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMount?: boolean } = {}) =>
+  useQuery({
+    queryKey: ["note", path],
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount,
+  });
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
 export const useLinks = (path: string, version: string | undefined) =>
@@ -120,6 +137,8 @@ export type SaveResult = { saved: NoteView } | { conflict: { content: string; ve
 export function useSaveNote(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    // Known to the change bar: while a save is under way, the version it brings is no change made elsewhere.
+    mutationKey: ["save", path],
     mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
       const body = { content, version };
       const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;
@@ -135,6 +154,23 @@ export function useSaveNote(path: string) {
         void queryClient.invalidateQueries({ queryKey: ["changes"] });
         void queryClient.invalidateQueries({ queryKey: ["history", path] });
       }
+    },
+  });
+}
+
+/**
+ * Moves (or renames) a note, or a folder with every note below it (`from` ending in `/`), within its vault. The
+ * server rewrites the links the move would break, in one batch with the move, and says so in `message`.
+ */
+export function useMove() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ from, to }: { from: string; to: string }) => call(api.POST("/api/move", { body: { from, to, keepLinks: false } })),
+    onSuccess: (_, { from }) => {
+      const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
+      for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
+      // Rewritten links changed other notes' text: every note, link and backlink is asked again.
+      for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search"]) void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }

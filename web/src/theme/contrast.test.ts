@@ -19,8 +19,22 @@ const textTokens = ["text", "textBody", "muted", "dim", "accentText"] as const s
 const grounds = ["bg", "surface", "surface2"] as const satisfies readonly (keyof Tokens)[];
 
 describe("colour schemes", () => {
-  it("ships Kumbu and Catppuccin Latte", () => {
-    expect(schemes.map((s) => s.id)).toEqual(["kumbu", "catppuccin-latte"]);
+  it("ships the schemes decided in MOBILE_EDITOR section 6, each once", () => {
+    expect(schemes.map((s) => s.id).sort()).toEqual(
+      [
+        "kumbu", "catppuccin-mocha", "catppuccin-latte", "tokyo-night", "tokyo-night-day", "gruvbox-dark", "gruvbox-light",
+        "nord", "dracula", "solarized-dark", "solarized-light", "everforest-dark", "everforest-light", "rose-pine",
+        "rose-pine-dawn", "one-dark", "one-light",
+      ].sort(),
+    );
+  });
+
+  it("marks a scheme light exactly when its background is light", () => {
+    for (const s of schemes) expect(s.light).toBe(luminance(s.tokens.bg) > 0.4);
+  });
+
+  it("writes every token as a six-digit lower-case hex colour", () => {
+    for (const s of schemes) for (const v of Object.values(s.tokens)) expect(v).toMatch(/^#[0-9a-f]{6}$/);
   });
 
   describe.each(schemes)("$name", (scheme) => {

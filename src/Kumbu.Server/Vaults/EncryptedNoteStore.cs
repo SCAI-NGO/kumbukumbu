@@ -185,32 +185,111 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, ct), ct);
     }
 
-    /// <summary>Search by meaning over the embeddings of the credential's vaults: the query's vector against every
-    /// chunk's, in memory. Notes whose current version isn't indexed yet count as pending, and so do notes embedded
-    /// with another model: their vectors don't compare with the query's, so they are skipped until re-embedded.</summary>
+    /// <summary>
+    /// Search by meaning over the embeddings of the credential's vaults: the query's vector against every chunk's, in
+    /// memory. Each vault is searched with its own provider's model, so the query is embedded once per provider in the
+    /// scope; a provider that is unavailable leaves its vaults to the words (<see cref="Kumbu.Core.Search.SemanticResult.WordsOnlyVaults"/>),
+    /// and the result says so in its reason.
+    /// Notes whose current version isn't indexed yet count as pending, and so do notes embedded with another model:
+    /// their vectors don't compare with the query's, so they are skipped until re-embedded.
+    /// <para>
+    /// The cosines of two providers' models end up in one list as they are, though they aren't on one scale. Measured
+    /// (docs/notes-search-external.md), that costs about a query of 37 against the better model alone, and
+    /// standardising each model's cosines didn't do better.
+    /// </para>
+    /// </summary>
     public async Task<Kumbu.Core.Search.SemanticResult> SearchAsync(VaultPath scope, string query, int limit, CancellationToken ct)
     {
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
-        var embedder = index.Embedder;
-        if (embedder.State != Kumbu.Core.Search.SemanticState.Ready) return new(embedder.State, [], 0, embedder.Reason);
 
         IEnumerable<UnlockedVault> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
-        var vector = (await embedder.EmbedAsync([query], query: true, ct))[0];
+        var groups = vaults.GroupBy(v => v.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+        if (groups.Count == 0)
+        {
+            var driver = index.Providers.InternalProvider.Driver;
+            if (driver.State != Kumbu.Core.Search.SemanticState.Ready) return new(driver.State, [], 0, driver.Reason);
+            return new(Kumbu.Core.Search.SemanticState.Ready, [], 0);
+        }
+
         var hits = new List<Kumbu.Core.Search.SemanticHit>();
         var pending = 0;
-        foreach (var vault in vaults)
+        var searched = false;
+        var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<UnlockedVault> Vaults)>();
+        // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
+        var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
+        foreach (var (group, (state, reason, vector)) in groups.Zip(queries))
         {
-            var embeddings = vault.Embeddings;
-            foreach (var (path, (_, note)) in vault.Notes)
+            if (vector is null)
             {
-                if (!scope.IsRoot && path != scope && !path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal)) continue;
-                if (!embeddings.TryGetValue(path, out var e) || e.Model != embedder.Model) { pending++; continue; }
-                if (e.Version != note.Version) pending++;
-                foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                unavailable.Add((state, reason!, [.. group]));
+                continue;
+            }
+
+            searched = true;
+            var model = index.Providers.Get(group.Key)!.Driver.ModelKey;
+            foreach (var vault in group)
+            {
+                var embeddings = vault.Embeddings;
+                foreach (var (path, (_, note)) in vault.Notes)
+                {
+                    if (!InScope(scope, path)) continue;
+                    if (!embeddings.TryGetValue(path, out var e) || e.Model != model) { pending++; continue; }
+
+                    // Same key, other length: the provider's model changed its output (no Dimensions configured).
+                    // They don't compare; the note is embedded again.
+                    if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
+                    {
+                        pending++;
+                        index.Enqueue(vault, [path]);
+                        continue;
+                    }
+
+                    if (e.Version != note.Version) pending++;
+                    foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                }
             }
         }
 
-        return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending);
+        if (!searched)
+        {
+            var state = unavailable.Any(u => u.State == Kumbu.Core.Search.SemanticState.Preparing) ? Kumbu.Core.Search.SemanticState.Preparing : Kumbu.Core.Search.SemanticState.Off;
+            return new(state, [], 0, unavailable.Count == 1 ? unavailable[0].Reason : string.Join("; ", unavailable.Select(Named)));
+        }
+
+        // Some vaults were searched by meaning, others not: the search ranks the others' notes by words (SectionSearch).
+        var partial = unavailable.Count == 0 ? null : string.Join("; ", unavailable.Select(Named));
+        return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending, partial)
+        {
+            WordsOnlyVaults = [.. unavailable.SelectMany(u => u.Vaults).Select(v => v.Name)],
+        };
+
+        static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<UnlockedVault> Vaults) u) =>
+            $"{string.Join(", ", u.Vaults.Select(v => v.Name).Order(StringComparer.Ordinal))}: {u.Reason}";
+    }
+
+    /// <summary>The caller's vaults, unlocked (the vault endpoints show each one's embedding provider).</summary>
+    internal async Task<IReadOnlyList<UnlockedVault>> UnlockedVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Values];
+
+    private static bool InScope(VaultPath scope, VaultPath path) =>
+        scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
+
+    /// <summary>The query's vector by one provider, or why there is none.</summary>
+    private async Task<(Kumbu.Core.Search.SemanticState State, string? Reason, float[]? Vector)> EmbedQueryAsync(string provider, string query, CancellationToken ct)
+    {
+        if (index!.Providers.Get(provider)?.Driver is not { } driver)
+        {
+            return (Kumbu.Core.Search.SemanticState.Off, $"its embedding provider '{provider}' isn't configured on this server any more (the vault's owner can pick another)", null);
+        }
+
+        if (driver.State != Kumbu.Core.Search.SemanticState.Ready) return (driver.State, driver.Reason ?? "search by meaning isn't available", null);
+        try
+        {
+            return (Kumbu.Core.Search.SemanticState.Ready, null, (await driver.EmbedAsync([query], query: true, ct))[0]);
+        }
+        catch (Search.EmbeddingUnavailableException e)
+        {
+            return (Kumbu.Core.Search.SemanticState.Off, e.Message, null);
+        }
     }
 
     public async Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct)
@@ -379,6 +458,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         await vault.Gate.WaitAsync(ct);
         try
         {
+            if (vault.Deleted || catalog.IsDeleted(vault.Id)) throw new VaultDeletedException();
             using var session = await catalog.StartSessionAsync(ct);
             session.StartTransaction();
             Action? apply;

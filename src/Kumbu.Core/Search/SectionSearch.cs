@@ -55,13 +55,21 @@ public static class SectionSearch
             semantic = await index.SearchAsync(scope, query, int.MaxValue, ct);
             if (semantic.State == SemanticState.Ready)
             {
-                ranked = RankByMeaning(chunks, semantic, query, mode == SearchMode.Meaning);
+                var wordsOnly = semantic.WordsOnlyVaults.ToHashSet(StringComparer.Ordinal);
+                var (byMeaning, byWords) = wordsOnly.Count == 0
+                    ? (chunks, [])
+                    : (chunks.Where(c => !wordsOnly.Contains(c.Path.Vault!)).ToList(), chunks.Where(c => wordsOnly.Contains(c.Path.Vault!)).ToList());
+                ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
 
                 // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
                 if (ranked.Count == 0 && semantic.Pending > 0 && mode != SearchMode.Meaning)
                 {
                     ranked = RankByWords(chunks, query);
                     fellBack = true;
+                }
+                else if (byWords.Count > 0 && mode != SearchMode.Meaning)
+                {
+                    ranked = FuseByRank(ranked, RankByWords(byWords, query));
                 }
             }
             else if (mode == SearchMode.Meaning) return new SectionSearchResult([], semantic, false) { MeaningUnavailable = true };
@@ -147,6 +155,23 @@ public static class SectionSearch
             .Select(c => (Chunk: c, Score: Fusion.Score(cosines[c.Key], terms, Bm25.Terms(c.EmbeddingText).ToHashSet())))
             .OrderByDescending(r => r.Score)
             .Select(r => (r.Chunk, (double?)r.Score))];
+    }
+
+    /// <summary>
+    /// Reciprocal rank fusion of the vaults ranked by meaning with those whose embedding provider is unavailable,
+    /// ranked by words: each section scores 1 / (60 + its rank in its own list), ties going to meaning. A cosine and a
+    /// BM25 score say nothing about each other, so only the ranks are merged (the meaning list keeps its scores, the
+    /// words list has none, as in a search by words). Hybrid ranking over one model uses the cosine and the word bonus
+    /// instead (<see cref="Fusion"/>), which measured better; this merges lists that can't share a score.
+    /// </summary>
+    private static List<(Chunk, double?)> FuseByRank(List<(Chunk Chunk, double? Score)> meaning, List<(Chunk Chunk, double? Score)> words)
+    {
+        const double K = 60;
+        return [.. meaning.Select((r, i) => (Hit: r, Fused: 1 / (K + i + 1), List: 0))
+            .Concat(words.Select((r, i) => (Hit: r, Fused: 1 / (K + i + 1), List: 1)))
+            .OrderByDescending(r => r.Fused)
+            .ThenBy(r => r.List)
+            .Select(r => r.Hit)];
     }
 
     private static bool IsHeadingOnly(Chunk chunk)

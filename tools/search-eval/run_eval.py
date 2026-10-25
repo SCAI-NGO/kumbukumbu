@@ -10,6 +10,7 @@ src/Kumbu.Core/Sh/Commands/Semsearch.cs. Change this file when you change those.
 import argparse
 import json
 import math
+import os
 import pathlib
 import re
 import sys
@@ -191,6 +192,58 @@ class SentenceTransformerModel:
         return self.m.encode([(self.query_prompt or "") + t for t in texts], normalize_embeddings=True, convert_to_numpy=True)
 
 
+class OpenAICompatibleModel:
+    """An external provider as the openai-compatible driver calls it: POST {base}/embeddings, batches of 32, the
+    query prompt before queries only. The key is read from a file and sent as a bearer token, nothing else."""
+
+    def __init__(self, base_url, model, key_file, dimensions=None, query_prompt="", cache=None):
+        self.url = base_url.rstrip("/") + "/embeddings"
+        self.model, self.dimensions, self.query_prompt = model, dimensions, query_prompt
+        self.key = pathlib.Path(key_file).expanduser().read_text(encoding="utf-8").strip() if key_file else None
+        # Vectors by text, so that a second run (another query prompt, the mixed experiment) doesn't send the corpus again.
+        self.cache_path = cache
+        self.cache = json.loads(cache.read_text(encoding="utf-8")) if cache and cache.exists() else {}
+
+    def _post(self, texts):
+        import urllib.error
+        import urllib.request
+        body = {"model": self.model, "input": texts, "encoding_format": "float"}
+        if self.dimensions:
+            body["dimensions"] = self.dimensions
+        headers = {"Content-Type": "application/json"}
+        if self.key:
+            headers["Authorization"] = "Bearer " + self.key
+        for attempt in range(5):
+            request = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers)
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    data = sorted(json.load(response)["data"], key=lambda d: d["index"])
+                    return [d["embedding"] for d in data]
+            except urllib.error.HTTPError as e:
+                if e.code not in (408, 429, 500, 502, 503, 504) or attempt == 4:
+                    raise RuntimeError(f"{self.url} answered {e.code}") from None
+                time.sleep(float(e.headers.get("Retry-After") or 2 ** attempt))
+
+    def _run(self, texts):
+        missing = list(dict.fromkeys(t for t in texts if t not in self.cache))
+        for i in range(0, len(missing), 32):
+            batch = missing[i:i + 32]
+            self.cache.update(zip(batch, self._post(batch)))
+        if self.cache_path and missing:
+            self.cache_path.write_text(json.dumps(self.cache), encoding="utf-8")
+        v = np.array([self.cache[t] for t in texts], dtype=np.float32)
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    def docs(self, texts):
+        return self._run(texts)
+
+    def queries(self, texts):
+        return self._run([self.query_prompt + t for t in texts])
+
+
+QWEN3_PROMPT = "Instruct: Given a search query, retrieve the note sections that answer it\nQuery: "
+
+
 # The GTE-based arctic v2 models need these on CPU without xformers (model card).
 NO_XFORMERS = {"use_memory_efficient_attention": False, "unpad_inputs": False}
 E5_INSTRUCT = "Instruct: Given a question or topic, retrieve the note sections that answer it\nQuery: "
@@ -255,6 +308,56 @@ def evaluate(model, notes):
     }
 
 
+def similarities(model, notes):
+    """The corpus' chunks and, per query, the cosine of every chunk, by one model."""
+    chunks = [c for rel, t in notes.items() for c in chunks_of(rel, t)]
+    texts = [c["context"] + "\n" + c["text"] for c in chunks]
+    return chunks, texts, model.queries([q for _, q, _ in QUERIES]) @ model.docs(texts).T
+
+
+def evaluate_mixed(sims_a, sims_b, chunks, texts):
+    """
+    Cross-vault search with two models: each top-level folder of the corpus is a vault, every other one embedded by
+    model B, the rest by A (and the other way round). The server ranks every vault's chunks by their own model's
+    cosine plus the word bonus, in one list ("raw"). "standardised" maps each model's cosines, per query, to the mean
+    and spread the two models have together before the bonus, so that a model whose cosines run higher doesn't take
+    the top places for its vaults alone.
+    """
+    vaults = sorted({c["path"].split("/")[0] for c in chunks})
+    chunk_terms = [set(terms(t)) for t in texts]
+    out = {}
+    for flip in (False, True):
+        b_vaults = set(vaults[1 - flip::2])
+        in_b = np.array([c["path"].split("/")[0] in b_vaults for c in chunks])
+        label = "B: " + ", ".join(sorted(b_vaults))
+        variants = {"raw": [], "standardised": []}
+        top_from_b, gold_in_b = 0, 0
+        for qi, (cat, q, gold) in enumerate(QUERIES):
+            cos = np.where(in_b, sims_b[qi], sims_a[qi])
+            bonus = fusion_scores(np.zeros(len(chunks)), query_terms(q), chunk_terms)
+            variants["raw"].append(list(np.argsort(-(cos + bonus), kind="stable")))
+            mu = {g: cos[in_b == g].mean() for g in (False, True)}
+            sd = {g: cos[in_b == g].std() for g in (False, True)}
+            mu_ref, sd_ref = (mu[False] + mu[True]) / 2, (sd[False] + sd[True]) / 2
+            std = np.where(in_b, (cos - mu[True]) / sd[True], (cos - mu[False]) / sd[False]) * sd_ref + mu_ref
+            variants["standardised"].append(list(np.argsort(-(std + bonus), kind="stable")))
+            if cat != "N":
+                top_from_b += bool(in_b[variants["raw"][-1][0]])
+                gold_in_b += any(is_gold(chunks[i], gold) for i in np.nonzero(in_b)[0])
+        out[label] = {name: summary(ranks_of(chunks, lists)) for name, lists in variants.items()}
+        out[label]["top_from_b"], out[label]["gold_in_b"] = top_from_b, gold_in_b
+    return out
+
+
+def print_mixed(a, b, res):
+    print(f"\nmixed: A = {a}, B = {b}")
+    for label, r in res.items():
+        print(f"  {label}  (top hit in B's vaults for {r['top_from_b']} queries, gold there for {r['gold_in_b']})")
+        for v in ("raw", "standardised"):
+            s = r[v]
+            print(f"    {v:14} R@1 {s['R@1']:.2f}  R@3 {s['R@3']:.2f}  MRR {s['MRR']:.2f}")
+
+
 def print_table(name, res):
     cats = sorted({c for c, _, _ in QUERIES if c != "N"})
     print(f"\n{name}  ({res['chunks']} chunks, {res['ms_per_chunk']} ms/chunk)")
@@ -272,14 +375,30 @@ def main():
     ap.add_argument("--compare", nargs="*", metavar="NAME", help=f"also run sentence-transformers models; no names = all of: {', '.join(COMPARE)}")
     ap.add_argument("--corpus", type=pathlib.Path, default=HERE / "corpus")
     ap.add_argument("--out", type=pathlib.Path, default=HERE / "results.json")
+    ap.add_argument("--openai-url", help="an external provider with the OpenAI embeddings API, e.g. https://api.tensorx.ai/v1")
+    ap.add_argument("--openai-model", default="qwen/qwen3-embedding-8b")
+    ap.add_argument("--openai-key-file", default=os.environ.get("KUMBU_TEST_TENSORX_KEY_FILE"),
+                    help="file with the provider's API key (default: $KUMBU_TEST_TENSORX_KEY_FILE)")
+    ap.add_argument("--openai-variants", nargs="+", default=["4096", "1024", "1024+prompt"],
+                    help="dimensions to ask for, '+prompt' to put the Qwen3 instruction before queries (default: 4096 1024 1024+prompt)")
+    ap.add_argument("--mixed", nargs=2, metavar=("A", "B"), help="two runs to search a corpus split into vaults of both with")
+    ap.add_argument("--cache-dir", type=pathlib.Path, default=HERE / "cache", help="where an external provider's vectors are kept between runs")
     args = ap.parse_args()
 
     notes = {p.relative_to(args.corpus).as_posix(): p.read_text(encoding="utf-8") for p in sorted(args.corpus.rglob("*.md"))}
     runs = {key: (lambda key=key: OnnxModel(args.model_dir / key)) for key in args.models}
     if args.compare is not None:
         runs |= {k: v for k, v in COMPARE.items() if not args.compare or any(w in k for w in args.compare)}
+    if args.openai_url:
+        args.cache_dir.mkdir(exist_ok=True)
+        for variant in args.openai_variants:
+            dims, _, prompt = variant.partition("+")
+            name = f"{args.openai_model.split('/')[-1]}@{dims}" + (" +prompt" if prompt else "")
+            cache = args.cache_dir / f"{args.openai_model.replace('/', '_')}@{dims}.json"
+            runs[name] = (lambda dims=dims, prompt=prompt, cache=cache: OpenAICompatibleModel(
+                args.openai_url, args.openai_model, args.openai_key_file, int(dims) or None, QWEN3_PROMPT if prompt else "", cache))
 
-    results = {}
+    results, sims = {}, {}
     for name, make in runs.items():
         try:
             model = make()
@@ -288,7 +407,14 @@ def main():
             continue
         results[name] = evaluate(model, notes)
         print_table(name, results[name])
+        if args.mixed and name in args.mixed:
+            sims[name] = similarities(model, notes)
         del model
+    if args.mixed and all(m in sims for m in args.mixed):
+        a, b = args.mixed
+        chunks, texts, sims_a = sims[a]
+        results["mixed"] = {"A": a, "B": b, **evaluate_mixed(sims_a, sims[b][2], chunks, texts)}
+        print_mixed(a, b, {k: v for k, v in results["mixed"].items() if k not in ("A", "B")})
     args.out.write_text(json.dumps(results, indent=1, default=float), encoding="utf-8")
     print(f"\nwritten: {args.out}")
 

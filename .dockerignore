@@ -2,6 +2,7 @@
 **/obj/
 **/TestResults/
 .superpowers/
+.claude/
 .git/
 .github/
 vaults/

@@ -15,13 +15,19 @@ export function swipe(start: Point, end: Point, open: boolean): "open" | "close"
   return null;
 }
 
-/** Touch handlers for the shell: a swipe in from the left edge opens the drawer, a swipe left closes it. */
+/**
+ * Touch handlers for the shell: a swipe in from the left edge opens the drawer, a swipe left closes it. A second
+ * finger (a pinch) or a touch the browser takes over (`touchcancel`, a scroll or its own back gesture) is no swipe.
+ */
 export function useEdgeSwipe(open: boolean, onOpen: () => void, onClose: () => void) {
   const start = useRef<Point | null>(null);
   return {
     onTouchStart(e: TouchEvent) {
-      const t = e.touches[0];
+      const t = e.touches.length === 1 ? e.touches[0] : undefined;
       start.current = t ? { x: t.clientX, y: t.clientY } : null;
+    },
+    onTouchCancel() {
+      start.current = null;
     },
     onTouchEnd(e: TouchEvent) {
       const t = e.changedTouches[0];

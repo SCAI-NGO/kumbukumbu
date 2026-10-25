@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { crumbOf, noteUrl, titleOf } from "../api/paths";
@@ -31,21 +31,31 @@ export default function SearchSheet() {
 
   return (
     <div ref={dialog} role="dialog" aria-modal="true" aria-label="Search" tabIndex={-1} className="k-sheet absolute inset-0 z-20 flex flex-col bg-bg">
-      <header className="flex-none border-b border-line px-[22px] pt-5 pb-3">
-        <h2 className="text-[17px] font-bold text-text">
-          {search.idle ? (
-            "Recent notes"
-          ) : results ? (
-            <>
-              {results.length === 1 ? "1 result" : `${results.length} results`} <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
-            </>
-          ) : (
-            <>
-              Searching <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
-            </>
-          )}
-        </h2>
-        <p className="text-[13px] text-muted">{hint}</p>
+      <header className="flex flex-none items-start gap-2 border-b border-line pt-3 pr-2 pb-3 pl-[22px]">
+        <div className="min-w-0 flex-1 pt-2">
+          <h2 className="text-[17px] font-bold text-text">
+            {search.idle ? (
+              "Recent notes"
+            ) : results ? (
+              <>
+                {results.length === 1 ? "1 result" : `${results.length} results`} <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
+              </>
+            ) : (
+              <>
+                Searching <span className="font-mono text-[12px] font-normal text-accent-text">{searchMode}</span>
+              </>
+            )}
+          </h2>
+          <p className="text-[13px] text-muted">{hint}</p>
+        </div>
+        <button
+          type="button"
+          aria-label="Close search"
+          onClick={() => setOverlay("none")}
+          className="flex size-11 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <X size={22} strokeWidth={1.9} aria-hidden />
+        </button>
       </header>
 
       <section aria-label="Results" aria-busy={search.waiting} className="min-h-0 flex-1 overflow-y-auto px-[22px] py-3">

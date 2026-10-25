@@ -62,10 +62,18 @@ export default function Keys() {
   );
 }
 
+/** "Expires …", "Expired …" or "Doesn't expire"; nothing for a revoked key, whose expiry no longer matters. */
+function expiryText(apiKey: ApiKey, expired: boolean) {
+  if (apiKey.revokedAt !== null) return "";
+  if (!apiKey.expiresAt) return " · Doesn't expire";
+  return ` · ${expired ? "Expired" : "Expires"} ${date(apiKey.expiresAt)}`;
+}
+
 function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
   const revoked = apiKey.revokedAt !== null;
+  const expired = apiKey.expiresAt !== null && new Date(apiKey.expiresAt).getTime() <= Date.now();
   return (
-    <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked ? " opacity-75" : ""}`}>
+    <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked || expired ? " opacity-75" : ""}`}>
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="min-w-0 font-medium break-words text-text">{apiKey.name}</h2>
         <span className="font-mono text-sm text-muted">{apiKey.prefix}…</span>
@@ -80,8 +88,10 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
       <p className="text-sm text-muted">
         Created {date(apiKey.createdAt)} · {apiKey.lastUsedAt ? `Last used ${date(apiKey.lastUsedAt)}` : "Never used"}
         {revoked && ` · Revoked ${date(apiKey.revokedAt!)}`}
+        {expiryText(apiKey, expired)}
       </p>
-      {!revoked && (
+      {/* An expired key opens nothing already; revoking it would change nothing. */}
+      {!revoked && !expired && (
         <button type="button" onClick={onRevoke} aria-label={`Revoke ${apiKey.name}`} className={`${secondaryButtonClass} self-start`}>
           Revoke
         </button>

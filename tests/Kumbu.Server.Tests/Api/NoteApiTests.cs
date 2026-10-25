@@ -424,7 +424,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
                      ("get", "/api/notes/{vault}/{path}"), ("put", "/api/notes/{vault}/{path}"), ("delete", "/api/notes/{vault}/{path}"),
                      ("post", "/api/move"), ("get", "/api/links/{vault}/{path}"), ("get", "/api/backlinks/{vault}/{path}"),
                      ("get", "/api/history/{vault}/{path}"), ("get", "/api/search"), ("get", "/api/changes"),
-                     ("post", "/api/upload/{vault}/{folder}"),
+                     ("post", "/api/upload/{vault}/{folder}"), ("put", "/api/vaults/{vault}/embeddings"), ("get", "/api/embeddings"),
                  })
         {
             Assert.True(paths[path]?[method] is not null, $"{method} {path} is missing");

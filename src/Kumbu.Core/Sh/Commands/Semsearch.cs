@@ -105,6 +105,14 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
         if (wordsOnly) return $"(ranked by words{read})";
         var by = meaningOnly ? "meaning" : "words and meaning";
         if (semantic is null || semantic.State != SemanticState.Ready) return $"(ranked by words only: {semantic?.Reason ?? "no index"}{read})";
+        // Some vaults' embedding provider is unavailable: their notes are ranked by words, or not at all by meaning only.
+        if (semantic.WordsOnlyVaults.Count > 0 && semantic.Reason is { } partial && !notIndexed)
+        {
+            return meaningOnly
+                ? $"(ranked by meaning, without {partial}; semsearch --words finds those notes{read})"
+                : $"(ranked by {by}, and by words only in {partial}{read})";
+        }
+
         if (semantic.Pending > 0)
         {
             var one = semantic.Pending == 1;

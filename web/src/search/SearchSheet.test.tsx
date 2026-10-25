@@ -85,6 +85,42 @@ describe("the search sheet", () => {
     expect(input()).toHaveFocus();
   });
 
+  it("closes from the button in its header, giving the focus back to the dock", async () => {
+    api(() => view([]));
+    await openSheet();
+    const close = within(sheet()).getByRole("button", { name: "Close search" });
+    expect(within(sheet()).getByRole("banner")).toContainElement(close);
+    await userEvent.click(close);
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+    expect(useEditor.getState().overlay).toBe("none");
+    expect(screen.getByRole("button", { name: /^Search/ })).toHaveFocus();
+  });
+
+  it("takes the focus inside the tap, for iOS to raise the keyboard, and hands it to the sheet's input", async () => {
+    api(() => view([]));
+    renderApp("/notes/Work/inbox.md");
+    const search = await screen.findByRole("button", { name: /^Search/ });
+    const focused: Element[] = [];
+    const record = (e: FocusEvent) => focused.push(e.target as Element);
+    document.addEventListener("focusin", record);
+    fireEvent.click(search);
+    await waitFor(() => expect(input()).toHaveFocus());
+    document.removeEventListener("focusin", record);
+    // First the stand-in, within the click itself; then the sheet's input.
+    expect(focused[0]).toHaveAttribute("data-focus-return", "dock-search");
+    expect(focused[0].tagName).toBe("INPUT");
+    expect(focused.at(-1)).toBe(input());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: /^Search/ })).toHaveFocus();
+  });
+
+  it("closes on Escape too", async () => {
+    api(() => view([]));
+    await openSheet();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+  });
+
   it("shows the five recent notes while the query is empty, and opens one", async () => {
     api(() => view([]));
     const paths = ["/Work/a.md", "/Work/b.md", "/Work/c.md", "/Work/d.md", "/Work/e.md", "/Work/f.md"];

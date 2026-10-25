@@ -69,7 +69,7 @@ export function remarkWikiLinks({ links }: { links: LinkView[] }) {
         if (m.index > last) out.push({ type: "text", value: value.slice(last, m.index) });
         out.push({
           type: "wikiLink",
-          data: { hName: "span", hProperties: { dataWikiLink: index } },
+          data: { hName: "span", hProperties: { dataWikiLink: index, ...(m[0].startsWith("!") ? { dataEmbed: "inline" } : {}) } },
           children: [{ type: "text", value: linkLabel(m[0]) }],
         });
         last = m.index + m[0].length;
@@ -80,5 +80,31 @@ export function remarkWikiLinks({ links }: { links: LinkView[] }) {
     };
 
     replace(tree);
+    blockEmbeds(tree);
   };
+}
+
+const isEmbed = (n: MdNode) => n.type === "wikiLink" && n.data?.hProperties?.dataEmbed !== undefined;
+
+/**
+ * A paragraph of nothing but embeds (`![[plan]]` on its own line, as Obsidian writes them) becomes a block, so
+ * the embedded note can show inside it; an embed within a sentence stays a link there.
+ */
+function blockEmbeds(node: MdNode) {
+  node.children?.forEach(blockEmbeds);
+  if (node.type !== "paragraph" || !node.children?.some(isEmbed)) return;
+  if (!node.children.every((c) => isEmbed(c) || (c.type === "text" && !c.value?.trim()) || c.type === "break")) return;
+  node.data = { ...node.data, hName: "div", hProperties: { ...node.data?.hProperties, dataEmbeds: true } };
+  for (const c of node.children) if (isEmbed(c)) c.data!.hProperties!.dataEmbed = "block";
+}
+
+/** The heading of an embed's subpath (`![[plan#Goals]]` → `Goals`); null without one, or for a block (`#^id`). */
+export function embedHeading(raw: string): string | null {
+  const inner = raw.replace(/^!?\[\[/, "").replace(/\]\]$/, "");
+  const bar = inner.search(/\\?\|/);
+  const target = bar >= 0 ? inner.slice(0, bar) : inner;
+  const hash = target.indexOf("#");
+  if (hash < 0) return null;
+  const heading = target.slice(hash + 1).trim();
+  return heading && !heading.startsWith("^") ? heading : null;
 }

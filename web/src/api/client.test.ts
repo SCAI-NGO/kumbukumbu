@@ -55,6 +55,19 @@ describe("api client", () => {
     expect(useSession.getState().notice).toBeNull();
   });
 
+  it("takes a 401 after signing out for the sign-out, except for the session itself", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    useSession.getState().signOut();
+    fakeApi({ "GET /api/notes/*": () => json(401, { error: "Sign in first." }), "GET /api/session": () => json(401, { error: "Sign in first." }) });
+    await api.GET("/api/notes/{vault}/{path}", { params: { path: { vault: "W", path: "a.md" } } });
+    expect(useSession.getState().ended).toBe(false);
+    await api.GET("/api/session");
+    expect(useSession.getState().ended).toBe(true);
+    // Signing in again ends that.
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    expect(useSession.getState().signedOut).toBe(false);
+  });
+
   it.each([
     ["POST /api/session", () => api.POST("/api/session", { body: { username: "ada", password: "x" } })],
     ["POST /api/join", () => api.POST("/api/join", { body: { code: "c", username: "ada", password: "x" } })],
