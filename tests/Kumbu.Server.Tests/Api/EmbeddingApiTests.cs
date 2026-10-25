@@ -114,6 +114,49 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Across_vaults_the_notes_of_a_vault_whose_provider_is_down_are_found_by_words()
+    {
+        var user = await RestClient.NewAsync(Api, "Arbeit");
+        await user.CreateAsync("gate.md", "# Gate\n\nThe gate service checks the rules at the entrance.\n");
+        using (await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Garten" }))
+        {
+        }
+
+        using (await user.SendAsync(HttpMethod.Put, "/api/notes/Garten/hens.md", new { content = "# Hens\n\nThe hens laid eggs today.\n" }))
+        {
+        }
+
+        using (await user.SendAsync(HttpMethod.Put, "/api/vaults/Garten/embeddings", new { provider = "remote" }))
+        {
+        }
+
+        await IndexedAsync();
+        _remote.Failure = new EmbeddingUnavailableException("the embedding provider Remote AI answered 503 Service Unavailable", providerDown: true);
+        try
+        {
+            using var hybrid = await user.GetAsync("/api/search?q=hens%20eggs");
+            using var meaning = await user.GetAsync("/api/search?q=hens%20eggs&mode=meaning");
+
+            var found = await JsonAsync(hybrid);
+            var paths = found["results"]!.AsArray().Select(r => r!["path"]!.GetValue<string>()).ToList();
+            Assert.Contains("/Garten/hens.md", paths);
+            Assert.Contains("/Arbeit/gate.md", paths);
+            Assert.Null(found["results"]!.AsArray().First(r => r!["path"]!.GetValue<string>() == "/Garten/hens.md")!["score"]);
+            Assert.Equal(
+                "Search by meaning isn't available for some vaults, so their notes are ranked by words (Garten: the embedding provider Remote AI answered 503 Service Unavailable).",
+                found["notice"]!.GetValue<string>());
+
+            var byMeaning = await JsonAsync(meaning);
+            Assert.DoesNotContain(byMeaning["results"]!.AsArray(), r => r!["path"]!.GetValue<string>() == "/Garten/hens.md");
+            Assert.StartsWith("Search by meaning isn't available for some vaults, so their notes aren't in these results", byMeaning["notice"]!.GetValue<string>());
+        }
+        finally
+        {
+            _remote.Failure = null;
+        }
+    }
+
+    [Fact]
     public async Task A_provider_that_is_down_leaves_its_vault_to_the_words_and_says_so()
     {
         var user = await RestClient.NewAsync(Api, "Remote");

@@ -384,8 +384,10 @@ public static class NoteApi
             { MeaningUnavailable: true } => $"Search by meaning isn't available: {reason}.",
             { Semantic.State: not SemanticState.Ready } => $"Ranked by words only: {reason}.",
             { FellBackToWords: true } => "Ranked by words only: nothing is indexed for meaning yet.",
-            { Semantic: { State: SemanticState.Ready, Reason: { } partial } } =>
-                $"Search by meaning isn't available for some vaults, so their notes aren't in these results ({partial}). Exact search finds them.",
+            { Semantic: { State: SemanticState.Ready, WordsOnlyVaults.Count: > 0, Reason: { } partial } } when searchMode == SearchMode.Meaning =>
+                $"Search by meaning isn't available for some vaults, so their notes aren't in these results ({partial}). Hybrid or exact search finds them by words.",
+            { Semantic: { State: SemanticState.Ready, WordsOnlyVaults.Count: > 0, Reason: { } partial } } =>
+                $"Search by meaning isn't available for some vaults, so their notes are ranked by words ({partial}).",
             _ => null,
         };
         return TypedResults.Ok(new SearchView(

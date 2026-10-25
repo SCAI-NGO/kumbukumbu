@@ -188,7 +188,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// <summary>
     /// Search by meaning over the embeddings of the credential's vaults: the query's vector against every chunk's, in
     /// memory. Each vault is searched with its own provider's model, so the query is embedded once per provider in the
-    /// scope; a provider that is unavailable leaves its vaults to the words, and the result says so in its reason.
+    /// scope; a provider that is unavailable leaves its vaults to the words (<see cref="Kumbu.Core.Search.SemanticResult.WordsOnlyVaults"/>),
+    /// and the result says so in its reason.
     /// Notes whose current version isn't indexed yet count as pending, and so do notes embedded with another model:
     /// their vectors don't compare with the query's, so they are skipped until re-embedded.
     /// <para>
@@ -244,10 +245,12 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             return new(state, [], 0, unavailable.Count == 1 ? unavailable[0].Reason : string.Join("; ", unavailable.Select(Named)));
         }
 
-        // Some vaults were searched by meaning, others not: their notes are pending like notes not indexed yet.
-        pending += unavailable.Sum(u => u.Vaults.Sum(v => v.Notes.Keys.Count(p => InScope(scope, p))));
+        // Some vaults were searched by meaning, others not: the search ranks the others' notes by words (SectionSearch).
         var partial = unavailable.Count == 0 ? null : string.Join("; ", unavailable.Select(Named));
-        return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending, partial);
+        return new(Kumbu.Core.Search.SemanticState.Ready, [.. hits.OrderByDescending(h => h.Score).Take(limit)], pending, partial)
+        {
+            WordsOnlyVaults = [.. unavailable.SelectMany(u => u.Vaults).Select(v => v.Name)],
+        };
 
         static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<UnlockedVault> Vaults) u) =>
             $"{string.Join(", ", u.Vaults.Select(v => v.Name).Order(StringComparer.Ordinal))}: {u.Reason}";

@@ -301,7 +301,8 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         var result = await s.Store.SearchAsync(P("/"), "hens", 10, Ct);
         Assert.Equal(SemanticState.Ready, result.State);
         Assert.Equal(P("/Work/farm.md"), Assert.Single(result.Hits).Path);
-        Assert.Equal(1, result.Pending);
+        Assert.Equal(0, result.Pending);
+        Assert.Equal(["Private"], result.WordsOnlyVaults);
         Assert.Equal("Private: the embedding provider Remote couldn't be reached (ConnectionError)", result.Reason);
 
         var only = await s.Store.SearchAsync(P("/Private"), "hens", 10, Ct);

@@ -21,8 +21,13 @@ public sealed record SemanticHit(VaultPath Path, int StartLine, double Score);
 /// <param name="Hits">Chunks with the cosine similarity to the query, best first; only chunks embedded by the current model.</param>
 /// <param name="Pending">Notes below the scope without embeddings of the current model yet (not indexed, or embedded by another model).</param>
 /// <param name="Reason">Why the state isn't <see cref="SemanticState.Ready"/>, for the output. When Ready: the vaults
-/// that weren't searched by meaning (their provider unavailable) and why; their notes count as pending.</param>
-public sealed record SemanticResult(SemanticState State, IReadOnlyList<SemanticHit> Hits, int Pending, string? Reason = null);
+/// of <see cref="WordsOnlyVaults"/> and why they weren't searched by meaning.</param>
+public sealed record SemanticResult(SemanticState State, IReadOnlyList<SemanticHit> Hits, int Pending, string? Reason = null)
+{
+    /// <summary>When Ready: vaults (by name) that weren't searched by meaning because their embedding provider is
+    /// unavailable. The search ranks their notes by words; they don't count as pending.</summary>
+    public IReadOnlyList<string> WordsOnlyVaults { get; init; } = [];
+}
 
 /// <summary>Search by meaning over the embeddings of the caller's vaults. <c>limit</c> caps the hits; pass
 /// <see cref="int.MaxValue"/> to get a cosine for every chunk.</summary>

@@ -131,14 +131,41 @@ public class SearchTests
         Assert.EndsWith("(ranked by meaning; 2 notes aren't indexed yet and aren't ranked; cat \"path#Section\" reads one)", (await Run("semsearch --meaning rules /Demo", index)).Output);
     }
 
-    [Fact]
-    public async Task SemsearchNamesTheVaultsWhoseProviderIsUnavailable()
-    {
-        var index = new FakeIndex(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.5)], 3, "Private: the embedding provider TensorX answered 503 Service Unavailable"));
+    /// <summary>Ideas' provider is unavailable: its notes are ranked by words and merged with Demo's ranking by meaning.</summary>
+    private static FakeIndex DemoByMeaningIdeasByWords() =>
+        new(new SemanticResult(SemanticState.Ready, [new(P("/Demo/farm.md"), 0, 0.8), new(P("/Demo/gate.md"), 0, 0.5)], 0,
+            "Ideas: the embedding provider TensorX answered 503 Service Unavailable") { WordsOnlyVaults = ["Ideas"] });
 
+    [Fact]
+    public async Task AVaultWhoseProviderIsUnavailableIsRankedByWordsAndFusedByRank()
+    {
+        var notes = await Store.ReadNotesUnderAsync(VaultPath.Root, CancellationToken.None);
+
+        var hybrid = await SectionSearch.RankAsync(notes, VaultPath.Root, "rules", SearchMode.Hybrid, 10, DemoByMeaningIdeasByWords(), CancellationToken.None);
+        var meaning = await SectionSearch.RankAsync(notes, VaultPath.Root, "rules", SearchMode.Meaning, 10, DemoByMeaningIdeasByWords(), CancellationToken.None);
+
+        // Reciprocal rank fusion: Demo's best by meaning first, then Ideas' best by words, then Demo's second.
+        Assert.Equal(
+            [("/Demo/farm.md", (double?)0.8), ("/Ideas/x.md", null), ("/Demo/gate.md", 0.6)],
+            hybrid.Hits.Select(h => (h.Chunk.Path.Value, h.Score is { } s ? Math.Round(s, 2) : (double?)null)));
+        Assert.False(hybrid.FellBackToWords);
+        // By meaning only, there is nothing to rank Ideas' notes with.
+        Assert.DoesNotContain(meaning.Hits, h => h.Chunk.Path.Value == "/Ideas/x.md");
+    }
+
+    [Fact]
+    public async Task SemsearchNamesTheVaultsRankedByWordsOnly()
+    {
+        var output = (await Run("semsearch rules", DemoByMeaningIdeasByWords())).Output;
+        var meaning = (await Run("semsearch --meaning rules", DemoByMeaningIdeasByWords())).Output;
+
+        Assert.Contains("/Ideas/x.md", output);
         Assert.EndsWith(
-            "(ranked by words and meaning without the notes of Private: the embedding provider TensorX answered 503 Service Unavailable; semsearch --words finds them; cat \"path#Section\" reads one)",
-            (await Run("semsearch rules /Demo", index)).Output);
+            "(ranked by words and meaning, and by words only in Ideas: the embedding provider TensorX answered 503 Service Unavailable; cat \"path#Section\" reads one)",
+            output);
+        Assert.EndsWith(
+            "(ranked by meaning, without Ideas: the embedding provider TensorX answered 503 Service Unavailable; semsearch --words finds those notes; cat \"path#Section\" reads one)",
+            meaning);
     }
 
     [Fact]
