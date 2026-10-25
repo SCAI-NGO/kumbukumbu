@@ -9,6 +9,7 @@ export type SearchMode = "hybrid" | "meaning" | "exact";
 /** The open note's tools in Read mode: its outline (a sheet), or find in the note (a bar in place of the dock). */
 export type NoteTool = "outline" | "find" | null;
 export type Find = { query: string; index: number; count: number };
+export type BeforeRead = (options?: { reread?: boolean }) => Promise<boolean>;
 /** Text a session end left unsaved, to be saved on `version` once `username` is signed in again. */
 export type Draft = { username: string; path: string; text: string; version: string };
 
@@ -35,8 +36,12 @@ interface EditorState {
   scrollTarget: { path: string; line: number } | null;
   /** The upload sheet's folder (`/Work/projects`), and the files dropped there if it opened with a drop. */
   upload: { folder: string; dropped: Picked[] | null } | null;
-  /** Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure). */
-  beforeRead: (() => Promise<boolean>) | null;
+  /**
+   * Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure).
+   * Afterwards the note is asked for again, unless `reread` is false: signing out, where that read would race the
+   * session's end and answer 401.
+   */
+  beforeRead: BeforeRead | null;
   /** Kept in memory only, like everything here; the note opens with it in Write mode. */
   draft: Draft | null;
   noteTool: NoteTool;
@@ -49,7 +54,7 @@ interface EditorState {
   /** Ends Write mode (Done, the Read toggle): only once the editor has saved everything. */
   endWrite(): Promise<void>;
   setScrollTarget(target: { path: string; line: number } | null): void;
-  setBeforeRead(guard: (() => Promise<boolean>) | null): void;
+  setBeforeRead(guard: BeforeRead | null): void;
   setDraft(draft: Draft | null): void;
   setOverlay(overlay: Overlay): void;
   /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */

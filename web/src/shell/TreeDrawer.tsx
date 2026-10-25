@@ -63,7 +63,8 @@ function AccountRow() {
     setAsking(false);
     setFailed(false);
     const save = useEditor.getState().beforeRead;
-    if (!anyway && save && !(await save())) return setAsking(true);
+    // No read of the note afterwards: it would race the DELETE below, and a 401 for it would report a lost session.
+    if (!anyway && save && !(await save({ reread: false }))) return setAsking(true);
     try {
       const { response } = await api.DELETE("/api/session");
       // A 401: the session had ended already, and the app is on its way to sign-in.
@@ -72,7 +73,7 @@ function AccountRow() {
       return setFailed(true);
     }
     useEditor.getState().reset();
-    useSession.getState().reset();
+    useSession.getState().signOut();
     navigate("/signin", { replace: true });
     queryClient.clear();
   };

@@ -421,6 +421,9 @@ describe("Signing out mid-edit", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
     expect(bodies).toEqual([{ content: `${source} mine`, version: "v1" }]);
     expect(sent(fetch)).toEqual([`PUT /api/notes${PLAN}`, "DELETE /api/session"]);
+    // The note isn't read again between its save and the DELETE: that read would race it.
+    const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(calls.slice(calls.indexOf(`PUT /api/notes${PLAN}`), calls.indexOf("DELETE /api/session"))).not.toContain(`GET /api/notes${PLAN}`);
   });
 
   it("asks while the text can't be saved, and signs out only when told to", async () => {

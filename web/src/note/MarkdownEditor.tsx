@@ -55,11 +55,11 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   }, [path, unsaved]);
 
   useEffect(() => {
-    useEditor.getState().setBeforeRead(async () => {
+    useEditor.getState().setBeforeRead(async ({ reread = true } = {}) => {
       const done = await flush();
       // A read of the note that started before the last save (a focus refetch) may answer after it, with the
       // older version: asked again, Read mode shows what was saved.
-      if (done) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
+      if (done && reread) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
       return done;
     });
     return () => useEditor.getState().setBeforeRead(null);
