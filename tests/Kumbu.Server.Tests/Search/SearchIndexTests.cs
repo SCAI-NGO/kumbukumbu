@@ -329,6 +329,29 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Switching_back_to_internal_stops_sending_between_batches()
+    {
+        var remote = new FakeEmbedder(model: "remote:qwen3@64") { MaxBatch = 1 };
+        var s = await StartAsync(external: [Remote(remote)]);
+        var priv = await s.Catalog.CreateAsync("Private", Token, null, Ct);
+        await s.Catalog.SetEmbeddingProviderAsync(priv, "remote", Ct);
+
+        // The owner switches back while the first of three batches is with the provider.
+        remote.BeforeEmbed = async query =>
+        {
+            if (query) return;
+            remote.BeforeEmbed = null;
+            await s.Catalog.SetEmbeddingProviderAsync(priv, EmbeddingProviders.Internal, Ct);
+        };
+        await s.Store.TryCreateAsync(New("/Private/long.md", "# A\nalpha\n# B\nbeta\n# C\ngamma\n"), Ct);
+        await IdleAsync(s);
+
+        Assert.Single(remote.Seen);
+        var stored = await StoredEmbeddingsAsync(s, "Private");
+        Assert.DoesNotContain(stored, e => e.Model == "remote:qwen3@64");
+    }
+
+    [Fact]
     public async Task The_provider_choice_is_not_readable_in_the_database()
     {
         var (s, _) = await TwoProvidersAsync();

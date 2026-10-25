@@ -135,7 +135,8 @@ public sealed class SearchIndex : BackgroundService
                 return;
             }
 
-            if (_providers.Get(vault.EmbeddingProvider)?.Driver is not { } driver) return;
+            var provider = vault.EmbeddingProvider;
+            if (_providers.Get(provider)?.Driver is not { } driver) return;
             var model = driver.ModelKey;
             var note = entry.Note;
             if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note, driver)) return;
@@ -148,9 +149,14 @@ public sealed class SearchIndex : BackgroundService
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
             foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))
             {
+                // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
+                // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
+                if (vault.EmbeddingProvider != provider) return;
                 var vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, ct);
                 for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];
             }
+
+            if (vault.EmbeddingProvider != provider) return;
 
             var embeddings = new NoteEmbeddings(model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
             await _catalog.Embeddings.UpdateOneAsync(
