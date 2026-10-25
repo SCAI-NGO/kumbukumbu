@@ -141,10 +141,10 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var users = Catalog(db);
         var keys = Keys(db, TimeProvider.System);
         var (_, oldRecoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
-        var (user, userKey, _) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+        var (user, userKey, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
         var vault = await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct);
-        var (laptop, _) = await keys.CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
-        var (phone, _) = await keys.CreateAsync(user, userKey, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
+        var (laptop, _) = await keys.CreateAsync(user, userKey, readAt, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (phone, _) = await keys.CreateAsync(user, userKey, readAt, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
 
         var newRecoveryKey = await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct);
 
@@ -160,6 +160,29 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         Assert.Null(await users.RecoverAsync("chris", oldRecoveryKey, Password, Ct));
         Assert.NotNull(await users.RecoverAsync("chris", newRecoveryKey, Password, Ct));
         Assert.Equal(userKey, (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey);
+    }
+
+    [Fact]
+    public async Task A_key_cannot_be_made_from_a_sign_in_older_than_the_last_credentials_change()
+    {
+        var db = fixture.NewDatabase();
+        var users = Catalog(db);
+        var keys = Keys(db, TimeProvider.System);
+        await users.CreateAsync("chris", Password, Roles.User, Ct);
+        var (user, userKey, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+        var vault = await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct);
+        var vaults = new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write };
+        await keys.CreateAsync(user, userKey, readAt, "before", vaults, Ct);
+
+        Assert.True(await users.ChangePasswordAsync(user.Id, userKey, Password, NewPassword, Ct));
+
+        // A session of the old password that slipped past its own check (its request resolved it just before the
+        // change) still can't make a key that outlives the change.
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => keys.CreateAsync(user, userKey, readAt, "after", vaults, Ct));
+        Assert.Equal(["before"], (await keys.ListAsync(user, userKey, Ct)).Select(k => k.Name));
+        var (_, _, freshReadAt) = (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value;
+        await keys.CreateAsync(user, userKey, freshReadAt, "after", vaults, Ct);
+        Assert.Equal(["before", "after"], (await keys.ListAsync(user, userKey, Ct)).Select(k => k.Name));
     }
 
     [Fact]

@@ -385,9 +385,9 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     public async Task A_bearer_caller_needs_no_origin_but_is_refused_account_endpoints_even_as_an_admins_key()
     {
         var username = await NewUserAsync(Roles.Admin);
-        var (user, userKey, _) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
+        var (user, userKey, readAt) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
         var vault = await Api.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync("Notizen", user.Id, userKey, Ct);
-        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(user, userKey, readAt, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
 
         foreach (var (method, path) in new[]
                  {

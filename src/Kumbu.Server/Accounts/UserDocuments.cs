@@ -55,6 +55,12 @@ public sealed class UserDocument
     [BsonElement("credentialsChangedAt"), BsonIgnoreIfNull]
     public DateTime? CredentialsChangedAt { get; set; }
 
+    /// <summary>How many API keys the user has created. Each creation increments it in the key's transaction, a
+    /// real write to this document, so that it conflicts with a concurrent credentials change (see
+    /// <see cref="ApiKeys.CreateAsync"/>).</summary>
+    [BsonElement("keysCreated")]
+    public long KeysCreated { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

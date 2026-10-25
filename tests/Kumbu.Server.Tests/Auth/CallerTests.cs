@@ -112,8 +112,8 @@ public sealed class CallerTests(KumbuAppFactory app)
         var (user, _) = await SignedInWithVaultAsync("Journal");
         var users = new UserCatalog(
             app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), app.Services.GetRequiredService<ApiKeys>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
-        var (_, key, _) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
-        var caller = RequestCaller.ForSession(user, key, app.Services.GetRequiredService<VaultCatalog>());
+        var (_, key, readAt) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
+        var caller = RequestCaller.ForSession(user, key, readAt, app.Services.GetRequiredService<VaultCatalog>());
 
         Assert.Equal(CallerKind.Session, caller.Kind);
         Assert.Equal(user.Username, caller.Writer);

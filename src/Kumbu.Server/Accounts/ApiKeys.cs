@@ -77,11 +77,13 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// <summary>
     /// Creates a key for <paramref name="vaults"/> (vault id → right), which must all be the user's own; returns
     /// the key, the only time it is shown. Throws <see cref="ArgumentException"/> for an unusable name, no vaults or
-    /// a vault that isn't the user's, and <see cref="ApiKeyNameTakenException"/> if one of the user's keys that
-    /// isn't revoked has that name (compared case-insensitively).
+    /// a vault that isn't the user's, <see cref="ApiKeyNameTakenException"/> if one of the user's keys that isn't
+    /// revoked has that name (compared case-insensitively), and <see cref="CredentialsChangedException"/> if the
+    /// user's credentials changed at or after <paramref name="credentialReadAt"/> (when the session's password was
+    /// read) or the user is inactive.
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
-        User user, byte[] userKey, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct)
+        User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct)
     {
         var clean = CheckName(user, name);
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
@@ -103,22 +105,35 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
             CreatedAt = Now,
         };
 
-        // The key and its slots in one transaction: a key never exists with only some of its vaults.
+        // The key and its slots in one transaction: a key never exists with only some of its vaults. The session
+        // was checked when the request began; a password change, recovery or deactivation may have landed since,
+        // and a key made now would outlive it. So the user document is checked again and written in the same
+        // transaction: either this commits first, and the change's revocation (which runs after its stamp) finds
+        // the key, or the change's stamp comes first, and the condition fails or the write conflicts (retried by
+        // WithTransactionAsync, then failing the condition).
         using (var session = await catalog.StartSessionAsync(ct))
         {
-            session.StartTransaction();
             try
             {
-                await Keys.InsertOneAsync(session, doc, cancellationToken: ct);
-                await catalog.Slots.InsertManyAsync(session, slots, cancellationToken: ct);
+                await session.WithTransactionAsync(
+                    async (s, token) =>
+                    {
+                        var current = await Users.UpdateOneAsync(
+                            s,
+                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt),
+                            Builders<UserDocument>.Update.Inc(u => u.KeysCreated, 1),
+                            cancellationToken: token);
+                        if (current.MatchedCount == 0) throw new CredentialsChangedException();
+                        await Keys.InsertOneAsync(s, doc, cancellationToken: token);
+                        await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);
+                        return true;
+                    },
+                    cancellationToken: ct);
             }
             catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
             {
-                await session.AbortTransactionAsync(CancellationToken.None);
                 throw new ApiKeyNameTakenException(clean);
             }
-
-            await session.CommitTransactionAsync(CancellationToken.None);
         }
 
         log.LogInformation("User {Username} created API key {KeyId} for {Count} vaults", user.Username, id, vaults.Count);
@@ -386,3 +401,7 @@ public sealed class ApiKeyDocument
 }
 
 public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key named '{name}'.");
+
+/// <summary>The session that asked is older than the user's last password change or recovery, or the user was
+/// deactivated meanwhile: it may not make anything that outlives it.</summary>
+public sealed class CredentialsChangedException() : Exception("Your session has ended; sign in again.");

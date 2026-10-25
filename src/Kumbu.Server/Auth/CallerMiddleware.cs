@@ -74,8 +74,8 @@ public sealed class CallerMiddleware(
             // page on a sibling subdomain (same site, so SameSite=Strict doesn't stop it) post a blind no-cors
             // tools/call with the user's session.
             caller = context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
-                     && await sessions.ResolveAsync(secret, context.RequestAborted) is var (user, userKey)
-                ? RequestCaller.ForSession(user, userKey, catalog)
+                     && await sessions.ResolveAsync(secret, context.RequestAborted) is var (user, userKey, readAt)
+                ? RequestCaller.ForSession(user, userKey, readAt, catalog)
                 : null;
         }
 

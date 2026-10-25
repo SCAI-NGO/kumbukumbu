@@ -217,7 +217,7 @@ public static class AccountApi
             vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
         }
 
-        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, body.Name, vaults, ct);
+        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 

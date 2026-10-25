@@ -24,6 +24,9 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
 
     private ApiKeys Keys => app.Services.GetRequiredService<ApiKeys>();
 
+    /// <summary>A sign-in just now: these tests aren't about a credentials change since the session began.</summary>
+    private static DateTime JustRead => DateTime.UtcNow;
+
     private IMongoCollection<BsonDocument> KeyDocs => app.Database.GetCollection<BsonDocument>("api_keys");
 
     private IMongoCollection<BsonDocument> SlotDocs => app.Database.GetCollection<BsonDocument>("slots");
@@ -76,7 +79,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
 
-        var (key, info) = await Keys.CreateAsync(user, userKey, "Claude Code", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "Claude Code", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
 
         Assert.Matches("^kumbu_[0-9A-Za-z]{43}$", key);
         Assert.Equal(key[6..14], info.Prefix);
@@ -96,7 +99,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary", "Ideas");
         var (key, _) = await Keys.CreateAsync(
-            user, userKey, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Ideas"]] = KeyRight.Read }, Ct);
+            user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Ideas"]] = KeyRight.Read }, Ct);
 
         await using var client = await app.ConnectAsync(key);
         var ls = Text(await ShAsync(client, "ls /"));
@@ -112,7 +115,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, _) = await UserWithVaultsAsync("Notes");
 
-        await Assert.ThrowsAsync<ArgumentException>(() => Keys.CreateAsync(user, userKey, "empty", new Dictionary<string, KeyRight>(), Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Keys.CreateAsync(user, userKey, JustRead, "empty", new Dictionary<string, KeyRight>(), Ct));
         Assert.Empty(await Keys.ListAsync(user, userKey, Ct));
     }
 
@@ -123,7 +126,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (_, _, theirs) = await UserWithVaultsAsync("Secret");
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            Keys.CreateAsync(user, userKey, "thief", new Dictionary<string, KeyRight> { [theirs["Secret"]] = KeyRight.Read }, Ct));
+            Keys.CreateAsync(user, userKey, JustRead, "thief", new Dictionary<string, KeyRight> { [theirs["Secret"]] = KeyRight.Read }, Ct));
         Assert.Empty(await Keys.ListAsync(user, userKey, Ct));
     }
 
@@ -131,7 +134,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     public async Task A_revoked_key_is_401_at_once_also_with_its_vault_in_the_cache()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
-        var (key, info) = await Keys.CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write }, Ct);
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "laptop", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write }, Ct);
         await using (var client = await app.ConnectAsync(key))
         {
             Assert.Contains("Notes/", Text(await ShAsync(client, "ls /")), StringComparison.Ordinal);
@@ -150,7 +153,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
         var (other, _, _) = await UserWithVaultsAsync("Other");
-        var (key, info) = await Keys.CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "laptop", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
 
         Assert.False(await Keys.RevokeAsync(other, info.Id, Ct));
 
@@ -162,7 +165,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Shared", "Own");
         var (key, info) = await Keys.CreateAsync(
-            user, userKey, "agent", new Dictionary<string, KeyRight> { [vaults["Shared"]] = KeyRight.Read, [vaults["Own"]] = KeyRight.Write }, Ct);
+            user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Shared"]] = KeyRight.Read, [vaults["Own"]] = KeyRight.Write }, Ct);
         await using (var client = await app.ConnectAsync(key))
         {
             Assert.Contains("Shared/", Text(await ShAsync(client, "ls /")), StringComparison.Ordinal);
@@ -191,8 +194,8 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
         var grant = new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write };
-        var (laptop, _) = await Keys.CreateAsync(user, userKey, "laptop", grant, Ct);
-        var (phone, _) = await Keys.CreateAsync(user, userKey, "phone", grant, Ct);
+        var (laptop, _) = await Keys.CreateAsync(user, userKey, JustRead, "laptop", grant, Ct);
+        var (phone, _) = await Keys.CreateAsync(user, userKey, JustRead, "phone", grant, Ct);
 
         string version;
         await using (var first = await app.ConnectAsync(laptop))
@@ -229,7 +232,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            Keys.CreateAsync(user, userKey, name, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct));
+            Keys.CreateAsync(user, userKey, JustRead, name, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct));
     }
 
     [Fact]
@@ -238,10 +241,10 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
         var grant = new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read };
 
-        var (_, info) = await Keys.CreateAsync(user, userKey, "  " + new string('k', 64) + "  ", grant, Ct);
+        var (_, info) = await Keys.CreateAsync(user, userKey, JustRead, "  " + new string('k', 64) + "  ", grant, Ct);
 
         Assert.Equal(new string('k', 64), info.Name);
-        await Assert.ThrowsAsync<ArgumentException>(() => Keys.CreateAsync(user, userKey, new string('k', 65), grant, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Keys.CreateAsync(user, userKey, JustRead, new string('k', 65), grant, Ct));
     }
 
     // The agent banner tells a key's writes from the user's own by the writer label.
@@ -251,7 +254,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            Keys.CreateAsync(user, userKey, user.Username.ToUpperInvariant(), new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct));
+            Keys.CreateAsync(user, userKey, JustRead, user.Username.ToUpperInvariant(), new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct));
     }
 
     [Fact]
@@ -260,13 +263,13 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
         var (other, otherKey, otherVaults) = await UserWithVaultsAsync("Notes");
         var grant = new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read };
-        var (_, first) = await Keys.CreateAsync(user, userKey, "Laptop", grant, Ct);
+        var (_, first) = await Keys.CreateAsync(user, userKey, JustRead, "Laptop", grant, Ct);
 
-        await Assert.ThrowsAsync<ApiKeyNameTakenException>(() => Keys.CreateAsync(user, userKey, " laptop ", grant, Ct));
-        await Keys.CreateAsync(other, otherKey, "Laptop", new Dictionary<string, KeyRight> { [otherVaults["Notes"]] = KeyRight.Read }, Ct);
+        await Assert.ThrowsAsync<ApiKeyNameTakenException>(() => Keys.CreateAsync(user, userKey, JustRead, " laptop ", grant, Ct));
+        await Keys.CreateAsync(other, otherKey, JustRead, "Laptop", new Dictionary<string, KeyRight> { [otherVaults["Notes"]] = KeyRight.Read }, Ct);
 
         await Keys.RevokeAsync(user, first.Id, Ct);
-        await Keys.CreateAsync(user, userKey, "Laptop", grant, Ct);
+        await Keys.CreateAsync(user, userKey, JustRead, "Laptop", grant, Ct);
     }
 
     [Fact]
@@ -274,9 +277,9 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
         var (other, otherKey, otherVaults) = await UserWithVaultsAsync("Elsewhere");
-        await Keys.CreateAsync(other, otherKey, "theirs", new Dictionary<string, KeyRight> { [otherVaults["Elsewhere"]] = KeyRight.Read }, Ct);
+        await Keys.CreateAsync(other, otherKey, JustRead, "theirs", new Dictionary<string, KeyRight> { [otherVaults["Elsewhere"]] = KeyRight.Read }, Ct);
         var (_, created) = await Keys.CreateAsync(
-            user, userKey, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct);
+            user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct);
 
         var listed = Assert.Single(await Keys.ListAsync(user, userKey, Ct));
 
@@ -293,7 +296,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     public async Task Last_used_is_written_at_most_once_a_minute()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
-        var (key, info) = await Keys.CreateAsync(user, userKey, "agent", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct);
         var byId = Builders<BsonDocument>.Filter.Eq("_id", info.Id);
         DateTime LastUsed(BsonDocument d) => d["lastUsedAt"].ToUniversalTime();
 
