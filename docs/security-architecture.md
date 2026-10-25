@@ -7,7 +7,7 @@ date: "25 October 2026, as built after step 9a, with the security fixes of step 
 # Kumbu² — Security Architecture and Encryption at Rest
 
 **Audience:** a technical decision-maker who decides whether employees' personal notes may live in Kumbu².
-**Scope:** the code as built (accounts, API keys, web app, MCP endpoint; steps 1 to 9a, plus the step 9b fixes to the recovery key file, HSTS and the CSP). Everything that is only planned is in §9, "What comes next", and nowhere else.
+**Scope:** the code as built (accounts, API keys, web app, MCP endpoint; steps 1 to 9a, plus the step 9b fixes to the recovery key file, HSTS, the CSP, and what a password change and a recovery revoke). Everything that is only planned is in §9, "What comes next", and nowhere else.
 **How to check it:** every key claim names the file (and, where useful, the line) in `src/` that implements it. The project is open source (AGPL-3.0-or-later). No external security audit has been done; the reviews so far were part of development.
 
 ## 1. Summary for a decision-maker
@@ -24,7 +24,7 @@ Kumbu² is a self-hosted Markdown notes server. People use it through a web app;
 2. **Admins are not the threat** the design worries about: the admin role grants no access to content (§4).
 3. **No password reset, by design.** A user who loses both password and recovery key loses their notes. This has to be accepted and communicated.
 4. **AI use follows COR's AI policy.** What an agent reads goes to its model provider. Kumbu² limits *which* vaults an agent can reach (and whether it may write), not what the provider does with what it receives.
-5. **No deletion yet.** A leaving employee's account can only be deactivated (`src/Kumbu.Server/Accounts/Admin.cs:53–87`; there is no delete endpoint, `src/Kumbu.Server/Api/AccountApi.cs:91–106`); their sealed notes remain in the database and in backups indefinitely.
+5. **No deletion yet.** A leaving employee's account can only be deactivated (`src/Kumbu.Server/Accounts/Admin.cs:53–87`; there is no delete endpoint, `src/Kumbu.Server/Api/AccountApi.cs:93–108`); their sealed notes remain in the database and in backups indefinitely.
 
 ## 2. Threat model and honest limits
 
@@ -89,21 +89,21 @@ flowchart TB
 
 Why a user key in between: with five vaults and three credentials, direct slots would be fifteen to keep in step on every change. With the user key, a password change rewraps one slot, and a new vault is wrapped once (`docs/superpowers/specs/2026-10-24-accounts-and-web-design.md` §3).
 
-**No key rotation.** Revoking a credential deletes its slot but does not change the user key or any vault key: a password change re-wraps the same user key (`Accounts/UserCatalog.cs:204–219`), a new recovery key wraps the same user key (`UserCatalog.cs:181–187`), revoking an API key only deletes its slots (`Accounts/ApiKeys.cs:151–172`). Anyone who holds an old backup *and* a credential that was valid at the time (old password, old recovery key, revoked API key) can still open those vaults from it. A vault key, once exposed, stays valid for every later copy of the database. Re-keying is not built (§9).
+**No key rotation.** Revoking a credential deletes its slot but does not change the user key or any vault key: a password change or a recovery re-wraps the same user key (`Accounts/UserCatalog.cs:224–239`), a new recovery key wraps the same user key (`UserCatalog.cs:200–210`), revoking an API key only deletes its slots (`Accounts/ApiKeys.cs:151–172`). Anyone who holds an old backup *and* a credential that was valid at the time (old password, old recovery key, revoked API key) can still open those vaults from it. A vault key, once exposed, stays valid for every later copy of the database. Re-keying is not built (§9).
 
 ### The slots as built
 
 | Slot | Collection | KEK derivation | Associated data | Code |
 |---|---|---|---|---|
-| Password → user key | `user_slots` | Argon2id(password, 16-byte random salt) | `user:{userId}:password` | `Accounts/UserCatalog.cs:242–253` |
-| Recovery key → user key | `user_slots` | HKDF(recovery key, `kumbu/v1/user-recovery-kek`, salt = user id) | `user:{userId}:recovery` | `UserCatalog.cs:255–264` |
+| Password → user key | `user_slots` | Argon2id(password, 16-byte random salt) | `user:{userId}:password` | `Accounts/UserCatalog.cs:262–273` |
+| Recovery key → user key | `user_slots` | HKDF(recovery key, `kumbu/v1/user-recovery-kek`, salt = user id) | `user:{userId}:recovery` | `UserCatalog.cs:275–284` |
 | Session → user key | `user_slots` | HKDF(session secret, `kumbu/v1/session-kek`, salt = user id) | `user:{userId}:session` | `Accounts/Sessions.cs:43–61` |
 | User key → vault key | `slots` | HKDF(user key, `kumbu/v1/user-slot-kek`, salt = vault id) | `slot:{vaultId}:user` | `Vaults/VaultCatalog.cs:158–214` |
 | API key → vault key and right | `slots` | HKDF(API key, `kumbu/v1/api-key-kek`, salt = vault id) | `slot:{vaultId}:key:{keyId}` | `VaultCatalog.cs:222–260` |
 
 (All paths relative to `src/Kumbu.Server/`.) Each derivation has its own label, so a value derived for finding a slot can never serve as a key for opening one. The per-vault and per-user salts mean one KEK opens exactly one slot. HKDF is used only for high-entropy secrets (random keys and tokens, and the dev token, which the operator chooses and which must therefore be random: the server checks only its length, `KumbuOptions.cs:6–15`, `Vaults/VaultCatalog.cs:66, 491`); Argon2id only for the password, the one low-entropy secret (`src/Kumbu.Core/Crypto/VaultCrypto.cs:54`).
 
-**Finding a slot without storing the credential.** Sessions and API keys are found by a lookup value `HKDF(secret, "…-lookup")` stored next to the slot (`Sessions.cs:148`, `Accounts/ApiKeys.cs:288`); a user's vault slots by `HKDF(user key, "kumbu/v1/user-slot", salt = user id)` (`VaultCatalog.cs:496`). Since the secrets are 256 bits of randomness, a lookup value cannot be turned back into the secret, and guessing is pointless.
+**Finding a slot without storing the credential.** Sessions and API keys are found by a lookup value `HKDF(secret, "…-lookup")` stored next to the slot (`Sessions.cs:148`, `Accounts/ApiKeys.cs:307`); a user's vault slots by `HKDF(user key, "kumbu/v1/user-slot", salt = user id)` (`VaultCatalog.cs:496`). Since the secrets are 256 bits of randomness, a lookup value cannot be turned back into the secret, and guessing is pointless.
 
 **Vaults of users have no recovery slot of their own.** The user's recovery key reaches them through the user key.
 
@@ -119,10 +119,10 @@ Why a user key in between: with five vaults and three credentials, direct slots 
 | **Database dump or stolen backup** (read access) | See metadata (§5.6). Run offline guesses against each user's password slot at the cost of one Argon2id (64 MiB, 3 passes) per guess per user. | Read content, paths, vault names, checkpoint names, API key names. Recover API keys, session secrets or recovery keys from their lookup values. |
 | **Database write access** | Delete data. Put back older genuine documents (rollback, §2). Change roles or the active flag; insert an invitation (the instance secret that keys invitation codes is in the database, `Accounts/ServerSecret.cs`) and so create an account. | Make a modified or moved document open: a changed byte, a blob copied to another document or vault, a changed right in an API-key slot, or a swapped path hash is rejected (`UnlockedVault.cs:76–89`; `tests/Kumbu.Server.Tests/Vaults/EncryptedNoteStoreTests.cs:533`). Gain access to an existing user's vaults. |
 | **Stolen API key** | Read, or read and write, exactly the vaults it was given, through MCP (`/mcp`) and the note endpoints of the REST API, from anywhere, until revoked. Its writes carry the key's name in the history. With write rights, also remove checkpoints for good: `rmcp` deletes the checkpoint document, with no trash (`src/Kumbu.Core/Notes/Checkpoints.cs:103–117`, `Vaults/EncryptedNoteStore.cs:260–273`). | Reach other vaults; create vaults; manage keys, the account or users (session-only endpoints answer 403, `Api/Security.cs:84–88`). Write to a read-only vault. Delete notes beyond recovery: a deleted note is in the trash for 30 days, and up to 10 earlier versions per note are kept (`src/Kumbu.Core/Notes/NoteWriter.cs:19–20`), though a key with write rights can push old versions out by writing repeatedly. API keys do not expire. |
-| **Lost or stolen laptop** | Use a browser session that is still valid (at most 30 idle minutes, 12 hours in all), and within that session create new API keys (write, any of the user's vaults) that outlast the session and a password change (`Api/AccountApi.cs:99`). Use any API key stored in an agent's configuration (for Claude Code, in its local settings, in plain text) until it is revoked. **If the downloaded recovery key file is on the laptop and the finder knows the username**, take over the account. The file, `kumbu-recovery-key.txt`, holds only the key and a short instruction (keep it somewhere safe, not on this device; together with the username it opens the account; it is shown only once), but neither the username nor the instance's address (`web/src/components/RecoveryKeyReveal.tsx:25–34`), so the file alone is not enough. A username is not a secret, though: it may be the e-mail prefix or known to colleagues. | Read notes from browser storage: the web app keeps no note content and no secrets in local or session storage (local storage holds only the colour scheme, `web/src/theme/apply.ts`; session storage only a flag for the one automatic reload after an update, `web/src/components/AppError.tsx:9–36`; tested in `web/src/note/MarkdownEditor.test.tsx`, `web/src/routes/Keys.test.tsx:152`), and API responses are `Cache-Control: no-store` (`Api/Security.cs:51`). |
+| **Lost or stolen laptop** | Use a browser session that is still valid (at most 30 idle minutes, 12 hours in all), and within that session create new API keys (write, any of the user's vaults) that outlast the session, until revoked; a password change revokes them unless the user unticks that (`Api/AccountApi.cs:101`, §6). Use any API key stored in an agent's configuration (for Claude Code, in its local settings, in plain text) until it is revoked. **If the downloaded recovery key file is on the laptop and the finder knows the username**, take over the account. The file, `kumbu-recovery-key.txt`, holds only the key and a short instruction (keep it somewhere safe, not on this device; together with the username it opens the account; it is shown only once), but neither the username nor the instance's address (`web/src/components/RecoveryKeyReveal.tsx:25–34`), so the file alone is not enough. A username is not a secret, though: it may be the e-mail prefix or known to colleagues. | Read notes from browser storage: the web app keeps no note content and no secrets in local or session storage (local storage holds only the colour scheme, `web/src/theme/apply.ts`; session storage only a flag for the one automatic reload after an update, `web/src/components/AppError.tsx:9–36`; tested in `web/src/note/MarkdownEditor.test.tsx`, `web/src/routes/Keys.test.tsx:152`), and API responses are `Cache-Control: no-store` (`Api/Security.cs:51`). |
 | **AI provider** (e.g. Anthropic for Claude) | See everything its agent reads or writes through Kumbu², as part of the conversation, under the provider's own data terms. | Reach vaults the API key wasn't given. With Claude Code, the MCP connection is made from the user's machine and the key sits in its local configuration, so it is not normally sent to the provider. This holds by the design of the set-up, not by enforcement: the agent can read its own configuration files. |
 
-**What to do after a lost laptop:** from another device, sign in, end other sessions (`POST /api/sessions/end-others`, in Settings), revoke every API key you don't recognise, not only those that were on the laptop (a session on the laptop may have made new ones), change the password, make a new recovery key. A password change does **not** revoke API keys and does **not** replace the recovery key (`Accounts/UserCatalog.cs:147–160`; README, "Accounts, API keys and the REST API"). Recommendation for users: keep the recovery key in a password manager and delete the downloaded file.
+**What to do after a lost laptop:** from another device, sign in, end other sessions (`POST /api/sessions/end-others`, in Settings), change the password with "Also revoke all API keys" ticked, as it is by default, so the keys a session on the laptop may have made die too, not only those that were on the laptop (`Api/AccountApi.cs:34–36, 179`), give the agents still in use new keys, and make a new recovery key: a password change does **not** replace it (`Accounts/UserCatalog.cs:156–169`; README, "Accounts, API keys and the REST API"). Recommendation for users: keep the recovery key in a password manager and delete the downloaded file.
 
 ## 5. Encryption at rest in detail
 
@@ -158,13 +158,13 @@ Every blob is sealed with associated data that names what it is. A blob only ope
 | Slots | see §3 |
 | API key's name and vaults (owner's list) / its writer label | `api-key:{keyId}:meta` / `api-key:{keyId}:writer` |
 
-(`src/Kumbu.Server/Vaults/UnlockedVault.cs:76–181`, `VaultCatalog.cs:106, 502–507`, `Accounts/ApiKeys.cs:298–300`.)
+(`src/Kumbu.Server/Vaults/UnlockedVault.cs:76–181`, `VaultCatalog.cs:106, 502–507`, `Accounts/ApiKeys.cs:317–319`.)
 
 Consequence: someone with write access to the database cannot move a note, its embeddings or a checkpoint into another document, another vault or another revision, nor swap their clear fields around: it fails to open. On opening, the path inside the sealed note must also match the clear path hash (`UnlockedVault.cs:80–89`), likewise for embeddings and checkpoints. A document that fails is reported as damaged, never shown. The clear fields of trash and move records (the path hash, the deletion or move time) are *not* bound into the seal (`UnlockedVault.cs:90–106`): changing them can mislabel an entry or make the TTL index remove it earlier, which amounts to deleting it, something write access to the database allows anyway.
 
 ### 5.3 Sealed paths and names
 
-Paths, file names and folder names exist in the database only inside sealed blobs. For MongoDB's unique index and lookups each document carries a **keyed hash** of its path, `HMAC-SHA256(HKDF(vault key, "kumbu/v1/path-id"), path)` (`UnlockedVault.cs:73`). Equal paths give equal hashes within a vault; without the vault key nothing else can be learned, not even whether two vaults hold the same path. Vault names are sealed (`VaultCatalog.cs:200`); their per-user uniqueness uses a keyed hash under the user key (`VaultCatalog.cs:171`). API key names are sealed under the user key, and their uniqueness also uses a keyed hash (`ApiKeys.cs:295`). Checkpoint names are keyed hashes too (`UnlockedVault.cs:144`).
+Paths, file names and folder names exist in the database only inside sealed blobs. For MongoDB's unique index and lookups each document carries a **keyed hash** of its path, `HMAC-SHA256(HKDF(vault key, "kumbu/v1/path-id"), path)` (`UnlockedVault.cs:73`). Equal paths give equal hashes within a vault; without the vault key nothing else can be learned, not even whether two vaults hold the same path. Vault names are sealed (`VaultCatalog.cs:200`); their per-user uniqueness uses a keyed hash under the user key (`VaultCatalog.cs:171`). API key names are sealed under the user key, and their uniqueness also uses a keyed hash (`ApiKeys.cs:314`). Checkpoint names are keyed hashes too (`UnlockedVault.cs:144`).
 
 ### 5.4 History, trash, moves and checkpoints
 
@@ -179,7 +179,7 @@ Full-text search runs over the decrypted notes in memory. Search by meaning uses
 
 ### 5.6 What is in the clear
 
-Verified against the document classes in `src/Kumbu.Server/Vaults/Documents.cs`, `Accounts/UserDocuments.cs`, `Accounts/ApiKeys.cs:331–367` and `Accounts/Invitations.cs`; the test `Nothing_readable_reaches_the_database` (`tests/Kumbu.Server.Tests/Vaults/EncryptedNoteStoreTests.cs:48`) checks a full dump for paths, names and content.
+Verified against the document classes in `src/Kumbu.Server/Vaults/Documents.cs`, `Accounts/UserDocuments.cs`, `Accounts/ApiKeys.cs:350–386` and `Accounts/Invitations.cs`; the test `Nothing_readable_reaches_the_database` (`tests/Kumbu.Server.Tests/Vaults/EncryptedNoteStoreTests.cs:48`) checks a full dump for paths, names and content.
 
 | Collection | In the clear |
 |---|---|
@@ -206,17 +206,18 @@ A **session** is a slot: the server makes a random 32-byte secret, puts it in th
 
 Signing out deletes the slot; "sign out other sessions" deletes the others; a password change or recovery deletes all. None of them locks a vault that is in memory: it stays there until idle (§2).
 
-The cookie `kumbu_session` is `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, with `Max-Age` of 12 hours (`Api/AccountApi.cs:278–293`). It is accepted **only under `/api`**, never on `/mcp`, so a page on a sibling subdomain cannot drive the MCP endpoint with a user's cookie (`Auth/CallerMiddleware.cs:71–80`).
+The cookie `kumbu_session` is `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, with `Max-Age` of 12 hours (`Api/AccountApi.cs:282–297`). It is accepted **only under `/api`**, never on `/mcp`, so a page on a sibling subdomain cannot drive the MCP endpoint with a user's cookie (`Auth/CallerMiddleware.cs:71–80`).
 
 ### API keys
 
 - Format `kumbu_` plus 32 random bytes in Base62 (43 characters), shown once (`Accounts/ApiKeys.cs:52–55, 91`).
 - Rights per vault: `read` or `write`. A key without a vault cannot be created (`ApiKeys.cs:87`). Each vault gets its own slot sealing the vault key **and the right together**, bound to the key's id; changing the right in the database makes the slot fail to open (`VaultCatalog.cs:222–292`). The read-only rule itself is enforced in the server before any write (`src/Kumbu.Core/Notes/ICaller.cs:16–19`, called by every write path); a read-only key still lets the server unwrap the vault key, as it must to read.
-- Only a signed-in session can create, list or revoke keys. A key can never manage keys, the account or users (`Api/Security.cs:84–88`), so a leaked key cannot make more keys. A stolen *session* can, and those keys outlive it (§4).
+- Only a signed-in session can create, list or revoke keys. A key can never manage keys, the account or users (`Api/Security.cs:84–88`), so a leaked key cannot make more keys. A stolen *session* can, and those keys outlive it until revoked (§4).
 - The key's name becomes the writer label in the history, so the user can see which agent changed what; the web app shows changes by keys since the previous sign-in.
 - **Revoking** marks the key revoked and deletes its slots in one transaction; it opens nothing from then on, also for a vault still in memory, since every request opens its slots afresh (`ApiKeys.cs:151–172`, `VaultCatalog.cs:267–292`). It does not change the vault key: a copy of the database taken before the revocation still opens with the revoked key (§3, "No key rotation").
+- **Changing the password** revokes all the user's keys too, unless the user unticks "Also revoke all API keys" in Settings (`revokeApiKeys`, true when left out, so an older client gets the safe behaviour; `Api/AccountApi.cs:34–36, 179`). A **recovery** always revokes them (`UserCatalog.cs:145`). Both mark every key revoked and delete its slots in one transaction, as revoking one key does (`ApiKeys.cs:174–191`).
 - **Deactivating a user** ends all their sessions and revokes all their keys in one transaction; reactivating revives none of them (`Accounts/Admin.cs:53–87`).
-- Keys do not expire; they stay valid until revoked, also across a password change and a recovery.
+- Keys do not expire; they stay valid until revoked: one by one, by a password change that asks for it, by a recovery or by deactivation.
 
 ### Invitations and the first admin
 
@@ -230,9 +231,11 @@ At least 12 characters (counted as characters, not bytes), not one of the 10,000
 
 At sign-up the user gets a **recovery key** (32 random bytes, Base32 with a `kumbu-rk-` prefix, `src/Kumbu.Core/Crypto/RecoveryKey.cs`), shown once, to download (as `kumbu-recovery-key.txt`, without the username) or copy. The join screen does not let the user continue until it was downloaded or copied and they ticked that it is stored. (The account itself already exists at that moment; the confirmation is a step of the web app, not a server-side condition.)
 
-The recovery key opens the user key. With username and recovery key, the "forgot password" screen sets a new password; this ends every session (`UserCatalog.cs:120–141`). Regenerating the recovery key needs the current password and invalidates the old one at once (`UserCatalog.cs:167–190`), so a stolen session alone cannot make a recovery key and lock the owner out.
+The recovery key opens the user key. With username and recovery key, the "forgot password" screen sets a new password. This ends every session, revokes every API key and **replaces the recovery key**: the used one opens nothing from then on, and the answer carries the new one (`UserCatalog.cs:116–150`, `Api/AccountApi.cs:148–155`). The screen shows it once, under the same rules as at sign-up, and says that the old key no longer works and that agents need new API keys (`web/src/routes/ForgotPassword.tsx`). Regenerating the recovery key needs the current password and invalidates the old one at once (`UserCatalog.cs:176–193`), so a stolen session alone cannot make a recovery key and lock the owner out.
 
-Recovery, like a password change, revokes no API key and keeps the recovery key valid (`UserCatalog.cs:119–140` calls only `SetPasswordAsync`, `UserCatalog.cs:204–219`). After a takeover with a stolen recovery key, owner and attacker can take the account back and forth until one of them makes a new recovery key (which needs the current password), and API keys the attacker made in between stay valid until revoked.
+The writes of a recovery come in an order that a crash cannot turn into a lock-out: the new password first, then the revocation, and the recovery slot last, replaced in a single write (`UserCatalog.cs:140–146, 200–210`). A crash before that write leaves the old recovery key working, so the user simply recovers again; a crash after it, before the answer arrives, leaves the user the password they just chose, to sign in with and make a new recovery key.
+
+What this means for a stolen recovery key: whoever uses it first holds the account, and the other's copy no longer works. That was already possible before, with one more step (the thief could make a new recovery key with the password just set); what the change removes is the back and forth, and the thief's API keys surviving the owner's recovery. The user key stays the same (§3).
 
 **There is no password reset by an admin or the operator, by design.** Nobody but the user holds a credential that opens their user key. Without password and recovery key, the vaults cannot be decrypted by anyone, and the web app says so at sign-up. The alternative — an escrow key held by the instance — would give the operator or an admin a way into every vault and defeat the point of §4.
 
@@ -251,8 +254,8 @@ Recovery, like a password change, revokes no API key and keeps the recovery key 
 | Dev token | Optional; unset, it opens nothing. If set, at least 16 characters, compared in constant time via hashes. The public Compose set-up leaves it empty. | `KumbuOptions.cs:6–20`, `CallerMiddleware.cs:118–124` |
 | Client address and scheme behind a proxy | `KUMBU_TRUSTED_PROXY=true` takes the address from the last `X-Forwarded-For` entry only, and the scheme from `X-Forwarded-Proto`; the server refuses to start with it unless `KUMBU_PUBLIC_URL` is set. Any peer is trusted as the proxy, so this is safe only when the proxy is the container's only way in. | `Program.cs:129–141`, `KumbuOptionsValidator.cs:37` |
 | Upload limits | At most 200 files and 5 MB of text per request, 16 MB request body; only Markdown files (`.md`, `.markdown`) are taken. | `Api/UploadApi.cs:33–57, 128–144` |
-| No secrets in URLs | Keys only in the `Authorization` header; invitation codes in the fragment and request bodies; passwords and recovery keys in bodies. | `CallerMiddleware.cs`, `AccountApi.cs:86–89` |
-| No secrets in logs | ASP.NET's request logging is lowered to warnings. The server's own log lines name vaults by id, users by username, keys and invitations by id; never a password, key, code, cookie, note path or vault name (seeding from a development folder excepted). They are metadata nonetheless: the log records when each vault is unlocked and locked (`Vaults/VaultCatalog.cs:371, 379, 458`), which user created or revoked which API key (`Accounts/ApiKeys.cs:124, 170`) and who set a new password with a recovery key (`Accounts/UserCatalog.cs:138`), all with times. Checked by hand after the phase 8 test (`docs/notes-test-phase8.md`). Unhandled errors are still logged with their exception message by ASP.NET; those messages have not been audited exhaustively. | `Program.cs:29–31` |
+| No secrets in URLs | Keys only in the `Authorization` header; invitation codes in the fragment and request bodies; passwords and recovery keys in bodies. | `CallerMiddleware.cs`, `AccountApi.cs:88–91` |
+| No secrets in logs | ASP.NET's request logging is lowered to warnings. The server's own log lines name vaults by id, users by username, keys and invitations by id; never a password, key, code, cookie, note path or vault name (seeding from a development folder excepted). They are metadata nonetheless: the log records when each vault is unlocked and locked (`Vaults/VaultCatalog.cs:371, 379, 458`), which user created or revoked which API key, or all of them (`Accounts/ApiKeys.cs:124, 170, 189`) and who set a new password with a recovery key (`Accounts/UserCatalog.cs:147–148`), all with times. Checked by hand after the phase 8 test (`docs/notes-test-phase8.md`). Unhandled errors are still logged with their exception message by ASP.NET; those messages have not been audited exhaustively. | `Program.cs:29–31` |
 | Outbound connections | Only the one-time model download from Hugging Face; no telemetry. | `Search/OnnxEmbedder.cs` |
 
 ### Deployment shape
@@ -283,7 +286,7 @@ Points for the operator, not handled by the code:
 - **Proxy access logs** contain what the server's own log leaves out: request lines under `/api` name vaults and note paths (`/api/notes/Work/plan.md`) and carry search queries (`/api/search?q=…`). Disable the access log for `/api` or strip paths and query strings (README, "Security notes for a public instance").
 - **MongoDB** runs in Compose without authentication and without TLS, protected only by being on an internal network (in the shipped `compose.yaml`, the same network as the server; see above). Traffic between proxy and server, and between server and MongoDB, is unencrypted inside the host. On Kubernetes, use network policies and MongoDB authentication.
 - **Swap and core dumps** of the server process can hold plaintext and keys; disable them.
-- **Backups** of MongoDB are safe to store in the sense of §4 (sealed), but contain the metadata of §5.6 and the password slots that offline guessing works on. Since keys are never rotated (§3), an old backup opens with any credential that was valid when it was taken. **Restoring a backup brings back the credentials of that moment:** old passwords and recovery keys work again, and API keys revoked since are valid again, with their slots (`Accounts/ApiKeys.cs:202`). After a restore, users should change their passwords, make new recovery keys and review their API keys.
+- **Backups** of MongoDB are safe to store in the sense of §4 (sealed), but contain the metadata of §5.6 and the password slots that offline guessing works on. Since keys are never rotated (§3), an old backup opens with any credential that was valid when it was taken. **Restoring a backup brings back the credentials of that moment:** old passwords and recovery keys work again, and API keys revoked since are valid again, with their slots (`Accounts/ApiKeys.cs:221`). After a restore, users should change their passwords, make new recovery keys and review their API keys.
 
 ## 8. AI providers
 
@@ -305,8 +308,7 @@ Known gaps, noted but not scheduled. Each is described where it matters above:
 
 - **No key rotation or re-keying** of user or vault keys: revoking a credential deletes its slot only, so old backups open with old credentials (§3).
 - **No deletion** of accounts or vaults; only deactivation. Deleting their slots would make the data unreadable, but it is not built (§1).
-- **API keys don't expire**, and survive a password change and a recovery; a stolen session can create them (§4, §6). Optional expiry is not built.
-- **Recovery doesn't replace the recovery key** and revokes no API key (§6).
+- **API keys don't expire**; a stolen session can create them, and they outlive it until revoked, which a password change does by default and a recovery always (§4, §6). Optional expiry is not built.
 - **Restoring a backup revives old credentials**, revoked API keys included (§7).
 - **Targeted sign-in lockout** through the per-username rate limit (§2).
 - **A vault stays unlocked** after sign-out until idle, and any caller's use keeps it unlocked (§2).
