@@ -63,6 +63,12 @@ public sealed record AdminUserView(
 /// <summary>Either or both; the role is <c>user</c> or <c>admin</c>.</summary>
 public sealed record UpdateUserRequest(bool? Active = null, string? Role = null);
 
+/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
+public sealed record DeleteAccountRequest(string Password, string Confirm);
+
+/// <summary>Deleting a deactivated user: <c>confirm</c> is their username, typed out.</summary>
+public sealed record DeleteUserRequest(string Confirm);
+
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
 public sealed record AdminInvitationView(
@@ -99,6 +105,7 @@ public static class AccountApi
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 429);
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
+        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
         account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409);
@@ -106,6 +113,7 @@ public static class AccountApi
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404);
+        account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404);
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
@@ -192,6 +200,17 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
+    /// <summary>Everything of the account goes, this session too: the cookie is cleared with it.</summary>
+    private static async Task<NoContent> DeleteAccountAsync(
+        DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw ApiErrors.BadRequest("The password is wrong.");
+        ClearSessionCookie(http);
+        return TypedResults.NoContent();
+    }
+
     private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, CancellationToken ct)
     {
         await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
@@ -241,6 +260,9 @@ public static class AccountApi
 
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
     }
+
+    private static async Task<NoContent> DeleteUserAsync(string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, CancellationToken ct) =>
+        await deletion.DeleteUserAsync(caller.User!, id, body.Confirm, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such user.");
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());

@@ -34,6 +34,10 @@ internal static class ToolResult
         {
             return From(ShellResult.Error(e.Message));
         }
+        catch (VaultDeletedException e)
+        {
+            return From(ShellResult.Error(e.Message));
+        }
         catch (System.Security.Cryptography.CryptographicException)
         {
             // A backstop: the stores mark damaged documents, so this should not happen.

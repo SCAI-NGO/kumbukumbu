@@ -96,6 +96,8 @@ public sealed class SearchIndex : BackgroundService
         await vault.IndexGate.WaitAsync(ct);
         try
         {
+            // An upsert now would bring back an embedding of a vault that is gone.
+            if (vault.Deleted) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {

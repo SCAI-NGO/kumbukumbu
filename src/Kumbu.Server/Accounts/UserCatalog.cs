@@ -177,17 +177,21 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         var user = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
         // The password must open this very user key: a wrong key would leave a recovery slot that opens to
         // nothing, and the user would lose recovery unnoticed.
-        if (user is null
-            || await FindSlotAsync(userId, UserSlotDocument.Password, ct) is not { Salt: not null } passwordSlot
-            || await OpenPasswordSlotAsync(passwordSlot, currentPassword, ct) is not { } opened
-            || !CryptographicOperations.FixedTimeEquals(opened, userKey))
-        {
-            return null;
-        }
+        if (user is null || !await CheckPasswordAsync(userId, userKey, currentPassword, ct)) return null;
 
         var recoveryKey = await ReplaceRecoveryKeyAsync(userId, userKey, ct);
         log.LogInformation("User {Username} has a new recovery key", user.Username);
         return recoveryKey;
+    }
+
+    /// <summary>Whether <paramref name="password"/> is the user's and opens exactly <paramref name="userKey"/>:
+    /// for actions a stolen session alone must not be able to take.</summary>
+    internal async Task<bool> CheckPasswordAsync(string userId, byte[] userKey, string password, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        return await FindSlotAsync(userId, UserSlotDocument.Password, ct) is { Salt: not null } slot
+            && await OpenPasswordSlotAsync(slot, password, ct) is { } opened
+            && CryptographicOperations.FixedTimeEquals(opened, userKey);
     }
 
     /// <summary>

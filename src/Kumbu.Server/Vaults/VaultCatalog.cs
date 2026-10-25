@@ -294,6 +294,79 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections => [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts];
 
+    /// <summary>
+    /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
+    /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
+    /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// A vault in memory is taken off writes and indexing first (both its gates), and after the commit is marked
+    /// deleted and dropped from the working set, so a write or an indexing that waited for it adds nothing that
+    /// would outlive the vault. Returns how many documents went, slots included.
+    /// </summary>
+    internal async Task<long> DeleteVaultsAsync(
+        IReadOnlyCollection<string> vaultIds, Func<IClientSessionHandle, CancellationToken, Task> alsoDelete, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var held = new List<UnlockedVault>();
+        try
+        {
+            // In id order, so two deletions can't each hold a gate the other waits for.
+            foreach (var id in ids)
+            {
+                if (!_open.TryGetValue(id, out var vault)) continue;
+                await vault.Gate.WaitAsync(ct);
+                try
+                {
+                    await vault.IndexGate.WaitAsync(ct);
+                }
+                catch
+                {
+                    vault.Gate.Release();
+                    throw;
+                }
+
+                held.Add(vault);
+            }
+
+            long deleted;
+            using (var session = await StartSessionAsync(ct))
+            {
+                // WithTransactionAsync retries a write conflict, e.g. with lastUsedAt written on a key or session in use.
+                deleted = await session.WithTransactionAsync(
+                    async (s, token) =>
+                    {
+                        long count = (await Vaults.DeleteManyAsync(s, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: token)).DeletedCount;
+                        count += (await Slots.DeleteManyAsync(s, Builders<SlotDocument>.Filter.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
+                        foreach (var collection in ContentCollections)
+                        {
+                            count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
+                        }
+
+                        await alsoDelete(s, token);
+                        return count;
+                    },
+                    cancellationToken: ct);
+            }
+
+            foreach (var vault in held) vault.Deleted = true;
+            foreach (var id in ids)
+            {
+                // Also one unlocked after the gates were taken: its slots are gone, so no request gets it again.
+                if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
+            }
+
+            return deleted;
+        }
+        finally
+        {
+            foreach (var vault in held)
+            {
+                vault.IndexGate.Release();
+                vault.Gate.Release();
+            }
+        }
+    }
+
     /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
     internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
         Slots.DeleteManyAsync(session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), cancellationToken: ct);

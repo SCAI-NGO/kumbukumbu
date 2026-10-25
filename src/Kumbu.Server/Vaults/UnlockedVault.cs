@@ -69,6 +69,16 @@ public sealed class UnlockedVault
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
+    private volatile bool _deleted;
+
+    /// <summary>Set once the vault is deleted (<see cref="VaultCatalog.DeleteVaultsAsync"/>), under both gates: a
+    /// write or an indexing that was waiting for a gate then writes nothing, so nothing outlives the vault.</summary>
+    public bool Deleted
+    {
+        get => _deleted;
+        set => _deleted = value;
+    }
+
     /// <summary>A keyed hash of the path: equal paths give equal ids, but the id reveals nothing else.</summary>
     public byte[] PathId(VaultPath path) => VaultCrypto.Mac(_pathKey, path.Value);
 
