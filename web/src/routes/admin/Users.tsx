@@ -7,7 +7,7 @@ import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
 import { FormError, secondaryButtonClass } from "../../components/form";
 import { useSession } from "../../state/session";
-import AdminOnly from "./AdminOnly";
+import AdminOnly, { useIsAdmin } from "./AdminOnly";
 import ConfirmTyped from "./ConfirmTyped";
 
 type AdminUser = components["schemas"]["AdminUserView"];
@@ -25,7 +25,7 @@ export function storageText(bytes: number) {
 
 /** Everyone on the server, as metadata only: no note, no vault name. */
 export default function Users() {
-  const users = useQuery({ queryKey: ["admin", "users"], queryFn: () => call(api.GET("/api/admin/users")) });
+  const users = useQuery({ queryKey: ["admin", "users"], queryFn: () => call(api.GET("/api/admin/users")), enabled: useIsAdmin() === true });
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
 
@@ -50,7 +50,8 @@ function useUpdate(user: AdminUser, onDone?: () => void) {
     mutationFn: (body: components["schemas"]["UpdateUserRequest"]) =>
       call(api.PATCH("/api/admin/users/{id}", { params: { path: { id: user.id } }, body })),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      // A changed role may be the caller's own view of the world.
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["admin", "users"] }), queryClient.invalidateQueries({ queryKey: ["session"] })]);
       onDone?.();
     },
   });
@@ -81,15 +82,18 @@ function UserItem({ user, self, onToggle }: { user: AdminUser; self: boolean; on
       {update.isError && <FormError>{errorText(update.error)}</FormError>}
       {!primary && (
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={update.isPending}
-            onClick={() => update.mutate({ role: makeAdmin ? "admin" : "user" })}
-            aria-label={`Make ${user.display} ${makeAdmin ? "an admin" : "a user"}`}
-            className={secondaryButtonClass}
-          >
-            {makeAdmin ? "Make admin" : "Make user"}
-          </button>
+          {/* Another admin can demote you; doing it to yourself by one click would lock you out of this page. */}
+          {!(self && !makeAdmin) && (
+            <button
+              type="button"
+              disabled={update.isPending}
+              onClick={() => update.mutate({ role: makeAdmin ? "admin" : "user" })}
+              aria-label={`Make ${user.display} ${makeAdmin ? "an admin" : "a user"}`}
+              className={secondaryButtonClass}
+            >
+              {makeAdmin ? "Make admin" : "Make user"}
+            </button>
+          )}
           {/* The server refuses deactivating oneself, so the button isn't offered. */}
           {!self && (
             <button type="button" onClick={onToggle} aria-label={`${user.active ? "Deactivate" : "Reactivate"} ${user.display}`} className={secondaryButtonClass}>

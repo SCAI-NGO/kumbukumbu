@@ -7,7 +7,7 @@ import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../../components/form";
 import { useDialog } from "../../hooks/useDialog";
-import AdminOnly from "./AdminOnly";
+import AdminOnly, { useIsAdmin } from "./AdminOnly";
 import InvitationReveal from "./InvitationReveal";
 import NewInvitationDialog from "./NewInvitationDialog";
 
@@ -20,7 +20,7 @@ const forWhom = (role: string) => `for ${role === "admin" ? "an admin" : "a user
 
 /** The invitations made so far, and the way to make another. */
 export default function Invitations() {
-  const invitations = useQuery({ queryKey: ["admin", "invitations"], queryFn: () => call(api.GET("/api/admin/invitations")) });
+  const invitations = useQuery({ queryKey: ["admin", "invitations"], queryFn: () => call(api.GET("/api/admin/invitations")), enabled: useIsAdmin() === true });
   const [creating, setCreating] = useState(false);
   // The link lives here, in component state only, until the reveal is done.
   const [link, setLink] = useState<string | null>(null);

@@ -118,13 +118,32 @@ describe("Admin users", () => {
     await vi.waitFor(() => expect(patches).toEqual([{ role: "admin" }]));
   });
 
-  it("offers to make an admin a user, and shows the server's sentence when it refuses", async () => {
-    api(admin, {
+  it("offers to make another admin a user, and shows the server's sentence when it refuses", async () => {
+    api(root, {
       "PATCH /api/admin/users/u1": () => json(403, { error: "Nope, not today." }),
     });
     renderApp("/admin/users");
     await userEvent.click(await screen.findByRole("button", { name: "Make Ada a user" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Nope, not today.");
+  });
+
+  it("offers no demotion of oneself, but still the promotion of others", async () => {
+    api();
+    renderApp("/admin/users");
+    await screen.findByRole("listitem", { name: "Ada" });
+    expect(screen.queryByRole("button", { name: "Make Ada a user" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Make Bob an admin" })).toBeInTheDocument();
+  });
+
+  it("refetches the session after a role change", async () => {
+    const fetch = api(admin, { "PATCH /api/admin/users/u2": () => noContent() });
+    renderApp("/admin/users");
+    await userEvent.click(await screen.findByRole("button", { name: "Make Bob an admin" }));
+    // A session read that comes after the PATCH.
+    await vi.waitFor(() => {
+      const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);
+      expect(calls.slice(calls.indexOf("PATCH /api/admin/users/u2")).includes("GET /api/session")).toBe(true);
+    });
   });
 
   it("offers no deactivation of oneself", async () => {
@@ -134,11 +153,12 @@ describe("Admin users", () => {
     expect(within(card("Ada")).queryByRole("button", { name: /Deactivate/ })).not.toBeInTheDocument();
   });
 
-  it("tells a plain user that only an admin can see it", async () => {
-    api(plain);
+  it("tells a plain user that only an admin can see it, without asking for the data", async () => {
+    const fetch = api(plain);
     renderApp("/admin/users");
     expect(await screen.findByText("Only an admin can see this.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to the notes" })).toHaveAttribute("href", "/");
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => new URL(r.url).pathname.startsWith("/api/admin"))).toBe(false);
   });
 });

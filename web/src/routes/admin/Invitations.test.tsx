@@ -70,6 +70,13 @@ describe("Admin invitations", () => {
     expect(second.queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
   });
 
+  it("does not ask a plain user's session for invitations", async () => {
+    const fetch = api({ "GET /api/session": () => json(200, { user: { ...admin, role: "user" }, previousSignInAt: null }) });
+    renderApp("/admin/invitations");
+    expect(await screen.findByText("Only an admin can see this.")).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([r]) => new URL(r.url).pathname.startsWith("/api/admin"))).toBe(false);
+  });
+
   it("links the two admin pages", async () => {
     api();
     renderApp("/admin/invitations");
