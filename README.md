@@ -30,7 +30,11 @@ The server offers four MCP tools. `sh` is a shell over your notes:
 
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
-Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. There is no web UI yet; accounts, API keys and the REST API under `/api` are described below.
+Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. The web app (below) and the REST API under `/api` sit on top of this; accounts and API keys are described further down.
+
+### The web app
+
+The server also serves a web app, built from `web/` into the image. It works on a phone first and on a laptop too: sign in, browse vaults and folders, read and edit notes in Markdown (saved automatically, with a conflict prompt if an agent wrote in the meantime), search by words and meaning, upload Markdown files or folders, make API keys, and, for admins, manage users and invitations. It talks only to the REST API, with the same-origin session cookie. Notes are text only for now.
 
 ## Security
 
@@ -97,6 +101,14 @@ curl localhost:8080/healthz       # ok
 docker compose exec kumbu sh -c 'cat /recovery/*.recovery-key.txt'   # store these keys safely
 ```
 
+For the web app, set `KUMBU_PUBLIC_URL` in `.env` to the address you open it at (e.g. `http://localhost:8080`), then create the first admin and open the link it prints, `…/join#<code>`:
+
+```sh
+docker compose exec kumbu kumbu bootstrap-admin
+```
+
+After joining you see the recovery key once; keep it safe. Then open `http://localhost:8080/` (or your `KUMBU_PORT`) and sign in.
+
 Your own notes go in `./vaults/<VaultName>/`, one folder per vault. Good to know:
 
 - **Search by meaning needs the embedding model** ([snowflake-arctic-embed-m-v2.0](https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0), 16-bit, about 630 MB). The server downloads it once on the first start into the `models` volume, pinned to one revision and checked against its SHA-256, and runs it in-process with ONNX Runtime; after that it works offline. Until it is loaded, and with `KUMBU_SEARCH=false`, `semsearch` ranks by words and says so. Indexing runs in the background after every write and when a vault is unlocked; a note takes some tens of milliseconds per section on a CPU.
@@ -146,6 +158,20 @@ $KUMBU_MODEL_DIR/
 ```
 
 Without it the tests use a stand-in embedder and skip the three tests that need the real files: the tokenizer test of each model and the ranking test against arctic-m. A directory in the layout of step 7 (arctic-m's files directly in it) is moved into `arctic-m/` when the server starts (`ModelFiles.AdoptStep7Layout`); the tests don't move it and skip until then.
+
+### The web app
+
+Needs Node 20+ and pnpm. Details are in [web/README.md](web/README.md).
+
+```sh
+pnpm -C web install
+pnpm -C web dev       # http://localhost:5173, proxies /api and /mcp to the server on :8083
+pnpm -C web test      # Vitest
+pnpm -C web build     # type check and build into web/dist
+pnpm -C web gen:api   # regenerate src/api/schema.d.ts from a running server
+```
+
+The dev server proxies to `http://localhost:8083`, so start the stack with `KUMBU_PORT=8083` (or change `server` in `web/vite.config.ts`). The server refuses a POST, PUT or DELETE from a browser unless its `Origin` header matches `KUMBU_PUBLIC_URL` (or, when that is unset, the request's own host). The proxy keeps the browser's host, so the Vite page at `:5173` fails with `403` ("This request didn't come from Kumbu's own pages") if `KUMBU_PUBLIC_URL` points elsewhere. For development either leave `KUMBU_PUBLIC_URL` empty or set it to `http://localhost:5173`; `bootstrap-admin` needs it, so for the first admin use the second and open the printed link as `http://localhost:5173/join#…`. Rebuild with `docker compose up -d --build` after changing it. `gen:api` reads `http://localhost:8083/api/openapi.json`; set `KUMBU_OPENAPI_URL` to use another address.
 
 ## More
 
