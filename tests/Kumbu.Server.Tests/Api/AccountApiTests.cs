@@ -639,7 +639,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("same-origin", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.Equal(
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
             response.Headers.GetValues("Content-Security-Policy").Single());
         Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
     }
