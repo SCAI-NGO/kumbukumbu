@@ -239,6 +239,67 @@ public sealed class DeletionTests(MongoFixture fixture)
         await AssertGoneAsync(stale.Id);
     }
 
+    /// <summary>A vault of lea's on an external provider that hangs, and a long note in it being embedded, one chunk
+    /// per call: the provider is in its first call.</summary>
+    private async Task<(User Lea, byte[] Key, UnlockedVault Vault, Search.FakeEmbedder Remote, Task Indexing, Kumbu.Server.Search.SearchIndex Index)> HangingEmbeddingAsync(bool ignoreCancellation = false)
+    {
+        var (lea, key, _) = await SignedInAsync("lea");
+        var vault = await FilledVaultAsync(lea, key, "Tagebuch");
+        var remote = new Search.FakeEmbedder(model: "remote-1", dimensions: 8) { MaxBatch = 1, Hang = true, IgnoreCancellation = ignoreCancellation };
+        var index = new Kumbu.Server.Search.SearchIndex(
+            Catalog(),
+            Kumbu.Server.Search.EmbeddingProviders.Of(new Search.FakeEmbedder(), new Kumbu.Server.Search.EmbeddingProvider("remote", "Remote", null, remote)),
+            NullLogger<Kumbu.Server.Search.SearchIndex>.Instance);
+        await Catalog().SetEmbeddingProviderAsync(vault, "remote", Ct);
+        var path = P("/Tagebuch/long.md");
+        var long_ = string.Join("\n\n", Enumerable.Range(1, 3).Select(i => $"# Teil {i}\n\n{string.Concat(Enumerable.Repeat($"Abschnitt {i} mit eigenem Text. ", 60))}"));
+        var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
+        Assert.True(await store.TryCreateAsync(new StoredNote(path, long_, 1, lea.Username, Now, []), Ct));
+        var indexing = index.IndexAsync(vault, path, Ct);
+        await remote.Hanging.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        return (lea, key, vault, remote, indexing, index);
+    }
+
+    [Fact]
+    public async Task Deleting_a_vault_whose_provider_hangs_cancels_the_call_and_sends_no_more_batches()
+    {
+        var (lea, key, vault, remote, indexing, index) = await HangingEmbeddingAsync();
+        using var _ = index;
+
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await indexing.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Single(remote.Seen);
+        Assert.Equal(0, await CountAsync("embeddings", "vault", vault.Id));
+        await AssertGoneAsync(vault.Id);
+    }
+
+    [Fact]
+    public async Task While_a_deletion_waits_for_a_hanging_provider_other_vaults_answer_at_once()
+    {
+        var (lea, key, vault, remote, indexing, index) = await HangingEmbeddingAsync(ignoreCancellation: true);
+        using var _ = index;
+        var (bob, bobKey, _) = await SignedInAsync("bob");
+        await FilledVaultAsync(bob, bobKey, "Projekte");
+
+        // The provider doesn't even honour the cancellation: the deletion has to wait for the vault's index gate.
+        var deletion = Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
+        await Task.Delay(200, Ct);
+
+        Assert.False(deletion.IsCompleted);
+        Assert.True(Catalog().IsDeleted(vault.Id));
+        Assert.Single(await Catalog().OpenForUserAsync(bob.Id, bobKey, Ct).WaitAsync(TimeSpan.FromSeconds(2), Ct));
+        Assert.Empty(await Catalog().OpenForUserAsync(lea.Id, key, Ct).WaitAsync(TimeSpan.FromSeconds(2), Ct));
+
+        // Its answer comes in after all: the batches after it don't go out, and nothing is stored.
+        remote.Release.SetResult();
+        await indexing.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        await deletion.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.Single(remote.Seen);
+        Assert.Equal(0, await CountAsync("embeddings", "vault", vault.Id));
+        await AssertGoneAsync(vault.Id);
+    }
+
     [Fact]
     public async Task An_older_vault_object_waiting_in_the_index_queue_brings_no_embedding_back()
     {

@@ -149,12 +149,25 @@ public sealed class SearchIndex : BackgroundService
             var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
+            // A deletion of the vault cancels a call under way: it waits for this gate, and a provider that hangs
+            // with retries would hold it up for minutes.
+            using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.DeletionToken(vault.Id));
             foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))
             {
                 // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
                 // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
-                if (vault.EmbeddingProvider != provider) return;
-                var vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, ct);
+                // Nor does anything more of a vault being deleted.
+                if (vault.EmbeddingProvider != provider || vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+                float[][] vectors;
+                try
+                {
+                    vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, embedding.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];
             }
 

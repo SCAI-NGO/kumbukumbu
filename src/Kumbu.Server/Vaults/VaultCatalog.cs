@@ -33,6 +33,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();
+
+    /// <summary>Per vault, what cancels its embedding calls when it is deleted (<see cref="DeletionToken"/>).</summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _deletions = new();
     private volatile bool _ready;
 
     internal IMongoCollection<VaultDocument> Vaults { get; } = db.GetCollection<VaultDocument>("vaults");
@@ -344,14 +347,16 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
     /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
-    /// Nothing may bring a deleted vault back or write for it afterwards. Loading is held off for the whole
-    /// deletion (<c>_loading</c>), so a request that read the slot and the vault document just before the commit
-    /// can't put the vault back into the working set. The vault in memory is taken off writes and indexing (both
-    /// its gates). And the ids are tombstoned before the transaction (<see cref="IsDeleted"/>): an older
-    /// <see cref="UnlockedVault"/> of the same vault, locked meanwhile but still held by a request or waiting in the
-    /// search index's queue, has gates of its own, so every write and every indexing checks the tombstone too. After
-    /// the commit the vault in memory is marked deleted and dropped, and the content collections are swept once more
-    /// for a write of such an older object that was already under way when the tombstone was set.
+    /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
+    /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="DeletionToken"/>):
+    /// from then on the vault isn't loaded, written or indexed, whatever <see cref="UnlockedVault"/> object a request
+    /// or the search index's queue still holds, and no more of its text goes to an external provider. Then the vault in
+    /// memory is taken off writes and indexing (both its gates), which waits for a write or an embedding call already
+    /// under way. Loading is held off (<c>_loading</c>) only after that, for the transaction, so a request that read
+    /// the slot and the vault document just before the commit can't put the vault back into the working set; taking
+    /// it last keeps a slow provider from stalling every other vault's requests. After the commit the vault in memory
+    /// is marked deleted and dropped, and the content collections are swept once more for a write of an older object
+    /// that was already past its tombstone check.
     /// </para>
     /// Returns how many documents went, slots included.
     /// </summary>
@@ -361,13 +366,18 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         await EnsureReadyAsync(ct);
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         var held = new List<UnlockedVault>();
-        var tombstoned = new List<string>();
+        var tombstoned = ids.Where(id => _deleted.TryAdd(id, 0)).ToList();
+        foreach (var id in ids)
+        {
+            if (_deletions.TryRemove(id, out var deletion)) deletion.Cancel();
+        }
+
         IReadOnlyList<string> revoked = [];
-        // Never while holding a gate: nothing that holds a gate waits for _loading, so this order can't deadlock.
-        await _loading.WaitAsync(ct);
+        var loading = false;
         try
         {
-            // In id order, so two deletions can't each hold a gate the other waits for.
+            // In id order, so two deletions can't each hold a gate the other waits for. A vault loaded after this
+            // look is held by nobody, but the tombstone keeps it from writing and indexing already.
             foreach (var id in ids)
             {
                 if (!_open.TryGetValue(id, out var vault)) continue;
@@ -385,7 +395,9 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 held.Add(vault);
             }
 
-            tombstoned.AddRange(ids.Where(id => _deleted.TryAdd(id, 0)));
+            // After the gates: nothing that holds _loading waits for a gate, so this order can't deadlock.
+            await _loading.WaitAsync(ct);
+            loading = true;
             long deleted;
             using (var session = await StartSessionAsync(ct))
             {
@@ -436,7 +448,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 vault.Gate.Release();
             }
 
-            _loading.Release();
+            if (loading) _loading.Release();
         }
     }
 
@@ -465,6 +477,15 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>Whether the vault was deleted (or is being deleted) in this process: such a vault is never loaded,
     /// written or indexed again, whatever <see cref="UnlockedVault"/> object a caller still holds.</summary>
     public bool IsDeleted(string vaultId) => _deleted.ContainsKey(vaultId);
+
+    /// <summary>Cancelled when the vault is deleted: an embedding call for it stops, rather than holding up the deletion.
+    /// Already cancelled for a vault deleted (or being deleted) now.</summary>
+    internal CancellationToken DeletionToken(string vaultId)
+    {
+        var token = _deletions.GetOrAdd(vaultId, _ => new CancellationTokenSource()).Token;
+        // After the lookup: a deletion tombstones first and cancels second, so one of the two catches it.
+        return IsDeleted(vaultId) ? new CancellationToken(canceled: true) : token;
+    }
 
     /// <summary>Deletes an API key's slots, outside a transaction (an expired key, on its first use after expiry).</summary>
     internal Task DeleteApiKeySlotsAsync(string keyId, CancellationToken ct) =>

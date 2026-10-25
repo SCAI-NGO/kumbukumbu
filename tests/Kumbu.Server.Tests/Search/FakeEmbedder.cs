@@ -43,18 +43,39 @@ public sealed class FakeEmbedder(SemanticState state = SemanticState.Ready, stri
     /// <summary>Awaited before each call (query or not), to hold a call up or to change something in between.</summary>
     public Func<bool, Task>? BeforeEmbed { get; set; }
 
+    /// <summary>While set, every call hangs until its token is cancelled, as a remote provider that doesn't answer.
+    /// <see cref="Hanging"/> completes once the first call hangs.</summary>
+    public bool Hang { get; set; }
+
+    /// <summary>With <see cref="Hang"/>: the call ignores its token and hangs until <see cref="Release"/> completes.</summary>
+    public bool IgnoreCancellation { get; init; }
+
+    public TaskCompletionSource Hanging { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct)
     {
         if (BeforeEmbed is { } before) await before(query);
+        if (Hang)
+        {
+            // Seen as it leaves, before the hang: a call that is cancelled still went out.
+            lock (Seen) Seen.AddRange(texts.Select(t => (t, query)));
+            Hanging.TrySetResult();
+            if (IgnoreCancellation) await Release.Task;
+            else await Task.Delay(Timeout.Infinite, ct);
+            return Embed(texts, query, seen: true);
+        }
+
         return Embed(texts, query);
     }
 
-    private float[][] Embed(IReadOnlyList<string> texts, bool query)
+    private float[][] Embed(IReadOnlyList<string> texts, bool query, bool seen = false)
     {
         if (Failure is not null) throw Failure;
         if (texts.Count > MaxBatch) throw new ArgumentException($"At most {MaxBatch} texts per call", nameof(texts));
         Embedded += texts.Count;
-        lock (Seen) Seen.AddRange(texts.Select(t => (t, query)));
+        if (!seen) lock (Seen) Seen.AddRange(texts.Select(t => (t, query)));
         return [.. texts.Select(t =>
         {
             var v = new float[Dimensions];
