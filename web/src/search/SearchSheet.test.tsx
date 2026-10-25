@@ -173,6 +173,16 @@ describe("the search sheet", () => {
     expect(within(other).getByText("title")).toBeInTheDocument();
   });
 
+  it("shows no score or bar for a result ranked by words only (score null), but keeps its reason", async () => {
+    api(() => view([hit("/Work/plan.md", { score: null, reason: "all words" })]));
+    await openSheet();
+    await userEvent.type(input(), "plan");
+    const card = await within(sheet()).findByRole("button", { name: /plan/ });
+    expect(within(card).getByText("all words")).toBeInTheDocument();
+    expect(within(card).queryByRole("meter")).not.toBeInTheDocument();
+    expect(within(card).queryByText(/%/)).not.toBeInTheDocument();
+  });
+
   it("searches in the chosen mode and says so", async () => {
     const searched: Searched[] = [];
     api(() => view([hit("/Work/plan.md")]), searched);
