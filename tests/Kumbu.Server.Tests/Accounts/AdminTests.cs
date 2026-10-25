@@ -24,7 +24,7 @@ public sealed class AdminTests(MongoFixture fixture)
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
 
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
 
     private VaultCatalog Catalog() => new(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
 

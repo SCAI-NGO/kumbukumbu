@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Driver;
 
@@ -17,8 +20,17 @@ public sealed class UserCatalogTests(MongoFixture fixture)
     /// <summary>Cheap Argon2 parameters, so a test run doesn't spend seconds per sign-in.</summary>
     private static Argon2Kdf CheapKdf() => new(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1));
 
-    private UserCatalog Catalog(IMongoDatabase? db = null, Argon2Kdf? kdf = null, TimeProvider? time = null) =>
-        new(db ?? fixture.NewDatabase(), kdf ?? CheapKdf(), time ?? TimeProvider.System, NullLogger<UserCatalog>.Instance);
+    private UserCatalog Catalog(IMongoDatabase? db = null, Argon2Kdf? kdf = null, TimeProvider? time = null)
+    {
+        db ??= fixture.NewDatabase();
+        time ??= TimeProvider.System;
+        return new(db, kdf ?? CheapKdf(), Keys(db, time), time, NullLogger<UserCatalog>.Instance);
+    }
+
+    private static VaultCatalog Vaults(IMongoDatabase db, TimeProvider time) =>
+        new(db, Options.Create(new KumbuOptions()), time, NullLogger<VaultCatalog>.Instance);
+
+    private static ApiKeys Keys(IMongoDatabase db, TimeProvider time) => new(db, Vaults(db, time), time, NullLogger<ApiKeys>.Instance);
 
     [Fact]
     public void The_production_parameters_are_those_of_rfc_9106s_second_recommendation()
@@ -114,12 +126,40 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         await slots.InsertOneAsync(new UserSlotDocument { User = user.Id, Kind = UserSlotDocument.Session, Wrapped = [1, 2, 3] }, cancellationToken: Ct);
 
         // Typed by hand: lower case, spaces instead of dashes.
-        Assert.True(await users.RecoverAsync("Chris", recoveryKey.ToLowerInvariant().Replace('-', ' '), NewPassword, Ct));
+        Assert.NotNull(await users.RecoverAsync("Chris", recoveryKey.ToLowerInvariant().Replace('-', ' '), NewPassword, Ct));
 
         Assert.Null(await users.TrySignInAsync("chris", Password, Ct));
         Assert.Equal(key, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);
         Assert.False(await slots.Find(s => s.User == user.Id && s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
         Assert.Equal(1, await slots.CountDocumentsAsync(s => s.User == user.Id && s.Kind == UserSlotDocument.Password, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Recovery_revokes_every_api_key_and_replaces_the_recovery_key()
+    {
+        var db = fixture.NewDatabase();
+        var users = Catalog(db);
+        var keys = Keys(db, TimeProvider.System);
+        var (_, oldRecoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
+        var (user, userKey, _) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
+        var vault = await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct);
+        var (laptop, _) = await keys.CreateAsync(user, userKey, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
+        var (phone, _) = await keys.CreateAsync(user, userKey, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
+
+        var newRecoveryKey = await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct);
+
+        Assert.NotNull(newRecoveryKey);
+        Assert.NotEqual(oldRecoveryKey, newRecoveryKey);
+        Assert.True(RecoveryKey.TryParse(newRecoveryKey, out _));
+        Assert.Null(await keys.ResolveAsync(laptop, Ct));
+        Assert.Null(await keys.ResolveAsync(phone, Ct));
+        Assert.All(await keys.ListAsync(user, userKey, Ct), k => Assert.NotNull(k.RevokedAt));
+        Assert.Equal(1, await db.GetCollection<UserSlotDocument>("user_slots").CountDocumentsAsync(s => s.User == user.Id && s.Kind == UserSlotDocument.Recovery, cancellationToken: Ct));
+
+        // The used key opens nothing any more; the new one does, to the same user key.
+        Assert.Null(await users.RecoverAsync("chris", oldRecoveryKey, Password, Ct));
+        Assert.NotNull(await users.RecoverAsync("chris", newRecoveryKey, Password, Ct));
+        Assert.Equal(userKey, (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey);
     }
 
     [Fact]
@@ -129,9 +169,9 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         await users.CreateAsync("chris", Password, Roles.User, Ct);
         var (_, otherKey) = await users.CreateAsync("other", Password, Roles.User, Ct);
 
-        Assert.False(await users.RecoverAsync("chris", otherKey, NewPassword, Ct));
-        Assert.False(await users.RecoverAsync("chris", "kumbu-rk-not-a-key", NewPassword, Ct));
-        Assert.False(await users.RecoverAsync("nobody", otherKey, NewPassword, Ct));
+        Assert.Null(await users.RecoverAsync("chris", otherKey, NewPassword, Ct));
+        Assert.Null(await users.RecoverAsync("chris", "kumbu-rk-not-a-key", NewPassword, Ct));
+        Assert.Null(await users.RecoverAsync("nobody", otherKey, NewPassword, Ct));
         Assert.NotNull(await users.TrySignInAsync("chris", Password, Ct));
     }
 
@@ -160,8 +200,8 @@ public sealed class UserCatalogTests(MongoFixture fixture)
 
         Assert.NotNull(newRecoveryKey);
         Assert.NotEqual(oldRecoveryKey, newRecoveryKey);
-        Assert.False(await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct));
-        Assert.True(await users.RecoverAsync("chris", newRecoveryKey, NewPassword, Ct));
+        Assert.Null(await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct));
+        Assert.NotNull(await users.RecoverAsync("chris", newRecoveryKey, NewPassword, Ct));
         Assert.Equal(key, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);
     }
 
@@ -175,7 +215,7 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, key, "not the password at all", Ct));
         Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, key, "", Ct));
         Assert.Null(await users.RegenerateRecoveryKeyAsync(user.Id, new byte[32], Password, Ct));
-        Assert.True(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
+        Assert.NotNull(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
     }
 
     [Theory]

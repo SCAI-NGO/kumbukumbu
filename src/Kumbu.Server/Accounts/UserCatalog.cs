@@ -11,7 +11,7 @@ namespace Kumbu.Server.Accounts;
 /// the keys of their vaults; it is itself wrapped by the password (Argon2id) and by the recovery key. MongoDB
 /// holds the user key only wrapped, and never a password or recovery key.
 /// </summary>
-public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider time, ILogger<UserCatalog> log)
+public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, TimeProvider time, ILogger<UserCatalog> log)
 {
     private const string KeyIdLabel = "kumbu/v1/user-key-id";
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
@@ -114,16 +114,18 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
     }
 
     /// <summary>
-    /// Forgot password: with the recovery key, sets a new password and ends every session of the user. False if
-    /// the user or key is unknown or wrong; <see cref="ArgumentException"/> if the new password is refused.
+    /// Forgot password: with the recovery key, sets a new password, ends every session of the user, revokes every
+    /// API key and replaces the recovery key, so the used one opens nothing any more. Returns the new recovery key,
+    /// formatted for humans; null if the user or key is unknown or wrong; <see cref="ArgumentException"/> if the
+    /// new password is refused.
     /// </summary>
-    public async Task<bool> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
+    public async Task<string?> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
     {
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
-        if (!RecoveryKey.TryParse(recoveryKey, out var key)) return false;
+        if (!RecoveryKey.TryParse(recoveryKey, out var key)) return null;
         var user = NormaliseUsername(username) is { } name ? await Users.Find(u => u.Username == name && u.Active).FirstOrDefaultAsync(ct) : null;
-        if (user is null || await FindSlotAsync(user.Id, UserSlotDocument.Recovery, ct) is not { } slot) return false;
+        if (user is null || await FindSlotAsync(user.Id, UserSlotDocument.Recovery, ct) is not { } slot) return null;
 
         byte[] userKey;
         try
@@ -132,12 +134,19 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
         }
         catch (CryptographicException)
         {
-            return false;
+            return null;
         }
 
         await SetPasswordAsync(user.Id, userKey, newPassword, ct);
-        log.LogInformation("User {Username} set a new password with their recovery key", user.Username);
-        return true;
+        // From here on the request finishes even if the client gives up. The recovery key goes last: a crash
+        // before it leaves the old key working, so the user simply recovers again (and the keys are revoked
+        // then); a crash after it, before the answer arrives, leaves the user the password they just chose, to
+        // sign in with and make a new recovery key in the settings.
+        var revoked = await keys.RevokeAllAsync(user.ToUser(), CancellationToken.None);
+        var newKey = await ReplaceRecoveryKeyAsync(user.Id, userKey, CancellationToken.None);
+        log.LogInformation(
+            "User {Username} set a new password with their recovery key; {Count} API keys revoked and the recovery key replaced", user.Username, revoked);
+        return newKey;
     }
 
     /// <summary>
@@ -178,6 +187,18 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             return null;
         }
 
+        var recoveryKey = await ReplaceRecoveryKeyAsync(userId, userKey, ct);
+        log.LogInformation("User {Username} has a new recovery key", user.Username);
+        return recoveryKey;
+    }
+
+    /// <summary>
+    /// A new recovery key for <paramref name="userKey"/>, which the caller has checked is the user's. The slot is
+    /// replaced in one write, so there is always exactly one recovery slot: the old one until the write, the new
+    /// one after it.
+    /// </summary>
+    private async Task<string> ReplaceRecoveryKeyAsync(string userId, byte[] userKey, CancellationToken ct)
+    {
         var recoveryKey = RecoveryKey.New();
         var slot = RecoverySlot(userId, userKey, recoveryKey);
         await Slots.UpdateOneAsync(
@@ -185,7 +206,6 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, TimeProvider t
             Builders<UserSlotDocument>.Update.Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
             new UpdateOptions { IsUpsert = true },
             ct);
-        log.LogInformation("User {Username} has a new recovery key", user.Username);
         return RecoveryKey.Format(recoveryKey);
     }
 

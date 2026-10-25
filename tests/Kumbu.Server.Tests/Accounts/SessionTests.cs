@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Buffers.Text;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -21,8 +23,11 @@ public sealed class SessionTests(MongoFixture fixture)
 
     private IMongoCollection<UserSlotDocument> Slots => _db.GetCollection<UserSlotDocument>("user_slots");
 
+    private ApiKeys Keys() =>
+        new(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<ApiKeys>.Instance);
+
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
 
     private Sessions Sessions() => new(_db, _time);
 
@@ -243,7 +248,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
+        Assert.NotNull(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
         await Slots.InsertOneAsync(leftOver, cancellationToken: Ct);
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));

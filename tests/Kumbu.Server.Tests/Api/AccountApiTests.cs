@@ -552,6 +552,38 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Recovery_revokes_every_api_key_and_replaces_the_used_recovery_key()
+    {
+        var (username, firstKey, session, keys) = await JoinedWithKeysAsync();
+        var other = await SignInAsync(username);
+
+        using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
+
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        var json = (await JsonAsync(recovered)).AsObject();
+        Assert.Equal(["recoveryKey"], json.Select(p => p.Key));
+        var secondKey = json["recoveryKey"]!.GetValue<string>();
+        Assert.True(RecoveryKey.TryParse(secondKey, out _));
+        Assert.NotEqual(firstKey, secondKey);
+        foreach (var key in keys) Assert.Equal((HttpStatusCode.Unauthorized, HttpStatusCode.Unauthorized), await KeyStatusAsync(key));
+        foreach (var old in new[] { session, other })
+        {
+            using var me = await SendAsync(HttpMethod.Get, "/api/session", session: old);
+            Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+        }
+
+        // The used key can't take the account back; the new one can.
+        using var again = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = Password }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.Unauthorized, again.StatusCode);
+        Assert.DoesNotContain("recoveryKey", await again.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        using var list = await SendAsync(HttpMethod.Get, "/api/keys", session: await SignInAsync(username, NewPassword));
+        Assert.All((await JsonAsync(list)).AsArray(), k => Assert.NotNull(k!["revokedAt"]));
+        using var withNew = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = secondKey, newPassword = Password }, ip: NewIp());
+        Assert.Equal(HttpStatusCode.OK, withNew.StatusCode);
+        await SignInAsync(username, Password);
+    }
+
+    [Fact]
     public async Task The_recovery_key_sets_a_new_password_and_a_regenerated_one_replaces_it()
     {
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
@@ -569,7 +601,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var old = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
         Assert.Equal(HttpStatusCode.Unauthorized, old.StatusCode);
         using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = secondKey, newPassword = NewPassword }, ip: NewIp());
-        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
 
         using var oldSession = await SendAsync(HttpMethod.Get, "/api/session", session: SessionOf(join));
         Assert.Equal(HttpStatusCode.Unauthorized, oldSession.StatusCode);
@@ -598,7 +630,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using var me = await SendAsync(HttpMethod.Get, "/api/session", session: session);
         Assert.Equal(HttpStatusCode.OK, me.StatusCode);
         using var recovered = await SendAsync(HttpMethod.Post, "/api/recover", new { username, recoveryKey = firstKey, newPassword = NewPassword }, ip: NewIp());
-        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
     }
 
     [Fact]

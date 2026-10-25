@@ -398,6 +398,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var users = new Kumbu.Server.Accounts.UserCatalog(
             app.Database,
             new Kumbu.Server.Accounts.Argon2Kdf(new Kumbu.Server.Accounts.Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)),
+            app.Services.GetRequiredService<Kumbu.Server.Accounts.ApiKeys>(),
             TimeProvider.System,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Kumbu.Server.Accounts.UserCatalog>.Instance);
         var username = "u" + Guid.NewGuid().ToString("N")[..12];

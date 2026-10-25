@@ -145,15 +145,13 @@ public static class AccountApi
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));
     }
 
-    private static async Task<NoContent> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>
+    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct))
-        {
-            throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
-        }
-
-        return TypedResults.NoContent();
+        var recoveryKey = await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
+            ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
+        return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
     private static Ok<SessionView> Session(RequestCaller caller) =>

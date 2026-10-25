@@ -6,19 +6,47 @@ import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
+import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 
 export default function ForgotPassword() {
   const [username, setUsername] = useState("");
   const [recoveryKey, setRecoveryKey] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  // The recovery key that replaces the used one lives here, in component state only, until the reveal is done.
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   const recover = useMutation({
     mutationFn: () => call(api.POST("/api/recover", { body: { username, recoveryKey, newPassword } })),
-    // The key was typed in once; it doesn't stay in memory longer than needed.
-    onSuccess: () => setRecoveryKey(""),
+    // The result carries the new recovery key: it goes into component state, not the client-wide mutation cache.
+    gcTime: 0,
+    onSuccess: (view) => {
+      // The used key was typed in once; it doesn't stay in memory longer than needed.
+      setRecoveryKey("");
+      setNewPassword("");
+      setNewKey(view.recoveryKey);
+    },
   });
 
-  if (recover.isSuccess) {
+  if (newKey) {
+    return (
+      <AuthScreen
+        title="Your new recovery key"
+        lead="Your new password is set and every session of yours has ended. Your old recovery key no longer works, and all your API keys were revoked: agents using them need new keys."
+      >
+        <RecoveryKeyReveal
+          value={newKey}
+          onContinue={() => {
+            recover.reset();
+            setNewKey(null);
+            setDone(true);
+          }}
+        />
+      </AuthScreen>
+    );
+  }
+
+  if (done) {
     return (
       <AuthScreen title="Password set" lead="Your new password is set. Every session of yours has ended, here and on other devices.">
         <Link to="/signin" className={`${primaryButtonClass} flex items-center justify-center`}>

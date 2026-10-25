@@ -2,7 +2,9 @@
 using System.Buffers.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Cli;
+using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -23,8 +25,11 @@ public sealed class InvitationTests(MongoFixture fixture)
 
     private IMongoCollection<BsonDocument> InvitationDocs => _db.GetCollection<BsonDocument>("invitations");
 
+    private ApiKeys Keys() =>
+        new(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<ApiKeys>.Instance);
+
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
 
     /// <summary>A second call is a second server process: nothing is shared but the database.</summary>
     private Invitations Invitations() => new(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
@@ -210,7 +215,7 @@ public sealed class InvitationTests(MongoFixture fixture)
         var admin = await AdminAsync();
         var (code, _) = await Invitations().CreateAsync(admin, Roles.Admin, null, null, Ct);
         var failing = new Invitations(
-            _db, new ServerSecret(_db), new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(1024, 1, 1)), _time, new FailAfterInsert()), _time, NullLogger<Invitations>.Instance);
+            _db, new ServerSecret(_db), new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(1024, 1, 1)), Keys(), _time, new FailAfterInsert()), _time, NullLogger<Invitations>.Instance);
 
         await Assert.ThrowsAsync<IOException>(() => failing.RedeemAsync(code, "lea", Password, Ct));
 
