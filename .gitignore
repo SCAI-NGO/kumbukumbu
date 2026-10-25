@@ -485,3 +485,4 @@ $RECYCLE.BIN/
 /vaults/
 .env
 /src/Kumbu.Server/wwwroot/
+.claude/worktrees/
