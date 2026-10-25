@@ -31,7 +31,9 @@ public sealed record JoinedView(UserView User, string RecoveryKey);
 
 public sealed record RecoverRequest(string Username, string RecoveryKey, string NewPassword);
 
-public sealed record ChangePasswordRequest(string OldPassword, string NewPassword);
+/// <summary><c>revokeApiKeys</c> also revokes every API key of the user; true when left out, so an older client
+/// gets the safe behaviour: a key made from a stolen session doesn't outlive the password change.</summary>
+public sealed record ChangePasswordRequest(string OldPassword, string NewPassword, bool RevokeApiKeys = true);
 
 /// <summary>Always true: a changed password ends every session, this one too, so the web app signs in again.</summary>
 public sealed record PasswordChangedView(bool SignedOut);
@@ -165,7 +167,7 @@ public static class AccountApi
     }
 
     private static async Task<Ok<PasswordChangedView>> ChangePasswordAsync(
-        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, CancellationToken ct)
+        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, ApiKeys keys, AccountLimits limits, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -173,6 +175,10 @@ public static class AccountApi
         {
             throw ApiErrors.BadRequest("The current password is wrong.");
         }
+
+        // The password is changed and every session ended: the revocation must not stop half way because the
+        // client gave up waiting.
+        if (body.RevokeApiKeys) await keys.RevokeAllAsync(user, CancellationToken.None);
 
         ClearSessionCookie(http);
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));

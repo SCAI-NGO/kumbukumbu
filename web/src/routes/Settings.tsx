@@ -75,11 +75,14 @@ function SchemeSection() {
 }
 
 function PasswordSection() {
+  const revokeId = useId();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
+  // On by default: a key made from a stolen session shouldn't outlive the password change.
+  const [revokeApiKeys, setRevokeApiKeys] = useState(true);
   const [changed, setChanged] = useState(false);
   const change = useMutation({
-    mutationFn: () => call(api.POST("/api/password", { body: { oldPassword: current, newPassword: next } })),
+    mutationFn: () => call(api.POST("/api/password", { body: { oldPassword: current, newPassword: next, revokeApiKeys } })),
     onSuccess: ({ signedOut }) => {
       setCurrent("");
       setNext("");
@@ -100,6 +103,22 @@ function PasswordSection() {
       <form onSubmit={submit} className="flex flex-col gap-4">
         <PasswordField label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
         <PasswordField label="New password" value={next} onChange={setNext} autoComplete="new-password" policy />
+        <div className="flex flex-col gap-1">
+          <label htmlFor={revokeId} className="flex min-h-11 items-center gap-3 text-text">
+            <input
+              id={revokeId}
+              type="checkbox"
+              checked={revokeApiKeys}
+              onChange={(e) => setRevokeApiKeys(e.target.checked)}
+              aria-describedby={`${revokeId}-hint`}
+              className="size-5 shrink-0 accent-accent"
+            />
+            Also revoke all API keys
+          </label>
+          <p id={`${revokeId}-hint`} className="pl-8 text-sm text-text-body">
+            Agents using them will need new keys.
+          </p>
+        </div>
         {change.isError && <FormError>{errorText(change.error)}</FormError>}
         {changed && <Done>Your password is changed. Your other sessions have ended.</Done>}
         <button type="submit" disabled={change.isPending || !current || !next} className={primaryButtonClass}>

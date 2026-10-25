@@ -1989,6 +1989,8 @@ export interface components {
         ChangePasswordRequest: {
             oldPassword: string;
             newPassword: string;
+            /** @default true */
+            revokeApiKeys: boolean;
         };
         ChangeView: {
             path: string;

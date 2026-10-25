@@ -172,6 +172,25 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     }
 
     /// <summary>
+    /// Revokes every key of the user that isn't revoked yet, in one transaction, the way <see cref="RevokeAsync"/>
+    /// revokes one: after a password change that asks for it, and after a recovery. Returns how many.
+    /// </summary>
+    public async Task<int> RevokeAllAsync(User user, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        int revoked;
+        using (var session = await catalog.StartSessionAsync(ct))
+        {
+            session.StartTransaction();
+            revoked = await RevokeAllAsync(session, user.Id, ct);
+            await session.CommitTransactionAsync(CancellationToken.None);
+        }
+
+        if (revoked > 0) log.LogInformation("User {Username} revoked all {Count} API keys", user.Username, revoked);
+        return revoked;
+    }
+
+    /// <summary>
     /// Revokes every key of the user that isn't revoked yet, inside the caller's transaction (deactivating the
     /// user): marked revoked, names freed and slots deleted, so reactivating the user revives none of them.
     /// </summary>

@@ -91,6 +91,48 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         return (await JsonAsync(created))["code"]!.GetValue<string>();
     }
 
+    /// <summary>A user who joined by invitation, with a vault <c>Arbeit</c> and two API keys for it: the username,
+    /// the recovery key from joining, the join's session and the keys.</summary>
+    private async Task<(string Username, string RecoveryKey, string Session, string[] Keys)> JoinedWithKeysAsync()
+    {
+        var code = await InvitationCodeAsync();
+        var username = NewUsername();
+        using var join = await SendAsync(HttpMethod.Post, "/api/join", new { code, username, password = Password });
+        var recoveryKey = (await JsonAsync(join))["recoveryKey"]!.GetValue<string>();
+        var session = SessionOf(join);
+        using var vault = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session);
+        Assert.Equal(HttpStatusCode.Created, vault.StatusCode);
+        var keys = new List<string>();
+        foreach (var (name, right) in new[] { ("laptop", "write"), ("phone", "read") })
+        {
+            using var created = await SendAsync(HttpMethod.Post, "/api/keys", new { name, vaults = new Dictionary<string, string> { ["Arbeit"] = right } }, session: session);
+            keys.Add((await JsonAsync(created))["key"]!.GetValue<string>());
+        }
+
+        foreach (var key in keys) Assert.Equal((HttpStatusCode.OK, HttpStatusCode.OK), await KeyStatusAsync(key));
+        return (username, recoveryKey, session, [.. keys]);
+    }
+
+    /// <summary>What an API key gets on the REST API and on <c>/mcp</c>.</summary>
+    private async Task<(HttpStatusCode Api, HttpStatusCode Mcp)> KeyStatusAsync(string key)
+    {
+        using var api = await SendAsync(HttpMethod.Get, "/api/vaults", origin: null, bearer: key);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(
+                """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        request.Headers.Add("X-Forwarded-For", _ip);
+        using var http = Client();
+        using var mcp = await http.SendAsync(request, Ct);
+        return (api.StatusCode, mcp.StatusCode);
+    }
+
     private static string NewIp() => $"198.19.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
 
     [Fact]
@@ -485,6 +527,28 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         }
 
         await SignInAsync(username, NewPassword);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task Changing_the_password_revokes_every_api_key_unless_asked_to_keep_them(bool? revokeApiKeys)
+    {
+        var (username, _, session, keys) = await JoinedWithKeysAsync();
+        object body = revokeApiKeys is { } revoke
+            ? new { oldPassword = Password, newPassword = NewPassword, revokeApiKeys = revoke }
+            : new { oldPassword = Password, newPassword = NewPassword };
+
+        using var changed = await SendAsync(HttpMethod.Post, "/api/password", body, session: session);
+
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        // Left out, the flag is true: an older client gets the safe behaviour.
+        var revoked = revokeApiKeys ?? true;
+        var expected = revoked ? HttpStatusCode.Unauthorized : HttpStatusCode.OK;
+        foreach (var key in keys) Assert.Equal((expected, expected), await KeyStatusAsync(key));
+        using var list = await SendAsync(HttpMethod.Get, "/api/keys", session: await SignInAsync(username, NewPassword));
+        Assert.All((await JsonAsync(list)).AsArray(), k => Assert.Equal(revoked, k!["revokedAt"] is not null));
     }
 
     [Fact]
