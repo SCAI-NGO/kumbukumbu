@@ -16,15 +16,20 @@ public static class Security
     public const string ContentSecurityPolicy =
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
+    /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
+    public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
+
     /// <summary>
     /// The security headers, on every response (API, MCP, static files and errors alike), and
     /// <c>Cache-Control: no-store</c> on the API's. Added when the response
-    /// starts, so that a handler clearing the response doesn't drop them. HSTS only when users reach the instance
-    /// over https: on plain http a browser ignores it, and on localhost it would pin https for every local port.
+    /// starts, so that a handler clearing the response doesn't drop them. HSTS when the public URL is https or the
+    /// request came over https as the app sees it: behind a trusted proxy that is <c>X-Forwarded-Proto</c>
+    /// (see Program.cs), otherwise the connection itself. Never on plain http: a browser ignores it there, and on
+    /// a plain-http localhost it would pin https for every local port.
     /// </summary>
     public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app, string? publicUrl)
     {
-        var hsts = publicUrl is not null && publicUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        var httpsPublicUrl = publicUrl is not null && publicUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         return app.Use((context, next) =>
         {
             context.Response.OnStarting(() =>
@@ -33,7 +38,7 @@ public static class Security
                 headers.XContentTypeOptions = "nosniff";
                 headers["Referrer-Policy"] = "same-origin";
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
-                if (hsts) headers.StrictTransportSecurity = "max-age=31536000";
+                if (httpsPublicUrl || context.Request.IsHttps) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
                 if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";

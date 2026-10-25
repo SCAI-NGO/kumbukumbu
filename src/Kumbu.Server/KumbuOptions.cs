@@ -87,7 +87,8 @@ public sealed class VaultOptions
 
 public sealed class ProxyOptions
 {
-    /// <summary>Behind a reverse proxy (Traefik): take the client IP from <c>X-Forwarded-For</c>. Only set this
+    /// <summary>Behind a reverse proxy (Traefik): take the client IP from <c>X-Forwarded-For</c> and the scheme from
+    /// <c>X-Forwarded-Proto</c> (which decides HSTS). Only set this
     /// when the proxy is the only way in, or clients could pick the IP that rate limits count against.</summary>
     public bool Trusted { get; set; }
 }

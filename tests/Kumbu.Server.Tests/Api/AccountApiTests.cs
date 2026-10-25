@@ -641,7 +641,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
             response.Headers.GetValues("Content-Security-Policy").Single());
-        Assert.StartsWith("max-age=", response.Headers.GetValues("Strict-Transport-Security").Single(), StringComparison.Ordinal);
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]
@@ -654,15 +654,76 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Null(health.Headers.CacheControl);
     }
 
+    private const string Hsts = "max-age=31536000; includeSubDomains";
+
+    /// <summary>A GET of <c>/healthz</c> over plain http, optionally claiming https in <c>X-Forwarded-Proto</c>.</summary>
+    private static async Task<HttpResponseMessage> PlainHttpAsync(WebApplicationFactory<Program> factory, string? forwardedProto = null)
+    {
+        using var http = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("http://localhost") });
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/healthz");
+        if (forwardedProto is not null) request.Headers.Add("X-Forwarded-Proto", forwardedProto);
+        return await http.SendAsync(request, Ct);
+    }
+
+    /// <summary>Behind Traefik with a public URL that is (still) http: only the request tells whether it came over https.</summary>
+    private WebApplicationFactory<Program> HttpPublicUrlBehindProxy() => app.WithWebHostBuilder(b =>
+        b.UseSetting("Kumbu:Proxy:Trusted", "true").UseSetting("Kumbu:PublicUrl", "http://kumbu.test"));
+
     [Fact]
-    public async Task Without_an_https_public_url_there_is_no_hsts()
+    public async Task An_https_public_url_sends_hsts_even_on_a_request_that_reached_the_app_over_http()
+    {
+        using var response = await PlainHttpAsync(Api);
+
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Fact]
+    public async Task A_request_over_https_behind_a_trusted_proxy_gets_hsts()
+    {
+        await using var proxied = HttpPublicUrlBehindProxy();
+
+        using var response = await PlainHttpAsync(proxied, forwardedProto: "https");
+
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Fact]
+    public async Task A_request_over_plain_http_behind_a_trusted_proxy_gets_no_hsts()
+    {
+        await using var proxied = HttpPublicUrlBehindProxy();
+
+        using var forwardedHttp = await PlainHttpAsync(proxied, forwardedProto: "http");
+        using var unforwarded = await PlainHttpAsync(proxied);
+
+        Assert.False(forwardedHttp.Headers.Contains("Strict-Transport-Security"));
+        Assert.False(unforwarded.Headers.Contains("Strict-Transport-Security"));
+    }
+
+    [Fact]
+    public async Task Over_plain_http_without_an_https_public_url_there_is_no_hsts()
+    {
+        using var response = await PlainHttpAsync(app);
+
+        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
+        Assert.True(response.Headers.Contains("X-Content-Type-Options"));
+    }
+
+    [Fact]
+    public async Task Without_a_trusted_proxy_x_forwarded_proto_is_ignored()
+    {
+        using var response = await PlainHttpAsync(app, forwardedProto: "https");
+
+        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
+    }
+
+    [Fact]
+    public async Task A_request_that_reached_the_app_over_https_gets_hsts()
     {
         using var http = Client(app);
 
         using var response = await http.GetAsync("/healthz", Ct);
 
-        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
-        Assert.True(response.Headers.Contains("X-Content-Type-Options"));
+        Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]
