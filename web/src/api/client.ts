@@ -18,7 +18,12 @@ const anonymous = new Set(["POST /api/session", "POST /api/join", "POST /api/rec
 
 const sessionEnds: Middleware = {
   onResponse({ request, response, schemaPath }) {
-    if (response.status === 401 && !anonymous.has(`${request.method} ${schemaPath}`)) useSession.getState().end();
+    const key = `${request.method} ${schemaPath}`;
+    if (response.status !== 401 || anonymous.has(key)) return;
+    // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
+    // itself. Asking for the session is the way back in, and still leads to sign-in.
+    if (useSession.getState().signedOut && key !== "GET /api/session") return;
+    useSession.getState().end();
   },
 };
 

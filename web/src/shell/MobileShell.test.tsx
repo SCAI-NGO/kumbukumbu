@@ -101,6 +101,42 @@ describe("the shell", () => {
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
   });
 
+  it("opens the drawer on a swipe only over the note, closes it only while it is on top, and drops a cancelled or two-finger touch", async () => {
+    signedInApi();
+    renderApp("/notes/Work/inbox.md");
+    const shell = await screen.findByTestId("shell");
+    const swipe = (from: [number, number], to: [number, number], fingers = 1) => {
+      fireEvent.touchStart(shell, { touches: Array.from({ length: fingers }, () => ({ clientX: from[0], clientY: from[1] })) });
+      fireEvent.touchEnd(shell, { changedTouches: [{ clientX: to[0], clientY: to[1] }] });
+    };
+
+    // Two fingers: a pinch, not a swipe. A touch the browser took over: no swipe either.
+    swipe([10, 400], [100, 400], 2);
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    fireEvent.touchStart(shell, { touches: [{ clientX: 10, clientY: 400 }] });
+    fireEvent.touchCancel(shell);
+    fireEvent.touchEnd(shell, { changedTouches: [{ clientX: 100, clientY: 400 }] });
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+
+    // Not over the search sheet.
+    await userEvent.click(screen.getByRole("button", { name: /^Search/ }));
+    await screen.findByRole("dialog", { name: "Search" });
+    swipe([10, 400], [100, 400]);
+    expect(screen.getByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+
+    // Open, then a dialog over it: a swipe left leaves both.
+    swipe([10, 400], [100, 400]);
+    await userEvent.click(within(drawer()).getByRole("button", { name: "New vault" }));
+    swipe([300, 400], [200, 400]);
+    expect(screen.getByRole("dialog", { name: "New vault" })).toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    swipe([300, 400], [200, 400]);
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+  });
+
   it("lists folders first, then notes, alphabetically, with each folder's note count", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");

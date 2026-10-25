@@ -96,6 +96,23 @@ describe("Write mode", () => {
     expect(screen.queryByRole("navigation", { name: "Vault actions" })).not.toBeInTheDocument();
   });
 
+  it("focuses a stand-in inside the tap on Write and, the editor being loaded already, mounts it in that tap", async () => {
+    editorApi();
+    renderApp(planUrl);
+    const write = await screen.findByRole("button", { name: "Write" });
+    // The note view fetched the editor ahead; give that a moment to land.
+    await wait(50);
+    const focused: Element[] = [];
+    const record = (e: FocusEvent) => focused.push(e.target as Element);
+    document.addEventListener("focusin", record);
+    fireEvent.click(write);
+    document.removeEventListener("focusin", record);
+    // Within the click itself: first the stand-in, then the editor's textarea, rendered directly (no suspending).
+    expect(focused[0]).toHaveAttribute("data-stand-in");
+    expect(focused.at(-1)).toBe(editorBox());
+    expect(editorBox()).toHaveFocus();
+  });
+
   it("saves 800 ms after the last keystroke with the known version, then on with the version that came back", async () => {
     const puts = editorApi();
     const { u } = await openInWrite();
@@ -279,7 +296,7 @@ describe("Write mode", () => {
     await screen.findByRole("alert", { name: "Changed elsewhere" });
 
     await u.click(screen.getByRole("button", { name: "Open file tree" }));
-    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: /roadmap/ }));
+    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "roadmap" }));
     await wait(0);
     expect(router.state.location.pathname).toBe(planUrl);
     expect(useEditor.getState()).toMatchObject({ mode: "write", currentPath: PLAN });
@@ -421,6 +438,9 @@ describe("Signing out mid-edit", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/signin"));
     expect(bodies).toEqual([{ content: `${source} mine`, version: "v1" }]);
     expect(sent(fetch)).toEqual([`PUT /api/notes${PLAN}`, "DELETE /api/session"]);
+    // The note isn't read again between its save and the DELETE: that read would race it.
+    const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(calls.slice(calls.indexOf(`PUT /api/notes${PLAN}`), calls.indexOf("DELETE /api/session"))).not.toContain(`GET /api/notes${PLAN}`);
   });
 
   it("asks while the text can't be saved, and signs out only when told to", async () => {
@@ -482,5 +502,62 @@ describe("Done", () => {
     expect(await screen.findByRole("checkbox", { name: "new task" })).toBeInTheDocument();
     await wait(100);
     expect(queryClient.getQueryData<{ version: string }>(["note", PLAN])?.version).toBe("v2");
+  });
+});
+
+describe("[[ completion", () => {
+  const listbox = () => screen.queryByRole("listbox", { name: "Notes to link" });
+
+  it("lists the vault's notes as the name is typed, and Enter inserts the link", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control}{Enter}See [[[[");
+    // The note itself isn't offered.
+    expect(within(listbox()!).getAllByRole("option").map((o) => o.textContent)).toEqual(["roadmapWork / projects"]);
+    await u.type(editorBox(), "ro");
+    expect(within(listbox()!).getByRole("option", { selected: true })).toHaveTextContent("roadmap");
+    await u.keyboard("{Enter}");
+    expect(editorBox().value).toBe(`${source}\nSee [[roadmap]]`);
+    expect(editorBox().selectionStart).toBe(editorBox().value.length);
+    expect(listbox()).toBeNull();
+  });
+
+  it("inserts on a tap and keeps the textarea focused; Escape closes the list", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[road");
+    await u.click(within(listbox()!).getByRole("option"));
+    expect(editorBox().value).toBe(`${source} [[roadmap]]`);
+    expect(editorBox()).toHaveFocus();
+
+    await u.type(editorBox(), " [[[[r");
+    expect(listbox()).not.toBeNull();
+    await u.keyboard("{Escape}");
+    expect(listbox()).toBeNull();
+    await u.type(editorBox(), "o");
+    expect(listbox()).toBeNull();
+  });
+
+  it("leaves Enter to an IME that is composing", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[ro");
+    expect(listbox()).not.toBeNull();
+    const before = editorBox().value;
+    expect(fireEvent.keyDown(editorBox(), { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(editorBox(), { key: "Enter", keyCode: 229 })).toBe(true);
+    expect(editorBox().value).toBe(before);
+    expect(listbox()).not.toBeNull();
+  });
+
+  it("completes the [[ ]] the toolbar inserted", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} ");
+    await u.click(screen.getByRole("button", { name: "Wiki link" }));
+    await u.type(editorBox(), "road", { skipClick: true });
+    expect(screen.getByRole("listbox", { name: "Notes to link" })).toBeInTheDocument();
+    await u.keyboard("{Tab}");
+    expect(editorBox().value).toBe(`${source} [[roadmap]]`);
   });
 });

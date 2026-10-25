@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { RefObject, SyntheticEvent } from "react";
 import { useVisualViewport } from "../hooks/useVisualViewport";
+import { apply, type Edit } from "./textEdit";
 
-/** A replacement of `start`–`end` by `text`, and the selection to leave afterwards. */
-type Edit = { start: number; end: number; text: string; selStart: number; selEnd: number };
 type Tool = { label: string; name: string; edit(value: string, start: number, end: number): Edit };
 
 /** Wraps the selection in `open` … `close` (keeping it selected), or puts the pair at the caret with the caret inside. */
@@ -43,22 +42,6 @@ const tools: Tool[] = [
   { label: "`", name: "Inline code", edit: wrap("`") },
   { label: ">", name: "Quote", edit: prefix("> ") },
 ];
-
-/**
- * Applies an edit as typing would, so the browser's undo can take it back: `insertText` where the browser still
- * offers it, else `setRangeText` (no undo, but the same text). Both leave the textarea focused.
- */
-function apply(area: HTMLTextAreaElement, edit: Edit, onChange: (value: string) => void) {
-  if (document.activeElement !== area) area.focus({ preventScroll: true });
-  area.setSelectionRange(edit.start, edit.end);
-  // execCommand is deprecated, yet it is the only way into the undo stack; it fires `input`, so React sees it.
-  const typed = typeof document.execCommand === "function" && document.execCommand("insertText", false, edit.text);
-  if (!typed) {
-    area.setRangeText(edit.text, edit.start, edit.end);
-    onChange(area.value);
-  }
-  area.setSelectionRange(edit.selStart, edit.selEnd);
-}
 
 /** Keeps the focus (and the on-screen keyboard) in the textarea when a button is pressed. */
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();

@@ -1,36 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
+import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
-import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
+import { OutlineSheet } from "./NoteTools";
+import { outline } from "./outline";
+import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
 
-const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
+// Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
+// shown, so switching to Write rarely waits.
+// React.lazy suspends on first render even when the module is in already, which would mount the editor in a later
+// task, outside the tap on Write (iOS then raises no keyboard): once loaded, the editor is rendered directly.
+let LoadedEditor: (typeof import("./MarkdownEditor"))["default"] | null = null;
+const loadEditor = () =>
+  import("./MarkdownEditor").then((m) => {
+    LoadedEditor = m.default;
+    return m;
+  });
+const LazyEditor = lazy(loadEditor);
 
-/**
- * A leading YAML block (`---` … `---` or `...`), and the body with those lines left empty: the body keeps the
- * source's line numbers, which ticking a task and the links' lines go by.
- */
-export function splitFrontmatter(source: string): { frontmatter: string | null; body: string } {
-  const lines = source.split("\n");
-  if (lines[0]?.trimEnd() !== "---") return { frontmatter: null, body: source };
-  const end = lines.findIndex((l, i) => i > 0 && (l.trimEnd() === "---" || l.trimEnd() === "..."));
-  if (end < 0) return { frontmatter: null, body: source };
-  return {
-    frontmatter: lines.slice(1, end).join("\n"),
-    body: [...lines.slice(0, end + 1).map(() => ""), ...lines.slice(end + 1)].join("\n"),
-  };
+/** Write mode didn't load: the Write button's stand-in field lets go of the focus, so the keyboard goes down. */
+function EditorLoadFailed() {
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.standIn !== undefined) active.blur();
+  }, []);
+  return <LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />;
 }
+
+const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
 
 /**
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
@@ -66,6 +75,13 @@ export default function NoteView({ path }: { path: string }) {
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
 
+  const noteTool = useEditor((s) => s.noteTool);
+  const find = useEditor((s) => s.find);
+  const headings = useMemo(() => (noteTool === "outline" ? outline(parts.body) : []), [noteTool, parts.body]);
+  // Typing stays quick in a long note: the marks follow the query when React has time.
+  const query = useDeferredValue(find.query);
+  const finding = noteTool === "find" && query !== "" ? { query, current: find.index } : null;
+
   // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
   const scrollTarget = useEditor((s) => s.scrollTarget);
   const article = useRef<HTMLElement>(null);
@@ -75,6 +91,28 @@ export default function NoteView({ path }: { path: string }) {
     headings.at(-1)?.scrollIntoView({ block: "start" });
     useEditor.getState().setScrollTarget(null);
   }, [scrollTarget, path, mode, note.data]);
+
+  // Find in the note: the note says how many matches it marked, and the current one comes into view.
+  useEffect(() => {
+    if (noteTool !== "find" || mode !== "read" || !article.current) return;
+    const count = article.current.querySelectorAll<HTMLElement>("mark[data-find]").length;
+    const { find } = useEditor.getState();
+    // Fewer matches than before (an edit, a longer query): the current one is the last that is left.
+    if (count !== find.count || (count > 0 && find.index >= count)) useEditor.getState().setFind({ count, index: Math.min(find.index, Math.max(0, count - 1)) });
+    const current = article.current.querySelector<HTMLElement>("mark[data-current]");
+    // A match in a folded callout is shown by unfolding it.
+    current?.closest("details")?.setAttribute("open", "");
+    current?.scrollIntoView({ block: "center" });
+  }, [noteTool, mode, finding?.query, finding?.current, note.data?.content]);
+
+  const jump = (line: number) => {
+    useEditor.getState().setNoteTool(null);
+    article.current?.querySelector<HTMLElement>(`[data-line="${line}"]`)?.scrollIntoView({ block: "start" });
+  };
+
+  useEffect(() => {
+    void loadEditor().catch(() => {});
+  }, []);
 
   const toggleTask = useCallback(
     (line: number) => {
@@ -109,7 +147,19 @@ export default function NoteView({ path }: { path: string }) {
   );
 
   if (mode === "write") {
-    if (note.data) return <MarkdownEditor path={path} note={note.data} />;
+    if (note.data) {
+      return (
+        <LoadBoundary fallback={<EditorLoadFailed />}>
+          {LoadedEditor ? (
+            <LoadedEditor path={path} note={note.data} />
+          ) : (
+            <Suspense fallback={<div className="flex-1" />}>
+              <LazyEditor path={path} note={note.data} />
+            </Suspense>
+          )}
+        </LoadBoundary>
+      );
+    }
     return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
   }
 
@@ -148,21 +198,70 @@ export default function NoteView({ path }: { path: string }) {
         {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
-            {parts.frontmatter !== null && (
-              <pre
-                aria-label="Frontmatter"
-                {...(frontmatterChanged ? { "data-changed": true, "data-writer": highlight!.writer } : {})}
-                className="mb-4 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6] whitespace-pre-wrap text-muted"
-              >
-                {parts.frontmatter}
-              </pre>
-            )}
-            <MarkdownView source={parts.body} links={links.data} tasksDisabled={save.isPending} onToggleTask={toggleTask} onCreateMissing={createMissing} highlight={highlight} />
+            {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}
+            <MarkdownView
+              source={parts.body}
+              links={links.data}
+              tasksDisabled={save.isPending}
+              onToggleTask={toggleTask}
+              onCreateMissing={createMissing}
+              highlight={highlight}
+              find={finding}
+              path={path}
+            />
           </article>
         )}
         {note.data && <BacklinksList path={path} />}
       </div>
+      {noteTool === "outline" && note.data && <OutlineSheet headings={headings} onJump={jump} onClose={() => useEditor.getState().setNoteTool(null)} />}
     </>
+  );
+}
+
+/**
+ * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
+ * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
+ */
+function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
+  const props = useMemo(() => parseProperties(yaml), [yaml]);
+  const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
+  if (!props) {
+    return (
+      <pre
+        aria-label="Properties"
+        {...tint}
+        className="mb-4 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6] whitespace-pre-wrap text-muted"
+      >
+        {yaml}
+      </pre>
+    );
+  }
+  if (props.length === 0) return null;
+  return (
+    <dl
+      aria-label="Properties"
+      {...tint}
+      className="mb-4 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]"
+    >
+      {props.map(({ key, value }, i) => (
+        <div key={`${i}${key}`} className="contents">
+          <dt className="truncate font-mono text-[12px] leading-[21px] text-muted">{key}</dt>
+          <dd className="min-w-0 break-words text-text-body">
+            {Array.isArray(value) ? (
+              <ul className="flex flex-wrap gap-1">
+                {value.map((v, j) => (
+                  <li key={j} className="rounded-full bg-surface-2 px-2 text-[13px] text-text-body">
+                    {v}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              value || <span className="text-dim">—</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

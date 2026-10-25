@@ -230,3 +230,46 @@ describe("MarkdownView", () => {
     expect(document.querySelector("[data-changed]")).toBeNull();
   });
 });
+
+describe("Callouts", () => {
+  const callouts = () => [...document.querySelectorAll<HTMLElement>("[data-callout]")];
+
+  it("renders `> [!type] Title` as a box with its title and body, and a plain quote as a quote", () => {
+    show("> [!warning] Mind the **gap**\n> Body text\n> more\n\n> just a quote");
+    const [box] = callouts();
+    expect(box.tagName).toBe("ASIDE");
+    expect(box).toHaveAttribute("data-callout", "warning");
+    expect(box.querySelector("[data-callout-title]")).toHaveTextContent("Mind the gap");
+    expect(within(box).getByText("gap").tagName).toBe("STRONG");
+    expect(box).toHaveTextContent(/Body text\s*more/);
+    expect(box).not.toHaveTextContent("[!warning]");
+    expect(document.querySelector("blockquote")).toHaveTextContent("just a quote");
+    expect(callouts()).toHaveLength(1);
+  });
+
+  it("names an untitled callout after its type, and gives aliases and unknown types a known look", () => {
+    show("> [!tip]\n> Use it.\n\n> [!caution] Careful\n\n> [!whatever] Odd\n\n> [!QUOTE]\n> Said.");
+    expect(callouts().map((c) => c.dataset.callout)).toEqual(["tip", "warning", "note", "quote"]);
+    expect(callouts()[0].querySelector("[data-callout-title]")).toHaveTextContent(/^Tip$/);
+    expect(callouts()[3].querySelector("[data-callout-title]")).toHaveTextContent(/^Quote$/);
+  });
+
+  it("folds `+` (open) and `-` (shut) callouts as details, toggled by their title", async () => {
+    show("> [!note]+ Open one\n> Inside A\n\n> [!danger]- Shut one\n> Inside B");
+    const [open, shut] = callouts();
+    expect(open.tagName).toBe("DETAILS");
+    expect(open).toHaveAttribute("open");
+    expect(shut).not.toHaveAttribute("open");
+    expect(shut).toHaveAttribute("data-callout", "danger");
+    const summary = shut.querySelector("summary")!;
+    expect(summary).toHaveTextContent("Shut one");
+    await userEvent.click(summary);
+    expect(shut).toHaveAttribute("open");
+  });
+
+  it("resolves wiki links in a callout's title and body on their lines", () => {
+    show("> [!info] See [[plan]]\n> and [[roadmap]]", [link(1, "[[plan]]", "note", "/W/plan.md"), link(2, "[[roadmap]]", "note", "/W/roadmap.md")]);
+    expect(screen.getByRole("link", { name: "plan" })).toHaveAttribute("href", "/notes/W/plan.md");
+    expect(screen.getByRole("link", { name: "roadmap" })).toHaveAttribute("href", "/notes/W/roadmap.md");
+  });
+});

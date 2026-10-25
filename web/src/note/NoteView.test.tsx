@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -66,13 +66,14 @@ function noteApi(extra: Parameters<typeof fakeApi>[0] = {}, previousSignInAt: st
 const view = () => screen.getByRole("article");
 
 describe("the note view", () => {
-  it("renders the note, with its frontmatter raw in a muted block above the body", async () => {
+  it("renders the note, with its front matter as properties above the body", async () => {
     noteApi();
     renderApp(planUrl);
     expect(await screen.findByRole("heading", { level: 2, name: "Goals" })).toBeInTheDocument();
-    const frontmatter = screen.getByLabelText("Frontmatter");
-    expect(frontmatter).toHaveTextContent("tags: [work]");
-    expect(frontmatter).toHaveClass("text-muted");
+    const frontmatter = screen.getByLabelText("Properties");
+    expect(frontmatter.tagName).toBe("DL");
+    expect(within(frontmatter).getByRole("term")).toHaveTextContent("tags");
+    expect(within(frontmatter).getByRole("definition")).toHaveTextContent("work");
     expect(frontmatter.compareDocumentPosition(screen.getByRole("heading", { name: "Plan", level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(view()).queryByText("tags: [work]", { selector: "p" })).not.toBeInTheDocument();
   });
@@ -289,7 +290,7 @@ describe("the note view", () => {
     await userEvent.click(within(await screen.findByRole("region", { name: "Agent changes" })).getByRole("button", { name: "Show" }));
     await waitFor(() => expect(document.querySelectorAll("[data-changed]").length).toBeGreaterThan(3));
     expect(screen.getByRole("heading", { name: "Goals" })).toHaveAttribute("data-changed");
-    expect(screen.getByLabelText("Frontmatter")).toHaveAttribute("data-changed");
+    expect(screen.getByLabelText("Properties")).toHaveAttribute("data-changed");
     expect(asked.every((v) => v === null)).toBe(true);
   });
 
@@ -323,5 +324,168 @@ describe("the note view", () => {
     noteApi({ [`GET /api/notes${PLAN}`]: () => json(404, { error: "There is no note at /Work/projects/plan.md." }) });
     renderApp(planUrl);
     expect(await screen.findByText("There is no note at /Work/projects/plan.md.")).toBeInTheDocument();
+  });
+});
+
+describe("Embeds", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const embedding = ["![[roadmap]]", "", "![[roadmap#Next]]", "", "Inline ![[roadmap]] here.", "", "![[plan]]", "", "![[chart.png]]", "", "![[roadmap#Nope]]"].join("\n");
+  const roadmap = ["---", "status: draft", "---", "# Roadmap", "", "intro text", "", "## Next", "", "- [ ] next thing", "", "## Later", "", "later text, see ![[plan]]"].join("\n");
+  const embedLinks = [
+    { line: 1, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 3, raw: "![[roadmap#Next]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 5, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 7, raw: "![[plan]]", target: "plan", kind: "note", path: PLAN, candidates: [] },
+    { line: 9, raw: "![[chart.png]]", target: "chart.png", kind: "attachment", path: null, candidates: [] },
+    { line: 11, raw: "![[roadmap#Nope]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+  ];
+
+  it("shows embedded notes and sections one level deep, with the way to open them; other embeds stay links", async () => {
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, embedding)),
+      [`GET /api/links${PLAN}`]: () => json(200, embedLinks),
+      [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, roadmap, "r1")),
+      [`GET /api/links${ROADMAP}`]: () => json(200, [{ line: 14, raw: "![[plan]]", target: "plan", kind: "note", path: PLAN, candidates: [] }]),
+    });
+    renderApp(planUrl);
+
+    const whole = await screen.findByRole("region", { name: "Embedded: roadmap" });
+    expect(await within(whole).findByRole("heading", { name: "Roadmap", level: 1 })).toBeInTheDocument();
+    expect(whole).toHaveTextContent("later text");
+    expect(whole).not.toHaveTextContent("status: draft");
+    expect(within(whole).getByRole("link", { name: /^roadmap/ })).toHaveAttribute("href", "/notes/Work/projects/roadmap.md");
+    // Its own embed of this note stays a link: one level deep, no cycle.
+    expect(await within(whole).findByRole("link", { name: "plan" })).toHaveAttribute("href", planUrl);
+    expect(within(whole).getByRole("checkbox", { name: "next thing" })).toBeDisabled();
+
+    const part = screen.getByRole("region", { name: "Embedded: roadmap › Next" });
+    expect(part).toHaveTextContent("next thing");
+    expect(part).not.toHaveTextContent("intro text");
+    expect(part).not.toHaveTextContent("later text");
+
+    expect(screen.getByRole("region", { name: "Embedded: roadmap › Nope" })).toHaveTextContent("This note has no heading “Nope”.");
+    expect(screen.getAllByRole("region", { name: /^Embedded/ })).toHaveLength(3);
+    // Inline, an embed is a link; this note embedding itself is one too; an attachment is named.
+    const article = screen.getByRole("article");
+    expect(within(article).getAllByRole("link", { name: "roadmap" }).some((a) => a.closest("p")?.textContent?.startsWith("Inline"))).toBe(true);
+    expect(within(article).getAllByRole("link", { name: "plan" }).some((a) => !a.closest("section"))).toBe(true);
+    expect(within(article).getByText("chart.png")).not.toHaveAttribute("href");
+  });
+});
+
+describe("Embeds and the note's own lines", () => {
+  it("jumps from the outline to the note's own heading, never to an embedded one on the same line number", async () => {
+    const ROADMAP = "/Work/projects/roadmap.md";
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "![[roadmap]]\n\n## Mine\n\ntext")),
+      [`GET /api/links${PLAN}`]: () => json(200, [{ line: 1, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] }]),
+      [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, "x\n\n## Theirs\n\ny", "r1")),
+      [`GET /api/links${ROADMAP}`]: () => json(200, []),
+    });
+    renderApp(planUrl);
+    const theirs = await screen.findByRole("heading", { name: "Theirs" });
+    expect(theirs).not.toHaveAttribute("data-line");
+    await userEvent.click(screen.getByRole("button", { name: "Outline" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Outline" })).getByRole("button", { name: "Mine" }));
+    expect(scrolled.at(-1)).toBe(screen.getByRole("heading", { name: "Mine" }));
+  });
+});
+
+describe("Outline and find in the note", () => {
+  const long = ["# Plan", "", "Intro about the road.", "", "## Goals", "", "```", "# not a heading, road", "```", "", "### Road **ahead**", "", "The road `road` ends."].join("\n");
+  const scrolled: Element[] = [];
+  const scroll = vi.fn(function (this: Element) {
+    scrolled.push(this);
+  });
+
+  it("lists the headings from the title bar, and jumps to one", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, long)) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Outline" }));
+    const sheet = screen.getByRole("dialog", { name: "Outline" });
+    expect(within(sheet).getAllByRole("button", { name: /^(?!Close)/ }).map((b) => b.textContent)).toEqual(["Plan", "Goals", "Road ahead"]);
+    await userEvent.click(within(sheet).getByRole("button", { name: "Road ahead" }));
+    expect(screen.queryByRole("dialog", { name: "Outline" })).not.toBeInTheDocument();
+    expect(scrolled.at(-1)).toBe(screen.getByRole("heading", { name: "Road ahead", level: 3 }));
+  });
+
+  it("has no outline button in Write mode", async () => {
+    noteApi();
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    expect(screen.queryByRole("button", { name: "Outline" })).not.toBeInTheDocument();
+  });
+
+  it("finds in the note: marks every match, steps through them, and closes back to the dock", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, long)) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Find in note" }));
+
+    const bar = screen.getByRole("search", { name: "Find in note" });
+    expect(screen.queryByRole("navigation", { name: "Vault actions" })).not.toBeInTheDocument();
+    const input = within(bar).getByRole("searchbox", { name: "Find in note" });
+    expect(input).toHaveFocus();
+    await userEvent.type(input, "ROAD");
+
+    // Intro, the code block, the heading, the text and the inline code: five.
+    await waitFor(() => expect(within(bar).getByRole("status")).toHaveTextContent("1 of 5"));
+    const marks = () => [...document.querySelectorAll("mark[data-find]")];
+    expect(marks()).toHaveLength(5);
+    expect(marks()[0]).toHaveAttribute("data-current");
+    expect(marks()[1].closest("pre")).not.toBeNull();
+    expect(marks()[4].closest("code")).not.toBeNull();
+
+    await userEvent.keyboard("{Enter}");
+    expect(within(bar).getByRole("status")).toHaveTextContent("2 of 5");
+    await waitFor(() => expect(marks()[1]).toHaveAttribute("data-current"));
+    expect(scrolled.at(-1)).toBe(marks()[1]);
+    await userEvent.click(within(bar).getByRole("button", { name: "Previous match" }));
+    await userEvent.click(within(bar).getByRole("button", { name: "Previous match" }));
+    expect(within(bar).getByRole("status")).toHaveTextContent("5 of 5");
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "nothing like it");
+    await waitFor(() => expect(within(bar).getByRole("status")).toHaveTextContent("No matches"));
+    expect(within(bar).getByRole("button", { name: "Next match" })).toBeDisabled();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("search", { name: "Find in note" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Vault actions" })).toBeInTheDocument();
+    expect(marks()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Note actions" })).toHaveFocus();
+  });
+
+  it("unfolds a folded callout to show the match, keeps the index within the matches, and forgets the query on another note", async () => {
+    Element.prototype.scrollIntoView = scroll;
+    const folded = "Road one, road two, road three.\n\n> [!tip]- Hidden\n> the road inside";
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, folded)) });
+    renderApp(planUrl);
+    await screen.findByText(/Road one/);
+    act(() => useEditor.getState().setNoteTool("find"));
+    const input = await screen.findByRole("searchbox", { name: "Find in note" });
+    await userEvent.type(input, "road");
+    const status = () => within(screen.getByRole("search", { name: "Find in note" })).getByRole("status");
+    await waitFor(() => expect(status()).toHaveTextContent("1 of 4"));
+    await userEvent.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(status()).toHaveTextContent("4 of 4");
+    await waitFor(() => expect(document.querySelector("details")).toHaveAttribute("open"));
+
+    // An index past the matches (fewer of them since) comes back to the last one.
+    act(() => useEditor.getState().setFind({ index: 9 }));
+    await waitFor(() => expect(status()).toHaveTextContent("4 of 4"));
+
+    act(() => useEditor.getState().openNote("/Work/inbox.md"));
+    expect(useEditor.getState().find).toEqual({ query: "", index: 0, count: 0 });
+    expect(useEditor.getState().noteTool).toBeNull();
   });
 });

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction } from "react-router-dom";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
+import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
 import { useAutosave } from "./useAutosave";
 
@@ -32,8 +33,10 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved, unsaved } = autosave;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
+  const completion = useLinkCompletion(path, textarea, change);
 
-  useEffect(() => {
+  // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
+  useLayoutEffect(() => {
     textarea.current?.focus({ preventScroll: true });
   }, []);
 
@@ -53,11 +56,11 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   }, [path, unsaved]);
 
   useEffect(() => {
-    useEditor.getState().setBeforeRead(async () => {
+    useEditor.getState().setBeforeRead(async ({ reread = true } = {}) => {
       const done = await flush();
       // A read of the note that started before the last save (a focus refetch) may answer after it, with the
       // older version: asked again, Read mode shows what was saved.
-      if (done) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
+      if (done && reread) void queryClient.invalidateQueries({ queryKey: ["note", path], exact: true });
       return done;
     });
     return () => useEditor.getState().setBeforeRead(null);
@@ -126,7 +129,13 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
         id="markdown-source"
         ref={textarea}
         value={value}
-        onChange={(e) => change(e.target.value)}
+        onChange={(e) => {
+          change(e.target.value);
+          completion.follow();
+        }}
+        onSelect={completion.follow}
+        onKeyDown={completion.onKeyDown}
+        {...completion.textareaProps}
         onBlur={() => saveNow()}
         spellCheck={false}
         className="min-h-0 w-full flex-1 resize-none border-0 bg-bg px-[22px] py-5 font-mono text-[16px] leading-[1.65] text-text-body caret-accent outline-none"
@@ -141,6 +150,7 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
       )}
       {conflict && <ConflictToast onReload={chooseReload} onKeepMine={chooseKeepMine} onViewDiff={() => setDiff(true)} />}
       {diff && conflict && <ConflictDiff theirs={conflict.content} mine={value} onReload={chooseReload} onKeepMine={chooseKeepMine} onClose={() => setDiff(false)} />}
+      {completion.list}
       <MarkdownToolbar textarea={textarea} onChange={change} onDone={() => void useEditor.getState().endWrite()} />
     </>
   );

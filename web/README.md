@@ -21,10 +21,10 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - `api/`: typed client (`openapi-fetch`), generated `schema.d.ts`, error texts, note path helpers
 - `components/`: shared form parts, menu, password field, one-time secret reveal
 - `hooks/`: dialogs, edge swipe, visual viewport (keyboard)
-- `note/`: note view, Markdown editor and toolbar, autosave, conflict handling, backlinks, line diff
+- `note/`: note view, Markdown editor and toolbar, `[[` completion, autosave, conflict handling, backlinks, line diff; the renderer's plugins (wiki links and embeds, callouts, find in the note), front matter as properties, the outline
 - `routes/`: sign-in, join, forgot password, keys, settings; `routes/admin/` users and invitations
 - `search/`: search sheet, mode chips, result cards
-- `shell/`: mobile shell, dock, mode toggle
+- `shell/`: mobile shell, dock, mode toggle, tree drawer, rename and move
 - `state/`: zustand stores for session and editor
 - `theme/`: colour schemes, applying them, contrast test
 - `upload/`: collecting files and folders, planning the upload, conflict choices
@@ -39,7 +39,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - No secrets and no note text in browser storage. The only thing in `localStorage` is the name of the colour scheme.
 - Secrets (new API keys, recovery keys, invitation links) stay out of the TanStack mutation cache: those mutations use `gcTime: 0` and the reveal is cleared on close.
 - Same-origin session cookie only; the app never handles a token.
-- A `401` from the API sends the user to `/signin?next=<where they were>`.
+- A `401` from the API sends the user to `/signin?next=<where they were>`; after signing out on purpose, only a `401` for the session itself does (the page being left may still hear back for a moment).
 - Invitation codes travel in the URL fragment (`/join#…`) and are removed from the address bar once read.
 
 ## Known gaps (for the device pass)
@@ -47,4 +47,9 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - The Markdown toolbar above the on-screen keyboard is built on the visual viewport and needs testing on real iOS and Android devices.
 - Saving when the page closes (a `keepalive` request) is not verified on mobile browsers.
 - Downloading the recovery key on the Join screen may not work in iOS Safari; copying does.
+- The first tap on Search focuses a stand-in field in the dock inside the tap, so iOS raises the keyboard while the search sheet loads; the sheet's input then takes the focus over. Verified in tests only, not yet on an iPhone. Find in the note focuses its field as it opens, without a stand-in.
+- iOS Safari and Android's gesture navigation use a swipe from the screen's left edge for "back"; the drawer's edge swipe competes with them there.
 - Notes are text only; attachments are left to a later, carefully designed version.
+- Rename or move offers the vault's existing folders only; moving into a new folder isn't offered yet (make a note there first).
+- A missing link tapped inside an embedded note creates the note in the embedding note's folder, not the embedded one's.
+- Notes whose path contains `#`, `|`, `[` or `]` can't be named by a wiki link, so the `[[` list leaves them out.

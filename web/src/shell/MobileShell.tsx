@@ -1,24 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
-import { Trash2 } from "lucide-react";
+import { FolderInput, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { topDialog } from "../hooks/useDialog";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
+import type { MoveSubject } from "./MoveDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
 
-// Loaded on first use, which keeps the main bundle under Vite's 500 kB warning: upload is seldom used, and search
-// has its own sheet over the note.
+// Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
+// its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
-const SearchSheet = lazy(() => import("../search/SearchSheet"));
+const MoveDialog = lazy(() => import("./MoveDialog"));
+const loadSearch = () => import("../search/SearchSheet");
+const SearchSheet = lazy(loadSearch);
+
+/** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
+function SearchLoadFailed({ onClose }: { onClose(): void }) {
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.focusReturn) active.blur();
+  }, []);
+  return <LoadFailedSheet onClose={onClose} />;
+}
 
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
@@ -69,19 +83,30 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
 export default function MobileShell() {
   const match = useMatch("/notes/:vault/*");
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
-  const { recentPaths, overlay, mode, activeVault, upload, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
+  const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
   const [vaultDialog, setVaultDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
-  const swipe = useEdgeSwipe(overlay === "tree", () => setOverlay("tree"), () => setOverlay("none"));
+  const [moving, setMoving] = useState<MoveSubject | null>(null);
+  // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
+  const swipe = useEdgeSwipe(
+    overlay === "tree",
+    () => useEditor.getState().overlay === "none" && !topDialog() && setOverlay("tree"),
+    () => topDialog()?.dataset.drawer !== undefined && setOverlay("none"),
+  );
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
   // Only then: after signing out, the store is empty while this URL is still shown for a moment.
   useEffect(() => {
     if (path && path !== useEditor.getState().currentPath) useEditor.getState().openNote(path);
   }, [path]);
+
+  // Fetched ahead, so the first tap on Search finds the sheet loaded, or nearly (see the dock's stand-in field).
+  useEffect(() => {
+    void loadSearch().catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!activeVault && vaults.data?.length) setActiveVault(vaults.data[0].name);
@@ -109,17 +134,26 @@ export default function MobileShell() {
           {errorText(createUntitled.error)}
         </p>
       )}
-      {(!path || mode === "read") && (
+      {path && mode === "read" && noteTool === "find" && <FindBar />}
+      {(!path || mode === "read") && !(path && noteTool === "find") && (
         <Dock
           newNote={dockFolder ? () => newNote(dockFolder) : null}
           upload={dockFolder ? () => openUpload(dockFolder) : null}
-          noteActions={path ? [{ label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) }] : null}
+          noteActions={
+            path
+              ? [
+                  { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
+                  { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                  { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
+                ]
+              : null
+          }
         />
       )}
 
-      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
+      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} />}
       {overlay === "search" && (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
+        <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>
             <SearchSheet />
           </Suspense>
@@ -129,6 +163,13 @@ export default function MobileShell() {
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
             <UploadSheet folder={upload.folder} dropped={upload.dropped} />
+          </Suspense>
+        </LoadBoundary>
+      )}
+      {moving && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setMoving(null)} />}>
+          <Suspense>
+            <MoveDialog subject={moving} onClose={() => setMoving(null)} />
           </Suspense>
         </LoadBoundary>
       )}

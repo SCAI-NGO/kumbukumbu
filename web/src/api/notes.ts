@@ -140,6 +140,23 @@ export function useSaveNote(path: string) {
 }
 
 /**
+ * Moves (or renames) a note, or a folder with every note below it (`from` ending in `/`), within its vault. The
+ * server rewrites the links the move would break, in one batch with the move, and says so in `message`.
+ */
+export function useMove() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ from, to }: { from: string; to: string }) => call(api.POST("/api/move", { body: { from, to, keepLinks: false } })),
+    onSuccess: (_, { from }) => {
+      const gone = (key: readonly unknown[]) => typeof key[1] === "string" && (from.endsWith("/") ? key[1].startsWith(from) : key[1] === from);
+      for (const key of ["note", "links", "backlinks", "history"]) queryClient.removeQueries({ queryKey: [key], predicate: (q) => gone(q.queryKey) });
+      // Rewritten links changed other notes' text: every note, link and backlink is asked again.
+      for (const key of ["tree", "vaults", "note", "links", "backlinks", "changes", "search"]) void queryClient.invalidateQueries({ queryKey: [key] });
+    },
+  });
+}
+
+/**
  * Deletes a note and answers where to go: the next note of its folder (else the one before), or null for none.
  * The neighbour is looked up first, while the tree still has the note.
  */

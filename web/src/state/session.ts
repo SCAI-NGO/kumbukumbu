@@ -15,17 +15,22 @@ interface SessionState {
   notice: string | null;
   /** Whose session ended in this tab (a 401), until the next sign-in: someone else then starts afresh. */
   previousUser: string | null;
+  /** Signed out on purpose in this tab, until the next sign-in: a 401 then is that sign-out, not a lost session. */
+  signedOut: boolean;
   signedIn(view: SessionView): void;
+  /** The user signed out: everything is forgotten, and the requests of the page being left may answer 401. */
+  signOut(): void;
   /** `notice` replaces the usual "your session has ended" for an end the user caused, such as a new password. */
   end(notice?: string): void;
   reset(): void;
 }
 
-const initial = { user: null, previousSignInAt: null, ended: false, notice: null, previousUser: null };
+const initial = { user: null, previousSignInAt: null, ended: false, notice: null, previousUser: null, signedOut: false };
 
 export const useSession = create<SessionState>()((set, get) => ({
   ...initial,
-  signedIn: (view) => set({ user: view.user, previousSignInAt: view.previousSignInAt, ended: false, notice: null, previousUser: null }),
+  signedIn: (view) => set({ user: view.user, previousSignInAt: view.previousSignInAt, ended: false, notice: null, previousUser: null, signedOut: false }),
+  signOut: () => set({ ...initial, signedOut: true }),
   // Only a session that was running in this tab "has ended"; a first visit just needs to sign in.
   end: (notice) =>
     set({
