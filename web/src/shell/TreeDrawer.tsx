@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Sparkles, Upload } from "lucide-react";
+import { ChevronRight, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -120,9 +120,17 @@ function AccountRow() {
   );
 }
 
-/** The drawer from the left: the active vault's tree, then the vault switcher and the account row at the bottom. */
-export default function TreeDrawer(props: { onNewNote(folder: string): void; onNewVault(): void; onMove(subject: MoveSubject): void }) {
-  const { onNewNote, onNewVault, onMove } = props;
+/**
+ * The drawer from the left: the active vault's tree, then the vault switcher and the account row at the bottom. The
+ * vault's menu also opens its trash and its checkpoints (`onVaultSheet`), as sheets over the drawer.
+ */
+export default function TreeDrawer(props: {
+  onNewNote(folder: string): void;
+  onNewVault(): void;
+  onMove(subject: MoveSubject): void;
+  onVaultSheet(sheet: { kind: "trash" | "checkpoints"; vault: string }): void;
+}) {
+  const { onNewNote, onNewVault, onMove, onVaultSheet } = props;
   const { activeVault, currentPath, expandedFolders, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -133,10 +141,15 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
-  const vaultItems: MenuItem[] =
-    embeddings && providers.data?.some((p) => p.external)
-      ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }]
-      : [];
+  const vaultItems: MenuItem[] = [
+    ...(activeVault
+      ? [
+          { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
+          { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+        ]
+      : []),
+    ...(embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
+  ];
 
   return (
     <div className="absolute inset-0 z-20 flex">

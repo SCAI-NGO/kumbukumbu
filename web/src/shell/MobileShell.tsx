@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
-import { FolderInput, TextSearch, Trash2 } from "lucide-react";
+import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -22,6 +22,9 @@ import TreeDrawer from "./TreeDrawer";
 // its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
 const MoveDialog = lazy(() => import("./MoveDialog"));
+const HistorySheet = lazy(() => import("../note/HistorySheet"));
+const TrashSheet = lazy(() => import("./TrashSheet"));
+const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 
@@ -90,6 +93,8 @@ export default function MobileShell() {
   const [vaultDialog, setVaultDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
+  const [history, setHistory] = useState<string | null>(null);
+  const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "checkpoints"; vault: string } | null>(null);
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
     overlay === "tree",
@@ -143,6 +148,7 @@ export default function MobileShell() {
             path
               ? [
                   { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
+                  { label: "History", icon: History, onSelect: () => setHistory(path) },
                   { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
                   { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
                 ]
@@ -151,7 +157,7 @@ export default function MobileShell() {
         />
       )}
 
-      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} />}
+      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} onVaultSheet={setVaultSheet} />}
       {overlay === "search" && (
         <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>
@@ -170,6 +176,24 @@ export default function MobileShell() {
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setMoving(null)} />}>
           <Suspense>
             <MoveDialog subject={moving} onClose={() => setMoving(null)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
+      {history && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setHistory(null)} />}>
+          <Suspense>
+            <HistorySheet path={history} onClose={() => setHistory(null)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
+      {vaultSheet && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setVaultSheet(null)} />}>
+          <Suspense>
+            {vaultSheet.kind === "trash" ? (
+              <TrashSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
+            ) : (
+              <CheckpointsSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
+            )}
           </Suspense>
         </LoadBoundary>
       )}
