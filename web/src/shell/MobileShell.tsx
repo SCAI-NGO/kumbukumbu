@@ -25,6 +25,15 @@ const MoveDialog = lazy(() => import("./MoveDialog"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 
+/** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
+function SearchLoadFailed({ onClose }: { onClose(): void }) {
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.focusReturn) active.blur();
+  }, []);
+  return <LoadFailedSheet onClose={onClose} />;
+}
+
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   const vaults = useVaults();
@@ -144,7 +153,7 @@ export default function MobileShell() {
 
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} />}
       {overlay === "search" && (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
+        <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>
             <SearchSheet />
           </Suspense>

@@ -32,7 +32,7 @@ export default function Dock(props: { newNote: (() => void) | null; upload: (() 
           this field takes the focus at once, keeping the keyboard up until the sheet's input takes it over. */}
       <input
         ref={standIn}
-        aria-hidden
+        aria-label="Search, opening"
         tabIndex={-1}
         data-focus-return="dock-search"
         className="pointer-events-none absolute size-px text-[16px] opacity-0"
