@@ -328,6 +328,7 @@ export const schemes: readonly Scheme[] = [
   },
   {
     // navarasu/onedark.nvim (dark): bg0, bg1, bg2, bg3, fg, light_grey, comment grey, blue.
+    // `text` (#dcdfe4) is brightened beyond the published fg #abb2bf, which is kept as textBody.
     // Adjusted to 4.5:1 where the scheme's own colour fell short: muted, dim, muted (order), accentText.
     id: "one-dark",
     name: "One Dark",
@@ -355,8 +356,8 @@ export const schemes: readonly Scheme[] = [
     tokens: {
       bg: "#fafafa",
       surface: "#f0f0f0",
-      surface2: "#e5e5e6",
-      line: "#d3d3d4",
+      surface2: "#e6e6e6",
+      line: "#dcdcdc",
       text: "#383a42",
       textBody: "#4b4e57",
       muted: "#5e616a",
