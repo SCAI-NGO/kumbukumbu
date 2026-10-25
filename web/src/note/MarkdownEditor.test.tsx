@@ -521,6 +521,18 @@ describe("[[ completion", () => {
     expect(listbox()).toBeNull();
   });
 
+  it("leaves Enter to an IME that is composing", async () => {
+    editorApi();
+    const { u } = await openInWrite();
+    await u.type(editorBox(), "{Control>}{End}{/Control} [[[[ro");
+    expect(listbox()).not.toBeNull();
+    const before = editorBox().value;
+    expect(fireEvent.keyDown(editorBox(), { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(editorBox(), { key: "Enter", keyCode: 229 })).toBe(true);
+    expect(editorBox().value).toBe(before);
+    expect(listbox()).not.toBeNull();
+  });
+
   it("completes the [[ ]] the toolbar inserted", async () => {
     editorApi();
     const { u } = await openInWrite();

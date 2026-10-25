@@ -41,7 +41,8 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
 
   /** True when the key was the list's. */
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (!open) return false;
+    // While an IME composes (Japanese, Chinese, many phone keyboards), Enter and the arrows are the IME's.
+    if (!open || e.nativeEvent.isComposing || e.keyCode === 229) return false;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((i) => (i + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
     else if (e.key === "Enter" || e.key === "Tab") pick(options[active]);
     else if (e.key === "Escape") setDismissed(at.start);
