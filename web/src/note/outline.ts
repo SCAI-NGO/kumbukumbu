@@ -12,22 +12,38 @@ const plain = (md: string) =>
     .replace(/(\*\*|__|\*|_|~~|`)(.+?)\1/g, "$2")
     .trim();
 
+/** A line that can be (part of) a paragraph's text, and so a setext heading's: no other block starts with it. */
+const paragraphLine = (line: string) => line.trim() !== "" && !/^ {4}|^\t|^ {0,3}([-*+>|#]|\d+[.)]\s|`{3}|~{3})/.test(line);
+
 /**
- * The note's ATX headings (`## Goals`) in order, as the renderer finds them: never inside fenced code, at most
- * three spaces of indentation. The body keeps the source's line numbers (front matter lines are empty).
+ * The note's headings in order, as the renderer finds them: ATX (`## Goals`, at most three spaces in) and setext
+ * (a paragraph over `===` or `---`, whose line is the paragraph's first), never inside fenced code. The body keeps
+ * the source's line numbers (front matter lines are empty).
  */
 export function outline(body: string): Heading[] {
   const headings: Heading[] = [];
   let fence: string | null = null;
+  // The paragraph the current line continues: its first line (0-based) and its text so far.
+  let para: { start: number; text: string[] } | null = null;
   body.split("\n").forEach((line, i) => {
     const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
     if (marker && (fence === null || (marker[0] === fence[0] && marker.length >= fence.length))) {
       fence = fence === null ? marker : null;
+      para = null;
       return;
     }
     if (fence !== null) return;
+    const setext = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
+    if (setext && para) {
+      headings.push({ level: setext[1][0] === "=" ? 1 : 2, text: plain(para.text.join(" ")), line: para.start + 1 });
+      para = null;
+      return;
+    }
     const m = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
     if (m && m[2]) headings.push({ level: m[1].length, text: plain(m[2]), line: i + 1 });
+    if (m || !paragraphLine(line)) para = null;
+    else if (para) para.text.push(line.trim());
+    else para = { start: i, text: [line.trim()] };
   });
   return headings;
 }

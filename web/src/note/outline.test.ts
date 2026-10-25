@@ -13,6 +13,14 @@ describe("outline", () => {
     ]);
   });
 
+  it("takes setext headings too, at their paragraph's first line, but not a rule after a blank line or a list", () => {
+    const body = ["Title", "=====", "", "Two line", "sub *title*", "---", "", "text", "", "---", "", "- item", "---", "> quote", "==="].join("\n");
+    expect(outline(body)).toEqual([
+      { level: 1, text: "Title", line: 1 },
+      { level: 2, text: "Two line sub title", line: 4 },
+    ]);
+  });
+
   it("skips headings inside fenced code, with either fence", () => {
     expect(outline("```\n# no\n```\n~~~~\n## no\n```\n~~~~\n## yes").map((h) => h.text)).toEqual(["yes"]);
   });
