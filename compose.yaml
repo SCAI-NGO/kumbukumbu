@@ -2,7 +2,8 @@ services:
   mongo:
     image: ${KUMBU_MONGO_IMAGE:-mongo:8}
     # A single-node replica set: MongoDB has transactions only on a replica set.
-    # Optional authentication: with KUMBU_MONGO_PASSWORD set, MongoDB requires a login. A replica set with
+    # Optional authentication: with KUMBU_MONGO_PASSWORD set (or KUMBU_MONGO_PASSWORD_FILE naming a Docker secret
+    # inside the container, see the README), MongoDB requires a login. A replica set with
     # authentication needs a key file (its members authenticate each other with it, even a single one); it is
     # generated once, here, inside the data volume, never in the repository. The root user `kumbu` is created by
     # the health check below through MongoDB's localhost exception, which holds only while no user exists.
@@ -11,7 +12,9 @@ services:
       - -c
       - |
         set -e
-        if [ -z "$$KUMBU_MONGO_PASSWORD" ]; then exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all; fi
+        pwd="$$KUMBU_MONGO_PASSWORD"
+        if [ -z "$$pwd" ] && [ -n "$$KUMBU_MONGO_PASSWORD_FILE" ]; then pwd="$$(cat "$$KUMBU_MONGO_PASSWORD_FILE")"; fi
+        if [ -z "$$pwd" ]; then exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all; fi
         key=/data/db/kumbu.keyfile
         if [ ! -s "$$key" ]; then (umask 077; tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 756 > "$$key"); fi
         chown mongodb:mongodb "$$key"
@@ -34,7 +37,8 @@ services:
         - --quiet
         - --eval
         - |
-          const pwd = process.env.KUMBU_MONGO_PASSWORD;
+          const file = process.env.KUMBU_MONGO_PASSWORD_FILE;
+          const pwd = process.env.KUMBU_MONGO_PASSWORD || (file ? require('fs').readFileSync(file, 'utf8').replace(/[\r\n]+$$/, '') : '');
           const admin = db.getSiblingDB('admin');
           let signedIn = !pwd;
           if (pwd) { try { admin.auth('kumbu', pwd); signedIn = true; } catch (e) {} }
@@ -61,6 +65,7 @@ services:
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
       # Optional; set, the server signs in to MongoDB as `kumbu` (see the mongo service). Empty, it doesn't.
+      # Kumbu__Mongo__PasswordFile in its place reads it from a file (a Docker secret, see the README).
       Kumbu__Mongo__Password: ${KUMBU_MONGO_PASSWORD:-}
       # Optional: empty, the dev token opens nothing (a public instance), and seeding is skipped.
       Kumbu__DevToken: ${KUMBU_DEV_TOKEN:-}

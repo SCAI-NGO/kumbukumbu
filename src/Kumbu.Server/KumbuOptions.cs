@@ -158,10 +158,20 @@ public sealed class MongoOptions
     /// <summary>Empty: no credentials beyond what the connection string carries.</summary>
     public string? Password { get; set; }
 
+    /// <summary>In place of <see cref="Password"/>: a file holding it, e.g. a Docker secret under <c>/run/secrets/</c>,
+    /// so the password isn't in the container's environment. Its line break at the end is not part of it.</summary>
+    public string? PasswordFile { get; set; }
+
+    /// <summary>The password set, or the one in <see cref="PasswordFile"/> (read now); null for neither.</summary>
+    public string? EffectivePassword() =>
+        !string.IsNullOrEmpty(Password) ? Password
+        : string.IsNullOrEmpty(PasswordFile) ? null
+        : File.ReadAllText(PasswordFile).TrimEnd('\r', '\n') is { Length: > 0 } password ? password : null;
+
     public MongoClientSettings ClientSettings()
     {
         var settings = MongoClientSettings.FromConnectionString(ConnectionString);
-        if (!string.IsNullOrEmpty(Password)) settings.Credential = MongoCredential.CreateCredential("admin", User, Password);
+        if (EffectivePassword() is { } password) settings.Credential = MongoCredential.CreateCredential("admin", User, password);
         return settings;
     }
 }

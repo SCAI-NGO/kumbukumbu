@@ -29,6 +29,19 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
             failures.Add(MongoMessage);
         }
 
+        if (!string.IsNullOrEmpty(options.Mongo.PasswordFile))
+        {
+            if (!string.IsNullOrEmpty(options.Mongo.Password))
+            {
+                failures.Add("Kumbu:Mongo: set only one of Password and PasswordFile");
+            }
+            else if (FileProblem(() => options.Mongo.EffectivePassword()) is { } problem)
+            {
+                // The path is the admin's own setting; what the file holds is never repeated.
+                failures.Add($"Kumbu:Mongo:PasswordFile {options.Mongo.PasswordFile} {problem}");
+            }
+        }
+
         if (!string.IsNullOrEmpty(options.PublicUrl) && !KumbuOptions.IsUsablePublicUrl(options.PublicUrl))
         {
             failures.Add(PublicUrlMessage);
@@ -100,7 +113,7 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
         {
             if (!loopback) yield return $"{key}:ApiKeyFile must name a file holding the API key";
         }
-        else if (KeyFileProblem(provider.ApiKeyFile) is { } problem)
+        else if (FileProblem(() => EmbeddingProviderOptions.ReadKey(provider.ApiKeyFile)) is { } problem)
         {
             // The path is the admin's own setting; what the file holds is never repeated.
             yield return $"{key}:ApiKeyFile {provider.ApiKeyFile} {problem}";
@@ -111,11 +124,12 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
         if (provider.TimeoutSeconds is < 1 or > 600) yield return $"{key}:TimeoutSeconds must be 1 to 600";
     }
 
-    private static string? KeyFileProblem(string path)
+    /// <summary>What is wrong with a file holding a secret, as <paramref name="read"/> reads it: null if it holds one.</summary>
+    private static string? FileProblem(Func<string?> read)
     {
         try
         {
-            return EmbeddingProviderOptions.ReadKey(path) is null ? "is empty" : null;
+            return read() is null ? "is empty" : null;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
