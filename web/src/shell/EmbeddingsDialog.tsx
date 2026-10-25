@@ -90,11 +90,19 @@ export default function EmbeddingsDialog({
         {picked?.external && chosen !== current && (
           <div role="note" className="flex flex-col gap-2 rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
             <p>
-              <strong className="text-text">The text of every section and every search query in {vault} is sent to {picked.label}</strong>, now for the
-              notes already there and from then on for every change. It is sent encrypted on the way, but {picked.label} reads it in order to answer.
+              <strong className="text-text">The text of every section in {vault} is sent to {picked.label}</strong>, now for the notes already there and
+              from then on for every change.
             </p>
+            <p>
+              <strong className="text-text">So is the text of every search that includes {vault}</strong>: also a search across all your vaults, whether you
+              make it or an agent with a key for {vault} does.
+            </p>
+            <p>It is sent encrypted on the way, but {picked.label} reads it in order to answer.</p>
             {picked.description && <p>What {picked.label} promises: {picked.description}.</p>}
-            <p>That promise is theirs: Kumbu² can't check or enforce what happens to your text there. Your other vaults are not affected.</p>
+            <p>
+              That promise is theirs: Kumbu² can't check or enforce what happens to your text there. The notes of your other vaults are not sent; only
+              the searches that include {vault} are.
+            </p>
           </div>
         )}
         {!picked?.external && chosen !== current && before?.external && (

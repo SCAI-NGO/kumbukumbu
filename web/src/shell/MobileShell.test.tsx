@@ -190,7 +190,9 @@ describe("the shell", () => {
 
     await userEvent.click(within(dialog).getByRole("radio", { name: /TensorX/ }));
     const warning = within(dialog).getByRole("note");
-    expect(warning).toHaveTextContent("The text of every section and every search query in Work is sent to TensorX");
+    expect(warning).toHaveTextContent("The text of every section in Work is sent to TensorX");
+    expect(warning).toHaveTextContent("So is the text of every search that includes Work: also a search across all your vaults, whether you make it or an agent with a key for Work does.");
+    expect(warning).toHaveTextContent("The notes of your other vaults are not sent; only the searches that include Work are.");
     expect(warning).toHaveTextContent("What TensorX promises: EU, zero data retention.");
     expect(warning).toHaveTextContent("Kumbu² can't check or enforce what happens to your text there.");
     expect(fetch.mock.calls.some(([r]) => r.method === "PUT")).toBe(false);
