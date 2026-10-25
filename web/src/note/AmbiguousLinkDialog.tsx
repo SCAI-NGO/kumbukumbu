@@ -30,7 +30,7 @@ export default function AmbiguousLinkDialog({ target, candidates, onClose }: { t
                 className="flex min-h-11 min-w-0 flex-col justify-center rounded-[8px] px-2 py-1 focus-visible:outline-2 focus-visible:outline-accent"
               >
                 <span className="truncate text-accent-text">{titleOf(path)}</span>
-                <span className="truncate font-mono text-[12px] text-muted">{folderOf(path).slice(1).split("/").join(" / ")}</span>
+                <span className="font-mono text-[12px] [overflow-wrap:anywhere] text-muted">{folderOf(path).slice(1).split("/").join(" / ")}</span>
               </Link>
             </li>
           ))}

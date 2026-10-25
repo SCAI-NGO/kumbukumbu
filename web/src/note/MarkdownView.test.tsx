@@ -94,6 +94,8 @@ describe("MarkdownView", () => {
       expect(second).toHaveAttribute("href", "/notes/V/b/c/plan.md");
       expect(second).toHaveTextContent("V / b / c");
       expect(first).toHaveClass("min-h-11");
+      // The end of a deep path is where candidates differ: the folder wraps, it is never cut.
+      expect(within(first).getByText("V / a")).not.toHaveClass("truncate");
 
       await userEvent.click(second);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
