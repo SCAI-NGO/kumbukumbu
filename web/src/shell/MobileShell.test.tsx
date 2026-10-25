@@ -36,10 +36,14 @@ const workTree = {
 
 const homeTree = { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [note("/Home/garden.md")] } };
 
+const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null };
+const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention", external: true, available: true, reason: null };
+
 function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
   return fakeApi({
     "GET /api/session": () => json(200, { user: who, previousSignInAt: null }),
-    "GET /api/vaults": () => json(200, [{ name: "Home", notes: 1 }, { name: "Work", notes: 6 }]),
+    "GET /api/vaults": () => json(200, [{ name: "Home", notes: 1, embeddings: "internal" }, { name: "Work", notes: 6, embeddings: "internal" }]),
+    "GET /api/embeddings": () => json(200, [internalProvider]),
     "GET /api/vaults/Work/tree": () => json(200, workTree),
     "GET /api/vaults/Home/tree": () => json(200, homeTree),
     // Every note opens, with a line of text and no links.
@@ -151,6 +155,78 @@ describe("the shell", () => {
     expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
     // The tree is asked again, so the new note shows up.
     await waitFor(() => expect(fetch.mock.calls.filter(([r]) => r.url.endsWith("/api/vaults/Work/tree"))).toHaveLength(2));
+  });
+
+  it("offers no choice of search by meaning while the server has no external provider", async () => {
+    signedInApi();
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    expect(screen.getByRole("menuitem", { name: "Upload here" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Search by meaning…" })).not.toBeInTheDocument();
+  });
+
+  it("lets the owner send a vault to an external provider only after saying what that sends", async () => {
+    let body: unknown;
+    let vaults = [{ name: "Work", notes: 6, embeddings: "internal" }];
+    const fetch = signedInApi({
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/embeddings": () => json(200, [internalProvider, tensorx]),
+      "PUT /api/vaults/Work/embeddings": async (r) => {
+        body = await r.json();
+        vaults = [{ name: "Work", notes: 6, embeddings: "tensorx" }];
+        return json(200, vaults[0]);
+      },
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+    expect(within(dialog).getByRole("radio", { name: /On this server/ })).toBeChecked();
+    expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Use this server" })).toBeDisabled();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /TensorX/ }));
+    const warning = within(dialog).getByRole("note");
+    expect(warning).toHaveTextContent("The text of every section and every search query in Work is sent to TensorX");
+    expect(warning).toHaveTextContent("What TensorX promises: EU, zero data retention.");
+    expect(warning).toHaveTextContent("Kumbu² can't check or enforce what happens to your text there.");
+    expect(fetch.mock.calls.some(([r]) => r.method === "PUT")).toBe(false);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send to TensorX" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search by meaning in Work" })).not.toBeInTheDocument());
+    expect(body).toEqual({ provider: "tensorx" });
+
+    // Opened again, it shows the choice, and going back says what that means.
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const again = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+    await waitFor(() => expect(within(again).getByRole("radio", { name: /TensorX/ })).toBeChecked());
+    await userEvent.click(within(again).getByRole("radio", { name: /On this server/ }));
+    expect(within(again).getByRole("note")).toHaveTextContent("nothing more is sent to TensorX");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Search by meaning in Work" })).not.toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+  });
+
+  it("shows why a choice failed and keeps the dialog open", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal" }]),
+      "GET /api/embeddings": () => json(200, [internalProvider, { ...tensorx, available: false, reason: "the embedding provider TensorX answered 503 Service Unavailable" }]),
+      "PUT /api/vaults/Work/embeddings": () => json(400, { error: "This server has no embedding provider 'tensorx'." }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+
+    expect(dialog).toHaveTextContent("Not available right now: the embedding provider TensorX answered 503 Service Unavailable.");
+    await userEvent.click(within(dialog).getByRole("radio", { name: /TensorX/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Send to TensorX" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("This server has no embedding provider 'tensorx'.");
   });
 
   it('creates "Untitled" from the dock in the open note\'s folder', async () => {
