@@ -142,11 +142,11 @@ function WikiLink({ index, children }: { index: number; children: ReactNode }) {
 }
 
 const components: Components = {
-  h1: ({ node: _, ...props }) => <h1 className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
-  h2: ({ node: _, ...props }) => (
-    <h2 className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
+  h1: ({ node, ...props }) => <h1 data-line={node?.position?.start.line} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
+  h2: ({ node, ...props }) => (
+    <h2 data-line={node?.position?.start.line} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
   ),
-  h3: ({ node: _, ...props }) => <h3 className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
+  h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
   p: ({ node: _, ...props }) => <p className="my-3" {...props} />,
   ul: ({ node: _, className, ...props }) => (
     <ul className={`my-3 ${className?.includes("contains-task-list") ? "list-none pl-1" : "list-disc pl-6"}`} {...props} />

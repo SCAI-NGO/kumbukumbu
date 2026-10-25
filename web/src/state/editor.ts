@@ -25,6 +25,8 @@ interface EditorState {
   showAgentHighlights: boolean;
   /** The last notes opened, newest first. */
   recentPaths: string[];
+  /** A search result's section, to scroll to once its note is shown (`line` is the section's first source line). */
+  scrollTarget: { path: string; line: number } | null;
   /** Set by the open editor: saves what is pending and answers whether Write mode may end (no conflict, no failure). */
   beforeRead: (() => Promise<boolean>) | null;
 
@@ -33,6 +35,7 @@ interface EditorState {
   setMode(mode: Mode): void;
   /** Ends Write mode (Done, the Read toggle): only once the editor has saved everything. */
   endWrite(): Promise<void>;
+  setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: (() => Promise<boolean>) | null): void;
   setOverlay(overlay: Overlay): void;
   toggleFolder(path: string): void;
@@ -56,6 +59,7 @@ const initial = {
   showAgentHighlights: false,
   recentPaths: [],
   beforeRead: null,
+  scrollTarget: null,
 };
 
 /** `/Work/projects/deep` → `/Work/projects`, `/Work/projects/deep` (the vault's root is always open). */
@@ -81,6 +85,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (!guard || (await guard())) set({ mode: "read" });
   },
   setBeforeRead: (beforeRead) => set({ beforeRead }),
+  setScrollTarget: (scrollTarget) => set({ scrollTarget }),
   setOverlay: (overlay) => set({ overlay }),
   toggleFolder: (path) => set((s) => ({ expandedFolders: { ...s.expandedFolders, [path]: !s.expandedFolders[path] } })),
   setActiveVault: (activeVault) => set({ activeVault }),

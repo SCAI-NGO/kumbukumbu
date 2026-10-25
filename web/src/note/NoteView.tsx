@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
@@ -55,6 +55,16 @@ export default function NoteView({ path }: { path: string }) {
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
 
+  // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
+  const scrollTarget = useEditor((s) => s.scrollTarget);
+  const article = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
+    const headings = [...article.current.querySelectorAll<HTMLElement>("[data-line]")].filter((h) => Number(h.dataset.line) <= scrollTarget.line);
+    headings.at(-1)?.scrollIntoView({ block: "start" });
+    useEditor.getState().setScrollTarget(null);
+  }, [scrollTarget, path, mode, note.data]);
+
   const toggleTask = useCallback(
     (line: number) => {
       if (!note.data) return;
@@ -107,7 +117,7 @@ export default function NoteView({ path }: { path: string }) {
         )}
         {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
         {note.data && (
-          <article className="mt-4">
+          <article ref={article} className="mt-4">
             {parts.frontmatter !== null && (
               <pre
                 aria-label="Frontmatter"

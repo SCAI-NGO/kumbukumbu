@@ -8,6 +8,7 @@ import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
+import SearchSheet from "../search/SearchSheet";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import NewVaultDialog from "./NewVaultDialog";
@@ -111,14 +112,7 @@ export default function MobileShell() {
       )}
 
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
-      {overlay === "search" && (
-        <div role="dialog" aria-label="Search" className="k-sheet absolute inset-0 z-20 flex flex-col gap-3 bg-bg p-[22px]">
-          <p className="text-text-body">Search arrives with the next steps.</p>
-          <button type="button" onClick={() => setOverlay("none")} className={secondaryButtonClass}>
-            Cancel
-          </button>
-        </div>
-      )}
+      {overlay === "search" && <SearchSheet />}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
         <NewVaultDialog
