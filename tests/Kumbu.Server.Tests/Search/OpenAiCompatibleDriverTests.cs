@@ -317,6 +317,19 @@ public sealed class OpenAiCompatibleDriverTests
     }
 
     [Fact]
+    public async Task Without_configured_dimensions_a_model_may_change_its_length_and_the_driver_says_so()
+    {
+        var rig = Make(new FakeHandler(Vectors(4), Vectors(3)));
+
+        await rig.Driver.EmbedAsync(["a"], query: false, Ct);
+        Assert.Equal(4, rig.Driver.Dimensions);
+        Assert.Equal(3, (await rig.Driver.EmbedAsync(["a"], query: false, Ct))[0].Length);
+
+        // The index compares stored vectors with this, and embeds those of the old length again.
+        Assert.Equal(3, rig.Driver.Dimensions);
+    }
+
+    [Fact]
     public async Task More_texts_than_a_batch_holds_are_refused_before_anything_is_sent()
     {
         var rig = Make(new FakeHandler(Vectors()), o => o.MaxBatch = 2);

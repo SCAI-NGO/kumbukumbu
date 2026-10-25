@@ -234,6 +234,16 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 {
                     if (!InScope(scope, path)) continue;
                     if (!embeddings.TryGetValue(path, out var e) || e.Model != model) { pending++; continue; }
+
+                    // Same key, other length: the provider's model changed its output (no Dimensions configured).
+                    // They don't compare; the note is embedded again.
+                    if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
+                    {
+                        pending++;
+                        index.Enqueue(vault, [path]);
+                        continue;
+                    }
+
                     if (e.Version != note.Version) pending++;
                     foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
                 }

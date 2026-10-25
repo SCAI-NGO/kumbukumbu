@@ -74,11 +74,17 @@ public sealed class SearchIndex : BackgroundService
                 string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
-        Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note, model)).Select(n => n.Key)
+        Enqueue(vault, notes.Where(n => !IsCurrent(embeddings.GetValueOrDefault(n.Key), n.Value.Note, provider.Driver)).Select(n => n.Key)
             .Concat(embeddings.Keys.Where(p => !notes.ContainsKey(p))));
     }
 
-    private static bool IsCurrent(NoteEmbeddings? embeddings, StoredNote note, string model) => embeddings?.Model == model && embeddings.Version == note.Version;
+    /// <summary>Embedded by this model, at this version, and with vectors of the length the model gives now: under one key a
+    /// provider's model can change its output length (no Dimensions configured), and such vectors don't compare.</summary>
+    private static bool IsCurrent(NoteEmbeddings? embeddings, StoredNote note, IEmbeddingDriver driver) =>
+        embeddings?.Model == driver.ModelKey && embeddings.Version == note.Version && embeddings.Chunks.All(c => FitsLength(c, driver));
+
+    /// <summary>A length of 0 is a remote model that hasn't answered yet: then any length fits.</summary>
+    private static bool FitsLength(EmbeddedChunk chunk, IEmbeddingDriver driver) => driver.Dimensions == 0 || chunk.Vector.Length == driver.Dimensions;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         Task.WhenAll(_providers.All.Select(p => RunAsync(p, _queues[p.Name].Reader, stoppingToken)));
@@ -132,12 +138,12 @@ public sealed class SearchIndex : BackgroundService
             if (_providers.Get(vault.EmbeddingProvider)?.Driver is not { } driver) return;
             var model = driver.ModelKey;
             var note = entry.Note;
-            if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note, model)) return;
+            if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note, driver)) return;
 
             // Vectors are reused by the hash of their text, but only the current model's: the same text gives
             // another vector under another model.
             var chunks = Chunker.Split(new Note(path, note.Content));
-            var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
+            var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
             foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))

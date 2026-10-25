@@ -309,6 +309,26 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Vectors_of_another_length_under_the_same_model_key_are_pending_not_an_error()
+    {
+        // The provider's model now answers with 32 values instead of 64 (no Dimensions configured, so the key is the same).
+        var (s, _) = await TwoProvidersAsync();
+        var shorter = new FakeEmbedder(model: "remote:qwen3@64", dimensions: 32);
+        var idle = await StartAsync(s.World, start: false, external: [Remote(shorter)]);
+
+        var result = await idle.Store.SearchAsync(P("/"), "hens", 10, Ct);
+
+        Assert.Equal(SemanticState.Ready, result.State);
+        Assert.Equal(1, result.Pending);
+        Assert.DoesNotContain(result.Hits, h => h.Path.Value.StartsWith("/Private/", StringComparison.Ordinal));
+
+        var running = await StartAsync(s.World, external: [Remote(new FakeEmbedder(model: "remote:qwen3@64", dimensions: 32))]);
+        await IdleAsync(running);
+        Assert.All(await StoredEmbeddingsAsync(running, "Private"), e => Assert.Equal(32, e.Chunks[0].Vector.Length));
+        Assert.Contains((await running.Store.SearchAsync(P("/Private"), "hens", 10, Ct)).Hits, h => h.Path.Value == "/Private/diary.md");
+    }
+
+    [Fact]
     public async Task The_provider_choice_is_not_readable_in_the_database()
     {
         var (s, _) = await TwoProvidersAsync();

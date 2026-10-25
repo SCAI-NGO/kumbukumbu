@@ -163,13 +163,14 @@ public sealed class OpenAiCompatibleDriver : IEmbeddingDriver
         }
 
         var length = data[0].Embedding!.Length;
-        var expected = Dimensions;
+        // Only configured dimensions are a promise; otherwise the model may change its length, and the index re-embeds.
+        var expected = _options.Dimensions ?? 0;
         if (data.Any(d => d.Embedding!.Length != length) || (expected > 0 && length != expected))
         {
-            throw Fail($"answered with vectors of {length} values instead of {(expected > 0 ? expected : length)}", providerDown: true, query);
+            throw Fail(expected > 0 ? $"answered with vectors of {length} values instead of {expected}" : "answered with vectors of different lengths", providerDown: true, query);
         }
 
-        Interlocked.CompareExchange(ref _dimensions, length, 0);
+        Volatile.Write(ref _dimensions, length);
         var result = new float[count][];
         foreach (var item in data) result[item.Index] = Search.Vectors.Normalized(item.Embedding!);
         if (result.Any(v => v is null)) throw Fail("answered with vectors out of order", providerDown: true, query);
