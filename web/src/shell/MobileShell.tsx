@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
-import { Trash2 } from "lucide-react";
+import { FolderInput, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -11,6 +11,7 @@ import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
+import MoveDialog, { type MoveSubject } from "./MoveDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
@@ -75,6 +76,7 @@ export default function MobileShell() {
   const navigate = useNavigate();
   const [vaultDialog, setVaultDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [moving, setMoving] = useState<MoveSubject | null>(null);
   const swipe = useEdgeSwipe(overlay === "tree", () => setOverlay("tree"), () => setOverlay("none"));
 
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
@@ -113,11 +115,18 @@ export default function MobileShell() {
         <Dock
           newNote={dockFolder ? () => newNote(dockFolder) : null}
           upload={dockFolder ? () => openUpload(dockFolder) : null}
-          noteActions={path ? [{ label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) }] : null}
+          noteActions={
+            path
+              ? [
+                  { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                  { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
+                ]
+              : null
+          }
         />
       )}
 
-      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
+      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} />}
       {overlay === "search" && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
@@ -132,6 +141,7 @@ export default function MobileShell() {
           </Suspense>
         </LoadBoundary>
       )}
+      {moving && <MoveDialog subject={moving} onClose={() => setMoving(null)} />}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
       {vaultDialog && (
         <NewVaultDialog

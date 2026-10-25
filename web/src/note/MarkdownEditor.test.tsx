@@ -279,7 +279,7 @@ describe("Write mode", () => {
     await screen.findByRole("alert", { name: "Changed elsewhere" });
 
     await u.click(screen.getByRole("button", { name: "Open file tree" }));
-    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: /roadmap/ }));
+    await u.click(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("button", { name: "roadmap" }));
     await wait(0);
     expect(router.state.location.pathname).toBe(planUrl);
     expect(useEditor.getState()).toMatchObject({ mode: "write", currentPath: PLAN });

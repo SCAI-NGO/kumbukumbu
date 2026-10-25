@@ -55,6 +55,8 @@ interface EditorState {
   setShowAgentHighlights(show: boolean): void;
   /** A deleted note: it leaves the recent notes, and is no longer the open one. */
   forgetNote(path: string): void;
+  /** A moved note (or folder, `from` ending in `/`): the open note, the recent notes and the open folders follow it. */
+  moved(from: string, to: string): void;
   reset(): void;
 }
 
@@ -108,5 +110,21 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
   forgetNote: (path) =>
     set((s) => ({ recentPaths: s.recentPaths.filter((p) => p !== path), currentPath: s.currentPath === path ? null : s.currentPath })),
+  moved: (from, to) =>
+    set((s) => {
+      const map = (p: string) => movedPath(p, from, to);
+      const folders = Object.entries(s.expandedFolders).map(([f, open]) => [from.endsWith("/") ? movedPath(`${f}/`, from, to).replace(/\/$/, "") : f, open]);
+      return {
+        currentPath: s.currentPath && map(s.currentPath),
+        recentPaths: s.recentPaths.map(map),
+        expandedFolders: Object.fromEntries(folders),
+      };
+    }),
   reset: () => set(initial),
 }));
+
+/** Where `path` is after moving `from` to `to`: a note (`/W/a.md`) or a folder (`/W/a/`, with everything below it). */
+export function movedPath(path: string, from: string, to: string) {
+  if (!from.endsWith("/")) return path === from ? to : path;
+  return path.startsWith(from) ? `${to.replace(/\/$/, "")}/${path.slice(from.length)}` : path;
+}

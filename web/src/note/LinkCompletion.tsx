@@ -12,9 +12,10 @@ const keepFocus = (e: SyntheticEvent) => e.preventDefault();
  * toolbar, so above the on-screen keyboard) and the keys the textarea hands it first.
  */
 export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextAreaElement>, onChange: (value: string) => void) {
-  const tree = useTree(vaultOf(path));
-  const all = useMemo(() => (tree.data ? notePaths(tree.data.root) : []), [tree.data]);
   const [at, setAt] = useState<LinkQuery | null>(null);
+  // Asked for (or taken from the cache) only once a `[[` is typed.
+  const tree = useTree(at ? vaultOf(path) : null);
+  const all = useMemo(() => (tree.data ? notePaths(tree.data.root) : []), [tree.data]);
   const [active, setActive] = useState(0);
   // Escape closes the list for this `[[`; a new one opens it again.
   const [dismissed, setDismissed] = useState<number | null>(null);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, KeyRound, LogOut, Settings, Shield, Upload } from "lucide-react";
+import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -12,6 +12,7 @@ import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
 type Row =
@@ -34,11 +35,12 @@ function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0):
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
-/** The menu of a folder (the vault's root too). */
-function FolderMenu({ folder, onNewNote }: { folder: TreeFolder; onNewNote(folder: string): void }) {
+/** The menu of a folder (the vault's root too, which can't be moved). */
+function FolderMenu({ folder, onNewNote, onMove }: { folder: TreeFolder; onNewNote(folder: string): void; onMove(subject: MoveSubject): void }) {
   const items: MenuItem[] = [
     { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
     { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+    ...(folder.path.split("/").length > 2 ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
   ];
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
@@ -116,7 +118,8 @@ function AccountRow() {
 }
 
 /** The drawer from the left: the active vault's tree, then the vault switcher and the account row at the bottom. */
-export default function TreeDrawer({ onNewNote, onNewVault }: { onNewNote(folder: string): void; onNewVault(): void }) {
+export default function TreeDrawer(props: { onNewNote(folder: string): void; onNewVault(): void; onMove(subject: MoveSubject): void }) {
+  const { onNewNote, onNewVault, onMove } = props;
   const { activeVault, currentPath, expandedFolders, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -131,7 +134,7 @@ export default function TreeDrawer({ onNewNote, onNewVault }: { onNewNote(folder
             <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
             <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
           </div>
-          {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} />}
+          {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} />}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
@@ -151,9 +154,10 @@ export default function TreeDrawer({ onNewNote, onNewVault }: { onNewNote(folder
                           <span className="sr-only">{row.count === 1 ? " note" : " notes"}</span>
                         </span>
                       </button>
-                      <FolderMenu folder={row.folder} onNewNote={onNewNote} />
+                      <FolderMenu folder={row.folder} onNewNote={onNewNote} onMove={onMove} />
                     </>
                   ) : (
+                    <>
                     <button
                       type="button"
                       aria-current={row.path === currentPath ? "page" : undefined}
@@ -166,6 +170,15 @@ export default function TreeDrawer({ onNewNote, onNewVault }: { onNewNote(folder
                       <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
                       <span className="min-w-0 flex-1 truncate">{titleOf(row.path)}</span>
                     </button>
+                    <Menu
+                      label={`Actions for ${titleOf(row.path)}`}
+                      items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
+                      placement="below"
+                      className={menuButtonClass}
+                    >
+                      <Ellipsis size={18} aria-hidden />
+                    </Menu>
+                    </>
                   )}
                 </li>
               ))}
