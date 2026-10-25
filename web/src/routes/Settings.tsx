@@ -111,7 +111,6 @@ function PasswordSection() {
 }
 
 function RecoverySection() {
-  const username = useSession((s) => s.user?.username ?? "");
   const [password, setPassword] = useState("");
   // The new key lives here, in component state only, until the reveal is done.
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
@@ -137,7 +136,6 @@ function RecoverySection() {
       {recoveryKey ? (
         <RecoveryKeyReveal
           value={recoveryKey}
-          username={username}
           onContinue={() => {
             regenerate.reset();
             setRecoveryKey(null);
