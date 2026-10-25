@@ -158,26 +158,26 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
                     </>
                   ) : (
                     <>
-                    <button
-                      type="button"
-                      aria-current={row.path === currentPath ? "page" : undefined}
-                      onClick={() => {
-                        close();
-                        navigate(noteUrl(row.path));
-                      }}
-                      className={`${rowClass} pl-[22px] ${row.path === currentPath ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
-                    >
-                      <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
-                      <span className="min-w-0 flex-1 truncate">{titleOf(row.path)}</span>
-                    </button>
-                    <Menu
-                      label={`Actions for ${titleOf(row.path)}`}
-                      items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
-                      placement="below"
-                      className={menuButtonClass}
-                    >
-                      <Ellipsis size={18} aria-hidden />
-                    </Menu>
+                      <button
+                        type="button"
+                        aria-current={row.path === currentPath ? "page" : undefined}
+                        onClick={() => {
+                          close();
+                          navigate(noteUrl(row.path));
+                        }}
+                        className={`${rowClass} pl-[22px] ${row.path === currentPath ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+                      >
+                        <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+                        <span className="min-w-0 flex-1 truncate">{titleOf(row.path)}</span>
+                      </button>
+                      <Menu
+                        label={`Actions for ${titleOf(row.path)}`}
+                        items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
+                        placement="below"
+                        className={menuButtonClass}
+                      >
+                        <Ellipsis size={18} aria-hidden />
+                      </Menu>
                     </>
                   )}
                 </li>
