@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useBlocker, type BlockerFunction } from "react-router-dom";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { useEditor } from "../state/editor";
@@ -35,7 +35,8 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
   const [diff, setDiff] = useState(false);
   const completion = useLinkCompletion(path, textarea, change);
 
-  useEffect(() => {
+  // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
+  useLayoutEffect(() => {
     textarea.current?.focus({ preventScroll: true });
   }, []);
 

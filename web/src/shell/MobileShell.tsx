@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
@@ -27,7 +27,7 @@ const SearchSheet = lazy(loadSearch);
 
 /** The search sheet didn't load: the dock's stand-in field lets go of the focus, so the keyboard goes down. */
 function SearchLoadFailed({ onClose }: { onClose(): void }) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.dataset.focusReturn) active.blur();
   }, []);

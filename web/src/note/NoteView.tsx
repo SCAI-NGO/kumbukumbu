@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
+import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
-import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
+
+// Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
+// shown, so switching to Write rarely waits.
+const loadEditor = () => import("./MarkdownEditor");
+const MarkdownEditor = lazy(loadEditor);
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
 
@@ -89,6 +94,10 @@ export default function NoteView({ path }: { path: string }) {
     article.current?.querySelector<HTMLElement>(`[data-line="${line}"]`)?.scrollIntoView({ block: "start" });
   };
 
+  useEffect(() => {
+    void loadEditor().catch(() => {});
+  }, []);
+
   const toggleTask = useCallback(
     (line: number) => {
       if (!note.data) return;
@@ -122,7 +131,15 @@ export default function NoteView({ path }: { path: string }) {
   );
 
   if (mode === "write") {
-    if (note.data) return <MarkdownEditor path={path} note={note.data} />;
+    if (note.data) {
+      return (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />}>
+          <Suspense fallback={<div className="flex-1" />}>
+            <MarkdownEditor path={path} note={note.data} />
+          </Suspense>
+        </LoadBoundary>
+      );
+    }
     return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
   }
 
