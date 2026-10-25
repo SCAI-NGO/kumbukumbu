@@ -47,6 +47,19 @@ describe("Settings", () => {
     expect(localStorage.length).toBe(0);
   });
 
+  it("groups the schemes as dark and light, each with a swatch", async () => {
+    mockSystem(true);
+    api();
+    renderApp("/settings");
+    const dark = await screen.findByRole("group", { name: "Dark" });
+    const light = screen.getByRole("group", { name: "Light" });
+    expect(within(dark).getByLabelText("Tokyo Night")).toBeInTheDocument();
+    expect(within(dark).queryByLabelText("Tokyo Night Day")).not.toBeInTheDocument();
+    expect(within(light).getByLabelText("Tokyo Night Day")).toBeInTheDocument();
+    expect(within(light).getByLabelText("Rosé Pine Dawn")).toBeInTheDocument();
+    expect(screen.getByTestId("swatch-nord")).toBeInTheDocument();
+  });
+
   it("shows a remembered choice as chosen", async () => {
     mockSystem(false);
     localStorage.setItem("kumbu.scheme", "kumbu");
