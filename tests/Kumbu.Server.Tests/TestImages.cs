@@ -48,7 +48,14 @@ internal static class TestImages
                 { "_id", "rs0" },
                 { "members", new BsonArray { new BsonDocument { { "_id", 0 }, { "host", host } } } },
             };
-            await admin.RunCommandAsync<BsonDocument>(new BsonDocument("replSetInitiate", config), cancellationToken: ct);
+            try
+            {
+                await admin.RunCommandAsync<BsonDocument>(new BsonDocument("replSetInitiate", config), cancellationToken: ct);
+            }
+            catch (MongoCommandException e) when (e.Code == 23)
+            {
+                // AlreadyInitialized: another fixture won the race between our hello and here.
+            }
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(30);
