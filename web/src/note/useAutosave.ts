@@ -40,13 +40,15 @@ export function useAutosave(
     keepalive: false,
     conflict: null as Conflict | null,
     failed: false,
+    /** The note is gone from its path: nothing is saved any more (a save would answer 404, or make it again). */
+    stopped: false,
   }).current;
 
   const run = useCallback((keepalive = false): Promise<void> => {
     if (keepalive) s.keepalive = true;
     clearTimeout(s.timer);
     s.timer = undefined;
-    if (s.conflict) return Promise.resolve();
+    if (s.conflict || s.stopped) return Promise.resolve();
     if (s.inFlight) {
       s.again = true;
       return s.inFlight;
@@ -113,8 +115,8 @@ export function useAutosave(
         await s.inFlight;
         continue;
       }
-      if (s.conflict || s.failed) return false;
-      if (s.text === s.saved) return true;
+      if (s.text === s.saved) return !s.conflict && !s.failed;
+      if (s.conflict || s.failed || s.stopped) return false;
       await run();
     }
   }, [s, run]);
@@ -158,6 +160,19 @@ export function useAutosave(
     [s],
   );
 
+  /** The note is gone: saving stops, and the text stays here until the user copies it or saves it elsewhere. */
+  const stop = useCallback(() => {
+    s.stopped = true;
+    clearTimeout(s.timer);
+    s.timer = undefined;
+  }, [s]);
+
+  /** The text is safe elsewhere now (saved as another note): leaving no longer loses it. */
+  const release = useCallback(() => {
+    s.saved = s.text;
+    setStatus("saved");
+  }, [s]);
+
   const retry = useCallback(() => {
     s.failed = false;
     void run();
@@ -177,7 +192,7 @@ export function useAutosave(
   useEffect(
     () => () => {
       clearTimeout(s.timer);
-      if (s.conflict || s.text === s.saved) return;
+      if (s.conflict || s.stopped || s.text === s.saved) return;
       // A save in flight still sends what was typed after it started, once it returns.
       if (s.inFlight) s.again = true;
       else void saveRef.current(s.text, s.version, { keepalive: false }).catch(() => {});
@@ -185,5 +200,5 @@ export function useAutosave(
     [s],
   );
 
-  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, retry, unresolved, unsaved };
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, release, retry, unresolved, unsaved };
 }

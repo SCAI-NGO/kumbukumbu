@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useBlocker, type BlockerFunction } from "react-router-dom";
+import { useBlocker, useNavigate, type BlockerFunction } from "react-router-dom";
+import { api } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
+import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { BarButton, ChangeText, ElsewhereBar, type useChangedElsewhere } from "./ChangedElsewhere";
@@ -31,12 +33,41 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
     (content, version, options) => (useSession.getState().user ? save.mutateAsync({ content, version, ...options }) : Promise.reject(new Error("Signed out"))),
     draft,
   );
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, retry, unresolved, unsaved } = autosave;
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, release, retry, unresolved, unsaved } = autosave;
+  const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
   // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const newer = elsewhere?.change;
+  const gone = !!elsewhere?.gone;
+  const newer = gone ? null : elsewhere?.change;
+  useEffect(() => {
+    if (gone) stop();
+  }, [gone, stop]);
+  const [keepProblem, setKeepProblem] = useState<string | null>(null);
+
+  /** The text as a new note beside where the note was: `plan (kept).md`, else `plan (kept 2).md` …, opened in Write mode. */
+  const saveAsNew = async () => {
+    setKeepProblem(null);
+    const text = value;
+    for (let i = 1; i <= 20; i++) {
+      const target = `${folderOf(path)}/${titleOf(path)} (kept${i === 1 ? "" : ` ${i}`}).md`;
+      try {
+        const { response } = await api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault: vaultOf(target), path: inVault(target) } }, body: { content: text } });
+        if (response.status === 409) continue;
+        if (!response.ok) break;
+      } catch {
+        break;
+      }
+      release();
+      void queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(target)] });
+      useEditor.getState().openNote(target, "write");
+      navigate(noteUrl(target));
+      return;
+    }
+    setKeepProblem("Couldn't save it as a new note. Copy the text instead.");
+  };
+  const copy = () => void navigator.clipboard?.writeText(value).catch(() => setKeepProblem("Couldn't copy the text. Select it and copy it by hand."));
   const viewNewer = async () => {
     await queryClient.refetchQueries({ queryKey: ["note", path], exact: true });
     const fresh = queryClient.getQueryData<NoteView>(["note", path]);
@@ -131,7 +162,19 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
 
   return (
     <>
-      {!conflict && elsewhere?.gone && <ElsewhereBar>This note was moved or removed elsewhere.</ElsewhereBar>}
+      {gone && (
+        <ElsewhereBar
+          actions={
+            <>
+              <BarButton onClick={copy}>Copy text</BarButton>
+              <BarButton onClick={() => void saveAsNew()}>Save as new note</BarButton>
+            </>
+          }
+        >
+          This note was moved or removed elsewhere. Your text is kept here, but no longer saved: copy it, or save it as a new note.
+          {keepProblem && <span className="block text-text">{keepProblem}</span>}
+        </ElsewhereBar>
+      )}
       {!conflict && newer && dismissed !== newer.version && (
         <ElsewhereBar
           actions={

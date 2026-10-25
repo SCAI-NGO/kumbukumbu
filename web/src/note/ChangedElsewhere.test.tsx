@@ -60,6 +60,15 @@ function api(server: Server, puts: unknown[] = []) {
       writeElsewhere(server, "v9", "ada");
       return json(200, note(server));
     },
+    // Any other note: one the test made (a copy of the text), with its path.
+    "PUT /api/notes/*": async (r) => {
+      const notePath = decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length));
+      puts.push({ path: notePath, ...((await r.json()) as object) });
+      return json(201, { path: notePath, content: "", version: "n1", lastWriter: "ada", lastWriteAt: iso(server.at), current: true });
+    },
+    "GET /api/notes/*": (r) =>
+      json(200, { path: decodeURIComponent(new URL(r.url).pathname.slice("/api/notes".length)), content: "", version: "n1", lastWriter: "ada", lastWriteAt: iso(0), current: true }),
+    "GET /api/version/*": () => json(404, { error: "" }),
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
@@ -262,6 +271,34 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
     expect(puts).toEqual([{ content: `${texts.v1} mine`, version: "v1" }]);
     expect(server.version).toBe("v2");
     expect(editor).toHaveValue(`${texts.v1} mine`);
+  });
+
+  it("stops saving once the note is gone, keeps the text, and offers to copy it or save it as a new note", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const server = newServer();
+    const puts: unknown[] = [];
+    const editor = await openInWrite(server, puts);
+    server.gone = "There is no note at /Work/plan.md (if it was removed, it is in the trash).";
+    writeElsewhere(server, "v2");
+    backToThePage();
+
+    const shown = await bar();
+    expect(shown).toHaveTextContent("This note was moved or removed elsewhere. Your text is kept here, but no longer saved");
+    expect(screen.getAllByRole("region", { name: "Changed elsewhere" })).toHaveLength(1);
+
+    await userEvent.type(editor, " kept");
+    fireEvent.blur(editor);
+    await new Promise((r) => setTimeout(r, 900));
+    expect(puts).toHaveLength(0);
+    expect(editor).toHaveValue(`${texts.v1} kept`);
+
+    await userEvent.click(within(shown).getByRole("button", { name: "Copy text" }));
+    expect(writeText).toHaveBeenCalledWith(`${texts.v1} kept`);
+
+    await userEvent.click(within(shown).getByRole("button", { name: "Save as new note" }));
+    await waitFor(() => expect(puts).toEqual([{ path: "/Work/plan (kept).md", content: `${texts.v1} kept` }]));
+    await waitFor(() => expect(useEditor.getState().currentPath).toBe("/Work/plan (kept).md"));
   });
 
   it("does not count the user's own saves", async () => {
