@@ -1,0 +1,7 @@
+# Keeps the actions pinned to commit hashes in the workflows up to date.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
