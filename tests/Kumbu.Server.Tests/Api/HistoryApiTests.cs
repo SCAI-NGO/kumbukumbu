@@ -5,6 +5,8 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Search;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -293,6 +295,39 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             .Select(e => e.RoutePattern.RawText);
 
         Assert.Equal(["/api/version/{vault}/{**path}"], endpoints);
+    }
+
+    [Fact]
+    public async Task Half_an_hour_of_nothing_but_version_polls_ends_the_session()
+    {
+        // Whole seconds: MongoDB keeps milliseconds, so the idle clock is compared exactly.
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var timed = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        var polling = await RestClient.NewAsync(timed);
+        var reading = await RestClient.NewAsync(timed);
+        await polling.CreateAsync("plan.md", "x\n");
+        await reading.CreateAsync("plan.md", "x\n");
+
+        // Every 5 minutes for 29 minutes: one tab only polls, the other reads the note (which counts as use).
+        foreach (var minutes in new[] { 5, 5, 5, 5, 5, 4 })
+        {
+            time.Advance(TimeSpan.FromMinutes(minutes));
+            using var poll = await polling.GetAsync(polling.Url("plan.md", "version"));
+            using var read = await reading.GetAsync(reading.Url("plan.md"));
+            Assert.Equal(HttpStatusCode.OK, poll.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        }
+
+        time.Advance(TimeSpan.FromMinutes(2));
+        using var late = await polling.GetAsync(polling.Url("plan.md", "version"));
+        using var stillThere = await reading.GetAsync(reading.Url("plan.md", "version"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, late.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, stillThere.StatusCode);
     }
 
     [Fact]
