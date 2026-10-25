@@ -696,6 +696,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, notMine.StatusCode);
         using var badRight = await SendAsync(HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "admin" } }, session: session);
         Assert.Equal(HttpStatusCode.BadRequest, badRight.StatusCode);
+        Assert.Null(listed["expiresAt"]?.GetValue<DateTime?>());
 
         using var revoke = await SendAsync(HttpMethod.Delete, $"/api/keys/{id}", session: session);
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
@@ -705,6 +706,15 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull(Assert.Single((await JsonAsync(after)).AsArray())!["revokedAt"]?.GetValue<DateTime>());
         using var refused = await SendAsync(HttpMethod.Get, "/api/keys", origin: null, bearer: key);
         Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+
+        using var badExpiry = await SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "read" }, expiresInDays = 45 }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, badExpiry.StatusCode);
+        using var expiring = await SendAsync(
+            HttpMethod.Post, "/api/keys", new { name = "phone", vaults = new Dictionary<string, string> { ["Arbeit"] = "read" }, expiresInDays = 90 }, session: session);
+        Assert.Equal(HttpStatusCode.Created, expiring.StatusCode);
+        var expiresAt = (await JsonAsync(expiring))["apiKey"]!["expiresAt"]!.GetValue<DateTime>().ToUniversalTime();
+        Assert.InRange(expiresAt, DateTime.UtcNow.AddDays(90).AddMinutes(-1), DateTime.UtcNow.AddDays(90));
     }
 
     [Fact]

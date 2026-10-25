@@ -7,6 +7,7 @@ using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using MongoDB.Bson;
@@ -312,6 +313,92 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         await KeyDocs.UpdateOneAsync(byId, Builders<BsonDocument>.Update.Set("lastUsedAt", stale), cancellationToken: Ct);
         Assert.Equal(HttpStatusCode.OK, await InitializeStatusAsync(key));
         Assert.True(LastUsed(await KeyDocs.Find(byId).SingleAsync(Ct)) >= first);
+    }
+
+    /// <summary>The app's keys, but on a clock of the test's own: for keys made in the past, or checked in the future.</summary>
+    private ApiKeys KeysAt(FakeTimeProvider time) =>
+        new(app.Database, app.Services.GetRequiredService<VaultCatalog>(), time, NullLogger<ApiKeys>.Instance);
+
+    [Fact]
+    public async Task A_key_with_an_expiry_works_until_then_and_is_refused_from_then_on()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var keys = KeysAt(time);
+
+        var (key, info) = await keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct, expiresInDays: 30);
+
+        var expiresAt = Assert.IsType<DateTime>(info.ExpiresAt);
+        Assert.InRange(expiresAt - time.GetUtcNow().UtcDateTime, TimeSpan.FromDays(30) - TimeSpan.FromSeconds(1), TimeSpan.FromDays(30));
+        Assert.Equal(expiresAt, Assert.Single(await keys.ListAsync(user, userKey, Ct)).ExpiresAt);
+        Assert.NotNull(await keys.ResolveAsync(key, Ct));
+        time.Advance(TimeSpan.FromDays(30) - TimeSpan.FromMinutes(1));
+        Assert.NotNull(await keys.ResolveAsync(key, Ct));
+        time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Null(await keys.ResolveAsync(key, Ct));
+    }
+
+    [Fact]
+    public async Task An_expired_key_is_401_like_a_revoked_one()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        // Made 31 days ago for 30 days: expired a day ago, by the app's own clock.
+        var keys = KeysAt(new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-31)));
+        var (key, _) = await keys.CreateAsync(user, userKey, JustRead, "old", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write }, Ct, expiresInDays: 30);
+        var (fresh, _) = await Keys.CreateAsync(user, userKey, JustRead, "new", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write }, Ct, expiresInDays: 30);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, await InitializeStatusAsync(key));
+        Assert.Equal(HttpStatusCode.OK, await InitializeStatusAsync(fresh));
+    }
+
+    [Fact]
+    public async Task An_expiry_moved_or_removed_in_mongodb_makes_the_key_open_nothing()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        var grant = new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read };
+        var (moved, movedInfo) = await Keys.CreateAsync(user, userKey, JustRead, "moved", grant, Ct, expiresInDays: 30);
+        var (removed, removedInfo) = await Keys.CreateAsync(user, userKey, JustRead, "removed", grant, Ct, expiresInDays: 30);
+        Assert.Equal(HttpStatusCode.OK, await InitializeStatusAsync(moved));
+        Assert.Equal(HttpStatusCode.OK, await InitializeStatusAsync(removed));
+
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", movedInfo.Id), Builders<BsonDocument>.Update.Set("expiresAt", movedInfo.ExpiresAt!.Value.AddYears(10)), cancellationToken: Ct);
+        await KeyDocs.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", removedInfo.Id), Builders<BsonDocument>.Update.Unset("expiresAt"), cancellationToken: Ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, await InitializeStatusAsync(moved));
+        Assert.Equal(HttpStatusCode.Unauthorized, await InitializeStatusAsync(removed));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    [InlineData(31)]
+    [InlineData(-30)]
+    public async Task An_expiry_other_than_30_90_or_365_days_is_refused(int days)
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            Keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct, days));
+        Assert.Empty(await Keys.ListAsync(user, userKey, Ct));
+    }
+
+    [Fact]
+    public async Task An_expired_key_frees_its_name_and_loses_its_slots_when_the_next_key_is_made()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        var grant = new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read };
+        var (_, old) = await KeysAt(new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-91)))
+            .CreateAsync(user, userKey, JustRead, "laptop", grant, Ct, expiresInDays: 90);
+        Assert.NotEmpty(await SlotDocs.Find(Builders<BsonDocument>.Filter.Eq("apiKey", old.Id)).ToListAsync(Ct));
+
+        var (key, _) = await Keys.CreateAsync(user, userKey, JustRead, "laptop", grant, Ct);
+
+        Assert.Equal(HttpStatusCode.OK, await InitializeStatusAsync(key));
+        Assert.Empty(await SlotDocs.Find(Builders<BsonDocument>.Filter.Eq("apiKey", old.Id)).ToListAsync(Ct));
+        var listed = await Keys.ListAsync(user, userKey, Ct);
+        Assert.Equal(2, listed.Count);
+        Assert.Null(listed.Single(k => k.Id == old.Id).RevokedAt);
     }
 
     [Fact]

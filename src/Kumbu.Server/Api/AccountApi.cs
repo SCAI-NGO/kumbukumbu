@@ -43,12 +43,15 @@ public sealed record RegenerateRecoveryKeyRequest(string CurrentPassword);
 
 public sealed record RecoveryKeyView(string RecoveryKey);
 
-/// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.</summary>
+/// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
+/// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.</summary>
 public sealed record ApiKeyView(
-    string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt);
+    string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
+    DateTime? ExpiresAt);
 
-/// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>.</summary>
-public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults);
+/// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
+/// out or null, the key doesn't expire.</summary>
+public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string, string> Vaults, int? ExpiresInDays = null);
 
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
@@ -213,7 +216,7 @@ public static class AccountApi
             vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
         }
 
-        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct);
+        var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
 
@@ -268,7 +271,8 @@ public static class AccountApi
         info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
         info.CreatedAt,
         info.LastUsedAt,
-        info.RevokedAt);
+        info.RevokedAt,
+        info.ExpiresAt);
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));
