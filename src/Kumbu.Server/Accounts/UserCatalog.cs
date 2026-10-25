@@ -277,6 +277,10 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         // ... and again after it: a sign-in may have read the old slot between the first stamp and the write,
         // and its session's createdAt (the read time) is then before this one.
         await StampCredentialsChangedAsync(userId, ct);
+        // That sign-in passes the first stamp, so a key it made at once may have landed after the first
+        // revocation. Its read time is before the second stamp, so no further key can come from it: revoking
+        // once more here catches the last ones.
+        if (revokeApiKeys) await keys.RevokeAllAsync(user, ct);
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);
         return true;
     }

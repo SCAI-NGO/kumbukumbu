@@ -226,6 +226,55 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         Assert.NotNull(await Catalog(db).RecoverAsync("chris", recoveryKey, NewPassword, Ct));
     }
 
+    /// <summary>Runs <paramref name="act"/> once, right after the first revocation of all keys has committed.</summary>
+    private sealed class AfterFirstRevokingAll(Func<Task> act) : ILogger<ApiKeys>
+    {
+        private bool _done;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (_done || !formatter(state, exception).Contains("revoked all", StringComparison.Ordinal)) return;
+            _done = true;
+            act().GetAwaiter().GetResult();
+        }
+    }
+
+    [Fact]
+    public async Task A_key_made_between_the_first_revocation_and_the_new_password_is_revoked_too()
+    {
+        var db = fixture.NewDatabase();
+        var keys = Keys(db, TimeProvider.System);
+        var setUp = Catalog(db);
+        await setUp.CreateAsync("chris", Password, Roles.User, Ct);
+        var (user, userKey, readAt) = (await setUp.TrySignInAsync("chris", Password, Ct))!.Value;
+        var vaults = new Dictionary<string, KeyRight> { [(await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct)).Id] = KeyRight.Write };
+        await keys.CreateAsync(user, userKey, readAt, "laptop", vaults, Ct);
+
+        // A sign-in with the old password that read its slot after the first stamp, and made a key at once: its
+        // read time is after that stamp, so the creation passes, and it lands after the first revocation.
+        string? late = null;
+        var users = new UserCatalog(
+            db,
+            CheapKdf(),
+            new ApiKeys(db, Vaults(db, TimeProvider.System), TimeProvider.System, new AfterFirstRevokingAll(async () =>
+            {
+                await Task.Delay(5, Ct);
+                (late, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "late", vaults, Ct);
+            })),
+            TimeProvider.System,
+            NullLogger<UserCatalog>.Instance);
+
+        Assert.True(await users.ChangePasswordAsync(user, userKey, Password, NewPassword, revokeApiKeys: true, Ct));
+
+        Assert.NotNull(late);
+        Assert.Null(await keys.ResolveAsync(late, Ct));
+        Assert.All(await keys.ListAsync(user, userKey, Ct), k => Assert.NotNull(k.RevokedAt));
+    }
+
     [Fact]
     public async Task Of_two_recoveries_with_the_same_key_exactly_one_succeeds_and_its_new_key_works()
     {
