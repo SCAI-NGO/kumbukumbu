@@ -26,13 +26,17 @@ public static class Security
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
     public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
 
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host is "127.0.0.1" or "[::1]";
+
     /// <summary>
     /// The security headers, on every response (API, MCP, static files and errors alike), and
     /// <c>Cache-Control: no-store</c> on the API's. Added when the response
     /// starts, so that a handler clearing the response doesn't drop them. HSTS when the public URL is https or the
     /// request came over https as the app sees it: behind a trusted proxy that is <c>X-Forwarded-Proto</c>
-    /// (see Program.cs), otherwise the connection itself. Never on plain http: a browser ignores it there, and on
-    /// a plain-http localhost it would pin https for every local port.
+    /// (see Program.cs), otherwise the connection itself, except to a loopback host (as ASP.NET's own UseHsts):
+    /// pinned there, the browser would force https on every local port for a year. Never on plain http: a browser
+    /// ignores it there, and on a plain-http localhost it would pin https for every local port.
     /// </summary>
     public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder app, string? publicUrl)
     {
@@ -45,7 +49,7 @@ public static class Security
                 headers.XContentTypeOptions = "nosniff";
                 headers["Referrer-Policy"] = "same-origin";
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
-                if (httpsPublicUrl || context.Request.IsHttps) headers.StrictTransportSecurity = StrictTransportSecurity;
+                if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
                 if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";

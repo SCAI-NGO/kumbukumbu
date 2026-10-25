@@ -752,10 +752,11 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
     private const string Hsts = "max-age=31536000; includeSubDomains";
 
-    /// <summary>A GET of <c>/healthz</c> over plain http, optionally claiming https in <c>X-Forwarded-Proto</c>.</summary>
+    /// <summary>A GET of <c>/healthz</c> over plain http, optionally claiming https in <c>X-Forwarded-Proto</c>. To a
+    /// host that isn't loopback, as behind a proxy, since loopback never gets HSTS from the request alone.</summary>
     private static async Task<HttpResponseMessage> PlainHttpAsync(WebApplicationFactory<Program> factory, string? forwardedProto = null)
     {
-        using var http = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("http://localhost") });
+        using var http = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("http://kumbu.test") });
         using var request = new HttpRequestMessage(HttpMethod.Get, "/healthz");
         if (forwardedProto is not null) request.Headers.Add("X-Forwarded-Proto", forwardedProto);
         return await http.SendAsync(request, Ct);
@@ -815,11 +816,29 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     [Fact]
     public async Task A_request_that_reached_the_app_over_https_gets_hsts()
     {
-        using var http = Client(app);
+        using var http = app.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://kumbu.test") });
 
         using var response = await http.GetAsync("/healthz", Ct);
 
         Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
+    }
+
+    [Theory]
+    [InlineData("https://localhost")]
+    [InlineData("https://LocalHost:8443")]
+    [InlineData("https://127.0.0.1")]
+    [InlineData("https://[::1]:8443")]
+    public async Task Https_to_a_loopback_address_gets_no_hsts_unless_the_public_url_is_https(string address)
+    {
+        // As ASP.NET's own UseHsts: pinned, the browser would force https on every local port for a year.
+        using var http = app.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(address) });
+        using var publicHttp = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(address) });
+
+        using var response = await http.GetAsync("/healthz", Ct);
+        using var publicResponse = await publicHttp.GetAsync("/healthz", Ct);
+
+        Assert.False(response.Headers.Contains("Strict-Transport-Security"));
+        Assert.Equal(Hsts, publicResponse.Headers.GetValues("Strict-Transport-Security").Single());
     }
 
     [Fact]
