@@ -26,6 +26,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     private const string UserKekLabel = "kumbu/v1/user-slot-kek";
     private const string VaultNameLabel = "kumbu/v1/vault-name-id";
     private const string ApiKeyKekLabel = "kumbu/v1/api-key-kek";
+    private const string ConnectionKekLabel = "kumbu/v1/oauth-kek";
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
@@ -315,6 +316,35 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             KeyId = keyId,
             Wrapped = VaultCrypto.Seal(
                 ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))), ApiKeySlotContext(v.Key, keyId)),
+            CreatedAt = Now,
+        })];
+    }
+
+    /// <summary>
+    /// The slots one token of a connection gets when the user consents (the code): one per vault in
+    /// <paramref name="vaults"/> (vault id → right), sealing the vault key and the right together as an API key's slot
+    /// does, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the
+    /// token's id, so a slot can't be moved to another token or connection, nor read as an API key's. With
+    /// <paramref name="expiresAt"/> the slot carries it for the TTL index. The vault keys come from the user's own
+    /// slots, so <see cref="ArgumentException"/> if a vault isn't the user's. Not stored here: the caller inserts them
+    /// with the token's record, in one transaction.
+    /// </summary>
+    internal async Task<IReadOnlyList<SlotDocument>> ConnectionSlotsFromUserAsync(
+        string userId, byte[] userKey, string connectionId, string tokenId, string token, IReadOnlyDictionary<string, Accounts.KeyRight> vaults,
+        DateTime? expiresAt, CancellationToken ct)
+    {
+        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
+        return [.. vaults.Select(v => new SlotDocument
+        {
+            Vault = v.Key,
+            Kind = SlotDocument.Connection,
+            ConnectionId = connectionId,
+            TokenId = tokenId,
+            ExpiresAt = expiresAt,
+            Wrapped = VaultCrypto.Seal(
+                ConnectionKek(token, v.Key),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))),
+                ConnectionSlotContext(v.Key, connectionId, tokenId)),
             CreatedAt = Now,
         })];
     }
@@ -737,6 +767,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// <summary>Also bound to the key's id, so a slot can't be moved to another key, nor read as a dev-token slot.</summary>
     private static string ApiKeySlotContext(string vaultId, string keyId) => $"slot:{vaultId}:{SlotDocument.ApiKey}:{keyId}";
 
+    private static byte[] ConnectionKek(string token, string vaultId) => VaultCrypto.Derive(token, ConnectionKekLabel, Encoding.UTF8.GetBytes(vaultId));
+
+    /// <summary>Bound to the connection and the token's id: a slot can't be moved to another token, connection or kind.</summary>
+    private static string ConnectionSlotContext(string vaultId, string connectionId, string tokenId) =>
+        $"slot:{vaultId}:{SlotDocument.Connection}:{connectionId}:{tokenId}";
+
     /// <summary>What an API key's slot seals: the vault key and the key's right on the vault, together.</summary>
     private sealed record ApiKeySlotPayload(
         [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
@@ -804,6 +840,15 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.KeyId),
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.KeyId) }),
+                // A connection's token finds its slots by its id; revoking a connection finds them by the connection.
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.TokenId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.TokenId) }),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.ConnectionId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.ConnectionId) }),
+                // A token's slots vanish physically when it expires (spec §5); only slots with expiresAt carry one.
+                new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.ExpiresAt), new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
                 // One vault name per user: only user slots carry a nameId.
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup).Ascending(s => s.NameId),

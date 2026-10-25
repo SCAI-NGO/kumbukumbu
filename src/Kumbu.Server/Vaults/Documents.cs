@@ -26,6 +26,9 @@ public sealed class SlotDocument
     /// <summary>The vault key wrapped by the owner's user key (accounts design §3); has no recovery slot of its own.</summary>
     public const string User = "user";
 
+    /// <summary>A slot of one OAuth token (code, access or refresh) of a connection; vanishes with the token.</summary>
+    public const string Connection = "connection";
+
     [BsonId]
     public ObjectId Id { get; set; }
 
@@ -55,6 +58,20 @@ public sealed class SlotDocument
     /// </summary>
     [BsonElement("apiKey"), BsonIgnoreIfNull]
     public string? KeyId { get; set; }
+
+    /// <summary>Slots of a connection's token (kind <see cref="Connection"/>) only: the connection, so its revocation
+    /// finds every slot of it; such a slot seals the vault key with the right, as an API key's does.</summary>
+    [BsonElement("connection"), BsonIgnoreIfNull]
+    public string? ConnectionId { get; set; }
+
+    /// <summary>Slots of a connection's token only: the token's id (<c>oauth_tokens._id</c>), never the token.</summary>
+    [BsonElement("token"), BsonIgnoreIfNull]
+    public string? TokenId { get; set; }
+
+    /// <summary>When the token expires, if it does: a TTL index deletes the slot then. Expiry is also checked in code,
+    /// since the TTL monitor runs only about once a minute.</summary>
+    [BsonElement("expiresAt"), BsonIgnoreIfNull]
+    public DateTime? ExpiresAt { get; set; }
 
     [BsonElement("wrapped")]
     public byte[] Wrapped { get; set; } = [];

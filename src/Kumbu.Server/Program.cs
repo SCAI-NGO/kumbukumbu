@@ -66,6 +66,8 @@ builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
 builder.Services.AddSingleton<OAuthClients>();
+builder.Services.AddSingleton<AuthorizationRequests>();
+builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
