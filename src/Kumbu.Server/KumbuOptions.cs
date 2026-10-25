@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using MongoDB.Driver;
+
 namespace Kumbu.Server;
 
 public sealed class KumbuOptions
@@ -98,6 +100,20 @@ public sealed class MongoOptions
     public string ConnectionString { get; set; } = "";
 
     public string Database { get; set; } = "kumbu";
+
+    /// <summary>With <see cref="Password"/>: the user to authenticate as, against the <c>admin</c> database
+    /// (compose.yaml's root user). Kept apart from the connection string, so a password needs no URL escaping.</summary>
+    public string User { get; set; } = "kumbu";
+
+    /// <summary>Empty: no credentials beyond what the connection string carries.</summary>
+    public string? Password { get; set; }
+
+    public MongoClientSettings ClientSettings()
+    {
+        var settings = MongoClientSettings.FromConnectionString(ConnectionString);
+        if (!string.IsNullOrEmpty(Password)) settings.Credential = MongoCredential.CreateCredential("admin", User, Password);
+        return settings;
+    }
 }
 
 public sealed class SeedOptions
