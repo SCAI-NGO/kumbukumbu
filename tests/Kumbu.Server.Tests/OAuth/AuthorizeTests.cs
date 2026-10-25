@@ -367,6 +367,18 @@ public sealed class AuthorizeTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_client_that_no_longer_resolves_is_said_so()
+    {
+        var flow = await FlowAsync();
+        await Collection("oauth_clients").DeleteOneAsync(new BsonDocument("_id", flow.ClientId), Ct);
+
+        using var view = await flow.GetConsentAsync();
+
+        Assert.Equal(HttpStatusCode.NotFound, view.StatusCode);
+        Assert.Equal("The app could not be identified any more; start the connection again in the app.", await RestClient.ErrorAsync(view));
+    }
+
+    [Fact]
     public async Task Requests_expire_after_ten_minutes()
     {
         var flow = await FlowAsync();

@@ -71,12 +71,13 @@ public static class ConnectionApi
     }
 
     private const string RequestExpired = "This request has expired; start the connection again in the app.";
+    private const string ClientGone = "The app could not be identified any more; start the connection again in the app.";
 
     private static async Task<Ok<ConsentView>> ConsentAsync(
         string id, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, Connections connections, TimeProvider time, CancellationToken ct)
     {
         var request = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
-        var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw ApiErrors.NotFound(RequestExpired);
+        var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw ApiErrors.NotFound(ClientGone);
         var (problem, connection, renewal) = await ConsentConnectionAsync(request, caller, connections, time, ct);
         return TypedResults.Ok(new ConsentView(request.Id, new ClientView(client.Name, client.Host, client.Verified), new Uri(request.RedirectUri).Host, connection, renewal, problem));
     }
@@ -126,6 +127,7 @@ public static class ConnectionApi
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
 
+        // After the commit: should this fail, the code is never seen and expires harmlessly within 60 s.
         await clients.MarkAuthorisedAsync(request.ClientId, ct);
         OAuthEndpoints.LogStep(log, "consent", "allowed", request.ConnectionId, clientHost, request.Id);
         return TypedResults.Ok(new ConsentDecisionView(OAuthEndpoints.Redirect(request.RedirectUri, issuer, request.State, ("code", code))));

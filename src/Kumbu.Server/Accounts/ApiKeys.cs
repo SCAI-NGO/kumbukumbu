@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -47,16 +46,11 @@ public sealed record ResolvedApiKey(User User, string Id, string Name);
 /// </summary>
 public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvider time, ILogger<ApiKeys> log)
 {
+    /// <summary>Followed by 32 random bytes in Base62, 43 characters (<see cref="Secrets"/>).</summary>
     public const string KeyPrefix = "kumbu_";
-
-    private const int SecretBytes = 32;
-
-    /// <summary>62^43 > 2^256 > 62^42: every 32 bytes fit in 43 digits.</summary>
-    private const int Base62Length = 43;
 
     private const int PrefixLength = 8;
 
-    private const string Base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     private const string LookupLabel = "kumbu/v1/api-key-lookup";
     private const string WriterLabel = "kumbu/v1/api-key-writer";
     private const string MetaLabel = "kumbu/v1/api-key-meta";
@@ -98,7 +92,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         await EnsureReadyAsync(ct);
 
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
-        var key = KeyPrefix + EncodeBase62(RandomNumberGenerator.GetBytes(SecretBytes));
+        var key = Secrets.New(KeyPrefix);
         var slots = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
         var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)));
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
@@ -272,7 +266,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// </summary>
     public async Task<ResolvedApiKey?> ResolveAsync(string presented, CancellationToken ct)
     {
-        if (!IsWellFormed(presented)) return null;
+        if (!Secrets.IsWellFormed(presented, KeyPrefix)) return null;
         await EnsureReadyAsync(ct);
         var lookup = Lookup(presented);
         var doc = await Keys.Find(k => k.Lookup == lookup).FirstOrDefaultAsync(ct);
@@ -324,22 +318,6 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     }
 
     public static bool LooksLikeKey(string presented) => presented.StartsWith(KeyPrefix, StringComparison.Ordinal);
-
-    private static bool IsWellFormed(string presented) =>
-        presented.Length == KeyPrefix.Length + Base62Length && LooksLikeKey(presented) && presented.AsSpan(KeyPrefix.Length).IndexOfAnyExcept(Base62) < 0;
-
-    private static string EncodeBase62(byte[] bytes)
-    {
-        var value = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
-        var digits = new char[Base62Length];
-        for (var i = Base62Length - 1; i >= 0; i--)
-        {
-            value = BigInteger.DivRem(value, 62, out var digit);
-            digits[i] = Base62[(int)digit];
-        }
-
-        return new string(digits);
-    }
 
     private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta) => new(
         doc.Id,
