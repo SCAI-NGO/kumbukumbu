@@ -185,33 +185,49 @@ public sealed class RegistrationTests(KumbuAppFactory app)
         Assert.Equal(before, await collection.CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
     }
 
+    /// <summary>A request context from <paramref name="address"/>, as the limiter sees one.</summary>
+    private static Microsoft.AspNetCore.Http.DefaultHttpContext From(string address) =>
+        new() { Connection = { RemoteIpAddress = System.Net.IPAddress.Parse(address) } };
+
     [Fact]
-    public void Token_failures_are_limited_per_client_id()
+    public void Token_failures_are_limited_per_client_id_and_network()
     {
         using var limits = new OAuthLimits();
+        var here = From("203.0.113.5");
         for (var i = 0; i < 20; i++)
         {
-            Assert.Null(limits.TokenReserve("a"));
-            limits.TokenFailed("a");
+            Assert.Null(limits.TokenReserve(here, "a"));
+            limits.TokenFailed(here, "a");
         }
 
-        Assert.NotNull(limits.TokenReserve("a"));
-        Assert.Null(limits.TokenReserve("b"));
-        limits.TokenRelease("b");
+        Assert.NotNull(limits.TokenReserve(here, "a"));
+        Assert.Null(limits.TokenReserve(here, "b"));
+        limits.TokenRelease(here, "b");
+        // The same client id from another network has a budget of its own; the same /64 doesn't.
+        Assert.Null(limits.TokenReserve(From("198.51.100.7"), "a"));
+        var v6 = From("2001:db8::1");
+        for (var i = 0; i < 20; i++)
+        {
+            limits.TokenReserve(v6, "a");
+            limits.TokenFailed(v6, "a");
+        }
+
+        Assert.NotNull(limits.TokenReserve(From("2001:db8::2"), "a"));
     }
 
     [Fact]
     public void Token_limit_keys_are_cut_to_256_characters()
     {
         using var limits = new OAuthLimits();
+        var here = From("203.0.113.6");
         var prefix = new string('x', 256);
         for (var i = 0; i < 20; i++)
         {
-            limits.TokenReserve(prefix + "1");
-            limits.TokenFailed(prefix + "1");
+            limits.TokenReserve(here, prefix + "1");
+            limits.TokenFailed(here, prefix + "1");
         }
 
         // Padding past the cut doesn't buy a fresh budget.
-        Assert.NotNull(limits.TokenReserve(prefix + "2"));
+        Assert.NotNull(limits.TokenReserve(here, prefix + "2"));
     }
 }

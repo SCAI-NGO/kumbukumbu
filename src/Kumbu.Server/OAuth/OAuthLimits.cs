@@ -6,8 +6,10 @@ namespace Kumbu.Server.OAuth;
 
 /// <summary>
 /// The OAuth endpoints' rate limits (Ruling 13), in memory like <see cref="WrongKeyLimiter"/>: registrations per
-/// network, failed token requests per client id. Failures are not counted per address because Anthropic's
-/// connectors all come from one egress range (Ruling 12).
+/// network, failed token requests per client id and network together. Not per client id alone: anyone can name
+/// claude.ai's client id, and 20 bogus requests would then stop every real claude.ai exchange for a minute. Not per
+/// network alone either: Anthropic's connectors all come from one egress range (Ruling 12), so its users would share
+/// one budget with every other client calling from there.
 /// </summary>
 public sealed class OAuthLimits : IDisposable
 {
@@ -40,14 +42,17 @@ public sealed class OAuthLimits : IDisposable
         return lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) ? retryAfter : RegistrationWindow;
     }
 
-    /// <summary>Null if a token request for the client may be checked (a permit is then held until <see cref="TokenFailed"/> or <see cref="TokenRelease"/>); else how long to wait.</summary>
-    public TimeSpan? TokenReserve(string clientId) => _tokens.TryReserve(Key(clientId));
+    /// <summary>Null if a token request for the client from this caller's network may be checked (a permit is then held
+    /// until <see cref="TokenFailed"/> or <see cref="TokenRelease"/>); else how long to wait.</summary>
+    public TimeSpan? TokenReserve(HttpContext http, string clientId) => _tokens.TryReserve(Key(http, clientId));
 
-    public void TokenFailed(string clientId) => _tokens.Failed(Key(clientId));
+    public void TokenFailed(HttpContext http, string clientId) => _tokens.Failed(Key(http, clientId));
 
-    public void TokenRelease(string clientId) => _tokens.Release(Key(clientId));
+    public void TokenRelease(HttpContext http, string clientId) => _tokens.Release(Key(http, clientId));
 
-    private static string Key(string clientId) => clientId.Length <= MaxClientIdKey ? clientId : clientId[..MaxClientIdKey];
+    /// <summary>The network (<see cref="WrongKeyLimiter.Partition"/>, IPv6 per /64) and the client id, cut to <see cref="MaxClientIdKey"/>.</summary>
+    private static string Key(HttpContext http, string clientId) =>
+        WrongKeyLimiter.Partition(http.Connection.RemoteIpAddress) + " " + (clientId.Length <= MaxClientIdKey ? clientId : clientId[..MaxClientIdKey]);
 
     public void Dispose()
     {

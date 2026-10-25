@@ -168,7 +168,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     }
 
     /// <summary>
-    /// The owner's Revoke, final: marked revoked, name freed, tokens and their slots deleted, in one transaction.
+    /// The owner's Revoke, final: marked revoked, name freed, its tokens revoked (slots deleted, records kept as tombstones), in one transaction.
     /// False if the user has no such connection that isn't revoked.
     /// </summary>
     public async Task<bool> RevokeAsync(User user, string id, CancellationToken ct)
@@ -200,7 +200,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
 
     /// <summary>
     /// Gives the connection new rights (vault id → right, all the user's own, else <see cref="ArgumentException"/>)
-    /// and deletes its tokens (Ruling 4): the server never holds a refresh token, so it can't re-wrap the slots,
+    /// and revokes its tokens (Ruling 4): the server never holds a refresh token, so it can't re-wrap the slots,
     /// and the list never shows rights the tokens don't have. An authorised connection then needs a reconnect
     /// (<see cref="ConnectionReasons.RightsChanged"/>). Null if the user has no such connection that is neither
     /// revoked nor expired.
@@ -242,7 +242,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     }
 
     /// <summary>
-    /// Deletes the tokens of every connection of the user that isn't revoked, inside the caller's transaction (a
+    /// Revokes the tokens of every connection of the user that isn't revoked, inside the caller's transaction (a
     /// password change that revokes API keys, a recovery, a deactivation): those already authorised then need a
     /// reconnect with <paramref name="reason"/>. Returns how many connections.
     /// </summary>
@@ -265,7 +265,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return count;
     }
 
-    /// <summary>Deletes one connection's tokens and their slots, inside the caller's transaction (a reused refresh token or code, the client's revocation).</summary>
+    /// <summary>Revokes one connection's tokens (slots deleted, records kept as tombstones), inside the caller's transaction (a reused refresh token or code, the client's revocation).</summary>
     internal Task RevokeConnectionTokensAsync(IClientSessionHandle session, string connectionId, string reason, CancellationToken ct) =>
         ConnectionRevocation.RevokeTokensAsync(db, session, Builders<ConnectionDocument>.Filter.Eq(c => c.Id, connectionId), reason, Now, ct);
 
@@ -432,7 +432,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
 }
 
 /// <summary>
-/// Deleting connections' tokens, on the collections directly: <see cref="Connections"/> calls it, and so does
+/// Revoking connections' tokens, on the collections directly: <see cref="Connections"/> calls it, and so does
 /// <see cref="VaultCatalog"/>, which <see cref="Connections"/> depends on and so can't be called back (it works on
 /// <c>api_keys</c> directly for the same reason).
 /// </summary>
@@ -445,10 +445,14 @@ internal static class ConnectionRevocation
 
     internal const string ConnectionField = "connection";
 
+    /// <summary>How long a revoked code's or token's record stays as a tombstone: long enough for an app to give up on
+    /// it, and for a reused code to be recognised.</summary>
+    internal static readonly TimeSpan TombstoneRetention = TimeSpan.FromHours(24);
+
     /// <summary>
-    /// Deletes the tokens of the connections <paramref name="which"/> selects and their slots, and stamps
-    /// <c>tokensRevokedAt</c> and <c>tokensRevokedReason</c>, inside the caller's transaction. Returns how many
-    /// connections matched.
+    /// Revokes the tokens of the connections <paramref name="which"/> selects: their slots are deleted and their records
+    /// become tombstones (<see cref="TombstoneAsync"/>), and <c>tokensRevokedAt</c> and <c>tokensRevokedReason</c> are
+    /// stamped, inside the caller's transaction. Returns how many connections matched.
     /// </summary>
     public static async Task<int> RevokeTokensAsync(
         IMongoDatabase db, IClientSessionHandle session, FilterDefinition<ConnectionDocument> which, string reason, DateTime now, CancellationToken ct)
@@ -457,7 +461,7 @@ internal static class ConnectionRevocation
         var ids = await connections.Find(session, which).Project(c => c.Id).ToListAsync(ct);
         if (ids.Count == 0) return 0;
         var ofThese = Builders<BsonDocument>.Filter.In(ConnectionField, ids);
-        await db.GetCollection<BsonDocument>(TokensCollection).DeleteManyAsync(session, ofThese, cancellationToken: ct);
+        await TombstoneAsync(db, session, ofThese, now, ct);
         await db.GetCollection<BsonDocument>("slots").DeleteManyAsync(session, Builders<BsonDocument>.Filter.Eq("kind", SlotKind) & ofThese, cancellationToken: ct);
         await connections.UpdateManyAsync(
             session,
@@ -466,6 +470,20 @@ internal static class ConnectionRevocation
             cancellationToken: ct);
         return ids.Count;
     }
+
+    /// <summary>
+    /// Turns the code and token records <paramref name="which"/> selects, unless already revoked, into tombstones, inside
+    /// the caller's transaction: <c>revokedAt</c> set, the lookup kept and the grant dropped, gone after
+    /// <see cref="TombstoneRetention"/>. A revoked token stays recognised (Ruling 12): from Anthropic's shared range a
+    /// revoked token counted as a wrong key would lock every claude.ai user of the instance out. A tombstone opens
+    /// nothing: its slots are deleted by the caller.
+    /// </summary>
+    internal static Task TombstoneAsync(IMongoDatabase db, IClientSessionHandle session, FilterDefinition<BsonDocument> which, DateTime now, CancellationToken ct) =>
+        db.GetCollection<BsonDocument>(TokensCollection).UpdateManyAsync(
+            session,
+            which & Builders<BsonDocument>.Filter.Exists("revokedAt", false),
+            Builders<BsonDocument>.Update.Set("revokedAt", now).Set("purgeAt", now + TombstoneRetention).Unset("grant"),
+            cancellationToken: ct);
 }
 
 /// <summary>A connection (collection <c>connections</c>). Name, rights and client are sealed; the vault ids are not (Ruling 17).</summary>

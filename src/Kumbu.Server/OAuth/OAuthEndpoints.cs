@@ -28,8 +28,9 @@ public static partial class OAuthEndpoints
     /// <summary>
     /// The token endpoint (spec §4, RFC 6749 §3.2, §4.1.3, §5): a form POST only, each parameter at most once.
     /// <c>authorization_code</c> exchanges a code (<see cref="OAuthTokens.ExchangeCodeAsync"/>); any other grant is
-    /// <c>unsupported_grant_type</c>. Failures are limited per <c>client_id</c> (Ruling 13), not per address: every
-    /// claude.ai user arrives from Anthropic's range. Every answer is <c>no-store</c>; tokens are never logged.
+    /// <c>unsupported_grant_type</c>. Failures are limited per <c>client_id</c> and network together
+    /// (<see cref="OAuthLimits"/>), so neither a stranger naming claude.ai's client id nor Anthropic's shared range
+    /// stops the others. Every answer is <c>no-store</c>; tokens are never logged.
     /// </summary>
     private static async Task<IResult> TokenAsync(HttpContext http, OAuthTokens tokens, OAuthLimits limits, CancellationToken ct)
     {
@@ -50,7 +51,7 @@ public static partial class OAuthEndpoints
 
         // A missing client_id is counted under the empty one: a public client always sends its id.
         var clientId = form.TryGetValue("client_id", out var ids) && ids.Count == 1 ? ids[0] ?? "" : "";
-        if (limits.TokenReserve(clientId) is { } retryAfter)
+        if (limits.TokenReserve(http, clientId) is { } retryAfter)
         {
             ApiErrors.SetRetryAfter(http, retryAfter);
             return TokenError("invalid_request", "Too many failed token requests for this client; try again later.", StatusCodes.Status429TooManyRequests);
@@ -64,17 +65,17 @@ public static partial class OAuthEndpoints
         catch
         {
             // MongoDB unreachable or the request aborted: not a failure of the client's.
-            limits.TokenRelease(clientId);
+            limits.TokenRelease(http, clientId);
             throw;
         }
 
         if (result.Pair is not { } pair)
         {
-            limits.TokenFailed(clientId);
+            limits.TokenFailed(http, clientId);
             return TokenError(result.Error!, result.Description!, result.Error == "invalid_client" ? StatusCodes.Status401Unauthorized : StatusCodes.Status400BadRequest);
         }
 
-        limits.TokenRelease(clientId);
+        limits.TokenRelease(http, clientId);
         return TypedResults.Json(new JsonObject
         {
             ["access_token"] = pair.AccessToken,

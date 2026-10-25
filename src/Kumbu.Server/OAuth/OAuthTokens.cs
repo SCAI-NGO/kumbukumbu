@@ -20,7 +20,10 @@ public static class OAuthTokenKinds
 }
 
 /// <summary>What the token endpoint passes on for <c>grant_type=authorization_code</c>; <c>Resource</c> is optional.</summary>
-public sealed record CodeExchange(string Code, string ClientId, string RedirectUri, string CodeVerifier, string? Resource);
+public sealed record CodeExchange(string Code, string ClientId, string RedirectUri, string CodeVerifier, string? Resource)
+{
+    public override string ToString() => $"CodeExchange {{ ClientId = {ClientId}, RedirectUri = {RedirectUri}, Resource = {Resource} }}";
+}
 
 /// <summary>A connection's tokens as the token endpoint answers them. Not logged: <see cref="ToString"/> hides them.</summary>
 public sealed record TokenPair(string AccessToken, string RefreshToken, int ExpiresIn, string Scope)
@@ -144,7 +147,7 @@ public sealed class OAuthTokens(
             User = user.Id,
             ClientId = request.ClientId,
             Lookup = Lookup(code),
-            Grant = SealGrant(code, tokenId, OAuthTokenKinds.Code, new OAuthGrant(meta.Name, request.Resource, doc.ExpiresAt)),
+            Grant = SealGrant(code, tokenId, OAuthTokenKinds.Code, new OAuthGrant(meta.Name, request.Resource, doc.ExpiresAt, expiresAt)),
             RedirectUri = request.RedirectUri,
             CodeChallenge = request.CodeChallenge,
             ReadOnly = request.ReadOnly,
@@ -201,7 +204,7 @@ public sealed class OAuthTokens(
         // which would wait for a transaction that has written. Used only if the transaction finds the same record.
         var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
         if (found is null || found.Kind != OAuthTokenKinds.Code) return Refused(null, null, "invalid_grant", InvalidCode);
-        var keys = found.UsedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, exchange.Code, ct) : [];
+        var keys = found.UsedAt is null && found.RevokedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, exchange.Code, ct) : [];
 
         var access = Secrets.New(AccessPrefix);
         var refresh = Secrets.New(RefreshPrefix);
@@ -214,7 +217,8 @@ public sealed class OAuthTokens(
             {
                 reused = false;
                 var code = await Docs.Find(s, d => d.Id == found.Id).FirstOrDefaultAsync(token);
-                if (code is null) return TokenResult.Failure("invalid_grant", InvalidCode);
+                // A tombstone: the connection's tokens were revoked, this code with them; there is nothing left to revoke.
+                if (code is null || code.RevokedAt is not null) return TokenResult.Failure("invalid_grant", InvalidCode);
                 var now = Now;
                 if (code.UsedAt is not null)
                 {
@@ -231,6 +235,7 @@ public sealed class OAuthTokens(
                 // Spent now, whatever comes next; committed with the answer.
                 await Docs.UpdateOneAsync(s, d => d.Id == code.Id, Builders<OAuthTokenDocument>.Update.Set(d => d.UsedAt, now), cancellationToken: token);
                 if (!(now < code.ExpiresAt)) return TokenResult.Failure("invalid_grant", InvalidCode);
+                // The code's expiry, sealed into its grant, is checked below too: a changed expiresAt extends nothing.
                 if (!string.Equals(exchange.ClientId, code.ClientId, StringComparison.Ordinal)
                     || !string.Equals(exchange.RedirectUri, code.RedirectUri, StringComparison.Ordinal)
                     || !PkceMatches(exchange.CodeVerifier, code.CodeChallenge))
@@ -249,6 +254,7 @@ public sealed class OAuthTokens(
                     return TokenResult.Failure("invalid_grant", InvalidCode);
                 }
 
+                if (!(now < grant.ExpiresAt)) return TokenResult.Failure("invalid_grant", InvalidCode);
                 if (exchange.Resource is { } resource && OAuthUrls.Canonical(resource) != OAuthUrls.Canonical(grant.Resource))
                     return TokenResult.Failure("invalid_target", "The resource is not the connection this code was issued for.");
 
@@ -262,11 +268,13 @@ public sealed class OAuthTokens(
                 var connectionExpiresAt = grant.ConnectionExpiresAt;
                 var accessExpiresAt = Milliseconds(connectionExpiresAt is { } c && c < now + AccessLifetime ? c : now + AccessLifetime);
 
-                var earlier = await Docs.Find(s, d => d.ConnectionId == code.ConnectionId && (d.Kind == OAuthTokenKinds.Access || d.Kind == OAuthTokenKinds.Refresh))
+                // One family per connection: the earlier tokens become tombstones, still recognised but opening nothing.
+                var earlier = await Docs.Find(
+                        s, d => d.ConnectionId == code.ConnectionId && d.RevokedAt == null && (d.Kind == OAuthTokenKinds.Access || d.Kind == OAuthTokenKinds.Refresh))
                     .Project(d => d.Id).ToListAsync(token);
                 if (earlier.Count > 0)
                 {
-                    await Docs.DeleteManyAsync(s, Builders<OAuthTokenDocument>.Filter.In(d => d.Id, earlier), cancellationToken: token);
+                    await ConnectionRevocation.TombstoneAsync(db, s, Builders<MongoDB.Bson.BsonDocument>.Filter.In("_id", earlier), now, token);
                     await catalog.DeleteTokenSlotsAsync(s, earlier, token);
                 }
 
@@ -274,8 +282,8 @@ public sealed class OAuthTokens(
                 await Docs.InsertManyAsync(
                     s,
                     [
-                        Record(refreshId, OAuthTokenKinds.Refresh, refresh, code, grant, now, connectionExpiresAt, connectionExpiresAt),
-                        Record(accessId, OAuthTokenKinds.Access, access, code, grant, now, accessExpiresAt, accessExpiresAt + AccessRetention),
+                        Record(refreshId, OAuthTokenKinds.Refresh, refresh, code, grant with { ExpiresAt = connectionExpiresAt }, now, connectionExpiresAt, connectionExpiresAt),
+                        Record(accessId, OAuthTokenKinds.Access, access, code, grant with { ExpiresAt = accessExpiresAt }, now, accessExpiresAt, accessExpiresAt + AccessRetention),
                     ],
                     cancellationToken: token);
                 await catalog.Slots.InsertManyAsync(
@@ -352,7 +360,8 @@ public sealed class OAuthTokens(
         if (record is null) return new(null, false);
         var known = new AccessResolution(null, true);
         var now = Now;
-        if (record.Kind != OAuthTokenKinds.Access || record.ConnectionId != connectionId || !(now < record.ExpiresAt)) return known;
+        // A tombstone (revoked) is known too: refused, but not counted as a wrong key.
+        if (record.RevokedAt is not null || record.Kind != OAuthTokenKinds.Access || record.ConnectionId != connectionId || !(now < record.ExpiresAt)) return known;
 
         OAuthGrant grant;
         try
@@ -365,7 +374,8 @@ public sealed class OAuthTokens(
             return known;
         }
 
-        if (OAuthUrls.Canonical(grant.Resource) != OAuthUrls.Canonical(resource) || now >= grant.ConnectionExpiresAt) return known;
+        // The expiry sealed into the grant, not only the record's: a changed expiresAt in the database extends nothing.
+        if (!(now < grant.ExpiresAt) || OAuthUrls.Canonical(grant.Resource) != OAuthUrls.Canonical(resource) || now >= grant.ConnectionExpiresAt) return known;
         var connection = await ConnectionDocs.Find(c => c.Id == connectionId).FirstOrDefaultAsync(ct);
         if (connection is null || !IsLive(connection, record.User, now)) return known;
         var user = await Users.Find(u => u.Id == record.User).FirstOrDefaultAsync(ct);
@@ -433,12 +443,15 @@ public sealed class OAuthTokens(
         _ready = true;
     }
 
-    /// <summary>What a token's grant seals under the token: the writer label, the resource it is bound to and the
-    /// connection's expiry (Ruling 17), so a request with the token needs no user key to know them.</summary>
+    /// <summary>What a token's grant seals under the token: the writer label, the resource it is bound to, the
+    /// connection's expiry (Ruling 17) and the code's or token's own expiry (null for a refresh token of a connection
+    /// that doesn't expire), so a request with the token needs no user key to know them and a changed expiry in the
+    /// database extends nothing.</summary>
     internal sealed record OAuthGrant(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("resource")] string Resource,
-        [property: JsonPropertyName("connectionExpiresAt")] DateTime? ConnectionExpiresAt);
+        [property: JsonPropertyName("connectionExpiresAt")] DateTime? ConnectionExpiresAt,
+        [property: JsonPropertyName("expiresAt")] DateTime? ExpiresAt);
 }
 
 /// <summary>
@@ -496,6 +509,11 @@ public sealed class OAuthTokenDocument
     /// <summary>Expiry, checked in code; null for a refresh token of a connection that doesn't expire.</summary>
     [BsonElement("expiresAt"), BsonIgnoreIfNull]
     public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>A tombstone: when its connection's tokens were revoked or replaced. Its lookup stays, so it is still
+    /// recognised, but it has no grant and no slots (<see cref="ConnectionRevocation.TombstoneAsync"/>).</summary>
+    [BsonElement("revokedAt"), BsonIgnoreIfNull]
+    public DateTime? RevokedAt { get; set; }
 
     /// <summary>Codes and refresh tokens: when it was spent. A second use is a reuse.</summary>
     [BsonElement("usedAt"), BsonIgnoreIfNull]

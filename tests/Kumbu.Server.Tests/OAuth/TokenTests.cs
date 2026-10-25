@@ -111,16 +111,21 @@ public sealed class TokenTests(KumbuAppFactory app)
     }
 
     /// <summary>A form POST to <c>/oauth/token</c> with exactly <paramref name="fields"/>.</summary>
-    private static async Task<HttpResponseMessage> TokenAsync(WebApplicationFactory<Program> api, params (string Name, string Value)[] fields)
+    private static Task<HttpResponseMessage> TokenAsync(WebApplicationFactory<Program> api, params (string Name, string Value)[] fields) =>
+        TokenFromAsync(api, Address(), fields);
+
+    private static async Task<HttpResponseMessage> TokenFromAsync(WebApplicationFactory<Program> api, string address, params (string Name, string Value)[] fields)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/oauth/token")
         {
             Content = new FormUrlEncodedContent(fields.Select(f => new KeyValuePair<string, string>(f.Name, f.Value))),
         };
-        request.Headers.Add("X-Forwarded-For", Address());
+        request.Headers.Add("X-Forwarded-For", address);
         using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(KumbuAppFactory.PublicUrl) });
         return await client.SendAsync(request, Ct);
     }
+
+    private static string OwnAddress() => $"10.{Random.Shared.Next(256)}.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
 
     private static string Challenge(HttpResponseMessage response) => response.Headers.GetValues("WWW-Authenticate").Single();
 
@@ -430,28 +435,29 @@ public sealed class TokenTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Token_failures_are_limited_per_client()
+    public async Task Token_failures_are_limited_per_client_and_network()
     {
-        var limited = "https://limited.test/" + Guid.NewGuid().ToString("N");
-        var other = "https://other.test/" + Guid.NewGuid().ToString("N");
-        (string, string)[] Bad(string client) =>
+        var client = "https://limited.test/" + Guid.NewGuid().ToString("N");
+        var address = OwnAddress();
+        (string, string)[] Bad(string id) =>
         [
-            ("grant_type", "authorization_code"), ("code", "kumbu_ac_" + new string('B', 43)), ("redirect_uri", Callback), ("client_id", client),
+            ("grant_type", "authorization_code"), ("code", "kumbu_ac_" + new string('B', 43)), ("redirect_uri", Callback), ("client_id", id),
             ("code_verifier", OAuthFlow.NewVerifier()),
         ];
 
         for (var i = 0; i < 20; i++)
         {
-            using var bad = await TokenAsync(Api, Bad(limited));
+            using var bad = await TokenFromAsync(Api, address, Bad(client));
             Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
         }
 
-        using var tooMany = await TokenAsync(Api, Bad(limited));
-        using var otherClient = await TokenAsync(Api, Bad(other));
+        using var tooMany = await TokenFromAsync(Api, address, Bad(client));
+        // Someone else naming the same client id (say, claude.ai's) from another network isn't stopped by these.
+        using var elsewhere = await TokenFromAsync(Api, OwnAddress(), Bad(client));
 
         Assert.Equal(HttpStatusCode.TooManyRequests, tooMany.StatusCode);
         Assert.True(tooMany.Headers.RetryAfter is not null);
-        Assert.Equal(HttpStatusCode.BadRequest, otherClient.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, elsewhere.StatusCode);
     }
 
     [Fact]
@@ -470,7 +476,7 @@ public sealed class TokenTests(KumbuAppFactory app)
         using var after = await InitializeAsync(Api, $"/mcp/c/{flow.ConnectionId}", access);
 
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
-        Assert.Equal(0, await Collection("oauth_tokens").CountDocumentsAsync(ofConnection, cancellationToken: Ct));
+        await AssertTombstonesAsync(flow.ConnectionId, 3);
         Assert.Equal(0, await Collection("slots").CountDocumentsAsync(ofConnection, cancellationToken: Ct));
         Assert.Equal(1, await Collection("slots").CountDocumentsAsync(keySlots, cancellationToken: Ct));
         Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
@@ -486,7 +492,7 @@ public sealed class TokenTests(KumbuAppFactory app)
         using var after = await InitializeAsync(Api, $"/mcp/c/{flow.ConnectionId}", access);
 
         var ofConnection = new BsonDocument("connection", flow.ConnectionId);
-        Assert.Equal(0, await Collection("oauth_tokens").CountDocumentsAsync(ofConnection, cancellationToken: Ct));
+        await AssertTombstonesAsync(flow.ConnectionId, 3);
         Assert.Equal(0, await Collection("slots").CountDocumentsAsync(ofConnection, cancellationToken: Ct));
         Assert.Equal(1, await Collection("slots").CountDocumentsAsync(new BsonDocument { ["kind"] = "key", ["apiKey"] = new BsonDocument("$exists", true), ["vault"] = (await Collection("connections").Find(new BsonDocument("_id", flow.ConnectionId)).SingleAsync(Ct))["vaults"][0] }, cancellationToken: Ct));
         Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
@@ -516,10 +522,111 @@ public sealed class TokenTests(KumbuAppFactory app)
         using var current = await InitializeAsync(Api, $"/mcp/c/{flow.ConnectionId}", second);
         Assert.Equal(HttpStatusCode.Unauthorized, old.StatusCode);
         Assert.Equal(HttpStatusCode.OK, current.StatusCode);
-        // One family per connection: one access and one refresh token, besides the two spent codes.
-        var kinds = (await Collection("oauth_tokens").Find(new BsonDocument("connection", flow.ConnectionId)).ToListAsync(Ct)).Select(d => d["kind"].AsString);
-        Assert.Equal(["access", "code", "code", "refresh"], kinds.Order(StringComparer.Ordinal));
+        // One family per connection: one access and one refresh token, besides the two spent codes; the first
+        // family's tokens are tombstones without slots.
+        var records = await Collection("oauth_tokens").Find(new BsonDocument("connection", flow.ConnectionId)).ToListAsync(Ct);
+        Assert.Equal(["access", "code", "code", "refresh"], records.Where(d => !d.Contains("revokedAt")).Select(d => d["kind"].AsString).Order(StringComparer.Ordinal));
+        var tombstones = records.Where(d => d.Contains("revokedAt")).ToList();
+        Assert.Equal(["access", "refresh"], tombstones.Select(d => d["kind"].AsString).Order(StringComparer.Ordinal));
+        Assert.All(tombstones, d => Assert.False(d.Contains("grant")));
+        Assert.Equal(0, await Collection("slots").CountDocumentsAsync(Builders<BsonDocument>.Filter.In("token", tombstones.Select(d => d["_id"])), cancellationToken: Ct));
         Assert.NotEqual(firstRefresh, second);
+    }
+
+    /// <summary>Every record of the connection is a tombstone: revoked, its lookup kept, no grant, gone within a day, no slots.</summary>
+    private async Task AssertTombstonesAsync(string connectionId, int count)
+    {
+        var records = await Collection("oauth_tokens").Find(new BsonDocument("connection", connectionId)).ToListAsync(Ct);
+        Assert.Equal(count, records.Count);
+        Assert.All(records, d =>
+        {
+            Assert.True(d.Contains("revokedAt"));
+            Assert.True(d.Contains("lookup"));
+            Assert.False(d.Contains("grant"));
+            Assert.InRange(d["purgeAt"].ToUniversalTime(), d["revokedAt"].ToUniversalTime().AddHours(24).AddSeconds(-1), d["revokedAt"].ToUniversalTime().AddHours(24).AddSeconds(1));
+        });
+        Assert.Equal(0, await Collection("slots").CountDocumentsAsync(new BsonDocument("connection", connectionId), cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Revoked_access_tokens_do_not_count_as_wrong_keys()
+    {
+        var (flow, access, _) = await ConnectedAsync(Api);
+        var address = OwnAddress();
+        await Api.Services.GetRequiredService<Connections>().RevokeAllTokensAsync(flow.Owner.User, ConnectionReasons.PasswordChanged, Ct);
+        await AssertTombstonesAsync(flow.ConnectionId, 3);
+
+        for (var i = 0; i < 25; i++)
+        {
+            using var revoked = await InitializeAsync(Api, $"/mcp/c/{flow.ConnectionId}", access, address);
+            Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+            Assert.EndsWith("error=\"invalid_token\"", Challenge(revoked), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task A_revoked_code_is_refused_and_revokes_nothing_more()
+    {
+        var (owner, id) = await ConnectionAsync(Api);
+        var flow = await AllowedAsync(Api, owner, id);
+        await Api.Services.GetRequiredService<Connections>().RevokeAllTokensAsync(owner.User, ConnectionReasons.PasswordChanged, Ct);
+
+        using var response = await flow.TokenAsync();
+
+        Assert.Equal("invalid_grant", await ErrorOf(response));
+        Assert.Equal(ConnectionReasons.PasswordChanged, (await Collection("connections").Find(new BsonDocument("_id", id)).SingleAsync(Ct))["tokensRevokedReason"].AsString);
+    }
+
+    [Fact]
+    public async Task A_changed_expiry_in_the_database_extends_nothing()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var api = WithClock(time);
+        var (flow, access, _) = await ConnectedAsync(api);
+        var record = await TokenRecordAsync(flow.ConnectionId, "access");
+        var later = time.GetUtcNow().UtcDateTime.AddDays(1);
+        await Collection("oauth_tokens").UpdateOneAsync(new BsonDocument("_id", record["_id"]), new BsonDocument("$set", new BsonDocument("expiresAt", later)), cancellationToken: Ct);
+        await Collection("slots").UpdateManyAsync(new BsonDocument("token", record["_id"]), new BsonDocument("$set", new BsonDocument("expiresAt", later)), cancellationToken: Ct);
+
+        using (var before = await InitializeAsync(api, $"/mcp/c/{flow.ConnectionId}", access)) Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        time.Advance(TimeSpan.FromMinutes(61));
+        using var after = await InitializeAsync(api, $"/mcp/c/{flow.ConnectionId}", access);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
+        Assert.EndsWith("error=\"invalid_token\"", Challenge(after), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Two_exchanges_of_one_code_at_once_give_one_pair()
+    {
+        var (owner, id) = await ConnectionAsync(Api);
+        var flow = await AllowedAsync(Api, owner, id);
+
+        var responses = await Task.WhenAll(flow.TokenAsync(), flow.TokenAsync());
+
+        try
+        {
+            Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.OK));
+            var refused = responses.Single(r => r.StatusCode != HttpStatusCode.OK);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            Assert.Equal("invalid_grant", await ErrorOf(refused));
+        }
+        finally
+        {
+            foreach (var response in responses) response.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Exchanges_and_pairs_print_no_secrets()
+    {
+        var exchange = new Kumbu.Server.OAuth.CodeExchange("kumbu_ac_secretcode", "client", Callback, "verifier-secret", null);
+        var pair = new Kumbu.Server.OAuth.TokenPair("kumbu_at_secret", "kumbu_rt_secret", 3600, "kumbu:read");
+
+        Assert.DoesNotContain("secret", exchange.ToString(), StringComparison.Ordinal);
+        Assert.Contains("client", exchange.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", pair.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", new Kumbu.Server.OAuth.TokenResult(pair, null, null).ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
