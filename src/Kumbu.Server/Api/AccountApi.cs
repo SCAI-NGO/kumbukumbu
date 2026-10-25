@@ -165,18 +165,14 @@ public static class AccountApi
     }
 
     private static async Task<Ok<PasswordChangedView>> ChangePasswordAsync(
-        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, ApiKeys keys, AccountLimits limits, CancellationToken ct)
+        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await users.ChangePasswordAsync(user.Id, caller.UserKey!, body.OldPassword, body.NewPassword, ct))
+        if (!await users.ChangePasswordAsync(user, caller.UserKey!, body.OldPassword, body.NewPassword, body.RevokeApiKeys, ct))
         {
             throw ApiErrors.BadRequest("The current password is wrong.");
         }
-
-        // The password is changed and every session ended: the revocation must not stop half way because the
-        // client gave up waiting.
-        if (body.RevokeApiKeys) await keys.RevokeAllAsync(user, CancellationToken.None);
 
         ClearSessionCookie(http);
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));

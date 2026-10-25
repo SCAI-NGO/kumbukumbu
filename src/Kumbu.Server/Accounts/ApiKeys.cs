@@ -196,9 +196,9 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         int revoked;
         using (var session = await catalog.StartSessionAsync(ct))
         {
-            session.StartTransaction();
-            revoked = await RevokeAllAsync(session, user.Id, ct);
-            await session.CommitTransactionAsync(CancellationToken.None);
+            // WithTransactionAsync retries a write conflict, which is a real possibility here: ResolveAsync writes
+            // lastUsedAt on these very documents, outside any transaction, whenever a key is used.
+            revoked = await session.WithTransactionAsync((s, token) => RevokeAllAsync(s, user.Id, token), cancellationToken: ct);
         }
 
         if (revoked > 0) log.LogInformation("User {Username} revoked all {Count} API keys", user.Username, revoked);

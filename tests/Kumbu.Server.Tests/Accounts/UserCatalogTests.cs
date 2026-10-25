@@ -2,6 +2,7 @@
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -174,7 +175,7 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var vaults = new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write };
         await keys.CreateAsync(user, userKey, readAt, "before", vaults, Ct);
 
-        Assert.True(await users.ChangePasswordAsync(user.Id, userKey, Password, NewPassword, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, userKey, Password, NewPassword, revokeApiKeys: true, Ct));
 
         // A session of the old password that slipped past its own check (its request resolved it just before the
         // change) still can't make a key that outlives the change.
@@ -183,6 +184,46 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var (_, _, freshReadAt) = (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value;
         await keys.CreateAsync(user, userKey, freshReadAt, "after", vaults, Ct);
         Assert.Equal(["before", "after"], (await keys.ListAsync(user, userKey, Ct)).Select(k => k.Name));
+    }
+
+    /// <summary>Fails the request right after a revocation of all keys, as a crash or a lost connection would.</summary>
+    private sealed class FailAfterRevokingAll : ILogger<ApiKeys>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception).Contains("revoked all", StringComparison.Ordinal)) throw new IOException("connection lost");
+        }
+    }
+
+    [Fact]
+    public async Task A_fault_after_the_revocation_leaves_the_keys_revoked_and_the_old_password_and_recovery_key()
+    {
+        var db = fixture.NewDatabase();
+        var keys = Keys(db, TimeProvider.System);
+        var failing = new UserCatalog(
+            db, CheapKdf(), new ApiKeys(db, Vaults(db, TimeProvider.System), TimeProvider.System, new FailAfterRevokingAll()), TimeProvider.System, NullLogger<UserCatalog>.Instance);
+        var (_, recoveryKey) = await failing.CreateAsync("chris", Password, Roles.User, Ct);
+        var (user, userKey, readAt) = (await failing.TrySignInAsync("chris", Password, Ct))!.Value;
+        var vaults = new Dictionary<string, KeyRight> { [(await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct)).Id] = KeyRight.Write };
+        var (laptop, _) = await keys.CreateAsync(user, userKey, readAt, "laptop", vaults, Ct);
+
+        await Assert.ThrowsAsync<IOException>(() => failing.ChangePasswordAsync(user, userKey, Password, NewPassword, revokeApiKeys: true, Ct));
+
+        // The keys go before the new password: half done is "keys revoked, old password", never the reverse.
+        Assert.Null(await keys.ResolveAsync(laptop, Ct));
+        Assert.Null(await failing.TrySignInAsync("chris", NewPassword, Ct));
+        (_, _, readAt) = (await failing.TrySignInAsync("chris", Password, Ct))!.Value;
+        var (phone, _) = await keys.CreateAsync(user, userKey, readAt, "phone", vaults, Ct);
+
+        await Assert.ThrowsAsync<IOException>(() => failing.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
+
+        Assert.Null(await keys.ResolveAsync(phone, Ct));
+        Assert.Null(await failing.TrySignInAsync("chris", NewPassword, Ct));
+        Assert.NotNull(await Catalog(db).RecoverAsync("chris", recoveryKey, NewPassword, Ct));
     }
 
     [Fact]
@@ -205,8 +246,8 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var (user, _) = await users.CreateAsync("chris", Password, Roles.User, Ct);
         var key = (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey;
 
-        Assert.False(await users.ChangePasswordAsync(user.Id, key, "not the password at all", NewPassword, Ct));
-        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.False(await users.ChangePasswordAsync(user, key, "not the password at all", NewPassword, revokeApiKeys: true, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
 
         Assert.Null(await users.TrySignInAsync("chris", Password, Ct));
         Assert.Equal(key, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);

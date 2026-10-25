@@ -214,7 +214,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await Users().ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
 
         Assert.Null(await Sessions().ResolveAsync(secret, Ct));
         // A sign-in in the very millisecond of the change is refused too (see the next test), so a moment later.
@@ -231,7 +231,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var leftOver = await Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
         _time.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(await Users().ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await Users().ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         // As if the server had crashed between the new password slot and the deletion of the sessions.
         await Slots.InsertOneAsync(leftOver, cancellationToken: Ct);
 
@@ -265,7 +265,7 @@ public sealed class SessionTests(MongoFixture fixture)
         _time.Advance(TimeSpan.FromSeconds(1));
 
         // ... while the victim changes the password, which ends every session there is so far ...
-        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         _time.Advance(TimeSpan.FromSeconds(1));
 
         // ... and only then starts its session.
@@ -283,7 +283,7 @@ public sealed class SessionTests(MongoFixture fixture)
         var (user, key, readAt) = (await users.TrySignInAsync("chris", Password, Ct))!.Value;
 
         // The clock stands still: MongoDB keeps milliseconds only, so a read and a change within one look alike.
-        Assert.True(await users.ChangePasswordAsync(user.Id, key, Password, NewPassword, Ct));
+        Assert.True(await users.ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
         var secret = await Sessions().StartAsync(user, key, readAt, Ct);
 
         var changedAt = (await _db.GetCollection<UserDocument>("users").Find(u => u.Id == user.Id).SingleAsync(Ct)).CredentialsChangedAt;
