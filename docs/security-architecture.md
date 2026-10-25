@@ -298,15 +298,18 @@ Points for the operator, not handled by the code:
 
 ## 9. What comes next
 
-None of this is built. In the order Chris set (accounts design §6):
+None of this is built. Re-keying comes first; the rest follows in the order Chris set (accounts design §6):
 
-1. **OAuth 2.1 for connectors** (claude.ai, ChatGPT and others; build step 10). Kumbu² as its own authorisation server with PKCE; the consent screen chooses vaults and rights and *is* the creation of slots. The refresh token carries the slot; each access token gets an ephemeral slot with a MongoDB TTL of about an hour; each refresh rotates the refresh token and its slot; revoking a grant deletes all its slots at once (concept §9). Needs the public instance.
-2. **GitHub login**, as identity only, optionally limited to an organisation and team (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`, `KUMBU_GITHUB_ADMIN_TEAM`), the pattern COR uses for its internal tools. GitHub says *who* someone is; it holds no key material and cannot open a vault (concept §8).
-3. **Passkeys with the PRF extension** as a further slot on the user key: GitHub identifies, the passkey unlocks. A passkey without PRF cannot unlock; such a user sets a passphrase instead, and the UI says why.
+1. **Key rotation and re-keying**, the next step after this document. It does not protect what an old backup already holds (that data was sealed with the keys of its time), but it ends an old credential's reach into data written later. Two parts, built together:
+   - *Rotating the user key*: a new user key, with the user's vault slots, password, recovery and session slots wrapped anew. A few small records per user; the notes are not touched. An old password or recovery key from a backup then no longer leads to the current user key.
+   - *Re-keying a vault*: a new vault key, and everything in the vault sealed anew (notes, history, trash, checkpoints, embeddings, sealed paths and names), the keyed lookup hashes recomputed, and the slots of every user and API key with access wrapped anew. The sealed records carry no key version today, so the first version locks the vault for the moment it takes and does all of it in one MongoDB transaction; notes are small, so this is a matter of seconds. Triggered by a recovery, a password change that revokes the API keys, revoking an API key with write rights, and on request.
+2. **OAuth 2.1 for connectors** (claude.ai, ChatGPT and others; build step 10). Kumbu² as its own authorisation server with PKCE; the consent screen chooses vaults and rights and *is* the creation of slots. The refresh token carries the slot; each access token gets an ephemeral slot with a MongoDB TTL of about an hour; each refresh rotates the refresh token and its slot; revoking a grant deletes all its slots at once (concept §9). Needs the public instance.
+3. **GitHub login**, as identity only, optionally limited to an organisation and team (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`, `KUMBU_GITHUB_ADMIN_TEAM`), the pattern COR uses for its internal tools. GitHub says *who* someone is; it holds no key material and cannot open a vault (concept §8).
+4. **Passkeys with the PRF extension** as a further slot on the user key: GitHub identifies, the passkey unlocks. A passkey without PRF cannot unlock; such a user sets a passphrase instead, and the UI says why.
 
-Known gaps, noted but not scheduled. Each is described where it matters above:
+Known gaps. Each is described where it matters above; apart from the first, none is scheduled yet:
 
-- **No key rotation or re-keying** of user or vault keys: revoking a credential deletes its slot only, so old backups open with old credentials (§3).
+- **No key rotation or re-keying yet** of user or vault keys: revoking a credential deletes its slot only, so old backups open with old credentials (§3); planned as the next step (item 1 above).
 - **No deletion** of accounts or vaults; only deactivation. Deleting their slots would make the data unreadable, but it is not built (§1).
 - **API keys don't expire**; a stolen session can create them, and they outlive it until revoked, which a password change does by default and a recovery always (§4, §6). Optional expiry is not built.
 - **Restoring a backup revives old credentials**, revoked API keys included (§7).
