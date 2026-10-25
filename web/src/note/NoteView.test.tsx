@@ -66,13 +66,14 @@ function noteApi(extra: Parameters<typeof fakeApi>[0] = {}, previousSignInAt: st
 const view = () => screen.getByRole("article");
 
 describe("the note view", () => {
-  it("renders the note, with its frontmatter raw in a muted block above the body", async () => {
+  it("renders the note, with its front matter as properties above the body", async () => {
     noteApi();
     renderApp(planUrl);
     expect(await screen.findByRole("heading", { level: 2, name: "Goals" })).toBeInTheDocument();
-    const frontmatter = screen.getByLabelText("Frontmatter");
-    expect(frontmatter).toHaveTextContent("tags: [work]");
-    expect(frontmatter).toHaveClass("text-muted");
+    const frontmatter = screen.getByLabelText("Properties");
+    expect(frontmatter.tagName).toBe("DL");
+    expect(within(frontmatter).getByRole("term")).toHaveTextContent("tags");
+    expect(within(frontmatter).getByRole("definition")).toHaveTextContent("work");
     expect(frontmatter.compareDocumentPosition(screen.getByRole("heading", { name: "Plan", level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(view()).queryByText("tags: [work]", { selector: "p" })).not.toBeInTheDocument();
   });
@@ -289,7 +290,7 @@ describe("the note view", () => {
     await userEvent.click(within(await screen.findByRole("region", { name: "Agent changes" })).getByRole("button", { name: "Show" }));
     await waitFor(() => expect(document.querySelectorAll("[data-changed]").length).toBeGreaterThan(3));
     expect(screen.getByRole("heading", { name: "Goals" })).toHaveAttribute("data-changed");
-    expect(screen.getByLabelText("Frontmatter")).toHaveAttribute("data-changed");
+    expect(screen.getByLabelText("Properties")).toHaveAttribute("data-changed");
     expect(asked.every((v) => v === null)).toBe(true);
   });
 

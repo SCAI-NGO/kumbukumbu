@@ -13,6 +13,7 @@ import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
 import BacklinksList from "./BacklinksList";
 import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
+import { parseProperties } from "./properties";
 import { taskToggle } from "./taskToggle";
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
@@ -148,21 +149,60 @@ export default function NoteView({ path }: { path: string }) {
         {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
         {note.data && (
           <article ref={article} className="mt-4">
-            {parts.frontmatter !== null && (
-              <pre
-                aria-label="Frontmatter"
-                {...(frontmatterChanged ? { "data-changed": true, "data-writer": highlight!.writer } : {})}
-                className="mb-4 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6] whitespace-pre-wrap text-muted"
-              >
-                {parts.frontmatter}
-              </pre>
-            )}
+            {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={frontmatterChanged ? highlight!.writer : null} />}
             <MarkdownView source={parts.body} links={links.data} tasksDisabled={save.isPending} onToggleTask={toggleTask} onCreateMissing={createMissing} highlight={highlight} />
           </article>
         )}
         {note.data && <BacklinksList path={path} />}
       </div>
     </>
+  );
+}
+
+/**
+ * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
+ * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
+ */
+function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
+  const props = useMemo(() => parseProperties(yaml), [yaml]);
+  const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
+  if (!props) {
+    return (
+      <pre
+        aria-label="Properties"
+        {...tint}
+        className="mb-4 overflow-x-auto rounded-[10px] border border-line bg-surface px-3.5 py-2.5 font-mono text-[12.5px] leading-[1.6] whitespace-pre-wrap text-muted"
+      >
+        {yaml}
+      </pre>
+    );
+  }
+  if (props.length === 0) return null;
+  return (
+    <dl
+      aria-label="Properties"
+      {...tint}
+      className="mb-4 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5]"
+    >
+      {props.map(({ key, value }, i) => (
+        <div key={`${i}${key}`} className="contents">
+          <dt className="truncate font-mono text-[12px] leading-[21px] text-muted">{key}</dt>
+          <dd className="min-w-0 break-words text-text-body">
+            {Array.isArray(value) ? (
+              <ul className="flex flex-wrap gap-1">
+                {value.map((v, j) => (
+                  <li key={j} className="rounded-full bg-surface-2 px-2 text-[13px] text-text-body">
+                    {v}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              value || <span className="text-dim">—</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
