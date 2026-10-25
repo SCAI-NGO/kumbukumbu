@@ -72,8 +72,9 @@ public sealed record LinkView(int Line, string Raw, string Target, string Kind, 
 /// <summary>A line linking to the note, 1-based; <c>ambiguous</c>: its link matches several notes, this one among them.</summary>
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
-/// <summary>A version of a note, newest first; <c>changeset</c> the short id of its changeset, if it is in one.</summary>
-public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, bool Current, string? Changeset);
+/// <summary>A version of a note, newest first; <c>size</c> in bytes (UTF-8), <c>changeset</c> the short id of its
+/// changeset, if it is in one.</summary>
+public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -348,7 +349,7 @@ public static class NoteApi
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
         return TypedResults.Ok(NoteHistory.Versions(note)
-            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, v.Current, v.Changeset?.Short))
+            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short))
             .ToArray());
     }
 
@@ -467,7 +468,7 @@ public static class NoteApi
         if (caller.Refuse(command, path) is { } refused) throw new ApiException(StatusCodes.Status403Forbidden, refused.Output);
     }
 
-    private static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
+    internal static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
         ApiErrors.NotFound(await store.IsDamagedAsync(path, ct)
             ? Damage.Message("read", path)
             : $"There is no note at {path.Value}{await Moves.HintAsync(store, path, ct)} (if it was removed, it is in the trash).");

@@ -175,6 +175,7 @@ app.MapMcp("/mcp");
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
 app.MapNoteApi();
+app.MapHistoryApi();
 app.MapUploadApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
