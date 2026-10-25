@@ -14,7 +14,8 @@ interface SessionState {
   /** One short sentence for the sign-in screen. */
   notice: string | null;
   signedIn(view: SessionView): void;
-  end(): void;
+  /** `notice` replaces the usual "your session has ended" for an end the user caused, such as a new password. */
+  end(notice?: string): void;
   reset(): void;
 }
 
@@ -24,7 +25,7 @@ export const useSession = create<SessionState>()((set, get) => ({
   ...initial,
   signedIn: (view) => set({ user: view.user, previousSignInAt: view.previousSignInAt, ended: false, notice: null }),
   // Only a session that was running in this tab "has ended"; a first visit just needs to sign in.
-  end: () =>
-    set({ ...initial, ended: true, notice: get().user ? "Your session has ended. Please sign in again." : get().notice }),
+  end: (notice) =>
+    set({ ...initial, ended: true, notice: notice ?? (get().user ? "Your session has ended. Please sign in again." : get().notice) }),
   reset: () => set(initial),
 }));

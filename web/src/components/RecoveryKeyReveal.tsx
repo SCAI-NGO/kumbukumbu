@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/RecoveryKeyReveal.tsx, packages/ui-shared/src/components/ConfirmTyped.tsx)
-import { useEffect, useId, useState } from "react";
-import { useBlocker } from "react-router-dom";
-import { useDialog } from "../hooks/useDialog";
+import { useId, useState } from "react";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
+import { LeaveDialog, useLeaveGuard } from "./shownOnce";
 
 /**
  * The recovery key, shown once. Continue unlocks only after the key was downloaded or copied and the user ticked
@@ -15,18 +14,7 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
   const [saved, setSaved] = useState(false);
   const [stored, setStored] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const blocker = useBlocker(!saved);
-
-  useEffect(() => {
-    if (saved) return;
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      // Older browsers ask only when returnValue is set.
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [saved]);
+  const blocker = useLeaveGuard(saved);
 
   async function copy() {
     try {
@@ -97,36 +85,15 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
         Continue
       </button>
 
-      {blocker.state === "blocked" && <LeaveDialog id={`${checkId}-leave`} onStay={() => blocker.reset?.()} onLeave={() => blocker.proceed?.()} />}
-    </div>
-  );
-}
-
-/** "Leave without it?": Escape stays, as the safe answer. */
-function LeaveDialog({ id, onStay, onLeave }: { id: string; onStay(): void; onLeave(): void }) {
-  const dialog = useDialog<HTMLDivElement>(onStay);
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
-      <div
-        ref={dialog}
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby={id}
-        className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
-      >
-        <h2 id={id} className="text-lg font-bold text-text">
-          You haven't saved your recovery key
-        </h2>
-        <p className="text-text-body">Without it, a forgotten password means your notes are gone. You won't see this key again.</p>
-        <div className="flex gap-3">
-          <button type="button" onClick={onStay} className={`${primaryButtonClass} flex-1`}>
-            Stay
-          </button>
-          <button type="button" onClick={onLeave} className={`${secondaryButtonClass} flex-1`}>
-            Leave without it
-          </button>
-        </div>
-      </div>
+      {blocker.state === "blocked" && (
+        <LeaveDialog
+          id={`${checkId}-leave`}
+          title="You haven't saved your recovery key"
+          text="Without it, a forgotten password means your notes are gone. You won't see this key again."
+          onStay={() => blocker.reset?.()}
+          onLeave={() => blocker.proceed?.()}
+        />
+      )}
     </div>
   );
 }

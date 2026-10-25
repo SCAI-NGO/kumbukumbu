@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 /** The frame of the screens before the app: sign-in, join, forgot password. */
 export function AuthScreen({ title, lead, children }: { title: string; lead?: ReactNode; children?: ReactNode }) {
@@ -9,6 +10,21 @@ export function AuthScreen({ title, lead, children }: { title: string; lead?: Re
         <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-accent-text">Kumbu²</p>
         <h1 className="mt-2 text-[28px] leading-tight font-bold text-text">{title}</h1>
         {lead && <p className="mt-2 text-text-body">{lead}</p>}
+      </header>
+      {children}
+    </main>
+  );
+}
+
+/** The frame of the account pages behind the drawer's account row: keys, settings, admin. */
+export function AccountScreen({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-6 px-4 py-10">
+      <header className="flex flex-col gap-2">
+        <Link to="/" className="flex min-h-11 items-center self-start text-accent-text">
+          Back to the notes
+        </Link>
+        <h1 className="text-[28px] leading-tight font-bold text-text">{title}</h1>
       </header>
       {children}
     </main>

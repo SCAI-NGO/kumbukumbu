@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Link, Outlet, useLocation, useNavigate, type RouteObject } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, type RouteObject } from "react-router-dom";
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
+import { AccountScreen } from "./components/form";
 import ForgotPassword from "./routes/ForgotPassword";
-import Join from "./routes/Join";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
 import { useSession } from "./state/session";
@@ -49,23 +49,16 @@ function RequireSession() {
   return <Outlet />;
 }
 
-/** Keys, settings and admin: reached from the drawer's account row; their screens come with the next steps. */
-function AccountPage({ title }: { title: string }) {
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-xl flex-col gap-4 px-4 py-10">
-      <Link to="/" className="flex min-h-11 items-center text-accent-text">
-        Back to the notes
-      </Link>
-      <h1 className="text-[28px] leading-tight font-bold text-text">{title}</h1>
-    </main>
-  );
-}
+/** Pages loaded on first visit only, which keeps them out of the main bundle. */
+const lazyPage = (load: () => Promise<{ default: () => JSX.Element }>) => async () => ({ Component: (await load()).default });
 
 export const routes: RouteObject[] = [
   {
     element: <Root />,
+    // Blank while a lazy page loads on the first visit.
+    HydrateFallback: () => null,
     children: [
-      { path: "/join", element: <Join /> },
+      { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       {
@@ -78,10 +71,11 @@ export const routes: RouteObject[] = [
               { path: "/notes/:vault/*", element: null },
             ],
           },
-          { path: "/keys", element: <AccountPage title="API keys" /> },
-          { path: "/settings", element: <AccountPage title="Settings" /> },
-          { path: "/admin/users", element: <AccountPage title="Users" /> },
-          { path: "/admin/invitations", element: <AccountPage title="Invitations" /> },
+          { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
+          { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
+          // Their screens come with the next step.
+          { path: "/admin/users", element: <AccountScreen title="Users" /> },
+          { path: "/admin/invitations", element: <AccountScreen title="Invitations" /> },
         ],
       },
     ],
