@@ -396,6 +396,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// written or indexed again, whatever <see cref="UnlockedVault"/> object a caller still holds.</summary>
     public bool IsDeleted(string vaultId) => _deleted.ContainsKey(vaultId);
 
+    /// <summary>Deletes an API key's slots, outside a transaction (an expired key, on its first use after expiry).</summary>
+    internal Task DeleteApiKeySlotsAsync(string keyId, CancellationToken ct) =>
+        Slots.DeleteManyAsync(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), ct);
+
     /// <summary>Deletes an API key's slots, inside the caller's transaction (revoking the key).</summary>
     internal Task DeleteApiKeySlotsAsync(IClientSessionHandle session, string keyId, CancellationToken ct) =>
         Slots.DeleteManyAsync(session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId), cancellationToken: ct);

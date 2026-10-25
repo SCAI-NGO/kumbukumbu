@@ -255,6 +255,19 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     }
 
     /// <summary>
+    /// The first time an expired key is presented: its slots go and its name is freed, as when the next key is made.
+    /// Best effort and outside a transaction: the slots first, so the name id, which marks a key not yet retired,
+    /// goes only once they are gone; the key is refused either way.
+    /// </summary>
+    private async Task RetireExpiredAsync(ApiKeyDocument doc, CancellationToken ct)
+    {
+        if (doc.NameId is null) return;
+        await catalog.DeleteApiKeySlotsAsync(doc.Id, ct);
+        await Keys.UpdateOneAsync(k => k.Id == doc.Id, Builders<ApiKeyDocument>.Update.Unset(k => k.NameId), cancellationToken: ct);
+        log.LogInformation("API key {KeyId} of user {UserId} has expired; its slots are deleted", doc.Id, doc.User);
+    }
+
+    /// <summary>
     /// The key behind a presented bearer, or null if it isn't one, is unknown, revoked or expired, or its user is
     /// inactive. Never logs anything of the key. The rights are not checked here: they live in the slots.
     /// </summary>
@@ -265,7 +278,12 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var lookup = Lookup(presented);
         var doc = await Keys.Find(k => k.Lookup == lookup).FirstOrDefaultAsync(ct);
         var now = Now;
-        if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt) return null;
+        if (doc is null || doc.RevokedAt is not null) return null;
+        if (now >= doc.ExpiresAt)
+        {
+            await RetireExpiredAsync(doc, ct);
+            return null;
+        }
 
         var user = await Users.Find(u => u.Id == doc.User).FirstOrDefaultAsync(ct);
         if (user is null || !user.Active) return null;

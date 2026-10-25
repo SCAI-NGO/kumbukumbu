@@ -352,6 +352,21 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_expired_key_presented_once_loses_its_slots_and_frees_its_name()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        var (key, info) = await KeysAt(new FakeTimeProvider(DateTimeOffset.UtcNow.AddDays(-31)))
+            .CreateAsync(user, userKey, JustRead, "old", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Read }, Ct, expiresInDays: 30);
+        Assert.NotEmpty(await SlotDocs.Find(Builders<BsonDocument>.Filter.Eq("apiKey", info.Id)).ToListAsync(Ct));
+
+        Assert.Null(await Keys.ResolveAsync(key, Ct));
+
+        Assert.Empty(await SlotDocs.Find(Builders<BsonDocument>.Filter.Eq("apiKey", info.Id)).ToListAsync(Ct));
+        Assert.False((await KeyDocs.Find(Builders<BsonDocument>.Filter.Eq("_id", info.Id)).SingleAsync(Ct)).Contains("nameId"));
+        Assert.Null(await Keys.ResolveAsync(key, Ct));
+    }
+
+    [Fact]
     public async Task An_expiry_moved_or_removed_in_mongodb_makes_the_key_open_nothing()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
