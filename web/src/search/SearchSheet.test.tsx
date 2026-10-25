@@ -66,7 +66,8 @@ const input = () => within(sheet()).getByRole("searchbox", { name: "Search" });
 async function openSheet(path = "/notes/Work/inbox.md") {
   renderApp(path);
   await userEvent.click(await screen.findByRole("button", { name: /^Search/ }));
-  return sheet();
+  // Loaded on first use.
+  return screen.findByRole("dialog", { name: "Search" });
 }
 
 describe("the search sheet", () => {
@@ -91,7 +92,7 @@ describe("the search sheet", () => {
     await screen.findByRole("heading", { name: "inbox" });
     act(() => paths.forEach((p) => useEditor.getState().openNote(p)));
     act(() => useEditor.getState().setOverlay("search"));
-    const list = within(sheet()).getByRole("list", { name: "Recent notes" });
+    const list = within(await screen.findByRole("dialog", { name: "Search" })).getByRole("list", { name: "Recent notes" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
     await userEvent.click(within(list).getByRole("button", { name: /^d/ }));
     expect(useEditor.getState().currentPath).toBe("/Work/d.md");

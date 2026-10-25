@@ -9,15 +9,16 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
-import SearchSheet from "../search/SearchSheet";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar from "./TopBar";
 import TreeDrawer from "./TreeDrawer";
 
-// Seldom used: loaded on first use, which keeps the main bundle under Vite's 500 kB warning.
+// Loaded on first use, which keeps the main bundle under Vite's 500 kB warning: upload is seldom used, and search
+// has its own sheet over the note.
 const UploadSheet = lazy(() => import("../upload/UploadSheet"));
+const SearchSheet = lazy(() => import("../search/SearchSheet"));
 
 /** `/` without a last note: the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
@@ -117,7 +118,13 @@ export default function MobileShell() {
       )}
 
       {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} />}
-      {overlay === "search" && <SearchSheet />}
+      {overlay === "search" && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
+          <Suspense>
+            <SearchSheet />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {overlay === "upload" && upload && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setOverlay("none")} />}>
           <Suspense>
