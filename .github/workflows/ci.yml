@@ -19,4 +19,3 @@ jobs:
           global-json-file: global.json
       - run: dotnet build --configuration Release
       - run: dotnet test --configuration Release --no-build
-      - run: docker build .

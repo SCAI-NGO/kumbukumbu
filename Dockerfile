@@ -14,9 +14,14 @@ COPY --from=web /src/web/dist src/Kumbu.Server/wwwroot
 RUN dotnet publish src/Kumbu.Server -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
+ARG VERSION=0.0.0-dev
+ARG GIT_SHA=""
+ARG BUILT_AT=""
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=build /src/LICENSE /src/THIRD-PARTY-NOTICES.md ./
+# Version marker: set by the release workflow (.github/workflows/docker.yml), `0.0.0-dev` in local builds.
+RUN printf '%s\n' "$VERSION ($GIT_SHA, $BUILT_AT)" > /app/VERSION
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 # Owned by the app user, so the named volumes mounted here start out writable for it.
