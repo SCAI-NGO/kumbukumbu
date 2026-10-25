@@ -53,6 +53,21 @@ describe("Settings", () => {
     expect(localStorage.length).toBe(0);
   });
 
+  it("refreshes Read mode by itself only once chosen, kept on this device", async () => {
+    mockSystem(true);
+    api();
+    renderApp("/settings");
+    const box = await within(await screen.findByRole("region", { name: "Changes made elsewhere" })).findByRole("checkbox", { name: "Refresh Read mode automatically" });
+    expect(box).not.toBeChecked();
+
+    await userEvent.click(box);
+    expect(box).toBeChecked();
+    expect({ ...localStorage }).toEqual({ "kumbu.autoRefresh": "on" });
+
+    await userEvent.click(box);
+    expect(localStorage.length).toBe(0);
+  });
+
   it("groups the schemes as dark and light, each with a swatch", async () => {
     mockSystem(true);
     api();

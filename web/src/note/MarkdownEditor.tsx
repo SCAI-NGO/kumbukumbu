@@ -5,6 +5,7 @@ import { useBlocker, type BlockerFunction } from "react-router-dom";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { BarButton, ChangeText, ElsewhereBar, type useChangedElsewhere } from "./ChangedElsewhere";
 import ConflictToast, { ConflictDiff } from "./ConflictToast";
 import { useLinkCompletion } from "./LinkCompletion";
 import MarkdownToolbar from "./MarkdownToolbar";
@@ -16,7 +17,7 @@ import { useAutosave } from "./useAutosave";
  * with a conflict or a failed save open, the user stays here and decides. A session that ends meanwhile leaves the
  * unsaved text in memory (never in storage), and the note opens with it again once the same user is back.
  */
-export default function MarkdownEditor({ path, note }: { path: string; note: NoteView }) {
+export default function MarkdownEditor({ path, note, elsewhere }: { path: string; note: NoteView; elsewhere?: ReturnType<typeof useChangedElsewhere> }) {
   const save = useSaveNote(path);
   const queryClient = useQueryClient();
   const [draft] = useState(() => {
@@ -30,9 +31,17 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
     (content, version, options) => (useSession.getState().user ? save.mutateAsync({ content, version, ...options }) : Promise.reject(new Error("Signed out"))),
     draft,
   );
-  const { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved, unsaved } = autosave;
+  const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, retry, unresolved, unsaved } = autosave;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [diff, setDiff] = useState(false);
+  // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const newer = elsewhere?.change;
+  const viewNewer = async () => {
+    await queryClient.refetchQueries({ queryKey: ["note", path], exact: true });
+    const fresh = queryClient.getQueryData<NoteView>(["note", path]);
+    if (fresh && offer({ content: fresh.content, version: fresh.version })) setDiff(true);
+  };
   const completion = useLinkCompletion(path, textarea, change);
 
   // Before the browser paints: the editor is there focused, also when it arrives late (it is loaded on first use).
@@ -122,6 +131,19 @@ export default function MarkdownEditor({ path, note }: { path: string; note: Not
 
   return (
     <>
+      {!conflict && elsewhere?.gone && <ElsewhereBar>This note was moved or removed elsewhere.</ElsewhereBar>}
+      {!conflict && newer && dismissed !== newer.version && (
+        <ElsewhereBar
+          actions={
+            <>
+              <BarButton onClick={() => void viewNewer()}>View the new version</BarButton>
+              <BarButton onClick={() => setDismissed(newer.version)}>Keep writing</BarButton>
+            </>
+          }
+        >
+          <ChangeText change={newer} />
+        </ElsewhereBar>
+      )}
       <label htmlFor="markdown-source" className="sr-only">
         Markdown source
       </label>

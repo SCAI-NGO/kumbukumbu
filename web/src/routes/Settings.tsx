@@ -10,6 +10,7 @@ import { PasswordField } from "../components/PasswordField";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
 import { applyScheme, storedScheme } from "../theme/apply";
 import { schemes, type Scheme, type Tokens } from "../theme/schemes";
 
@@ -17,6 +18,7 @@ export default function Settings() {
   return (
     <AccountScreen title="Settings">
       <SchemeSection />
+      <ElsewhereSection />
       <PasswordSection />
       <RecoverySection />
       <SessionsSection />
@@ -64,6 +66,33 @@ function SchemeSection() {
         <SchemeGroup title="Dark" list={schemes.filter((s) => !s.light)} chosen={chosen} onChoose={choose} />
         <SchemeGroup title="Light" list={schemes.filter((s) => s.light)} chosen={chosen} onChoose={choose} />
       </div>
+    </Section>
+  );
+}
+
+/** Kept in this browser only, like the scheme: Write mode is never refreshed by itself, whatever is chosen here. */
+function ElsewhereSection() {
+  const id = useId();
+  const [on, setOn] = useState(storedAutoRefresh);
+  return (
+    <Section title="Changes made elsewhere">
+      <label className="flex min-h-11 cursor-pointer items-start gap-3 text-text">
+        <input
+          type="checkbox"
+          checked={on}
+          aria-describedby={`${id}-what`}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            setAutoRefresh(e.target.checked);
+          }}
+          className="mt-0.5 size-5 shrink-0 accent-accent"
+        />
+        Refresh Read mode automatically
+      </label>
+      <p id={`${id}-what`} className="text-sm text-text-body">
+        When the note you are reading is changed by an agent, another tab or another device, it is shown at once, with what changed tinted. Off, a bar
+        says so and you refresh when you are ready. Write mode never replaces your text by itself. Kept on this device only.
+      </p>
     </Section>
   );
 }

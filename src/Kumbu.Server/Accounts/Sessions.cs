@@ -78,9 +78,10 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// <summary>
     /// The user, their user key and when the session's credential was read (its <c>createdAt</c>), or null if
     /// the session is unknown, ended, idle too long, past its absolute limit, older than the user's last password
-    /// change or recovery, or the user is inactive.
+    /// change or recovery, or the user is inactive. Without <paramref name="touch"/> the request doesn't count as the
+    /// session's use: the web app's poll in the background must not keep a session alive that nobody uses.
     /// </summary>
-    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct)
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
     {
         if (Decode(secret) is not { } bytes) return null;
         await EnsureReadyAsync(ct);
@@ -118,7 +119,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             return null;
         }
 
-        if (now - lastUsedAt >= LastUsedGranularity)
+        if (touch && now - lastUsedAt >= LastUsedGranularity)
         {
             // Conditional, so of concurrent requests only one writes.
             var stale = now - LastUsedGranularity;

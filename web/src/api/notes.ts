@@ -74,8 +74,18 @@ export function useCreateNote() {
   });
 }
 
+/**
+ * The note as the server has it. Not read again by itself when the page comes back into view or online: that would
+ * replace the text under the reader's eye. A change made elsewhere is shown instead (`useChangedElsewhere`), and
+ * taken when the user says so.
+ */
 export const useNote = (path: string) =>
-  useQuery({ queryKey: ["note", path], queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })) });
+  useQuery({
+    queryKey: ["note", path],
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */
 export const useLinks = (path: string, version: string | undefined) =>
@@ -125,6 +135,8 @@ export type SaveResult = { saved: NoteView } | { conflict: { content: string; ve
 export function useSaveNote(path: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    // Known to the change bar: while a save is under way, the version it brings is no change made elsewhere.
+    mutationKey: ["save", path],
     mutationFn: async ({ content, version, keepalive = false }: { content: string; version: string; keepalive?: boolean }): Promise<SaveResult> => {
       const body = { content, version };
       const small = new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_LIMIT;

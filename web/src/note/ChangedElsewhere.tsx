@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { useIsFetching, useIsMutating } from "@tanstack/react-query";
+import { useEffect, useRef, type ReactNode } from "react";
+import { HttpError } from "../api/client";
+import { useVersionPoll, type NoteVersion } from "../api/history";
+import { useSession } from "../state/session";
+import { ago } from "./AgentBanner";
+
+/** Who wrote, without the tool: "liz (edit)" is "liz" (as Writers.Identity on the server). */
+export const writerOf = (label: string) => label.split(" (")[0];
+
+/**
+ * A version of the open note that this view hasn't seen, written elsewhere (an agent, another tab or device), or
+ * `gone` when the note isn't at its path any more. Every version the view has held counts as seen, and nothing
+ * counts while the view's own save or restore is under way, or the note is being read again: their answer is the
+ * version they bring, which the view then holds.
+ */
+export function useChangedElsewhere(path: string, version: string | undefined): { change: NoteVersion | null; gone: boolean } {
+  const seen = useRef(new Set<string>());
+  if (version !== undefined) seen.current.add(version);
+  const poll = useVersionPoll(path, version !== undefined);
+  const busy =
+    useIsMutating({ mutationKey: ["save", path] }) + useIsMutating({ mutationKey: ["restore"] }) + useIsFetching({ queryKey: ["note", path], exact: true }) > 0;
+  const data = poll.data;
+  const change = !busy && data && data.path === path && !seen.current.has(data.version) ? data : null;
+  const gone = !busy && poll.error instanceof HttpError && poll.error.status === 404;
+  return { change, gone };
+}
+
+const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
+
+/** "liz changed this note just now", or "You changed this note elsewhere …" for the user's own write in another tab. */
+export function ChangeText({ change }: { change: NoteVersion }) {
+  const username = useSession((s) => s.user?.username);
+  const writer = writerOf(change.lastWriter);
+  return writer === username ? (
+    <>You changed this note elsewhere {ago(change.lastWriteAt)}</>
+  ) : (
+    <>
+      <code className="font-mono text-text">{writer}</code> changed this note {ago(change.lastWriteAt)}
+    </>
+  );
+}
+
+/** The quiet bar over the note: what changed elsewhere, and what the user can do about it. */
+export function ElsewhereBar({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
+  return (
+    <section
+      aria-label="Changed elsewhere"
+      className="flex min-h-11 flex-none flex-wrap items-center gap-x-1 border-b border-line bg-surface pr-1.5 pl-4 text-[13px] text-muted"
+    >
+      <span aria-hidden className="size-2 flex-none rounded-full bg-accent" />
+      <span role="status" className="min-w-0 flex-1 py-2 pl-1.5">
+        {children}
+      </span>
+      {actions}
+    </section>
+  );
+}
+
+export function BarButton({ onClick, children }: { onClick(): void; children: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className={linkClass}>
+      {children}
+    </button>
+  );
+}
+
+/** Calls `onTimeout` once, `ms` after `active` turned true, unless it turns false first. */
+export function useTimeout(active: boolean, ms: number, onTimeout: () => void) {
+  const callback = useRef(onTimeout);
+  callback.current = onTimeout;
+  useEffect(() => {
+    if (!active) return;
+    const timer = setTimeout(() => callback.current(), ms);
+    return () => clearTimeout(timer);
+  }, [active, ms]);
+}

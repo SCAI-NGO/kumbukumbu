@@ -141,6 +141,23 @@ export function useAutosave(
     setStatus("saved");
   }, [s]);
 
+  /**
+   * A newer version written elsewhere, seen before any save ran into it: the same choice as a 409's, and saving
+   * pauses until it is made. Not while a save is under way: its answer decides (a 409 brings the same choice).
+   */
+  const offer = useCallback(
+    (newer: Conflict) => {
+      if (s.conflict || s.inFlight) return !!s.conflict;
+      clearTimeout(s.timer);
+      s.timer = undefined;
+      s.conflict = newer;
+      setConflict(newer);
+      setStatus("conflict");
+      return true;
+    },
+    [s],
+  );
+
   const retry = useCallback(() => {
     s.failed = false;
     void run();
@@ -168,5 +185,5 @@ export function useAutosave(
     [s],
   );
 
-  return { value, status, conflict, change, saveNow, flush, keepMine, reload, retry, unresolved, unsaved };
+  return { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, retry, unresolved, unsaved };
 }

@@ -28,6 +28,7 @@ function vaultChanged(queryClient: QueryClient, vault: string) {
 export function useRestoreNote() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["restore"],
     mutationFn: ({ path, version }: { path: string; version?: string }) =>
       call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null } })),
     onSuccess: (note: NoteView) => {
@@ -82,6 +83,7 @@ export const usePreviewCheckpoint = (vault: string, name: string) =>
 export function useRestoreCheckpoint(vault: string, name: string) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["restore"],
     mutationFn: (plan: string) => call(api.POST("/api/vaults/{vault}/checkpoints/{name}/restore", { params: { path: { vault, name } }, body: { plan } })),
     onSuccess: () => vaultChanged(queryClient, vault),
   });

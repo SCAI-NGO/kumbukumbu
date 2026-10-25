@@ -62,7 +62,7 @@ public static class HistoryApi
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapPost("/restore/{vault}/{**path}", RestoreAsync).Errors(400, 401, 403, 404, 409);
-        api.MapGet("/version/{vault}/{**path}", VersionAsync).Errors(400, 401, 404);
+        api.MapGet("/version/{vault}/{**path}", VersionAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404);
         api.MapGet("/vaults/{vault}/trash", TrashAsync).Errors(400, 401, 404);
         api.MapGet("/vaults/{vault}/checkpoints", ListCheckpointsAsync).Errors(400, 401, 404);
         api.MapPost("/vaults/{vault}/checkpoints", CreateCheckpointAsync).Errors(400, 401, 403, 404, 409);
@@ -94,6 +94,10 @@ public static class HistoryApi
             result.Output);
     }
 
+    /// <summary>
+    /// What the web app polls while a note is open and the page visible. It doesn't count as the session's use
+    /// (<see cref="BackgroundMetadata"/>), but like any read it keeps the vault unlocked.
+    /// </summary>
     private static async Task<Ok<NoteVersionView>> VersionAsync(string vault, string? path, INoteStore store, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);

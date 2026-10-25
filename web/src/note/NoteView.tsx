@@ -10,9 +10,13 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
+import { useSession } from "../state/session";
 import AgentBanner, { useAgentChange, useAgentHighlight } from "./AgentBanner";
+import { storedAutoRefresh } from "./autoRefresh";
+import { BarButton, ChangeText, ElsewhereBar, useChangedElsewhere, useTimeout, writerOf } from "./ChangedElsewhere";
+import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
-import MarkdownView from "./MarkdownView";
+import MarkdownView, { type Highlight } from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
@@ -70,7 +74,14 @@ export default function NoteView({ path }: { path: string }) {
   const [dropping, setDropping] = useState(false);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
   const change = useAgentChange(path);
-  const highlight = useAgentHighlight(path, change, note.data?.content);
+  const agentHighlight = useAgentHighlight(path, change, note.data?.content);
+  const elsewhere = useChangedElsewhere(path, note.data?.version);
+  const username = useSession((s) => s.user?.username);
+  // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
+  const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
+  const [updatedBy, setUpdatedBy] = useState<string | null>(null);
+  useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
+  const highlight = refreshed && refreshed.version === note.data?.version ? refreshed : agentHighlight;
   // The frontmatter's lines are 2 to its closing line (`parts.frontmatter` has one line fewer than that).
   const frontmatterChanged =
     !!highlight && parts.frontmatter !== null && (highlight.lines === "all" || [...highlight.lines].some((l) => l <= parts.frontmatter!.split("\n").length + 2));
@@ -85,6 +96,38 @@ export default function NoteView({ path }: { path: string }) {
   // A search result names a section: scroll to the last heading at or above its first line, once the note is shown.
   const scrollTarget = useEditor((s) => s.scrollTarget);
   const article = useRef<HTMLElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const keepScroll = useRef<number | null>(null);
+  const refreshing = useRef(false);
+
+  /** Takes the version written elsewhere: the reader stays where they were, and what changed is tinted. */
+  const refresh = useCallback(
+    async (writer: string, auto: boolean) => {
+      if (refreshing.current || !note.data) return;
+      refreshing.current = true;
+      const before = note.data.content;
+      const top = scroller.current?.scrollTop ?? 0;
+      const fresh = await note.refetch();
+      refreshing.current = false;
+      if (!fresh.data) return;
+      keepScroll.current = top;
+      setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
+      setUpdatedBy(auto ? writer : null);
+    },
+    [note],
+  );
+  useLayoutEffect(() => {
+    if (keepScroll.current === null || !scroller.current) return;
+    scroller.current.scrollTop = keepScroll.current;
+    keepScroll.current = null;
+  }, [note.data?.content]);
+
+  // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
+  const autoRefresh = mode === "read" && storedAutoRefresh();
+  const newer = elsewhere.change;
+  useEffect(() => {
+    if (autoRefresh && newer) void refresh(writerOf(newer.lastWriter), true);
+  }, [autoRefresh, newer, refresh]);
   useEffect(() => {
     if (!scrollTarget || scrollTarget.path !== path || mode !== "read" || !note.data || !article.current) return;
     const headings = [...article.current.querySelectorAll<HTMLElement>("[data-line]")].filter((h) => Number(h.dataset.line) <= scrollTarget.line);
@@ -151,10 +194,10 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <LoadBoundary fallback={<EditorLoadFailed />}>
           {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} />
+            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} />
           ) : (
             <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} />
+              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} />
             </Suspense>
           )}
         </LoadBoundary>
@@ -184,7 +227,20 @@ export default function NoteView({ path }: { path: string }) {
   return (
     <>
       <AgentBanner change={change} />
-      <div {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
+      {elsewhere.gone ? (
+        <ElsewhereBar>This note was moved or removed elsewhere.</ElsewhereBar>
+      ) : newer && !autoRefresh ? (
+        <ElsewhereBar actions={<BarButton onClick={() => void refresh(writerOf(newer.lastWriter), false)}>Refresh</BarButton>}>
+          <ChangeText change={newer} />
+        </ElsewhereBar>
+      ) : (
+        updatedBy && (
+          <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
+            {updatedBy === username ? "Updated: you changed this note elsewhere" : `Updated by ${updatedBy}`}
+          </p>
+        )
+      )}
+      <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
         {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
         {notice && (
