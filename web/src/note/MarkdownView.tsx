@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
-import { Check } from "lucide-react";
+import { Check, ChevronRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
 import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { noteUrl } from "../api/paths";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
+import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
@@ -151,13 +152,71 @@ function WikiLink({ index, children }: { index: number; children: ReactNode }) {
   }
 }
 
+const calloutIcons: Record<CalloutKind, LucideIcon> = { note: Pencil, tip: Lightbulb, info: Info, warning: TriangleAlert, danger: OctagonAlert, quote: Quote };
+
+// Tokens only: the kinds differ by icon and title first; warnings and dangers also take the accent.
+const calloutBox: Record<CalloutKind, string> = {
+  note: "border-l-dim bg-surface",
+  tip: "border-l-dim bg-surface",
+  info: "border-l-dim bg-surface",
+  warning: "border-l-accent bg-surface",
+  danger: "border-l-accent bg-accent/10",
+  quote: "border-l-muted bg-surface italic",
+};
+const calloutClass = (kind: CalloutKind) => `k-callout my-3 rounded-[10px] border border-l-[3px] border-line px-3.5 py-2.5 text-text-body [&>p]:my-1.5 ${calloutBox[kind]}`;
+const kindOf = (node: HastNode | undefined, key: "dataCallout" | "dataCalloutTitle") => (node?.properties[key] as CalloutKind | undefined) ?? "note";
+
+function CalloutTitle({ kind, foldable, children }: { kind: CalloutKind; foldable: boolean; children: ReactNode }) {
+  const Icon = calloutIcons[kind];
+  const accent = kind === "warning" || kind === "danger";
+  return (
+    <>
+      <Icon size={17} strokeWidth={2} aria-hidden className={`flex-none ${accent ? "text-accent-text" : "text-muted"}`} />
+      <span className="min-w-0 flex-1 font-semibold not-italic text-text">{children}</span>
+      {foldable && <ChevronRight size={16} aria-hidden className="k-fold flex-none text-dim transition-transform" />}
+    </>
+  );
+}
+
 const components: Components = {
+  // Obsidian callouts (callouts.ts): a box, foldable ones as <details>.
+  aside: ({ node, children, ...props }) =>
+    node?.properties.dataCallout ? (
+      <aside {...props} className={calloutClass(kindOf(node, "dataCallout"))}>
+        {children}
+      </aside>
+    ) : (
+      <aside {...props}>{children}</aside>
+    ),
+  details: ({ node, children, ...props }) => (
+    <details {...props} className={`${calloutClass(kindOf(node, "dataCallout"))} [&[open]_.k-fold]:rotate-90`}>
+      {children}
+    </details>
+  ),
+  summary: ({ node, children, ...props }) => (
+    <summary {...props} className="-my-1.5 flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-[6px] focus-visible:outline-2 focus-visible:outline-accent [&::-webkit-details-marker]:hidden">
+      <CalloutTitle kind={kindOf(node, "dataCalloutTitle")} foldable>
+        {children}
+      </CalloutTitle>
+    </summary>
+  ),
   h1: ({ node, ...props }) => <h1 data-line={node?.position?.start.line} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
   h2: ({ node, ...props }) => (
     <h2 data-line={node?.position?.start.line} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
   ),
   h3: ({ node, ...props }) => <h3 data-line={node?.position?.start.line} className="mt-5 mb-2 text-[17px] font-bold text-text" {...props} />,
-  p: ({ node: _, ...props }) => <p className="my-3" {...props} />,
+  p: ({ node, children, ...props }) =>
+    node?.properties.dataCalloutTitle ? (
+      <p {...props} className="flex items-center gap-2">
+        <CalloutTitle kind={kindOf(node, "dataCalloutTitle")} foldable={false}>
+          {children}
+        </CalloutTitle>
+      </p>
+    ) : (
+      <p className="my-3" {...props}>
+        {children}
+      </p>
+    ),
   // Only tasks: no bullets. A mix keeps the disc for ordinary items; the tasks (`k-task`) give theirs up and move
   // left so their checkbox stands where a bullet would, with their text close to the ordinary items'.
   ul: ({ node, className, ...props }) => {
@@ -213,7 +272,7 @@ const components: Components = {
 
 function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null }: Props) {
   const remarkPlugins = useMemo(
-    () => [remarkGfm, [remarkWikiLinks, { links: links ?? [] }], [remarkChanged, { highlight }]] as const,
+    () => [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkChanged, { highlight }]] as const,
     [links, highlight],
   );
   const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing }), [links, tasksDisabled, onToggleTask, onCreateMissing]);
