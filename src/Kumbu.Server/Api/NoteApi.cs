@@ -17,8 +17,8 @@ public sealed record VaultView(string Name, int Notes);
 
 public sealed record CreateVaultRequest(string Name);
 
-/// <summary><c>confirm</c>: the vault's name, typed out exactly.</summary>
-public sealed record DeleteVaultRequest(string Confirm);
+/// <summary>The owner's current password, and <c>confirm</c>: the vault's name, typed out exactly.</summary>
+public sealed record DeleteVaultRequest(string Password, string Confirm);
 
 /// <summary>A vault's notes as folders and notes, each level folders first, then notes, both in text order (as <c>ls</c>).
 /// <c>damaged</c>: stored notes of the vault that don't open (their paths are what doesn't open, so they aren't in the tree).</summary>
@@ -95,7 +95,7 @@ public static class NoteApi
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/vaults", ListVaultsAsync).Errors(401);
         api.MapPost("/vaults", CreateVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 409);
-        api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
+        api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429);
         api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404);
@@ -135,10 +135,15 @@ public static class NoteApi
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
-    private static async Task<NoContent> DeleteVaultAsync(string vault, DeleteVaultRequest body, RequestCaller caller, Deletion deletion, CancellationToken ct) =>
-        await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Confirm, ct) is not null
+    private static async Task<NoContent> DeleteVaultAsync(
+        string vault, DeleteVaultRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    {
+        // The same budget as the other password checks behind a session.
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        return await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct) is not null
             ? TypedResults.NoContent()
             : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+    }
 
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)
     {

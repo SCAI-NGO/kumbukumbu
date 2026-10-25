@@ -152,7 +152,7 @@ describe("Settings", () => {
     expect(ended).toBe(1);
   });
 
-  it("deletes a vault only after its name was typed exactly", async () => {
+  it("deletes a vault only with the password and its name typed exactly", async () => {
     const bodies: unknown[] = [];
     let vaults = [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }];
     api({
@@ -176,13 +176,30 @@ describe("Settings", () => {
     expect(confirm).toBeDisabled();
     await userEvent.clear(within(dialog).getByLabelText("Type Diary to confirm"));
     await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(confirm);
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
-    expect(bodies).toEqual([{ confirm: "Diary" }]);
+    expect(bodies).toEqual([{ password: "my password, long", confirm: "Diary" }]);
     await waitFor(() => expect(within(vaultsSection).queryByText("Diary")).not.toBeInTheDocument());
     expect(useEditor.getState().currentPath).toBeNull();
     expect(useEditor.getState().recentPaths).toEqual([]);
+  });
+
+  it("shows the server's sentence when the vault deletion is refused, and keeps the password out of the caches", async () => {
+    api({ "GET /api/keys": () => json(200, []), "POST /api/vaults/Diary/delete": () => json(400, { error: "The password is wrong." }) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/settings", queryClient);
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Delete Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Diary?" });
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "wrong password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete vault" }));
+
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("wrong password");
   });
 
   it("deletes the account with the password and the username typed, and goes to sign-in", async () => {

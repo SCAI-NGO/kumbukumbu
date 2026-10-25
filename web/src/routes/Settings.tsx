@@ -218,8 +218,10 @@ function VaultsSection() {
 
 function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
   const queryClient = useQueryClient();
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/vaults/{vault}/delete", { params: { path: { vault } }, body: { confirm: vault } })),
+    mutationFn: () => call(api.POST("/api/vaults/{vault}/delete", { params: { path: { vault } }, body: { password, confirm: vault } })),
     onSuccess: async () => {
       useEditor.getState().forgetVault(vault);
       // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
@@ -238,6 +240,8 @@ function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void 
       error={remove.isError ? errorText(remove.error) : null}
       onConfirm={() => remove.mutate()}
       onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
     />
   );
 }

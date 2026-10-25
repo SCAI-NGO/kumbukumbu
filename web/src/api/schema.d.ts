@@ -2268,6 +2268,7 @@ export interface components {
             confirm: string;
         };
         DeleteVaultRequest: {
+            password: string;
             confirm: string;
         };
         HistoryEntryView: {

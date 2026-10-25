@@ -27,12 +27,14 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
-    /// once <paramref name="confirm"/> repeats the name; null if the user has no vault of that name. API keys that
-    /// had it keep their other vaults.
+    /// once <paramref name="confirm"/> repeats the name and <paramref name="password"/> is the user's (so a stolen
+    /// session alone can't); null if the user has no vault of that name. API keys that had it keep their other vaults.
     /// </summary>
-    public async Task<DeletionSummary?> DeleteVaultAsync(User user, byte[] userKey, string name, string confirm, CancellationToken ct)
+    public async Task<DeletionSummary?> DeleteVaultAsync(User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct)
     {
         if (!string.Equals(confirm, name, StringComparison.Ordinal)) throw new ArgumentException("Type the vault's name exactly to confirm.", nameof(confirm));
+        // Before the lookup: without the password, nobody learns whether a vault of that name exists.
+        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new ArgumentException("The password is wrong.", nameof(password));
         // Only the owner's user key opens a vault through a user slot: nobody else finds it by name.
         var vault = (await catalog.OpenForUserAsync(user.Id, userKey, ct)).FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.Ordinal));
         if (vault is null) return null;

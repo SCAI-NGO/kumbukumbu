@@ -434,15 +434,42 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Alt Ablage" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
         using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
 
-        using var mistyped = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { confirm = "alt ablage" }, session: session);
+        using var mistyped = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "alt ablage" }, session: session);
         Assert.Equal(HttpStatusCode.BadRequest, mistyped.StatusCode);
-        using var unknown = await SendAsync(HttpMethod.Post, "/api/vaults/Fremd/delete", new { confirm = "Fremd" }, session: session);
+        using var unknown = await SendAsync(HttpMethod.Post, "/api/vaults/Fremd/delete", new { password = Password, confirm = "Fremd" }, session: session);
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
-        using var noOrigin = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { confirm = "Alt Ablage" }, session: session, origin: null);
+        using var wrongPassword = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = NewPassword, confirm = "Alt Ablage" }, session: session);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
+        Assert.Equal("The password is wrong.", (await JsonAsync(wrongPassword))["error"]!.GetValue<string>());
+        using var noOrigin = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "Alt Ablage" }, session: session, origin: null);
         Assert.Equal(HttpStatusCode.Forbidden, noOrigin.StatusCode);
-        using var deleted = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { confirm = "Alt Ablage" }, session: session);
+        using (var before = await SendAsync(HttpMethod.Get, "/api/vaults", session: session))
+        {
+            Assert.Equal(2, (await JsonAsync(before)).AsArray().Count);
+        }
+
+        using var deleted = await SendAsync(HttpMethod.Post, "/api/vaults/Alt%20Ablage/delete", new { password = Password, confirm = "Alt Ablage" }, session: session);
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
 
+        using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
+        Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Deleting_a_vault_takes_five_password_checks_a_minute_then_429()
+    {
+        var username = await NewUserAsync();
+        var session = await SignInAsync(username);
+        using (var made = await SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Arbeit" }, session: session)) Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        for (var i = 0; i < 5; i++)
+        {
+            using var refused = await SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password = NewPassword, confirm = "Arbeit" }, session: session);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password = Password, confirm = "Arbeit" }, session: session);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         using var list = await SendAsync(HttpMethod.Get, "/api/vaults", session: session);
         Assert.Equal(["Arbeit"], (await JsonAsync(list)).AsArray().Select(v => v!["name"]!.GetValue<string>()));
     }

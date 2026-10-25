@@ -96,7 +96,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         var (apiKey, info) = await Keys().CreateAsync(
             lea, key, Now, "agent", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Write, [work.Id] = KeyRight.Read }, Ct);
 
-        var summary = await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "Tagebuch", Ct);
+        var summary = await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
 
         Assert.NotNull(summary);
         await AssertGoneAsync(diary.Id);
@@ -115,10 +115,14 @@ public sealed class DeletionTests(MongoFixture fixture)
         var (bob, bobKey, _) = await SignedInAsync("bob");
         var diary = await FilledVaultAsync(lea, key, "Tagebuch");
 
-        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "tagebuch", Ct));
-        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "", Ct));
-        Assert.Null(await Deletion().DeleteVaultAsync(lea, key, "tagebuch", "tagebuch", Ct));
-        Assert.Null(await Deletion().DeleteVaultAsync(bob, bobKey, "Tagebuch", "Tagebuch", Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "tagebuch", Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "", Ct));
+        Assert.Null(await Deletion().DeleteVaultAsync(lea, key, "tagebuch", Password, "tagebuch", Ct));
+        Assert.Null(await Deletion().DeleteVaultAsync(bob, bobKey, "Tagebuch", Password, "Tagebuch", Ct));
+        var wrong = await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "wrong password, long enough", "Tagebuch", Ct));
+        Assert.StartsWith("The password is wrong.", wrong.Message, StringComparison.Ordinal);
+        // The right password, but for another user key: it must open exactly the caller's.
+        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, bobKey, "Tagebuch", Password, "Tagebuch", Ct));
 
         await AssertIntactAsync(diary.Id);
     }
@@ -132,7 +136,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
         Assert.Contains("Tagebuch", await store.ListVaultsAsync(Ct));
 
-        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "Tagebuch", Ct);
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
 
         await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
         await AssertGoneAsync(diary.Id);
@@ -223,7 +227,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         await FilledVaultAsync(lea, key, "Arbeit");
         await FilledVaultAsync(bob, bobKey, "Projekte");
 
-        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "Tagebuch", Ct);
+        await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
         await Deletion().DeleteOwnAccountAsync(bob, bobKey, Password, "bob", Ct);
         await Admin().SetActiveAsync(anna, lea.Id, false, Ct);
         await Deletion().DeleteUserAsync(anna, lea.Id, "lea", Ct);
