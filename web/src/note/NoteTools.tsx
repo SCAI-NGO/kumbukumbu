@@ -101,7 +101,7 @@ export function FindBar() {
         autoCorrect="off"
         spellCheck={false}
         enterKeyHint="next"
-        className="h-11 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent"
+        className="h-11 min-w-0 flex-1 rounded-full border border-line bg-bg px-4 text-[16px] text-text outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden"
       />
       <span role="status" className="min-w-[4.5rem] flex-none text-center font-mono text-[12px] text-muted">
         {status}
