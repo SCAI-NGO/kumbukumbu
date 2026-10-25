@@ -151,6 +151,21 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Restoring_a_trashed_version_where_a_note_exists_now_is_a_409()
+    {
+        var user = await UserAsync();
+        var trashed = await user.CreateAsync("plan.md", "old\n");
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md"));
+        await user.CreateAsync("plan.md", "new\n");
+
+        using var restore = await user.SendAsync(HttpMethod.Post, user.Url("plan.md", "restore"), new { version = trashed });
+
+        Assert.Equal(HttpStatusCode.Conflict, restore.StatusCode);
+        Assert.Contains("rm it first", await RestClient.ErrorAsync(restore), StringComparison.Ordinal);
+        Assert.Equal("new\n", Text(await user.ReadAsync("plan.md"), "content"));
+    }
+
+    [Fact]
     public async Task Checkpoints_are_made_listed_restored_after_a_preview_and_removed()
     {
         var user = await UserAsync();

@@ -87,10 +87,10 @@ public static class HistoryApi
         var result = await writer.RestoreAsync(notePath, body.Version, ct);
         if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(NoteView.From(now));
 
-        // What was asked for exists, so it is the state of the vault meanwhile that stood in the way.
-        var known = existing is not null
-            ? NoteHistory.Versions(existing).Any(v => v.Version == body.Version)
-            : (await store.ListTrashAsync(notePath, ct)).Any(t => t.Note.Path == notePath && (body.Version is null || t.Note.Version == body.Version));
+        // What was asked for exists (in the history, or in the trash with a note at its path now), so it is the
+        // state of the vault that stood in the way.
+        var inTrash = (await store.ListTrashAsync(notePath, ct)).Any(t => t.Note.Path == notePath && (body.Version is null || t.Note.Version == body.Version));
+        var known = existing is not null ? NoteHistory.Versions(existing).Any(v => v.Version == body.Version) || inTrash : inTrash;
         throw new ApiException(
             existing is not null && body.Version is null ? StatusCodes.Status400BadRequest : known ? StatusCodes.Status409Conflict : StatusCodes.Status404NotFound,
             result.Output);
