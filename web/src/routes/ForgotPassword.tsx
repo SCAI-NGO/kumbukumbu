@@ -2,7 +2,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { api, call } from "../api/client";
+import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { AuthScreen, FormError, primaryButtonClass, TextField } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
@@ -67,7 +67,15 @@ export default function ForgotPassword() {
         <TextField label="Username" value={username} onChange={setUsername} autoComplete="username" />
         <TextField label="Recovery key" value={recoveryKey} onChange={setRecoveryKey} autoComplete="off" mono />
         <PasswordField label="New password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" policy />
-        {recover.isError && <FormError>{errorText(recover.error)}</FormError>}
+        {recover.isError && (
+          <FormError>
+            {errorText(recover.error)}
+            {/* A refusal (wrong key, weak password, too many tries) changed nothing. A fault or a lost connection
+                may have come after the server set the new password, with the new recovery key lost on the way. */}
+            {!(recover.error instanceof HttpError && recover.error.status < 500) &&
+              " Your recovery may have gone through even so: try to sign in with the new password, and if that works, make a new recovery key in Settings."}
+          </FormError>
+        )}
         <button type="submit" disabled={recover.isPending} className={primaryButtonClass}>
           Set new password
         </button>

@@ -71,5 +71,23 @@ describe("ForgotPassword", () => {
     renderApp("/forgot");
     await fill();
     expect(await screen.findByRole("alert")).toHaveTextContent("The username or recovery key is wrong.");
+    expect(screen.queryByText(/may have gone through/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a server fault", () => json(502, { error: "Bad gateway" })],
+    [
+      "a lost connection",
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+    ],
+  ])("after %s, says the recovery may have gone through and what to do", async (_, answer) => {
+    fakeApi({ "POST /api/recover": answer });
+    renderApp("/forgot");
+    await fill();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/may have gone through/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/sign in with the new password/);
+    expect(screen.getByRole("alert")).toHaveTextContent(/new recovery key in Settings/);
   });
 });
