@@ -49,6 +49,13 @@ public sealed class UnlockedVault
     /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
 
+    /// <summary>
+    /// The embedding provider the owner chose for this vault (<see cref="Search.EmbeddingProviders.Internal"/> unless
+    /// they opted in to an external one). Sealed in the vault's meta: someone who can write to the database can't
+    /// point a vault at a provider and have its notes sent there.
+    /// </summary>
+    public string EmbeddingProvider { get; set; } = Search.EmbeddingProviders.Internal;
+
     /// <summary>One note is indexed at a time per vault, so two updates of a note can't overtake each other.</summary>
     public SemaphoreSlim IndexGate { get; } = new(1, 1);
 
@@ -87,6 +94,10 @@ public sealed class UnlockedVault
 
         return note;
     }
+
+    /// <summary>The vault's name and embedding provider, as <see cref="VaultCatalog"/> seals them at creation.</summary>
+    public byte[] SealMeta(string embeddingProvider) =>
+        Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider == Search.EmbeddingProviders.Internal ? null : embeddingProvider));
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
         Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt));
@@ -214,7 +225,10 @@ internal sealed record TrashPayload(NotePayload Note, long Revision, string Dele
 
 internal sealed record MovePayload(string From, string To, string MovedBy, DateTime MovedAt);
 
-internal sealed record VaultMeta(string Name);
+/// <remarks>Embeddings: the vault's embedding provider; missing (vaults before the overnight round) or null is the internal model.</remarks>
+internal sealed record VaultMeta(
+    string Name,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null);
 
 internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector);
 

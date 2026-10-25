@@ -386,6 +386,25 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         }
     }
 
+    /// <summary>
+    /// Points the vault at another embedding provider: its meta is sealed again with the choice, then the working set
+    /// follows. The search index re-embeds the vault afterwards (<see cref="Search.SearchIndex.CatchUp"/>).
+    /// </summary>
+    internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, CancellationToken ct)
+    {
+        await vault.Gate.WaitAsync(ct);
+        try
+        {
+            var result = await Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(provider)), cancellationToken: ct);
+            if (result.MatchedCount == 0) throw new VaultUnavailableException("The vault doesn't exist any more.");
+            vault.EmbeddingProvider = provider;
+        }
+        finally
+        {
+            vault.Gate.Release();
+        }
+    }
+
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => _open.Count;
 
@@ -427,7 +446,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             var meta = JsonSerializer.Deserialize<VaultMeta>(
                 VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now);
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now) { EmbeddingProvider = meta.Embeddings ?? Search.EmbeddingProviders.Internal };
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))

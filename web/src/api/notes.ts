@@ -7,11 +7,16 @@ import type { components } from "./schema";
 export type TreeFolder = components["schemas"]["TreeFolder"];
 export type TreeView = components["schemas"]["TreeView"];
 export type NoteView = components["schemas"]["NoteView"];
+export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
 
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
 export const useVaults = () => useQuery({ queryKey: ["vaults"], queryFn: () => call(api.GET("/api/vaults")) });
+
+/** The server's embedding providers, the internal model first. */
+export const useEmbeddingProviders = () =>
+  useQuery({ queryKey: ["embeddings"], queryFn: () => call(api.GET("/api/embeddings")), staleTime: 60_000 });
 
 export const useTree = (vault: string | null) =>
   useQuery({

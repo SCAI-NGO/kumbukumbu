@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Upload } from "lucide-react";
+import { ChevronRight, Ellipsis, FilePlus, FileText, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Sparkles, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useTree, type TreeFolder } from "../api/notes";
+import { useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
 import { noteUrl, titleOf } from "../api/paths";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
@@ -35,12 +36,13 @@ function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0):
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
-/** The menu of a folder (the vault's root too, which can't be moved). */
-function FolderMenu({ folder, onNewNote, onMove }: { folder: TreeFolder; onNewNote(folder: string): void; onMove(subject: MoveSubject): void }) {
+/** The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). */
+function FolderMenu({ folder, onNewNote, onMove, extra = [] }: { folder: TreeFolder; onNewNote(folder: string): void; onMove(subject: MoveSubject): void; extra?: MenuItem[] }) {
   const items: MenuItem[] = [
     { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
     { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
     ...(folder.path.split("/").length > 2 ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
+    ...extra,
   ];
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
@@ -126,6 +128,15 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
   const navigate = useNavigate();
   const close = () => setOverlay("none");
   const dialog = useDialog<HTMLDivElement>(close);
+  const vaults = useVaults();
+  const providers = useEmbeddingProviders();
+  const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
+  const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
+  // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
+  const vaultItems: MenuItem[] =
+    embeddings && providers.data?.some((p) => p.external)
+      ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }]
+      : [];
 
   return (
     <div className="absolute inset-0 z-20 flex">
@@ -135,7 +146,7 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
             <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
             <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
           </div>
-          {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} />}
+          {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} extra={vaultItems} />}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
@@ -201,6 +212,9 @@ export default function TreeDrawer(props: { onNewNote(folder: string): void; onN
         </div>
       </div>
       <button type="button" aria-label="Close file tree" onClick={close} className="flex-1 bg-black/55" />
+      {choosingEmbeddings && activeVault && embeddings && providers.data && (
+        <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
+      )}
     </div>
   );
 }

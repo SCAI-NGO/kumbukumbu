@@ -1,26 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using Kumbu.Core.Search;
-
 namespace Kumbu.Server.Search;
-
-/// <summary>Turns text into vectors whose dot product measures closeness of meaning.</summary>
-public interface IEmbedder
-{
-    SemanticState State { get; }
-
-    /// <summary>Key of the configured model in <see cref="ModelFiles.Catalogue"/>.</summary>
-    string Model { get; }
-
-    /// <summary>Why <see cref="State"/> isn't Ready, as a sentence for the user.</summary>
-    string? Reason { get; }
-
-    /// <summary>Completes when the model is loaded; never, if search by meaning is off.</summary>
-    Task WhenReadyAsync(CancellationToken ct);
-
-    /// <summary>Unit vectors, one per text. <paramref name="query"/> marks a search query, which the model
-    /// embeds with its query prompt; notes are embedded as they are.</summary>
-    Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, bool query, CancellationToken ct);
-}
 
 /// <summary>One model of the <see cref="ModelFiles.Catalogue"/>, pinned to a revision.</summary>
 public sealed record EmbeddingModel(string Key, string Repository, string Revision, string QueryPrompt, int Dimensions, IReadOnlyList<ModelFile> Files)

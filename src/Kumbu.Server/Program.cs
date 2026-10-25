@@ -29,6 +29,9 @@ if (bootstrapCommand)
 // ASP.NET logs every request line at Information ("Request starting POST /api/..."), endpoint matches and
 // results: nothing an operator needs, and a URL may carry something secret. Warnings and errors stay.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+// HttpClientFactory logs four lines per outgoing request: for an external embedding provider, one set per search
+// query, which would put when someone searched into the log. Failures are logged by the drivers themselves.
+builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
@@ -44,8 +47,12 @@ builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<OnnxEmbedder>();
-builder.Services.AddSingleton<IEmbedder>(sp => sp.GetRequiredService<OnnxEmbedder>());
+builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
+// The internal model and the external providers the admin configured; each vault uses one of them.
+builder.Services.AddSingleton(sp => EmbeddingProviders.FromOptions(
+    sp.GetRequiredService<IEmbeddingDriver>(), sp.GetRequiredService<IOptions<KumbuOptions>>().Value,
+    sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ILoggerFactory>()));
 builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();

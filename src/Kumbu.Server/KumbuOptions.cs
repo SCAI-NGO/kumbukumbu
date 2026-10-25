@@ -46,11 +46,61 @@ public sealed class KumbuOptions
     public VaultOptions Vaults { get; set; } = new();
 
     public SearchOptions Search { get; set; } = new();
+
+    public EmbeddingsOptions Embeddings { get; set; } = new();
+}
+
+/// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one only when
+/// its owner opts in; every vault starts with the internal model (<see cref="SearchOptions.Model"/>).</summary>
+public sealed class EmbeddingsOptions
+{
+    public Dictionary<string, EmbeddingProviderOptions> Providers { get; set; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>One external provider: a protocol (<see cref="Driver"/>), where it is, which model, and how it is described
+/// to the owners who may choose it.</summary>
+public sealed class EmbeddingProviderOptions
+{
+    /// <summary>The protocol: <c>openai-compatible</c> (<c>POST {BaseUrl}/embeddings</c>).</summary>
+    public string Driver { get; set; } = "";
+
+    /// <summary>e.g. <c>https://api.tensorx.ai/v1</c>; https, except for a provider on this machine (loopback).</summary>
+    public string BaseUrl { get; set; } = "";
+
+    public string Model { get; set; } = "";
+
+    /// <summary>A file holding the API key, e.g. a Docker secret under <c>/run/secrets/</c>. Never the key itself in
+    /// the configuration: environment variables end up in <c>docker inspect</c>, process listings and support dumps.
+    /// Optional only for a loopback provider.</summary>
+    public string? ApiKeyFile { get; set; }
+
+    /// <summary>Asks the model for vectors of this length (models trained for it, as Qwen3-Embedding, keep most of
+    /// their quality at a quarter); unset, the model's own length.</summary>
+    public int? Dimensions { get; set; }
+
+    /// <summary>Put before every search query, for models that embed queries with an instruction.</summary>
+    public string? QueryPrompt { get; set; }
+
+    /// <summary>What owners see; the name if unset.</summary>
+    public string? Label { get; set; }
+
+    /// <summary>What owners should know before their notes go there, e.g. "EU, zero data retention".</summary>
+    public string? Description { get; set; }
+
+    /// <summary>Texts per request.</summary>
+    public int MaxBatch { get; set; } = 32;
+
+    /// <summary>Per request; a slower answer counts as a failure and is retried.</summary>
+    public int TimeoutSeconds { get; set; } = 30;
+
+    /// <summary>The key in <paramref name="path"/>, trimmed; null without a path or for an empty file.</summary>
+    public static string? ReadKey(string? path) => path is null ? null : File.ReadAllText(path).Trim() is { Length: > 0 } key ? key : null;
 }
 
 public sealed class SearchOptions
 {
-    /// <summary>Search by meaning (semsearch); without it, semsearch ranks by words only.</summary>
+    /// <summary>Search by meaning with the internal model (semsearch); without it, the vaults that use it rank by
+    /// words only. Vaults whose owner opted in to an external provider still search by meaning.</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Where the embedding model is kept; downloaded there on the first start.</summary>

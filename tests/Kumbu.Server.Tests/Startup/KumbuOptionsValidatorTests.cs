@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Microsoft.Extensions.Configuration;
+
 namespace Kumbu.Server.Tests.Startup;
 
 public sealed class KumbuOptionsValidatorTests
@@ -122,5 +124,116 @@ public sealed class KumbuOptionsValidatorTests
 
         options.PublicUrl = "https://kumbu.example.org";
         Assert.True(Validate(options).Succeeded);
+    }
+
+    /// <summary>A key file of its own per test; the validator reads it.</summary>
+    private static string KeyFile(string content = "sk-test-key")
+    {
+        var path = Path.Combine(Directory.CreateTempSubdirectory("kumbu-key-").FullName, "key");
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    private static EmbeddingProviderOptions Provider(Action<EmbeddingProviderOptions>? change = null)
+    {
+        var provider = new EmbeddingProviderOptions
+        {
+            Driver = "openai-compatible", BaseUrl = "https://api.tensorx.ai/v1", Model = "qwen/qwen3-embedding-8b", ApiKeyFile = KeyFile(),
+        };
+        change?.Invoke(provider);
+        return provider;
+    }
+
+    private static IReadOnlyList<string> ProviderFailures(EmbeddingProviderOptions provider, string name = "tensorx")
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Embeddings.Providers[name] = provider;
+        return [.. Validate(options).Failures ?? []];
+    }
+
+    [Fact]
+    public void Accepts_an_external_provider_over_https_with_a_key_file()
+    {
+        Assert.Empty(ProviderFailures(Provider(p => p.Dimensions = 1024)));
+    }
+
+    [Theory]
+    [InlineData("http://localhost:11434/v1")]
+    [InlineData("http://127.0.0.1:8000/v1")]
+    [InlineData("http://[::1]:8000/v1")]
+    public void A_provider_on_this_machine_may_use_http_and_no_key(string url)
+    {
+        Assert.Empty(ProviderFailures(Provider(p => (p.BaseUrl, p.ApiKeyFile) = (url, null))));
+    }
+
+    [Theory]
+    [InlineData("http://api.tensorx.ai/v1", "must use https")]
+    [InlineData("http://10.0.0.5/v1", "must use https")]
+    [InlineData("ftp://api.tensorx.ai/v1", "absolute https URL")]
+    [InlineData("api.tensorx.ai/v1", "absolute https URL")]
+    [InlineData("https://user:pass@api.tensorx.ai/v1", "absolute https URL")]
+    [InlineData("https://api.tensorx.ai/v1?key=abc", "absolute https URL")]
+    public void Refuses_a_base_url_that_is_not_https_to_another_machine(string url, string message)
+    {
+        var failure = Assert.Single(ProviderFailures(Provider(p => p.BaseUrl = url)));
+        Assert.Contains("Kumbu:Embeddings:Providers:tensorx:BaseUrl", failure);
+        Assert.Contains(message, failure);
+    }
+
+    [Fact]
+    public void Refuses_a_missing_unreadable_or_empty_key_file_without_repeating_its_content()
+    {
+        Assert.Contains("must name a file", Assert.Single(ProviderFailures(Provider(p => p.ApiKeyFile = null))));
+        Assert.Contains("can't be read", Assert.Single(ProviderFailures(Provider(p => p.ApiKeyFile = "/nonexistent/key"))));
+        Assert.Contains("is empty", Assert.Single(ProviderFailures(Provider(p => p.ApiKeyFile = KeyFile(" \n")))));
+
+        var directory = Directory.CreateTempSubdirectory("kumbu-key-dir-").FullName;
+        Assert.Contains("can't be read", Assert.Single(ProviderFailures(Provider(p => p.ApiKeyFile = directory))));
+    }
+
+    [Theory]
+    [InlineData("internal", "internal model's name")]
+    [InlineData("TensorX", "lowercase letters")]
+    [InlineData("a b", "lowercase letters")]
+    [InlineData("-x", "lowercase letters")]
+    public void Refuses_names_that_are_not_simple_or_are_taken(string name, string message)
+    {
+        Assert.Contains(message, Assert.Single(ProviderFailures(Provider(), name)));
+    }
+
+    [Theory]
+    [InlineData("onnx", "internal model only")]
+    [InlineData("", "must be one of: openai-compatible")]
+    [InlineData("cohere", "must be one of: openai-compatible")]
+    public void Refuses_a_driver_that_is_not_an_external_protocol(string driver, string message)
+    {
+        Assert.Contains(message, Assert.Single(ProviderFailures(Provider(p => p.Driver = driver))));
+    }
+
+    [Fact]
+    public void Refuses_a_missing_model_and_out_of_range_numbers()
+    {
+        var failures = ProviderFailures(Provider(p => (p.Model, p.Dimensions, p.MaxBatch, p.TimeoutSeconds) = ("", 0, 0, 0)));
+
+        Assert.Equal(4, failures.Count);
+        Assert.Contains(failures, f => f.Contains("Model must be set"));
+    }
+
+    [Fact]
+    public void Providers_bind_from_configuration_as_the_environment_gives_them()
+    {
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Kumbu:Embeddings:Providers:tensorx:Driver"] = "openai-compatible",
+            ["Kumbu:Embeddings:Providers:tensorx:BaseUrl"] = "https://api.tensorx.ai/v1",
+            ["Kumbu:Embeddings:Providers:tensorx:Model"] = "qwen/qwen3-embedding-8b",
+            ["Kumbu:Embeddings:Providers:tensorx:Dimensions"] = "1024",
+            ["Kumbu:Embeddings:Providers:tensorx:Description"] = "EU, zero data retention",
+        }).Build();
+        var options = new KumbuOptions();
+        Microsoft.Extensions.Configuration.ConfigurationBinder.Bind(configuration.GetSection("Kumbu"), options);
+
+        var provider = Assert.Single(options.Embeddings.Providers);
+        Assert.Equal(("tensorx", "qwen/qwen3-embedding-8b", 1024, "EU, zero data retention", 32), (provider.Key, provider.Value.Model, provider.Value.Dimensions, provider.Value.Description, provider.Value.MaxBatch));
     }
 }
