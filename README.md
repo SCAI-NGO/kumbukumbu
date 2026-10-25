@@ -214,6 +214,8 @@ dotnet test tests/Kumbu.Core.Tests # core only, no Docker
 KUMBU_MODEL_DIR=/path/to/models dotnet test   # also the tests against the real model and tokenizer
 ```
 
+Without Docker, point the Mongo tests at a MongoDB 7.0 replica set, or a single `mongod --replSet rs0` (the tests initiate the set if it is not yet), with `KUMBU_TEST_MONGO='mongodb://127.0.0.1:27017/?directConnection=true' dotnet test`. Raise the open-files limit first (`ulimit -n 64000`): every test database is a set of files that mongod keeps open.
+
 `KUMBU_MODEL_DIR` holds one folder per model, as the server keeps them below `Kumbu:Search:ModelPath`:
 
 ```
