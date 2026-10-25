@@ -171,6 +171,8 @@ app.MapUploadApi();
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
 app.MapFallback("/api/{**path}", () => Results.Json(new { error = "Not found." }, statusCode: StatusCodes.Status404NotFound));
 app.MapFallback("/mcp/{**path}", () => Results.Json(new { error = "Not found." }, statusCode: StatusCodes.Status404NotFound));
+// A missing build file (an old chunk after a redeploy) is a plain 404: the shell in its place would fail as a script.
+app.MapFallback("/assets/{**path}", () => Results.NotFound()).AllowAnonymous();
 // Every other path is the web app's router's: index.html, without signing in (the app itself asks for that).
 // Not the default pattern, which skips paths with an extension: a note's address ends in .md.
 app.MapFallbackToFile("{**path}", "index.html", webApp).AllowAnonymous();

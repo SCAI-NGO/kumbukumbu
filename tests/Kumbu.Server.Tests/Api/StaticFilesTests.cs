@@ -60,6 +60,18 @@ public sealed class StaticFilesTests : IDisposable
     }
 
     [Theory]
+    [InlineData("/assets/nope.js")]
+    [InlineData("/assets/old/app-def456.css")]
+    public async Task A_missing_asset_is_a_404_not_the_shell(string path)
+    {
+        // A tab from before a redeploy asks for its old chunks: the shell instead would fail as a script, cached.
+        using var response = await _web.CreateClient().GetAsync(path, Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain("Kumbu test shell", await response.Content.ReadAsStringAsync(Ct));
+    }
+
+    [Theory]
     [InlineData("/api/nope")]
     [InlineData("/api/vaults/x/y/z")]
     [InlineData("/mcp/nope")]
