@@ -224,7 +224,8 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
 
   it("lets the user keep writing, and their next save meets the conflict choice instead of overwriting", async () => {
     const server = newServer();
-    const editor = await openInWrite(server);
+    const puts: unknown[] = [];
+    const editor = await openInWrite(server, puts);
     writeElsewhere(server, "v2");
     backToThePage();
 
@@ -232,6 +233,14 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
 
     expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
     expect(editor).toHaveValue(texts.v1);
+
+    await userEvent.type(editor, " mine");
+    fireEvent.blur(editor);
+
+    expect(await screen.findByRole("alert", { name: "Changed elsewhere" })).toHaveTextContent("reload / keep mine / view diff");
+    expect(puts).toEqual([{ content: `${texts.v1} mine`, version: "v1" }]);
+    expect(server.version).toBe("v2");
+    expect(editor).toHaveValue(`${texts.v1} mine`);
   });
 
   it("does not count the user's own saves", async () => {
