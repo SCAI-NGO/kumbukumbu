@@ -8,3 +8,10 @@ globalThis.Request = class extends NodeRequest {
     super(input, init?.signal ? { ...init, signal: undefined } : init);
   }
 };
+
+// Node 25+ has its own localStorage and sessionStorage globals, which shadow jsdom's (and lack `length` and
+// `key` without --localstorage-file); the tests mean the browser's.
+const { window: dom } = (globalThis as unknown as { jsdom: { window: Window } }).jsdom;
+for (const name of ["localStorage", "sessionStorage"] as const) {
+  Object.defineProperty(globalThis, name, { value: dom[name], configurable: true, writable: true });
+}
