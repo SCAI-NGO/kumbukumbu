@@ -2,6 +2,7 @@
 // Adapted from chatsundere (apps/user-client/src/components/RecoveryKeyReveal.tsx, packages/ui-shared/src/components/ConfirmTyped.tsx)
 import { useEffect, useId, useState } from "react";
 import { useBlocker } from "react-router-dom";
+import { useDialog } from "../hooks/useDialog";
 import { labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
 
 /**
@@ -96,29 +97,36 @@ export function RecoveryKeyReveal({ value, username, onContinue }: { value: stri
         Continue
       </button>
 
-      {blocker.state === "blocked" && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby={`${checkId}-leave`}
-            className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
-          >
-            <h2 id={`${checkId}-leave`} className="text-lg font-bold text-text">
-              You haven't saved your recovery key
-            </h2>
-            <p className="text-text-body">Without it, a forgotten password means your notes are gone. You won't see this key again.</p>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => blocker.reset()} className={`${primaryButtonClass} flex-1`}>
-                Stay
-              </button>
-              <button type="button" onClick={() => blocker.proceed()} className={`${secondaryButtonClass} flex-1`}>
-                Leave without it
-              </button>
-            </div>
-          </div>
+      {blocker.state === "blocked" && <LeaveDialog id={`${checkId}-leave`} onStay={() => blocker.reset?.()} onLeave={() => blocker.proceed?.()} />}
+    </div>
+  );
+}
+
+/** "Leave without it?": Escape stays, as the safe answer. */
+function LeaveDialog({ id, onStay, onLeave }: { id: string; onStay(): void; onLeave(): void }) {
+  const dialog = useDialog<HTMLDivElement>(onStay);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
+      <div
+        ref={dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={id}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
+      >
+        <h2 id={id} className="text-lg font-bold text-text">
+          You haven't saved your recovery key
+        </h2>
+        <p className="text-text-body">Without it, a forgotten password means your notes are gone. You won't see this key again.</p>
+        <div className="flex gap-3">
+          <button type="button" onClick={onStay} className={`${primaryButtonClass} flex-1`}>
+            Stay
+          </button>
+          <button type="button" onClick={onLeave} className={`${secondaryButtonClass} flex-1`}>
+            Leave without it
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

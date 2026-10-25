@@ -3,12 +3,14 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
+import { useDialog } from "../hooks/useDialog";
 import { FormError, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
 
 /** Asks for a vault's name and creates it; the server says what a name may be. */
 export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void; onCreated(name: string): void }) {
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
+  const dialog = useDialog<HTMLFormElement>(onClose);
   const create = useMutation({
     mutationFn: () => call(api.POST("/api/vaults", { body: { name } })),
     onSuccess: async (vault) => {
@@ -23,8 +25,9 @@ export default function NewVaultDialog({ onClose, onCreated }: { onClose(): void
   };
 
   return (
-    <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center" onKeyDown={(e) => e.key === "Escape" && onClose()}>
+    <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
       <form
+        ref={dialog}
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-vault-title"

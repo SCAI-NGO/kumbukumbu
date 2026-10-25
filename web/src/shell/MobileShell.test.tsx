@@ -265,4 +265,55 @@ describe("the shell", () => {
     expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to the notes" })).toHaveAttribute("href", "/");
   });
+
+  it("moves focus into the drawer, keeps it there, and gives it back on Escape", async () => {
+    signedInApi();
+    renderApp("/notes/Work/inbox.md");
+    const opener = await screen.findByRole("button", { name: "Open file tree" });
+    await userEvent.click(opener);
+    expect(within(drawer()).getByRole("heading", { name: "Work" })).toHaveFocus();
+    await within(drawer()).findByRole("button", { name: "inbox" });
+
+    await userEvent.tab({ shift: true });
+    expect(within(drawer()).getByRole("button", { name: "Sign out" })).toHaveFocus();
+    await userEvent.tab();
+    expect(within(drawer()).getByRole("button", { name: "Actions for Work" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it("closes only a folder menu on Escape, not the drawer around it", async () => {
+    signedInApi();
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for projects" }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+  });
+
+  it("moves focus to the vault name, and closes the dialog on Escape with focus back on its opener", async () => {
+    signedInApi({ "GET /api/vaults": () => json(200, []) });
+    renderApp("/");
+    const opener = await screen.findByRole("button", { name: "Create your first vault" });
+    await userEvent.click(opener);
+    expect(within(screen.getByRole("dialog", { name: "New vault" })).getByLabelText("Name")).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "New vault" })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it("closes only the topmost: Escape in the New vault dialog leaves the drawer open", async () => {
+    signedInApi();
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    const chip = within(drawer()).getByRole("button", { name: "New vault" });
+    await userEvent.click(chip);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "New vault" })).not.toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+    expect(chip).toHaveFocus();
+  });
 });

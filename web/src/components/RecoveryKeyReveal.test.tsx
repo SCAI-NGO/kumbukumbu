@@ -112,4 +112,19 @@ describe("RecoveryKeyReveal", () => {
     await userEvent.click(screen.getByRole("button", { name: "Leave without it" }));
     expect(await screen.findByText("Elsewhere")).toBeInTheDocument();
   });
+
+  it("moves focus to Stay, keeps it inside, and stays on Escape", async () => {
+    const { router } = setup();
+    await act(() => router.navigate("/elsewhere"));
+    const stay = screen.getByRole("button", { name: "Stay" });
+    expect(stay).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Leave without it" })).toHaveFocus();
+    await userEvent.tab();
+    expect(stay).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+  });
 });

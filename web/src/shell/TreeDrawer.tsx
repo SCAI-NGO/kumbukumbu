@@ -7,6 +7,7 @@ import { errorText } from "../api/error-text";
 import { useTree, type TreeFolder } from "../api/notes";
 import { noteUrl, titleOf } from "../api/paths";
 import { Menu, type MenuItem } from "../components/Menu";
+import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import VaultSwitcher from "./VaultSwitcher";
@@ -85,14 +86,15 @@ export default function TreeDrawer({ onNewNote, onNewVault }: { onNewNote(folder
   const tree = useTree(activeVault);
   const navigate = useNavigate();
   const close = () => setOverlay("none");
+  const dialog = useDialog<HTMLDivElement>(close);
 
   return (
-    <div className="absolute inset-0 z-20 flex" onKeyDown={(e) => e.key === "Escape" && close()}>
-      <div role="dialog" aria-label="File tree" className="k-drawer flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface">
+    <div className="absolute inset-0 z-20 flex">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" className="k-drawer flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface">
         <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
           <div className="min-w-0 flex-1">
             <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
-            <h2 className="mt-0.5 truncate text-[22px] font-bold text-text">{activeVault ?? "No vault yet"}</h2>
+            <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
           </div>
           {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} />}
         </div>
