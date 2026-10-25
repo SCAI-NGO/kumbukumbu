@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -40,6 +41,59 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
 
     private static async Task<HttpResponseMessage> ChooseAsync(RestClient user, string provider, string? bearer = null) =>
         await user.SendAsync(HttpMethod.Put, $"/api/vaults/{Uri.EscapeDataString(user.Vault)}/embeddings", new { provider }, bearer);
+
+    /// <summary>Answers every embeddings request with unit vectors of 8 values, and counts the requests.</summary>
+    private sealed class EightValues : HttpMessageHandler
+    {
+        public int Requests;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Requests);
+            var count = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!["input"]!.AsArray().Count;
+            var data = new JsonArray([.. Enumerable.Range(0, count).Select(i => (JsonNode)new JsonObject
+            {
+                ["index"] = i,
+                ["embedding"] = new JsonArray([.. Enumerable.Range(0, 8).Select(d => (JsonNode)(d == 0 ? 1.0 : 0.0))]),
+            })]);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(new JsonObject { ["data"] = data }.ToJsonString(), System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    [Fact]
+    public async Task A_search_through_a_real_driver_leaves_no_http_client_lines_in_the_log()
+    {
+        var keyFile = Path.Combine(Directory.CreateTempSubdirectory("kumbu-key-").FullName, "key");
+        await File.WriteAllTextAsync(keyFile, "sk-test-not-a-real-key", Ct);
+        var handler = new EightValues();
+        var log = new CapturedLog();
+        await using var api = app.PublicApi.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:Driver", "openai-compatible");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:BaseUrl", "https://embeddings.example.org/v1");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:Model", "test-model");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:ApiKeyFile", keyFile);
+            b.ConfigureLogging(l => l.AddProvider(log));
+            b.ConfigureServices(services => services.AddHttpClient(EmbeddingDrivers.HttpClientName("wire")).ConfigurePrimaryHttpMessageHandler(() => handler));
+        });
+        var user = await RestClient.NewAsync(api, "Wire");
+        await user.CreateAsync("diary.md", "# Garden\n\nThe hens laid eggs today.\n");
+        using (var chosen = await user.SendAsync(HttpMethod.Put, "/api/vaults/Wire/embeddings", new { provider = "wire" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, chosen.StatusCode);
+        }
+
+        await api.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        using var search = await user.GetAsync("/api/search?q=hens&mode=meaning&path=/Wire");
+
+        Assert.Equal("/Wire/diary.md", (await JsonAsync(search))["results"]![0]!["path"]!.GetValue<string>());
+        Assert.True(handler.Requests >= 2);
+        Assert.DoesNotContain(log.Lines, l => l.Contains("System.Net.Http", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("embeddings.example.org", StringComparison.Ordinal) || l.Contains("hens", StringComparison.Ordinal));
+    }
 
     [Fact]
     public async Task The_providers_are_listed_internal_first_with_what_an_owner_should_know()
