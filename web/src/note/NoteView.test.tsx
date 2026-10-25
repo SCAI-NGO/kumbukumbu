@@ -327,6 +327,52 @@ describe("the note view", () => {
   });
 });
 
+describe("Embeds", () => {
+  const ROADMAP = "/Work/projects/roadmap.md";
+  const embedding = ["![[roadmap]]", "", "![[roadmap#Next]]", "", "Inline ![[roadmap]] here.", "", "![[plan]]", "", "![[chart.png]]", "", "![[roadmap#Nope]]"].join("\n");
+  const roadmap = ["---", "status: draft", "---", "# Roadmap", "", "intro text", "", "## Next", "", "- [ ] next thing", "", "## Later", "", "later text, see ![[plan]]"].join("\n");
+  const embedLinks = [
+    { line: 1, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 3, raw: "![[roadmap#Next]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 5, raw: "![[roadmap]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+    { line: 7, raw: "![[plan]]", target: "plan", kind: "note", path: PLAN, candidates: [] },
+    { line: 9, raw: "![[chart.png]]", target: "chart.png", kind: "attachment", path: null, candidates: [] },
+    { line: 11, raw: "![[roadmap#Nope]]", target: "roadmap", kind: "note", path: ROADMAP, candidates: [] },
+  ];
+
+  it("shows embedded notes and sections one level deep, with the way to open them; other embeds stay links", async () => {
+    noteApi({
+      [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, embedding)),
+      [`GET /api/links${PLAN}`]: () => json(200, embedLinks),
+      [`GET /api/notes${ROADMAP}`]: () => json(200, noteView(ROADMAP, roadmap, "r1")),
+      [`GET /api/links${ROADMAP}`]: () => json(200, [{ line: 14, raw: "![[plan]]", target: "plan", kind: "note", path: PLAN, candidates: [] }]),
+    });
+    renderApp(planUrl);
+
+    const whole = await screen.findByRole("region", { name: "Embedded: roadmap" });
+    expect(await within(whole).findByRole("heading", { name: "Roadmap", level: 1 })).toBeInTheDocument();
+    expect(whole).toHaveTextContent("later text");
+    expect(whole).not.toHaveTextContent("status: draft");
+    expect(within(whole).getByRole("link", { name: /^roadmap/ })).toHaveAttribute("href", "/notes/Work/projects/roadmap.md");
+    // Its own embed of this note stays a link: one level deep, no cycle.
+    expect(await within(whole).findByRole("link", { name: "plan" })).toHaveAttribute("href", planUrl);
+    expect(within(whole).getByRole("checkbox", { name: "next thing" })).toBeDisabled();
+
+    const part = screen.getByRole("region", { name: "Embedded: roadmap › Next" });
+    expect(part).toHaveTextContent("next thing");
+    expect(part).not.toHaveTextContent("intro text");
+    expect(part).not.toHaveTextContent("later text");
+
+    expect(screen.getByRole("region", { name: "Embedded: roadmap › Nope" })).toHaveTextContent("This note has no heading “Nope”.");
+    expect(screen.getAllByRole("region", { name: /^Embedded/ })).toHaveLength(3);
+    // Inline, an embed is a link; this note embedding itself is one too; an attachment is named.
+    const article = screen.getByRole("article");
+    expect(within(article).getAllByRole("link", { name: "roadmap" }).some((a) => a.closest("p")?.textContent?.startsWith("Inline"))).toBe(true);
+    expect(within(article).getAllByRole("link", { name: "plan" }).some((a) => !a.closest("section"))).toBe(true);
+    expect(within(article).getByText("chart.png")).not.toHaveAttribute("href");
+  });
+});
+
 describe("Outline and find in the note", () => {
   const long = ["# Plan", "", "Intro about the road.", "", "## Goals", "", "```", "# not a heading, road", "```", "", "### Road **ahead**", "", "The road `road` ends."].join("\n");
   const scrolled: Element[] = [];

@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/components/chat/markdown/MarkdownContent.tsx)
-import { Check, ChevronRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, CornerDownRight, Info, Lightbulb, OctagonAlert, Pencil, Quote, TriangleAlert, type LucideIcon } from "lucide-react";
 import { createContext, memo, useContext, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { noteUrl } from "../api/paths";
+import { errorText } from "../api/error-text";
+import { useLinks, useNote } from "../api/notes";
+import { noteUrl, titleOf } from "../api/paths";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
-import { remarkWikiLinks, type LinkView } from "./wikiLinks";
+import { section } from "./outline";
+import { splitFrontmatter } from "./properties";
+import { embedHeading, remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -80,11 +84,19 @@ interface Props {
   highlight?: Highlight | null;
   /** Find in the note: matches are marked, `current` (0-based) as the current one. */
   find?: { query: string; current: number } | null;
+  /** The note shown. With it, notes embedded on a line of their own (`![[plan]]`) show their text; without it
+   * (inside an embedded note: one level deep) every embed stays a link. */
+  path?: string;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find">>({ links: undefined, tasksDisabled: true, onToggleTask: () => {}, onCreateMissing: () => {} });
+const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find">>({
+  links: undefined,
+  tasksDisabled: true,
+  onToggleTask: () => {},
+  onCreateMissing: () => {},
+});
 
 function TaskItem({ node, children, ...rest }: { node: HastNode; children: ReactNode } & ComponentPropsWithoutRef<"li">) {
   const { tasksDisabled, onToggleTask } = useContext(NoteContext);
@@ -110,10 +122,49 @@ function TaskItem({ node, children, ...rest }: { node: HastNode; children: React
   );
 }
 
-function WikiLink({ index, children }: { index: number; children: ReactNode }) {
-  const { links, onCreateMissing } = useContext(NoteContext);
+/**
+ * An embedded note (`![[plan]]`, `![[plan#Goals]]`): its text (or the heading's section) in a frame, with the way
+ * to open it. Its own embeds stay links (one level deep, so no cycle), and its tasks don't tick from here.
+ */
+function EmbeddedNote({ path, heading }: { path: string; heading: string | null }) {
+  const note = useNote(path);
+  const links = useLinks(path, note.data?.version);
+  const { onCreateMissing } = useContext(NoteContext);
+  const body = useMemo(() => {
+    if (!note.data) return null;
+    const { body } = splitFrontmatter(note.data.content);
+    return heading === null ? body : section(body, heading);
+  }, [note.data, heading]);
+  const title = heading ? `${titleOf(path)} › ${heading}` : titleOf(path);
+
+  return (
+    <section aria-label={`Embedded: ${title}`} className="k-embed my-3 rounded-[10px] border border-line border-l-[3px] border-l-accent/60 bg-surface px-3.5 pt-1 pb-2">
+      <Link
+        to={noteUrl(path)}
+        className="-mx-1 flex min-h-11 items-center gap-1.5 rounded-[6px] px-1 font-mono text-[12px] text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <CornerDownRight size={14} aria-hidden className="flex-none" />
+        <span className="truncate">{title}</span>
+        <span className="sr-only">(open the note)</span>
+      </Link>
+      {note.isPending && <p className="text-sm text-muted">Loading …</p>}
+      {note.isError && <p className="text-sm text-muted">{errorText(note.error)}</p>}
+      {note.data && body === null && <p className="text-sm text-muted">This note has no heading “{heading}”.</p>}
+      {body !== null && (
+        <MarkdownView source={body} links={links.data} tasksDisabled onToggleTask={() => {}} onCreateMissing={onCreateMissing} />
+      )}
+    </section>
+  );
+}
+
+function WikiLink({ index, embed, children }: { index: number; embed: unknown; children: ReactNode }) {
+  const { links, onCreateMissing, path } = useContext(NoteContext);
   const link = links?.[index];
   const [choosing, setChoosing] = useState(false);
+  // Only a note, never this one, and only from the note shown (not from inside an embedded one).
+  if (embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
+    return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
+  }
   switch (link?.kind) {
     case undefined:
       return <span>{children}</span>;
@@ -275,11 +326,17 @@ const components: Components = {
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
-    return typeof index === "number" ? <WikiLink index={index}>{children}</WikiLink> : <span {...props}>{children}</span>;
+    return typeof index === "number" ? (
+      <WikiLink index={index} embed={node?.properties.dataEmbed}>
+        {children}
+      </WikiLink>
+    ) : (
+      <span {...props}>{children}</span>
+    );
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null }: Props) {
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
@@ -287,7 +344,7 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
       [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
     [links, highlight, query, current],
   );
-  const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing }), [links, tasksDisabled, onToggleTask, onCreateMissing]);
+  const context = useMemo(() => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path }), [links, tasksDisabled, onToggleTask, onCreateMissing, path]);
 
   return (
     <NoteContext.Provider value={context}>

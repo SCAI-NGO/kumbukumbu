@@ -31,3 +31,20 @@ export function outline(body: string): Heading[] {
   });
   return headings;
 }
+
+/**
+ * The section under `heading` (its text as shown, ignoring case): from that heading to the next of the same or a
+ * higher level. The other lines are left empty, so the section keeps the note's line numbers (its links go by them);
+ * null when the note has no such heading.
+ */
+export function section(body: string, heading: string): string | null {
+  const headings = outline(body);
+  const at = headings.findIndex((h) => h.text.toLowerCase() === heading.toLowerCase());
+  if (at < 0) return null;
+  const start = headings[at].line;
+  const end = headings.slice(at + 1).find((h) => h.level <= headings[at].level)?.line ?? Infinity;
+  return body
+    .split("\n")
+    .map((l, i) => (i + 1 >= start && i + 1 < end ? l : ""))
+    .join("\n");
+}

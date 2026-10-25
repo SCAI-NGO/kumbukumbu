@@ -40,3 +40,18 @@ export function parseProperties(yaml: string): Property[] | null {
   }
   return props;
 }
+
+/**
+ * A leading YAML block (`---` … `---` or `...`), and the body with those lines left empty: the body keeps the
+ * source's line numbers, which ticking a task and the links' lines go by.
+ */
+export function splitFrontmatter(source: string): { frontmatter: string | null; body: string } {
+  const lines = source.split("\n");
+  if (lines[0]?.trimEnd() !== "---") return { frontmatter: null, body: source };
+  const end = lines.findIndex((l, i) => i > 0 && (l.trimEnd() === "---" || l.trimEnd() === "..."));
+  if (end < 0) return { frontmatter: null, body: source };
+  return {
+    frontmatter: lines.slice(1, end).join("\n"),
+    body: [...lines.slice(0, end + 1).map(() => ""), ...lines.slice(end + 1)].join("\n"),
+  };
+}

@@ -15,25 +15,10 @@ import MarkdownEditor from "./MarkdownEditor";
 import MarkdownView from "./MarkdownView";
 import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
-import { parseProperties } from "./properties";
+import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
-
-/**
- * A leading YAML block (`---` … `---` or `...`), and the body with those lines left empty: the body keeps the
- * source's line numbers, which ticking a task and the links' lines go by.
- */
-export function splitFrontmatter(source: string): { frontmatter: string | null; body: string } {
-  const lines = source.split("\n");
-  if (lines[0]?.trimEnd() !== "---") return { frontmatter: null, body: source };
-  const end = lines.findIndex((l, i) => i > 0 && (l.trimEnd() === "---" || l.trimEnd() === "..."));
-  if (end < 0) return { frontmatter: null, body: source };
-  return {
-    frontmatter: lines.slice(1, end).join("\n"),
-    body: [...lines.slice(0, end + 1).map(() => ""), ...lines.slice(end + 1)].join("\n"),
-  };
-}
 
 /**
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
@@ -178,6 +163,7 @@ export default function NoteView({ path }: { path: string }) {
               onCreateMissing={createMissing}
               highlight={highlight}
               find={finding}
+              path={path}
             />
           </article>
         )}
