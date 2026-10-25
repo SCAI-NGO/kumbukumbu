@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
@@ -105,8 +106,10 @@ export default function NoteView({ path }: { path: string }) {
   const scroller = useRef<HTMLDivElement>(null);
   const keepScroll = useRef<number | null>(null);
   const refreshing = useRef(false);
+  const queryClient = useQueryClient();
 
-  /** Takes the version written elsewhere: the reader stays where they were, and what changed is tinted. */
+  /** Takes the version written elsewhere: the reader stays where they were, and what changed is tinted. The notes it
+   * embeds are read again too: their text is part of what the reader sees, and may have changed as well. */
   const refresh = useCallback(
     async (newer: NoteVersion, auto: boolean) => {
       if (refreshing.current || !note.data) return;
@@ -114,6 +117,9 @@ export default function NoteView({ path }: { path: string }) {
       const writer = writerOf(newer.lastWriter);
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
+      for (const embedded of new Set(links.data?.filter((l) => l.raw.startsWith("!") && l.kind === "note" && l.path && l.path !== path).map((l) => l.path!))) {
+        void queryClient.invalidateQueries({ queryKey: ["note", embedded], exact: true });
+      }
       const fresh = await note.refetch();
       refreshing.current = false;
       // A failed read keeps the version shown; it is not tinted as if it were the new one.
@@ -124,7 +130,7 @@ export default function NoteView({ path }: { path: string }) {
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
       setUpdatedBy(auto ? writer : null);
     },
-    [note],
+    [note, links.data, path, queryClient],
   );
   useLayoutEffect(() => {
     if (keepScroll.current === null || !scroller.current) return;

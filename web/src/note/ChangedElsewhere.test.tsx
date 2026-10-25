@@ -36,7 +36,7 @@ function writeElsewhere(s: Server, version: string, writer = "liz") {
   s.at += 1;
 }
 
-function api(server: Server, puts: unknown[] = [], previousSignInAt: string | null = null) {
+function api(server: Server, puts: unknown[] = [], previousSignInAt: string | null = null, extra: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal" }]),
@@ -73,6 +73,7 @@ function api(server: Server, puts: unknown[] = [], previousSignInAt: string | nu
     "GET /api/backlinks/*": () => json(200, []),
     // An agent's write since the previous sign-in: liz's key wrote the version shown last.
     "GET /api/changes": () => json(200, server.writer.startsWith("liz") ? [{ path: PLAN, writer: "liz", lastWriteAt: iso(server.at), version: server.version }] : []),
+    ...extra,
   });
 }
 
@@ -125,6 +126,29 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: "Agent changes" })).queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Changed elsewhere" })).not.toBeInTheDocument();
+  });
+
+  it("reads the notes it embeds again on Refresh", async () => {
+    const server = newServer();
+    texts.e1 = "# Plan\n\n![[road]]\n";
+    texts.e2 = "# Plan\n\n![[road]]\n\nMore.\n";
+    server.version = "e1";
+    let road = "Road one.";
+    const ROAD = "/Work/road.md";
+    api(server, [], null, {
+      "GET /api/links/Work/plan.md": () => json(200, [{ line: 3, raw: "![[road]]", target: "road", kind: "note", path: ROAD, candidates: [] }]),
+      "GET /api/notes/Work/road.md": () => json(200, { path: ROAD, content: road, version: road, lastWriter: "ada", lastWriteAt: iso(0), current: true }),
+    });
+    renderApp("/notes/Work/plan.md");
+    expect(await screen.findByText("Road one.")).toBeInTheDocument();
+
+    road = "Road two.";
+    writeElsewhere(server, "e2");
+    backToThePage();
+    await userEvent.click(within(await bar()).getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("More.")).toBeInTheDocument();
+    expect(await screen.findByText("Road two.")).toBeInTheDocument();
   });
 
   it("keeps the reader where they were on Refresh", async () => {
