@@ -96,6 +96,23 @@ describe("Write mode", () => {
     expect(screen.queryByRole("navigation", { name: "Vault actions" })).not.toBeInTheDocument();
   });
 
+  it("focuses a stand-in inside the tap on Write and, the editor being loaded already, mounts it in that tap", async () => {
+    editorApi();
+    renderApp(planUrl);
+    const write = await screen.findByRole("button", { name: "Write" });
+    // The note view fetched the editor ahead; give that a moment to land.
+    await wait(50);
+    const focused: Element[] = [];
+    const record = (e: FocusEvent) => focused.push(e.target as Element);
+    document.addEventListener("focusin", record);
+    fireEvent.click(write);
+    document.removeEventListener("focusin", record);
+    // Within the click itself: first the stand-in, then the editor's textarea, rendered directly (no suspending).
+    expect(focused[0]).toHaveAttribute("data-stand-in");
+    expect(focused.at(-1)).toBe(editorBox());
+    expect(editorBox()).toHaveFocus();
+  });
+
   it("saves 800 ms after the last keystroke with the known version, then on with the version that came back", async () => {
     const puts = editorApi();
     const { u } = await openInWrite();

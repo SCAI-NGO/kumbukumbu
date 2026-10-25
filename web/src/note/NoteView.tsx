@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
@@ -20,8 +20,24 @@ import { taskToggle } from "./taskToggle";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
-const loadEditor = () => import("./MarkdownEditor");
-const MarkdownEditor = lazy(loadEditor);
+// React.lazy suspends on first render even when the module is in already, which would mount the editor in a later
+// task, outside the tap on Write (iOS then raises no keyboard): once loaded, the editor is rendered directly.
+let LoadedEditor: (typeof import("./MarkdownEditor"))["default"] | null = null;
+const loadEditor = () =>
+  import("./MarkdownEditor").then((m) => {
+    LoadedEditor = m.default;
+    return m;
+  });
+const LazyEditor = lazy(loadEditor);
+
+/** Write mode didn't load: the Write button's stand-in field lets go of the focus, so the keyboard goes down. */
+function EditorLoadFailed() {
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.dataset.standIn !== undefined) active.blur();
+  }, []);
+  return <LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />;
+}
 
 const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap again.";
 
@@ -133,10 +149,14 @@ export default function NoteView({ path }: { path: string }) {
   if (mode === "write") {
     if (note.data) {
       return (
-        <LoadBoundary fallback={<LoadFailedSheet onClose={() => useEditor.getState().setMode("read")} />}>
-          <Suspense fallback={<div className="flex-1" />}>
-            <MarkdownEditor path={path} note={note.data} />
-          </Suspense>
+        <LoadBoundary fallback={<EditorLoadFailed />}>
+          {LoadedEditor ? (
+            <LoadedEditor path={path} note={note.data} />
+          ) : (
+            <Suspense fallback={<div className="flex-1" />}>
+              <LazyEditor path={path} note={note.data} />
+            </Suspense>
+          )}
         </LoadBoundary>
       );
     }
