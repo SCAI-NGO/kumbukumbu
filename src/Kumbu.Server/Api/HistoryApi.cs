@@ -52,6 +52,21 @@ public sealed record RestoreCheckpointRequest(string Plan);
 public sealed record RestoredView(string Message);
 
 /// <summary>
+/// A note in a changeset. <c>kind</c>: <c>added</c>, <c>changed</c>, <c>renamed</c> (from <c>from</c>) or <c>deleted</c>.
+/// <c>version</c>: the state the changeset left (null for deleted); <c>before</c>: the state before it, null when there
+/// was none or it is no longer kept (<c>beforeLost</c>). <c>trashed</c>: the note is in the trash now. Both versions
+/// open with <c>?version=</c> on the note, or in the trash.
+/// </summary>
+public sealed record ActivityFileView(string Path, string Kind, string? From, string? Version, string? Before, bool BeforeLost, bool Trashed);
+
+/// <summary>A changeset: what one writer did close together in time, <c>from</c> to <c>to</c>. <c>id</c> is null for a
+/// write that joins no changeset (a restore, a seed, older moves and removals). <c>writerKind</c> as on a note.</summary>
+public sealed record ActivityRowView(string? Id, string Writer, string? WriterKind, DateTime From, DateTime To, IReadOnlyList<ActivityFileView> Files);
+
+/// <summary>The vault's changesets, newest first; <c>more</c>: older ones follow (ask again with <c>before</c> = the last row's <c>to</c>).</summary>
+public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More);
+
+/// <summary>
 /// A note's restore, the vault's trash and its checkpoints for the web app: the code paths of <c>restore</c>,
 /// <c>trash</c>, <c>mkcp</c>, <c>lscp</c> and <c>rmcp</c>, with their rights. Every caller lists what its
 /// credential opens; a restore, making and removing a checkpoint need write rights to the vault, and so does a
@@ -70,6 +85,7 @@ public static class HistoryApi
         api.MapPost("/vaults/{vault}/checkpoints/{name}/preview", PreviewAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/restore", RestoreCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/vaults/{vault}/activity", ActivityAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
     }
 
     /// <summary>
@@ -117,6 +133,51 @@ public static class HistoryApi
             [.. trashed.Select(t => new TrashEntryView(
                 t.Note.Path.Value, t.Note.Version, t.DeletedAt, t.DeletedBy, t.DeletedAt + NoteWriter.TrashRetention,
                 Lines.Split(t.Note.Content).Count, Encoding.UTF8.GetByteCount(t.Note.Content)))]));
+    }
+
+    public const int DefaultActivityRows = 50;
+    public const int MaxActivityRows = 100;
+
+    /// <summary>
+    /// The vault's changesets for the Activity sheet, newest first: <c>limit</c> rows (1 to 100, default 50), only
+    /// those that ended before <c>before</c> (an ISO time). Sessions only: it names every writer of the vault.
+    /// </summary>
+    private static async Task<Ok<ActivityView>> ActivityAsync(
+        string vault, string? before, int? limit, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    {
+        var max = limit ?? DefaultActivityRows;
+        if (max is < 1 or > MaxActivityRows) throw ApiErrors.BadRequest($"limit is 1 to {MaxActivityRows}.");
+        DateTime? until = null;
+        if (before is not null)
+        {
+            if (!DateTime.TryParse(before, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var parsed))
+            {
+                throw ApiErrors.BadRequest("before is a time, e.g. 2026-10-26T09:00:00Z.");
+            }
+
+            until = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        }
+
+        var root = ApiPaths.Parse(vault, null, note: false);
+        await NoteApi.RequireVaultAsync(store, root, ct);
+        var notes = new List<StoredNote>();
+        foreach (var path in await store.ListNotesUnderAsync(root, ct))
+        {
+            if (await store.GetAsync(path, ct) is { } note) notes.Add(note);
+        }
+
+        // One more than asked, to know whether there are more.
+        var rows = Activity.Rows(notes, await store.ListTrashAsync(root, ct), await store.ListMovesAsync(root, ct), until, max + 1);
+        var kindOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var views = new List<ActivityRowView>();
+        foreach (var row in rows.Take(max))
+        {
+            if (!kindOf.TryGetValue(row.Writer, out var kind)) kindOf[row.Writer] = kind = await kinds.OfAsync(row.Writer, ct);
+            views.Add(new ActivityRowView(row.Id, row.Writer, kind, row.From, row.To, [.. row.Files.Select(f => new ActivityFileView(
+                f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed))]));
+        }
+
+        return TypedResults.Ok(new ActivityView(views, rows.Count > max));
     }
 
     private static async Task<Ok<CheckpointsView>> ListCheckpointsAsync(string vault, INoteStore store, Checkpoints checkpoints, CancellationToken ct)

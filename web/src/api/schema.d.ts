@@ -3930,6 +3930,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vaults/{vault}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    before?: string;
+                    limit?: number | string;
+                };
+                header?: never;
+                path: {
+                    vault: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ActivityView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/{vault}/{folder}": {
         parameters: {
             query?: never;
@@ -4507,6 +4592,29 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ActivityFileView: {
+            path: string;
+            kind: string;
+            from: null | string;
+            version: null | string;
+            before: null | string;
+            beforeLost: boolean;
+            trashed: boolean;
+        };
+        ActivityRowView: {
+            id: null | string;
+            writer: string;
+            writerKind: null | string;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            files: components["schemas"]["ActivityFileView"][];
+        };
+        ActivityView: {
+            rows: components["schemas"]["ActivityRowView"][];
+            more: boolean;
+        };
         AdminInvitationView: {
             id: string;
             role: string;
