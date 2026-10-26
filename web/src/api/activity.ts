@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, call } from "./client";
+import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
 
 export type ActivityRow = components["schemas"]["ActivityRowView"];
@@ -22,16 +23,19 @@ export const useActivity = (vault: string) =>
   });
 
 /**
- * A note's text now, read once for a comparison and kept apart from the open note's cache: the open note never
- * changes under the reader, and the comparison never shows an old "now".
+ * A note's text now, read once each time a comparison asks for it (not again on refocus or reconnect), and kept
+ * apart from the open note's cache: the open note never changes under the reader, and a comparison opened later
+ * never shows an old "now".
  */
 export const useNoteNow = (path: string, enabled: boolean) =>
   useQuery({
     queryKey: ["activity", "now", path],
-    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: { path: { vault: path.split("/")[1], path: path.split("/").slice(2).join("/") } } })),
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: { path: { vault: vaultOf(path), path: inVault(path) } } })),
     enabled,
     gcTime: 0,
     staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
 /**

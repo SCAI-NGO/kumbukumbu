@@ -20,7 +20,7 @@ public static class EarlierSearch
 {
     /// <remarks>
     /// The history is in memory, but it is large (up to <see cref="NoteWriter.HistoryLimit"/> versions of every note), so
-    /// a version is chunked only when it holds every word somewhere, and hashed only for a hit. Checks
+    /// a version is chunked only when it holds every word somewhere, and hashed (once) only for a hit that is returned. Checks
     /// <paramref name="ct"/> once per note: a query the client gave up on stops.
     /// </remarks>
     public static IReadOnlyList<EarlierHit> Find(IReadOnlyList<StoredNote> notes, string query, int max, CancellationToken ct)
@@ -28,7 +28,8 @@ public static class EarlierSearch
         var words = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (words.Length == 0) return [];
 
-        var hits = new List<EarlierHit>();
+        // Snippets and hashes wait until the hits that are returned are known; each version is hashed at most once.
+        var found = new List<(StoredNote Note, int Index, Chunk Chunk)>();
         foreach (var note in notes)
         {
             ct.ThrowIfCancellationRequested();
@@ -42,15 +43,37 @@ public static class EarlierSearch
                 {
                     if (!words.All(w => chunk.Text.Contains(w, StringComparison.OrdinalIgnoreCase))) continue;
                     if (note.Content.Contains(chunk.Text, StringComparison.Ordinal) || !seen.Add(chunk.Text)) continue;
-                    var older = i + 1 < note.History.Count ? VersionToken.Of(note.History[i + 1].Content) : null;
-                    var lost = older is null && note.History.Count >= NoteWriter.HistoryLimit;
-                    hits.Add(new EarlierHit(
-                        note.Path, VersionToken.Of(entry.Content), entry.WrittenAt, Writers.Identity(entry.WrittenBy), chunk.StartLine, chunk.EndLine,
-                        SectionSearch.Snippet(chunk, query), older, lost));
+                    found.Add((note, i, chunk));
                 }
             }
+
+            // Only the top results are kept while scanning, so a common word doesn't pile up every section.
+            if (found.Count > 4 * max) found = Top(found, max);
         }
 
-        return [.. hits.OrderByDescending(h => h.WrittenAt).ThenBy(h => h.Path.Value, Sh.TextOrder.Default).ThenBy(h => h.StartLine).Take(max)];
+        var tokens = new Dictionary<(string, int), string>();
+        string Token(StoredNote note, int index) =>
+            tokens.TryGetValue((note.Path.Value, index), out var t) ? t : tokens[(note.Path.Value, index)] = VersionToken.Of(note.History[index].Content);
+
+        var hits = new List<EarlierHit>();
+        foreach (var (note, i, chunk) in Top(found, max))
+        {
+            var entry = note.History[i];
+            var older = i + 1 < note.History.Count ? Token(note, i + 1) : null;
+            var lost = older is null && note.History.Count >= NoteWriter.HistoryLimit;
+            hits.Add(new EarlierHit(
+                note.Path, Token(note, i), entry.WrittenAt, Writers.Identity(entry.WrittenBy), chunk.StartLine, chunk.EndLine,
+                SectionSearch.Snippet(chunk, query), older, lost));
+        }
+
+        return hits;
     }
+
+    /// <summary>Newest first, then by path and line; at most <paramref name="max"/>.</summary>
+    private static List<(StoredNote Note, int Index, Chunk Chunk)> Top(List<(StoredNote Note, int Index, Chunk Chunk)> found, int max) =>
+        [.. found
+            .OrderByDescending(f => f.Note.History[f.Index].WrittenAt)
+            .ThenBy(f => f.Note.Path.Value, Sh.TextOrder.Default)
+            .ThenBy(f => f.Chunk.StartLine)
+            .Take(max)];
 }

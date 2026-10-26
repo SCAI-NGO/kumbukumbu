@@ -89,4 +89,16 @@ public class EarlierSearchTests
 
         Assert.Empty(EarlierSearch.Find(notes, "zebras lions", 10, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public void A_common_word_keeps_only_the_newest_hits()
+    {
+        // 100 notes, each with an old version that mentions the word: only the 3 newest come back, in order.
+        var notes = Enumerable.Range(0, 100).Select(i => Note($"/W/n{i:D3}.md", "now\n", H($"Zebras {i}.\n", 100 - i))).ToArray();
+
+        var hits = EarlierSearch.Find(notes, "zebras", 3, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["/W/n099.md", "/W/n098.md", "/W/n097.md"], hits.Select(h => h.Path.Value));
+        Assert.All(hits, h => Assert.Equal(VersionToken.Of($"Zebras {int.Parse(h.Path.Value[4..7], System.Globalization.CultureInfo.InvariantCulture)}.\n"), h.Version));
+    }
 }
