@@ -46,14 +46,16 @@ public static class PairingApi
         RedeemPairingRequest body, HttpContext http, Pairings pairings, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.Redeem(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (limits.RedeemsBlocked() && !pairings.IsOpen(body.Code)) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
+        // Every redeem, right or wrong: letting open codes through would check every guess, and the server-wide count
+        // is what bounds a guess spread over many addresses (spec §4).
+        if (limits.RedeemsBlocked()) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
         var redeemed = await pairings.RedeemAsync(body.Code, body.Device, ct);
         if (redeemed is null)
         {
             if (limits.RedeemFailed())
             {
                 logs.CreateLogger(typeof(PairingApi).FullName!).LogWarning(
-                    "{Count} wrong pairing codes within a minute: redeeming is refused for codes that aren't open until it eases", AccountLimits.RedeemFailuresPerServer);
+                    "{Count} wrong pairing codes within a minute: every redeem is refused until it eases", AccountLimits.RedeemFailuresPerServer);
             }
 
             throw ApiErrors.NotFound(NotValid);

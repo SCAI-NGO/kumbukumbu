@@ -156,22 +156,46 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.NotNull(limited.Headers.RetryAfter);
     }
 
-    [Fact]
-    public async Task After_100_wrong_codes_a_minute_only_open_codes_get_through()
+    /// <summary>Wrong codes from as many addresses as it takes to use up the server's minute.</summary>
+    private async Task TripTheServerWideLimitAsync()
     {
-        var user = await NewAsync(Api);
-        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
         for (var i = 0; i < AccountLimits.RedeemFailuresPerServer; i++)
         {
             using var wrong = await RedeemAsync("ZZZZ-ZZZZ", "Laptop");
             Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
         }
+    }
 
-        using var limited = await RedeemAsync("YYYY-YYYY", "Laptop");
-        using var open = await RedeemAsync(code, "Laptop");
+    [Fact]
+    public async Task While_the_server_wide_limit_holds_no_guess_redeems_a_valid_code()
+    {
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        await TripTheServerWideLimitAsync();
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
-        Assert.NotNull(limited.Headers.RetryAfter);
-        Assert.Equal(HttpStatusCode.Created, open.StatusCode);
+        // A guess that happens to be right, from an address of its own: refused like every other.
+        using var right = await RedeemAsync(code, "Laptop");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, right.StatusCode);
+        Assert.NotNull(right.Headers.RetryAfter);
+        using var keys = await user.GetAsync("/api/keys");
+        Assert.Empty((await JsonAsync(keys)).AsArray());
+    }
+
+    [Fact]
+    public async Task While_the_server_wide_limit_holds_guesses_from_many_addresses_are_all_refused()
+    {
+        var user = await NewAsync(Api);
+        await CodeAsync(user);
+        await TripTheServerWideLimitAsync();
+
+        var refused = 0;
+        for (var i = 0; i < 50; i++)
+        {
+            using var guess = await RedeemAsync($"{i:D4}-AAAA", "Laptop");
+            if (guess.StatusCode == HttpStatusCode.TooManyRequests) refused++;
+        }
+
+        Assert.Equal(50, refused);
     }
 }

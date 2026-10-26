@@ -230,6 +230,19 @@ public sealed class PairingTests(MongoFixture fixture)
         Assert.Equal(vault, first.Vault);
     }
 
+    [Theory]
+    [InlineData("Work (old)", "Work [old] – Obsidian Laptop")]
+    [InlineData("Wo\u200Brk", "Work – Obsidian Laptop")]
+    public async Task A_vault_name_a_key_name_cant_hold_is_made_fit(string vault, string keyName)
+    {
+        var a = await AccountAsync(vault);
+
+        var redeemed = await Pairings().RedeemAsync(Code(a, vault: vault).Code, "Laptop", Ct);
+
+        Assert.Equal(keyName, redeemed!.KeyName);
+        Assert.Equal(vault, redeemed.Vault);
+    }
+
     [Fact]
     public async Task Codes_made_at_once_for_one_vault_leave_one_open()
     {

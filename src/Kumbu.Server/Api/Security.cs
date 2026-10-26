@@ -171,8 +171,8 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>
     /// Whether the server has seen 100 wrong codes in the last minute. A wrong code can't tell which code it was aimed
-    /// at, so there is no count per code; this bounds a guess spread over many addresses. While it holds, only a code
-    /// that is open gets through (the caller asks), so an attack doesn't lock everyone else out of pairing.
+    /// at, so there is no count per code; this bounds a guess spread over many addresses. While it holds every redeem
+    /// is refused, a right code too: the spec's trade-off, an attack delays pairing rather than speeding up guessing.
     /// </summary>
     public bool RedeemsBlocked()
     {

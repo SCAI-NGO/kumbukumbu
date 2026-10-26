@@ -60,8 +60,8 @@ public sealed class Pairings : IDisposable
     /// <summary>For tests: how many records are held.</summary>
     internal int Count => _records.Count;
 
-    /// <summary>Whether the code is open now (made, not used, not expired).</summary>
-    public bool IsOpen(string code) => _records.TryGetValue(Normalise(code), out var r) && Now < r.ExpiresAt;
+    /// <summary>For tests: whether the code is open now (made, not used, not expired).</summary>
+    internal bool IsOpen(string code) => _records.TryGetValue(Normalise(code), out var r) && Now < r.ExpiresAt;
 
     /// <summary>
     /// A new code for the user's vault, replacing the open one of the same user and vault. <paramref name="userKey"/> is
@@ -104,21 +104,16 @@ public sealed class Pairings : IDisposable
         var clean = Device(device);
         Sweep();
         var normal = Normalise(code);
-        // Taken out first: of two redeems at once, only one gets the record. Nothing about the code is said before
-        // this, so an answer tells a code that exists from one that doesn't only by succeeding.
+        if (!_records.TryGetValue(normal, out var peeked)) return null;
+        // Name() makes every vault name and device name of 1 to 32 characters fit, so this refuses nothing in practice;
+        // if it ever does, the code stays for a corrected retry, as for a bad device name.
+        var baseName = Name(peeked.VaultName, clean);
+        WriterNames.Check(peeked.User, baseName, "A device key");
+        // Taken out before use: of two redeems at once, only one gets the record.
         if (!_records.TryRemove(normal, out var record)) return null;
         var keep = false;
         try
         {
-            var baseName = Name(record.VaultName, clean);
-            try
-            {
-                WriterNames.Check(record.User, baseName, "A device key");
-            }
-            catch (ArgumentException)
-            {
-                return null;
-            }
 
             if (Now >= record.ExpiresAt) return null;
             for (var n = 1; n <= MaxNumber; n++)
@@ -187,9 +182,12 @@ public sealed class Pairings : IDisposable
     }
 
     /// <summary>"&lt;vault&gt; – Obsidian &lt;device&gt;", the vault's name shortened with "…" so that the whole stays within
-    /// <see cref="MaxName"/>: every device name of 1 to 32 characters fits, however long the vault's name is.</summary>
+    /// <see cref="MaxName"/>: every device name of 1 to 32 characters fits, however long the vault's name is. What a key
+    /// name can't hold and a vault name can is changed: brackets for parentheses (" (" would end the writer's name in
+    /// the history), invisible formatting and control characters left out.</summary>
     private static string Name(string vault, string device)
     {
+        vault = new string([.. vault.Replace('(', '[').Replace(')', ']').Where(c => !char.IsControl(c) && char.GetUnicodeCategory(c) != UnicodeCategory.Format)]);
         var room = MaxName - Infix.Length - device.Length;
         if (vault.Length > room)
         {
