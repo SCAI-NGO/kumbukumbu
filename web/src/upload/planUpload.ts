@@ -17,9 +17,9 @@ export interface UploadFile {
 }
 
 // The server's sentences, so its list and this one read alike.
-const NOT_MARKDOWN = "not a Markdown file (.md or .markdown)";
-const OBSIDIAN = "Obsidian's settings or trash, not a note";
-const TOO_LARGE = `larger than ${MAX_NOTE_BYTES} bytes (1 MiB), the limit for a note`;
+export const NOT_MARKDOWN = "not a Markdown file (.md or .markdown)";
+export const OBSIDIAN = "Obsidian's settings or trash, not a note";
+export const TOO_LARGE = `larger than ${MAX_NOTE_BYTES} bytes (1 MiB), the limit for a note`;
 
 const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
 
