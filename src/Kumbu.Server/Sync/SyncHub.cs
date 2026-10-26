@@ -25,6 +25,13 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
 
     public static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(30);
 
+    /// <summary>How long one send may take. A client that stops reading fills the buffers and then blocks every send;
+    /// past this its socket is aborted, so it can hold up neither its own close nor anyone else's.</summary>
+    public static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long a close waits for a send under way and then for the close frame, before the socket is aborted.</summary>
+    private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(5);
+
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
     private readonly CancellationTokenSource _stopping = new();
     private Task? _checks;
@@ -40,7 +47,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
     {
         catalog.NotesChanged -= OnNotesChanged;
         await _stopping.CancelAsync();
-        foreach (var connection in _connections.Keys) await connection.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "server shutting down");
+        // All at once: each close is bounded, and none waits for another.
+        await Task.WhenAll(_connections.Keys.Select(c => c.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "server shutting down")));
         if (_checks is not null) await _checks.ContinueWith(_ => { }, TaskScheduler.Default);
     }
 
@@ -51,7 +59,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         _connections[connection] = 0;
         try
         {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stopping.Token, connection.Closed);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, connection.Closed);
             var sending = connection.SendLoopAsync(linked.Token);
             var buffer = new byte[1024];
             while (socket.State == WebSocketState.Open && !linked.IsCancellationRequested)
@@ -65,11 +73,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
             }
 
             connection.Complete();
-            await sending;
+            // A send that ignores its cancellation (a socket stuck for good) mustn't keep this connection listed.
+            await sending.WaitAsync(SendTimeout);
         }
-        catch (Exception e) when (e is OperationCanceledException or WebSocketException or IOException or ObjectDisposedException)
+        catch (Exception e) when (e is OperationCanceledException or WebSocketException or IOException or ObjectDisposedException or TimeoutException)
         {
-            // The client went away, or the server is stopping.
+            // The client went away, stopped reading, or the server is stopping.
         }
         finally
         {
@@ -79,25 +88,25 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
     }
 
     /// <summary>One round of the 30-second check, for every connection; the loop runs it, tests call it directly.</summary>
-    internal async Task CheckAsync(CancellationToken ct)
-    {
-        foreach (var connection in _connections.Keys)
-        {
-            try
-            {
-                if (!await keys.IsActiveAsync(connection.Grant.KeyId, ct))
-                {
-                    log.LogInformation("Closed the sync connection of API key {KeyId}: revoked, expired or its owner deactivated", connection.Grant.KeyId);
-                    await connection.CloseAsync(KeyInactive, "key revoked or expired");
-                    continue;
-                }
+    internal Task CheckAsync(CancellationToken ct) => Task.WhenAll(_connections.Keys.Select(c => CheckAsync(c, ct)));
 
-                connection.DropVaults(catalog.IsDeleted);
-            }
-            catch (Exception e) when (e is not OperationCanceledException)
+    /// <summary>One connection; in parallel with the others, so a slow close holds up only its own.</summary>
+    private async Task CheckAsync(Connection connection, CancellationToken ct)
+    {
+        try
+        {
+            if (!await keys.IsActiveAsync(connection.Grant.KeyId, ct))
             {
-                log.LogWarning(e, "Checking the sync connection of API key {KeyId} failed; it is checked again next time", connection.Grant.KeyId);
+                log.LogInformation("Closed the sync connection of API key {KeyId}: revoked, expired or its owner deactivated", connection.Grant.KeyId);
+                await connection.CloseAsync(KeyInactive, "key revoked or expired");
+                return;
             }
+
+            connection.DropVaults(catalog.IsDeleted);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogWarning(e, "Checking the sync connection of API key {KeyId} failed; it is checked again next time", connection.Grant.KeyId);
         }
     }
 
@@ -125,6 +134,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         private readonly ConcurrentDictionary<string, byte> _waiting = new();
         private readonly SemaphoreSlim _sending = new(1, 1);
         private readonly CancellationTokenSource _closed = new();
+
+        /// <summary>Cancels a send under way when the connection is closed.</summary>
+        private readonly CancellationTokenSource _sends = new();
         private volatile IReadOnlyDictionary<string, string> _vaults = grant.Vaults.ToDictionary(v => v.VaultId, v => v.VaultName, StringComparer.Ordinal);
 
         public TicketGrant Grant { get; } = grant;
@@ -159,7 +171,18 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
                 try
                 {
                     if (socket.State != WebSocketState.Open) return;
-                    await socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, endOfMessage: true, ct);
+                    using var send = CancellationTokenSource.CreateLinkedTokenSource(ct, _sends.Token);
+                    send.CancelAfter(SendTimeout);
+                    try
+                    {
+                        await socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, endOfMessage: true, send.Token).WaitAsync(send.Token);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // Timed out, or the connection is being closed: a send that can't finish leaves the socket unusable.
+                        socket.Abort();
+                        return;
+                    }
                 }
                 finally
                 {
@@ -168,21 +191,30 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
             }
         }
 
+        /// <summary>Bounded: a send under way is cancelled first, and a socket that won't take the close frame in time is aborted.</summary>
         public async Task CloseAsync(WebSocketCloseStatus status, string reason)
         {
             _vaults = new Dictionary<string, string>();
             Complete();
-            await _sending.WaitAsync();
+            await _sends.CancelAsync();
+            if (!await _sending.WaitAsync(CloseTimeout))
+            {
+                socket.Abort();
+                await _closed.CancelAsync();
+                return;
+            }
+
             try
             {
                 if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
                 {
-                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    await socket.CloseOutputAsync(status, reason, timeout.Token);
+                    using var timeout = new CancellationTokenSource(CloseTimeout);
+                    await socket.CloseOutputAsync(status, reason, timeout.Token).WaitAsync(timeout.Token);
                 }
             }
             catch (Exception e) when (e is WebSocketException or OperationCanceledException or IOException or ObjectDisposedException)
             {
+                socket.Abort();
             }
             finally
             {

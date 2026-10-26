@@ -185,6 +185,76 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Contains("401", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>A client that completed the upgrade and then stopped reading: every send to it hangs, whatever the token says.</summary>
+    private sealed class StuckSocket : WebSocket
+    {
+        private readonly TaskCompletionSource _aborted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private WebSocketState _state = WebSocketState.Open;
+
+        public TaskCompletionSource SendStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override WebSocketCloseStatus? CloseStatus => null;
+
+        public override string? CloseStatusDescription => null;
+
+        public override WebSocketState State => _state;
+
+        public override string? SubProtocol => null;
+
+        public override void Abort()
+        {
+            _state = WebSocketState.Aborted;
+            _aborted.TrySetResult();
+        }
+
+        public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) => new TaskCompletionSource().Task;
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken) => new TaskCompletionSource().Task;
+
+        public override void Dispose()
+        {
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+        {
+            await Task.WhenAny(_aborted.Task, Task.Delay(Timeout.Infinite, cancellationToken));
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new WebSocketException("aborted");
+        }
+
+        public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
+        {
+            SendStarted.TrySetResult();
+            return new TaskCompletionSource().Task;
+        }
+    }
+
+    [Fact]
+    public async Task A_client_that_stops_reading_holds_up_neither_the_check_nor_other_connections()
+    {
+        var user = await NewAsync(Api);
+        await user.KeyAsync("Arbeit – Obsidian Stuck", KeyRight.Write, ApiKeyKind.Device);
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        using var socket = await ConnectAsync(await TicketAsync(user, key));
+        var hub = Api.Services.GetRequiredService<SyncHub>();
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single();
+        var keys = Api.Services.GetRequiredService<ApiKeys>();
+        var listed = await keys.ListAsync(user.User, user.UserKey, Ct);
+        var stuck = new StuckSocket();
+        var running = hub.RunAsync(stuck, new TicketGrant(listed.Single(k => k.Name.EndsWith("Stuck", StringComparison.Ordinal)).Id, [(vault.Id, vault.Name)]), Ct);
+        catalog.RaiseNotesChanged(vault.Id);
+        await stuck.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+        Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+        foreach (var k in listed) Assert.True(await keys.RevokeAsync(user.User, k.Id, Ct));
+
+        await hub.CheckAsync(Ct).WaitAsync(TimeSpan.FromSeconds(15), Ct);
+
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+        Assert.Equal(WebSocketState.Aborted, stuck.State);
+        await running.WaitAsync(TimeSpan.FromSeconds(15), Ct);
+    }
+
     [Fact]
     public async Task A_request_without_an_upgrade_is_400()
     {
