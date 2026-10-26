@@ -13,6 +13,10 @@ export function exportUrl(vaults: string[], tz: string = browserZone()): string 
   return `/api/export?${vaults.map((v) => `vault=${encodeURIComponent(v)}`).join("&")}&${zone}`;
 }
 
+/** The server's ZIP of one checkpoint: the vault's folder with the notes as they were then. Session only. */
+export const checkpointExportUrl = (vault: string, name: string, tz: string = browserZone()): string =>
+  `/api/vaults/${encodeURIComponent(vault)}/checkpoints/${encodeURIComponent(name)}/export?tz=${encodeURIComponent(tz)}`;
+
 /**
  * Starts the browser's download of a same-origin `GET`: the session cookie goes along, the server names the file,
  * and the ZIP streams to disk without passing through the page's memory (no fetch, no blob).

@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { aiPrompt } from "../note/copyForAi";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
@@ -146,5 +147,38 @@ describe("a checkpoint in the web app", () => {
 
     expect(await screen.findByTestId("shell")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("region", { name: "Checkpoint" })).toBeNull());
+  });
+
+  it("copies the note for your AI", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await openPlan();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy for your AI" }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith(aiPrompt("Work", "before-cleanup", "2026-10-19T12:02:00Z", "/Work/plan.md"));
+    expect(await screen.findByRole("status")).toHaveTextContent("Copied. Paste it into your AI's chat.");
+  });
+
+  it("says so when the clipboard refuses", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    await openPlan();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy for your AI" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't copy. Select the text and copy it by hand.");
+    expect(screen.queryByText(/^Copied/)).toBeNull();
+  });
+
+  it("says so when there is no clipboard", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    await openPlan();
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy for your AI" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't copy. Select the text and copy it by hand.");
+    expect(screen.queryByText(/^Copied/)).toBeNull();
   });
 });
