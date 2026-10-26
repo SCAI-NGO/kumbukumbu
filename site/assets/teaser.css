@@ -17,6 +17,7 @@
   --a: #cfe3c9; --a-deep: #9cc293;   /* sage */
   --b: #f8d5c2; --b-deep: #eaa98a;   /* peach */
   --c: #dcd3f0; --c-deep: #b2a3dc;   /* lavender */
+  --d: #f6e3b4; --d-deep: #e2c27a;   /* butter */
   --stem: #8fae86;
 }
 * { box-sizing: border-box; }
@@ -47,10 +48,11 @@ svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin
   stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.6s ease-in-out forwards; }
 .leaf { stroke: var(--graphite); stroke-width: 1.2; fill: var(--a);
   transform-box: fill-box; transform: scale(0); animation: pop .7s ease-out forwards; }
-.bud .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
+.bud .bloom, .plant .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
   animation: pop .9s cubic-bezier(.3,1.6,.5,1) forwards; }
-.bud .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
-.petal { stroke: var(--graphite); stroke-width: 1.2; fill: var(--c); }
+.bud .sway, .plant .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+/* Petals drawn through <use> can't be matched by a descendant selector, so the colour arrives as an inherited property. */
+.petal { stroke: var(--graphite); stroke-width: 1.2; fill: var(--petal, var(--c)); }
 .bud .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--c-deep); }
 .soon { font: 700 38px Caveat, cursive; fill: var(--ink); text-anchor: start;
   opacity: 0; animation: rise 1s 3.4s ease-out forwards; }
@@ -71,4 +73,90 @@ svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; }
-  .bud .sway { animation: none; } }
+  .bud .sway, .plant .sway { animation: none; } }
+
+/* ---- The full page (internal-preview.html): the garden of four, sections, cards and the sheet ---- */
+html { scrollbar-gutter: stable; }
+html.sheet-open { overflow: hidden; }
+.scribble { font: 700 28px Caveat, cursive; color: var(--soft); margin: 10px 0 0;
+  opacity: 0; animation: rise 1s 3.6s ease-out forwards; }
+.scribble svg { width: 22px; height: 30px; vertical-align: -8px; margin-left: 6px;
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Each plant is its own button and SVG, cut from one 900-wide drawing; the ground segments meet at y=352,
+   so four in a row draw one line, and two rows on a phone draw two. */
+.meadow { display: grid; grid-template-columns: repeat(4, 1fr); max-width: 900px; margin: 8px auto 0; }
+.plant { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit;
+  cursor: pointer; border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px; }
+.plant:focus-visible { outline: 2px dashed var(--graphite); outline-offset: -2px; }
+.plant svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ground.seg { stroke-dasharray: 260; stroke-dashoffset: 260; animation-duration: .45s; animation-timing-function: linear; }
+.plant use { transition: transform .6s cubic-bezier(.3,1.5,.5,1); transform-box: view-box; }
+.plant:hover use, .plant.open use { transform: scale(1.12); }
+.plant .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--heart); }
+.plant text { font: 700 30px Caveat, cursive; fill: var(--ink); text-anchor: middle; }
+.p1 { --petal: var(--b); --heart: var(--b-deep); } .p2 { --petal: var(--c); --heart: var(--c-deep); }
+.p3 { --petal: var(--d); --heart: var(--d-deep); } .p4 { --petal: var(--a); --heart: var(--a-deep); }
+/* 22 viewBox units of label at 360 px still render above 16 px; two by two keeps them readable. */
+@media (max-width: 639px) { .meadow { grid-template-columns: repeat(2, 1fr); max-width: 460px; } }
+
+.panel { min-height: 120px; scroll-margin-top: 16px; }
+.section-card {
+  background: rgba(255,255,255,.65); border: 1.6px solid var(--graphite);
+  border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  padding: 26px 30px; margin: 8px auto 0; max-width: 820px; animation: unfold .6s ease-out;
+}
+.section-card h2 { font: 600 33px/1.2 Fraunces, Georgia, serif; margin: 0 0 4px; }
+.section-card .hand { font: 700 27px/1.25 Caveat, cursive; color: var(--soft); margin: 0 0 14px; }
+.moments { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.moment {
+  padding: 14px 16px; border: 1.3px dashed var(--graphite); background: var(--paper);
+  border-radius: 18px 225px 18px 255px / 255px 18px 225px 18px;
+  opacity: 0; animation: settle .5s ease-out forwards;
+  cursor: pointer; transition: transform .35s cubic-bezier(.3,1.4,.5,1), box-shadow .35s;
+}
+.moment:nth-child(2) { animation-delay: .12s } .moment:nth-child(3) { animation-delay: .24s }
+.moment:nth-child(4) { animation-delay: .36s } .moment:nth-child(5) { animation-delay: .48s }
+.moment:hover { transform: translateY(-3px) rotate(-.4deg); box-shadow: 0 6px 0 -2px var(--c); }
+.moment:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.moment b { display: block; font-weight: 600; margin-bottom: 4px; }
+.moment > span { display: block; color: var(--graphite); font-size: 18px; }
+.moment.ask { background: var(--c); border-style: solid; }
+.moment.ask > span { color: var(--ink); }   /* graphite on lavender would miss AA */
+.moment .more { display: none; }
+.moment .more p { margin: 10px 0 0; }
+.moment a { color: var(--ink); text-decoration: none; background: linear-gradient(transparent 62%, var(--a) 62%); }
+.moment a:hover { background: linear-gradient(transparent 40%, var(--a) 40%); }
+.moment a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 2px; }
+.moment a:has(code) { background: none; }
+.moment a code { text-decoration: underline 1.5px var(--a-deep); text-underline-offset: 3px; }
+.moment code { font-size: 16px; background: var(--a); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+
+.veil { position: fixed; inset: 0; z-index: 10; background: rgba(251,248,242,.55); backdrop-filter: blur(3px);
+  opacity: 0; transition: opacity .35s; }
+.veil.on { opacity: 1; }
+.moment.pop { position: fixed; z-index: 11; margin: 0; opacity: 1; animation: none; translate: none;
+  background: #fff; cursor: default; padding: 26px 30px; font-size: 1.05em; transform-origin: top left;
+  box-shadow: 0 14px 0 -6px var(--b), 0 18px 40px -18px rgba(74,69,83,.35); max-height: calc(100vh - 32px); overflow: auto; }
+.moment.pop:hover { transform: none; }
+.moment.pop b { font: 600 26px/1.25 Fraunces, Georgia, serif; margin: 0 72px 8px 0; }
+.moment.pop .more { display: block; }
+.moment.pop .close { position: absolute; top: 10px; right: 16px; font: 700 26px Caveat, cursive;
+  color: var(--soft); background: none; border: 0; padding: 0 4px; cursor: pointer; }
+.moment.pop .close:focus-visible { outline: 2px solid var(--graphite); outline-offset: 2px; }
+@media (max-width: 480px) { .section-card, .moment.pop { padding: 22px 18px; } }
+
+.closing { text-align: center; max-width: 640px; margin: 64px auto 0; color: var(--graphite);
+  opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
+.closing a { color: var(--ink); text-decoration: none; padding: 0 3px;
+  background: linear-gradient(transparent 62%, var(--b) 62%, var(--b) 90%, transparent 90%); }
+.closing a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
+.closing a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.closing + .links { margin-top: 28px; }
+
+@keyframes settle { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+@keyframes unfold { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .veil, .moment, .plant use { transition: none; }
+  .moment:hover { transform: none; }
+}

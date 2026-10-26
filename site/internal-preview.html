@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Kumbu² — one calm place for your notes</title>
+<meta name="description" content="Kumbu² is one calm place for your notes — on every device, and for every AI you think with. Your vault is yours, and every app and AI you invite sees the same one.">
+<link rel="stylesheet" href="assets/teaser.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <filter id="pencil" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="4" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="2.6"/>
+    </filter>
+    <g id="petals">
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24"/>
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(60)"/>
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(120)"/>
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(180)"/>
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(240)"/>
+      <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(300)"/>
+    </g>
+  </defs>
+</svg>
+
+<div class="wrap">
+  <header>
+    <h1>Kumbu<sup>2</sup></h1>
+    <p class="tag">One calm place for your notes — on every device, and for every AI you think with.</p>
+    <p class="scribble">pick a flower<svg viewBox="0 0 22 30" aria-hidden="true"><path d="M11 3 C 9 10, 13 16, 11 26 M5 19 C 8 22, 10 24, 11 26 C 13 23, 15 21, 18 19"/></svg></p>
+  </header>
+
+  <!-- One drawing 900 units wide, cut into four 225-unit plants (the sketch’s coordinates, kept as they are). -->
+  <div class="meadow" role="group" aria-label="Choose what to read">
+    <button class="plant p1" type="button" data-section="hurts" aria-expanded="false" aria-controls="section" aria-label="where it hurts">
+      <svg viewBox="28 0 225 380" aria-hidden="true">
+        <g class="pencil">
+          <path class="ground seg" style="animation-delay:.6s" d="M28 352 C 90 347, 170 357, 253 352"/>
+          <path class="stem" style="animation-delay:1.0s" d="M140 350 C 130 290, 160 230, 145 165"/>
+          <path class="leaf" style="transform-origin:left bottom;animation-delay:2.0s" d="M140 275 C 167 257, 189 261, 197 269 C 177 285, 155 287, 140 275 Z"/>
+        </g>
+        <g class="sway"><g class="bloom pencil" style="animation-delay:2.4s">
+          <g transform="translate(145 143)"><use href="#petals"/><circle class="heart" r="12"/></g>
+        </g></g>
+        <text x="145" y="79" class="pencil">where it hurts</text>
+      </svg>
+    </button>
+    <button class="plant p2" type="button" data-section="helps" aria-expanded="false" aria-controls="section" aria-label="how Kumbu² helps">
+      <svg viewBox="238 0 225 380" aria-hidden="true">
+        <g class="pencil">
+          <path class="ground seg" style="animation-delay:1.0s" d="M238 352 C 300 357, 390 346, 463 352"/>
+          <path class="stem" style="animation-delay:1.25s" d="M350 350 C 362 270, 336 200, 350 105"/>
+          <path class="leaf" style="transform-origin:right bottom;animation-delay:2.2s" d="M347 240 C 320 222, 298 226, 290 234 C 310 250, 332 252, 347 240 Z"/>
+        </g>
+        <g class="sway"><g class="bloom pencil" style="animation-delay:2.65s">
+          <g transform="translate(350 83)"><use href="#petals"/><circle class="heart" r="12"/></g>
+        </g></g>
+        <text x="350" y="19" class="pencil">how Kumbu² helps</text>
+      </svg>
+    </button>
+    <button class="plant p3" type="button" data-section="works" aria-expanded="false" aria-controls="section" aria-label="how it works">
+      <svg viewBox="446 0 225 380" aria-hidden="true">
+        <g class="pencil">
+          <path class="ground seg" style="animation-delay:1.4s" d="M446 352 C 520 346, 600 358, 671 352"/>
+          <path class="stem" style="animation-delay:1.5s" d="M560 350 C 548 280, 574 210, 558 130"/>
+          <path class="leaf" style="transform-origin:left bottom;animation-delay:2.4s" d="M563 255 C 590 237, 612 241, 620 249 C 600 265, 578 267, 563 255 Z"/>
+        </g>
+        <g class="sway"><g class="bloom pencil" style="animation-delay:2.9s">
+          <g transform="translate(558 108)"><use href="#petals"/><circle class="heart" r="12"/></g>
+        </g></g>
+        <text x="558" y="44" class="pencil">how it works</text>
+      </svg>
+    </button>
+    <button class="plant p4" type="button" data-section="run" aria-expanded="false" aria-controls="section" aria-label="run your own">
+      <svg viewBox="645 0 225 380" aria-hidden="true">
+        <g class="pencil">
+          <path class="ground seg" style="animation-delay:1.8s" d="M645 352 C 720 357, 800 347, 870 352"/>
+          <path class="stem" style="animation-delay:1.75s" d="M765 350 C 775 290, 742 235, 757 175"/>
+          <path class="leaf" style="transform-origin:right bottom;animation-delay:2.6s" d="M765 280 C 738 262, 716 266, 708 274 C 728 290, 750 292, 765 280 Z"/>
+        </g>
+        <g class="sway"><g class="bloom pencil" style="animation-delay:3.15s">
+          <g transform="translate(757 153)"><use href="#petals"/><circle class="heart" r="12"/></g>
+        </g></g>
+        <text x="757" y="89" class="pencil">run your own</text>
+      </svg>
+    </button>
+  </div>
+
+  <main class="panel" id="section"></main>
+
+  <p class="closing">Kumbu² runs on servers people host for their friends, teams and communities — ask yours, or <a href="https://scai.world" target="_blank" rel="noopener">ask us</a>.</p>
+
+  <footer class="links">
+    <a href="https://github.com/SCAI-NGO/kumbukumbu" target="_blank" rel="noopener">the code on GitHub</a>
+    <svg class="dot" viewBox="-14 -14 28 28" aria-hidden="true">
+      <g class="dot-petals">
+        <ellipse cy="-7" rx="4.5" ry="7"/><ellipse cy="-7" rx="4.5" ry="7" transform="rotate(72)"/>
+        <ellipse cy="-7" rx="4.5" ry="7" transform="rotate(144)"/><ellipse cy="-7" rx="4.5" ry="7" transform="rotate(216)"/>
+        <ellipse cy="-7" rx="4.5" ry="7" transform="rotate(288)"/>
+      </g>
+      <circle class="dot-heart" r="3"/>
+    </svg>
+    <a href="https://scai.world" target="_blank" rel="noopener">made by SCAI</a>
+  </footer>
+</div>
+
+<template id="tpl-hurts">
+  <div class="section-card">
+    <h2>Sound familiar?</h2>
+    <p class="hand">little moments that add up</p>
+    <div class="moments">
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Your notes are out of reach.</b><span>On the train, on your phone, and the notes are somewhere awkward.</span>
+        <div class="more">
+          <p>You’re on the train with twenty minutes and a good thought for your worldbuilding project. The notes are on a computer at home, or in a cloud drive whose web view shows Markdown as a wall of symbols.</p>
+          <p>So the thought goes into a chat with yourself, a sticky note, or nowhere. Later you can’t find it.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Copy, paste, explain. Again.</b><span>Every chat starts with pasting in the same notes.</span>
+        <div class="more">
+          <p>You open a new chat and paste in the outline, the list of characters, the decisions from last week. The AI is clever, but it starts from zero every time.</p>
+          <p>Five chats later there are five slightly different copies of your notes, and none of them is the one you actually keep.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>The AI writes, you tidy up.</b><span>You get a block of text, not an updated note.</span>
+        <div class="more">
+          <p>You ask it to add the new idea to your notes. It hands you a block of text, and you paste it in, fix the headings and delete the part that was already there.</p>
+          <p>Coding agents have worked differently for a while: they open the file, change the lines that need changing and tell you what they did. Your notes deserve the same.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Every tool remembers a little.</b><span>Different tools for different jobs, and none of them share.</span>
+        <div class="more">
+          <p>One AI helps with code, another lives on your phone, a third drafts your texts. Each keeps its own little memory.</p>
+          <p>What Claude Code worked out with you this morning is news to the chat on your phone tonight. You end up as the messenger between your own tools.</p>
+        </div></div>
+      <div class="moment ask" role="button" tabindex="0" aria-haspopup="dialog"><b>“But doesn’t my AI already remember things?”</b><span>It does, for itself. A Kumbu² vault is yours, and shared.</span>
+        <div class="more">
+          <p>It does. Assistants keep memories and projects now, and they’re useful. But that memory belongs to one app: another AI can’t read it, and it isn’t a set of notes you can open in your own editor and take with you.</p>
+          <p>A Kumbu² vault is a folder of notes that belongs to you. Every app and every AI you invite sees the same one, and you can read and change everything they wrote.</p>
+          <p>So you don’t have to pick one assistant to remember for you. Your notes do the remembering; the assistants come and go.</p>
+        </div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-helps">
+  <div class="section-card">
+    <h2>One calm place for your notes</h2>
+    <p class="hand">your notes, wherever you think</p>
+    <div class="moments">
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Open your notes anywhere.</b><span>A web app for phone and laptop. Install it like an app.</span>
+        <div class="more">
+          <p>Kumbu² comes with a web app made for the phone first, and comfortable on a laptop too. Read, write, search, and look at earlier versions of a note.</p>
+          <p>Add it to your home screen and it opens like any other app. No app store involved.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Your AI works right inside.</b><span>Add Kumbu² to your assistant once. It edits your notes directly.</span>
+        <div class="more">
+          <p>Add Kumbu² to your assistant once: paste an address, sign in, allow. From then on it can look things up in your notes, search them by words and by meaning, and change them in place.</p>
+          <p>When you come back, Kumbu² shows you what it changed, line by line. If you don’t like a change, you go back to the version before.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Keep using Obsidian.</b><span>Pair it with a short code, and your notes sync both ways.</span>
+        <div class="more">
+          <p>If you write in Obsidian, keep doing that. Add the Kumbu² plugin, type in the short code Kumbu² shows you, and your vault stays in step, on your laptop and on your phone.</p>
+          <p>No addresses or passwords to copy around. Each device gets its own key, so if a phone goes missing, you switch off just that one.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Safe by default.</b><span>Stored encrypted, easy to undo, and you choose who sees what.</span>
+        <div class="more">
+          <p>Your notes are stored encrypted, even their names and folders, so a stolen backup shows nothing readable. Earlier versions are kept, deleted notes wait in a trash for 30 days, and you can mark a moment to come back to later.</p>
+          <p>Each app you connect sees only the vaults you pick, and read-only if you like. One honest word: what an AI reads, the company behind it sees too. So give each app only what you’d show it.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>It becomes a memory palace.</b><span>Your AI finds its way around and files things where they belong.</span>
+        <div class="more">
+          <p>A capable model finds its way around a well-kept vault: it reads the folder names, follows the links and puts new things where they belong instead of on a pile.</p>
+          <p>Over time the vault grows into a shared memory, one that you and your AI both use, and both keep tidy.</p>
+        </div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-works">
+  <div class="section-card">
+    <h2>How it works</h2>
+    <p class="hand">a tidy folder of notes, on a server you trust</p>
+    <div class="moments">
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Each vault is a folder of notes.</b><span>Laid out the way Obsidian lays out a vault.</span>
+        <div class="more">
+          <p>Notes are plain Markdown, in folders, with links between them and headings inside them. Nothing proprietary, nothing locked in.</p>
+          <p>Export a vault as a ZIP and Obsidian opens it as it is. One vault for work, one for a worldbuilding project, one for the garden.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>The Obsidian plugin.</b><span>Syncs both ways, on laptop and phone. Conflicts lose nothing.</span>
+        <div class="more">
+          <p>The plugin keeps one Obsidian vault and one Kumbu² vault in step. While you’re online, a change on either side shows up on the other within seconds; offline, it catches up the next time you open Obsidian.</p>
+          <p>The first time, notes on only one side are simply copied across. If a note differs on both sides, you’re asked once, for all of them: keep both, keep local, or keep Kumbu². Whichever you pick, the other text is kept where you can find it. After that, if both sides changed the same note, you get both versions next to each other.</p>
+          <p>How to add the plugin is explained in <a href="https://github.com/SCAI-NGO/kumbu-obsidian" target="_blank" rel="noopener">its README</a>.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>An editor for on the go.</b><span>No Obsidian at hand? Open the web app.</span>
+        <div class="more">
+          <p>On a borrowed laptop or a phone without Obsidian, open Kumbu² in the browser and write. It saves as you go, and tells you if your AI changed the note in the meantime.</p>
+          <p>Search, earlier versions and the trash are all there too.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Any AI that speaks MCP.</b><span>Not just one assistant: all of them, sharing one memory.</span>
+        <div class="more">
+          <p>MCP, the Model Context Protocol, is a common plug that lets AI apps use tools, a bit like USB for assistants. Kumbu² has that plug.</p>
+          <p>So Claude, Claude Code, <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener">Hermes Agent</a>, <a href="https://teaser.chatsundere.me" target="_blank" rel="noopener">Chatsundere</a> and any other app that connects AI to tools this way can read, search and edit your vaults.</p>
+          <p>What Claude Code worked out this morning is waiting for the chat on your phone tonight.</p>
+        </div></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-run">
+  <div class="section-card">
+    <h2>Run your own</h2>
+    <p class="hand">for the folks with a server and a free evening (well, five minutes)</p>
+    <div class="moments">
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Free software.</b><span>AGPL-3.0-or-later: use it, change it, host it.</span>
+        <div class="more">
+          <p>Kumbu² is licensed under the GNU Affero General Public License, version 3 or later. You may use it, study it, change it and host it for anyone, free of charge.</p>
+          <p>The one condition: if you change it and let others use your version over a network, offer them the source of your changes too. <a href="https://github.com/SCAI-NGO/kumbukumbu/blob/master/LICENSE" target="_blank" rel="noopener">The licence in full</a>.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>One compose file.</b><span><code>compose.yaml</code>, a <code>.env</code>, <code>docker compose up</code>.</span>
+        <div class="more">
+          <p>Take the repository’s <a href="https://github.com/SCAI-NGO/kumbukumbu/blob/master/compose.yaml" target="_blank" rel="noopener"><code>compose.yaml</code></a>, which pulls the published image, and make a <code>.env</code> from <a href="https://github.com/SCAI-NGO/kumbukumbu/blob/master/.env.example" target="_blank" rel="noopener"><code>.env.example</code></a>. Set <code>KUMBU_PUBLIC_URL</code>, run <code>docker compose up -d</code>, and create the first admin with <code>docker compose exec kumbu kumbu bootstrap-admin</code>.</p>
+          <p>Put a TLS-terminating reverse proxy in front; the README lists what claude.ai needs to reach it. The reference install with Komodo took about five minutes.</p>
+        </div></div>
+      <div class="moment" role="button" tabindex="0" aria-haspopup="dialog"><b>Under the hood.</b><span>.NET 10, MongoDB, AES-256-GCM, Argon2id, MCP with OAuth.</span>
+        <div class="more">
+          <p>Each vault is an Obsidian-compatible virtual file system: top-level folders are vaults, wikilinks resolve the way Obsidian resolves them, and agents work in it through a small shell (<code>ls</code>, <code>cat</code>, <code>rg</code>, <code>history</code>, <code>restore</code>) plus <code>write</code> and <code>edit</code> tools with optimistic version checks.</p>
+          <p>A .NET 10 server on MongoDB. Every vault has its own key; notes, their history and even paths are sealed with AES-256-GCM before they reach the database, keys are stored only wrapped, and passwords go through Argon2id. Agents connect over MCP with API keys, or as OAuth connections for claude.ai and other apps. Embeddings for search by meaning are computed in-process by default, so notes are sent out to be embedded only if a vault’s owner picks an outside provider.</p>
+          <p>The details, with the threat model and its limits: <a href="https://github.com/SCAI-NGO/kumbukumbu/blob/master/docs/security-architecture.md" target="_blank" rel="noopener">the security architecture</a>.</p>
+        </div></div>
+    </div>
+  </div>
+</template>
+
+<script src="assets/teaser.js"></script>
+</body>
+</html>
