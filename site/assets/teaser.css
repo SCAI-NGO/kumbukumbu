@@ -40,7 +40,6 @@ h1 sup { font-size: .45em; color: var(--c-deep); }
   opacity: 0; animation: rise 1s .5s ease-out forwards;
 }
 
-svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin: 8px auto 0; overflow: visible; }
 .pencil { filter: url(#pencil); }
 .ground { fill: none; stroke: var(--graphite); stroke-width: 1.6; stroke-linecap: round;
   stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s .6s ease-out forwards; }
@@ -48,14 +47,11 @@ svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin
   stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.6s ease-in-out forwards; }
 .leaf { stroke: var(--graphite); stroke-width: 1.2; fill: var(--a);
   transform-box: fill-box; transform: scale(0); animation: pop .7s ease-out forwards; }
-.bud .bloom, .plant .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
+.plant .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
   animation: pop .9s cubic-bezier(.3,1.6,.5,1) forwards; }
-.bud .sway, .plant .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+.plant .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
 /* Petals drawn through <use> can't be matched by a descendant selector, so the colour arrives as an inherited property. */
 .petal { stroke: var(--graphite); stroke-width: 1.2; fill: var(--petal, var(--c)); }
-.bud .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--c-deep); }
-.soon { font: 700 38px Caveat, cursive; fill: var(--ink); text-anchor: start;
-  opacity: 0; animation: rise 1s 3.4s ease-out forwards; }
 
 .links { text-align: center; margin-top: 56px; font: 700 28px Caveat, cursive;
   opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
@@ -73,9 +69,9 @@ svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; }
-  .bud .sway, .plant .sway { animation: none; } }
+  .plant .sway { animation: none; } }
 
-/* ---- The full page (internal-preview.html): the garden of four, sections, cards and the sheet ---- */
+/* ---- The garden of four, sections, cards and the sheet ---- */
 html { scrollbar-gutter: stable; }
 html.sheet-open { overflow: hidden; }
 .scribble { font: 700 28px Caveat, cursive; color: var(--soft); margin: 10px 0 0;

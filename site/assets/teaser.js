@@ -146,15 +146,3 @@ else {
   }, { threshold: .25 });
   watcher.observe(roadmap.querySelector('.road'));
 }
-
-// For review screenshots: #open=helps opens a section, #open=helps/2 also pops its second card,
-// #open=road/3 pops the roadmap's third stop.
-const debug = location.hash.match(/^#open=(\w+)(?:\/(\d+))?$/);
-if (debug && debug[1] === 'road') {
-  const stop = stops[debug[2] - 1];
-  if (stop) { roadmap.classList.add('grown'); setTimeout(() => popOut(stop), 800); }
-} else if (debug) {
-  openSection(debug[1]);
-  const card = debug[2] && section.querySelectorAll('.moment')[debug[2] - 1];
-  if (card) setTimeout(() => popOut(card), 800);
-}
