@@ -44,6 +44,24 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
 const sheet = (name: string) => screen.getByRole("dialog", { name });
 
 describe("a note's history", () => {
+  it("marks a version written from Obsidian as an Obsidian device's", async () => {
+    api({
+      "GET /api/history/Work/inbox.md": () =>
+        json(200, [
+          { version: "v2", writtenAt: "2026-10-25T09:00:00Z", writer: "Work – Obsidian Laptop", lines: 3, size: 21, current: true, changeset: null, writerKind: "device" },
+          { version: "v1", writtenAt: "2026-10-24T09:00:00Z", writer: "liz", lines: 3, size: 21, current: false, changeset: null, writerKind: "agent" },
+        ]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+
+    const versions = await within(await screen.findByRole("dialog", { name: "History" })).findByRole("list", { name: "Versions" });
+    const rows = within(versions).getAllByRole("button");
+    expect(rows[0]).toHaveTextContent("by Work – Obsidian Laptop · Obsidian device");
+    expect(rows[1]).not.toHaveTextContent("Obsidian device");
+  });
+
   it("lists the versions, shows an earlier one and its changes, and restores it", async () => {
     const fetch = api({
       "GET /api/history/Work/inbox.md": () =>

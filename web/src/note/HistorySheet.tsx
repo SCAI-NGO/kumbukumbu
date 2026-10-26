@@ -50,7 +50,10 @@ export default function HistorySheet({ path, onClose }: { path: string; onClose(
                   <span className="flex-none text-[12px] text-dim">{ago(v.writtenAt)}</span>
                 </span>
                 <span className="flex w-full gap-2 text-sm text-muted">
-                  <span className="min-w-0 flex-1 truncate">by {v.writer}</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    by {v.writer}
+                    {v.writerKind === "device" && " · Obsidian device"}
+                  </span>
                   <span className="flex-none font-mono text-[12px]">{sizeText(Number(v.size))}</span>
                 </span>
               </button>
@@ -90,7 +93,8 @@ function VersionView({ path, entry, expected, onBack, onRestored }: { path: stri
   return (
     <>
       <p className="text-sm text-muted">
-        By {entry.writer}, {ago(entry.writtenAt)} · {sizeText(Number(entry.size))}
+        By {entry.writer}
+        {entry.writerKind === "device" && " (Obsidian device)"}, {ago(entry.writtenAt)} · {sizeText(Number(entry.size))}
       </p>
       <div role="group" aria-label="Show" className="flex gap-1 rounded-[12px] border border-line p-1">
         <button type="button" aria-pressed={tab === "rendered"} onClick={() => setTab("rendered")} className={tabClass(tab === "rendered")}>

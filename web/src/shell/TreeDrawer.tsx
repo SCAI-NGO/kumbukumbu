@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, KeyRound, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -13,6 +13,7 @@ import { useDialog } from "../hooks/useDialog";
 import { download, exportUrl } from "../data/exportUrl";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
@@ -140,6 +141,7 @@ export default function TreeDrawer(props: {
   const vaults = useVaults();
   const providers = useEmbeddingProviders();
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
   const vaultItems: MenuItem[] = [
@@ -147,6 +149,7 @@ export default function TreeDrawer(props: {
       ? [
           { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+          { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
           // Downloads at once, so no ellipsis: that would promise a dialog.
           { label: "Export as ZIP", icon: Download, onSelect: () => download(exportUrl([activeVault])) },
         ]
@@ -228,6 +231,7 @@ export default function TreeDrawer(props: {
         </div>
       </div>
       <button type="button" aria-label="Close file tree" onClick={close} className="flex-1 bg-black/55" />
+      {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {choosingEmbeddings && activeVault && embeddings && providers.data && (
         <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
       )}

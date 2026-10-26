@@ -233,7 +233,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     }
 
     /// <summary>Moves a note to the trash. Needs no version: it can be undone with <see cref="RestoreAsync"/>.</summary>
-    public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct)
+    /// <summary>
+    /// With <paramref name="version"/>, only while the note is at that version (a sync client removing what it saw):
+    /// the check is on the very state <see cref="INoteStore.TryTrashAsync"/> then trashes at its revision, so a write in
+    /// between makes the trash fail rather than be lost.
+    /// </summary>
+    public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct, string? version = null)
     {
         if (caller.Refuse("rm", path) is { } refused) return refused;
         var existing = await store.GetAsync(path, ct);
@@ -243,6 +248,11 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             return (await store.ListNotesUnderAsync(path, ct)).Count > 0 || path.IsRoot
                 ? ShellResult.Error($"rm: {path.Value}: Is a directory (rm removes one note at a time)")
                 : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
+        }
+
+        if (version is not null && existing.Version != version)
+        {
+            return ShellResult.Error($"rm: {path.Value} has changed since version {version} (it is now {existing.Version})");
         }
 
         // Asked before removing: once the note is gone, its backlinks can't be asked for any more.

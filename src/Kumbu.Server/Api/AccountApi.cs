@@ -50,10 +50,11 @@ public sealed record RecoveryKeyView(string RecoveryKey);
 public sealed record ReencryptRequest(string Password);
 
 /// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
-/// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.</summary>
+/// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.
+/// <c>kind</c>: <c>agent</c>, or <c>device</c> for a key paired from Obsidian.</summary>
 public sealed record ApiKeyView(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt);
+    DateTime? ExpiresAt, string Kind);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
 /// out or null, the key doesn't expire.</summary>
@@ -399,7 +400,8 @@ public static class AccountApi
         info.CreatedAt,
         info.LastUsedAt,
         info.RevokedAt,
-        info.ExpiresAt);
+        info.ExpiresAt,
+        info.Kind == ApiKeyKind.Device ? "device" : "agent");
 
     private static AdminInvitationView InvitationView(InvitationInfo i) =>
         new(i.Id, i.Role, i.Note, i.CreatedBy, i.CreatedAt, i.ExpiresAt, i.UsedAt, i.UsedBy, i.RevokedAt, StateText(i.State));

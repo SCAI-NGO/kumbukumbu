@@ -86,7 +86,10 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
   return (
     <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked || expired ? " opacity-75" : ""}`}>
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="min-w-0 font-medium break-words text-text">{apiKey.name}</h2>
+        <h2 className="min-w-0 font-medium break-words text-text">
+          {apiKey.name}
+          {apiKey.kind === "device" && <span className="ml-2 rounded-full border border-line px-2 py-0.5 text-[12px] font-normal text-muted">Obsidian device</span>}
+        </h2>
         <span className="font-mono text-sm text-muted">{apiKey.prefix}…</span>
       </div>
       <ul className="flex flex-col text-sm text-text-body">

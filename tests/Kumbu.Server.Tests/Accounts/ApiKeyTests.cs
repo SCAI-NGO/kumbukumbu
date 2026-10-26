@@ -294,6 +294,50 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_device_key_is_listed_as_a_device()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "Work – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+
+        Assert.Equal(ApiKeyKind.Device, created.Kind);
+        Assert.Equal(ApiKeyKind.Device, Assert.Single(await Keys.ListAsync(user, userKey, Ct)).Kind);
+    }
+
+    [Fact]
+    public async Task A_key_made_before_kinds_is_an_agent()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "old", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        // The meta as every key had it before kinds existed: name and vaults only.
+        var oldMeta = Encoding.UTF8.GetBytes($$$"""{"name":"old","vaults":{"{{{vaults["Work"]}}}":"write"}}""");
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id),
+            Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, oldMeta)),
+            cancellationToken: Ct);
+
+        var listed = Assert.Single(await Keys.ListAsync(user, userKey, Ct));
+
+        Assert.Equal("old", listed.Name);
+        Assert.Equal(ApiKeyKind.Agent, listed.Kind);
+    }
+
+    [Fact]
+    public async Task An_agent_keys_meta_has_no_kind()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (_, created) = await Keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct);
+
+        var doc = await KeyDocs.Find(Builders<BsonDocument>.Filter.Eq("_id", created.Id)).SingleAsync(Ct);
+        var plain = Encoding.UTF8.GetString(ApiKeys.OpenMeta(userKey, user.Id, created.Id, doc["meta"].AsByteArray));
+
+        Assert.DoesNotContain("kind", plain, StringComparison.Ordinal);
+        Assert.Equal(ApiKeyKind.Agent, created.Kind);
+    }
+
+    [Fact]
     public async Task Last_used_is_written_at_most_once_a_minute()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");

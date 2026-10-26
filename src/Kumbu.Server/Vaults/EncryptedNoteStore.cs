@@ -494,12 +494,44 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
             index?.Enqueue(vault, paths);
+            await RecordAsync(vault, paths);
             return true;
         }
         finally
         {
             vault.Gate.Release();
         }
+    }
+
+    /// <summary>
+    /// The change record and the hint (sync spec §5), under the gate after the commit: every way a note changes
+    /// commits here, so none is missed. Checkpoints made or removed change no note and record nothing. A request
+    /// holding an older object of the vault (one locked and opened again meanwhile) changed only that object's working
+    /// set: the current one, which every other request and a sync client read, reads the paths again from MongoDB
+    /// (under the gate the two share) and records them too.
+    /// </summary>
+    private async Task RecordAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths)
+    {
+        if (paths.Count == 0) return;
+        var targets = new List<UnlockedVault> { vault };
+        if (catalog.Current(vault.Id) is { } current && !ReferenceEquals(current, vault))
+        {
+            try
+            {
+                foreach (var path in paths) await catalog.RefreshAsync(current, path, CancellationToken.None);
+                targets.Add(current);
+            }
+            catch (Exception e)
+            {
+                // The write has committed and stands; the current object just can't show it. It is let go, so the next
+                // request loads the vault afresh (and a sync cursor from before gets the full list).
+                catalog.Forget(current, e);
+            }
+        }
+
+        var now = catalog.Now;
+        foreach (var target in targets) target.ChangedAt = target.ChangedAt.SetItems(paths.Select(p => KeyValuePair.Create(p, now)));
+        catalog.RaiseNotesChanged(vault.Id);
     }
 
     private static async Task AbortAsync(IClientSessionHandle session)

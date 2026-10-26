@@ -75,6 +75,14 @@ describe("Keys", () => {
     expect(within(old).queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
   });
 
+  it("marks a key paired from Obsidian as an Obsidian device", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, kind: "agent" }, { ...listed, id: "k5", name: "Work – Obsidian Laptop", kind: "device" }]) });
+    renderApp("/keys");
+    const device = (await screen.findByText("Work – Obsidian Laptop")).closest("li")!;
+    expect(device).toHaveTextContent("Obsidian device");
+    expect(screen.getByText("Laptop").closest("li")!).not.toHaveTextContent("Obsidian device");
+  });
+
   it("revokes a key only after confirming", async () => {
     let revokedCalls = 0;
     api({ "DELETE /api/keys/k1": () => (revokedCalls++, noContent()) });

@@ -15,7 +15,7 @@ export class HttpError extends Error {
 }
 
 // These answer 401 for wrong credentials, not for a missing session; the screens show that themselves.
-const anonymous = new Set(["POST /api/session", "POST /api/join", "POST /api/recover", "POST /api/invitations/peek"]);
+const anonymous = new Set(["POST /api/session", "POST /api/join", "POST /api/recover", "POST /api/invitations/peek", "POST /api/pairing/redeem"]);
 
 const sessionEnds: Middleware = {
   onResponse({ request, response, schemaPath }) {

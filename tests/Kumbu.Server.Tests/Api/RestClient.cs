@@ -70,16 +70,17 @@ public sealed class RestClient
     }
 
     /// <summary>An API key of this user for its vault, with <paramref name="right"/>.</summary>
-    public async Task<string> KeyAsync(string name, KeyRight right)
+    public async Task<string> KeyAsync(string name, KeyRight right, ApiKeyKind kind = ApiKeyKind.Agent)
     {
         var vault = (await _api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(User.Id, UserKey, Ct)).Single(v => v.Name == Vault);
-        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct);
+        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct, kind: kind);
         return key;
     }
 
     /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead.</summary>
-    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null) =>
-        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer);
+    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null, IReadOnlyDictionary<string, string>? headers = null) =>
+        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer, headers);
 
     public Task<HttpResponseMessage> GetAsync(string path, string? bearer = null) => SendAsync(HttpMethod.Get, path, bearer: bearer);
 
@@ -109,9 +110,10 @@ public sealed class RestClient
         (await JsonAsync(response))["error"]!.GetValue<string>();
 
     private static async Task<HttpResponseMessage> SendAsync(
-        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer)
+        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer, IReadOnlyDictionary<string, string>? headers = null)
     {
         using var request = new HttpRequestMessage(method, path);
+        foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.TryAddWithoutValidation(name, value);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         if (session is not null) request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
         if (bearer is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);

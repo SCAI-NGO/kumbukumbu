@@ -57,6 +57,29 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>Raised when a vault is unlocked (or created), so the search index can catch up with it.</summary>
     public event Action<UnlockedVault>? Unlocked;
 
+    /// <summary>
+    /// Raised with a vault's id after every committed change to its notes or trash, and when it is deleted: what the
+    /// sync hints are made of. Handlers run on the writer's thread, under the vault's gate: they must only enqueue.
+    /// </summary>
+    public event Action<string>? NotesChanged;
+
+    /// <summary>A handler that throws is logged; the write it reports has committed and stands.</summary>
+    internal void RaiseNotesChanged(string vaultId)
+    {
+        if (NotesChanged is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string>>())
+        {
+            try
+            {
+                handler(vaultId);
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "A handler of NotesChanged failed for vault {VaultId}", vaultId);
+            }
+        }
+    }
+
     /// <summary>Named checkpoints: one document each, the name as a keyed hash in "pid".</summary>
     internal IMongoCollection<SealedDocument> Checkpoints { get; } = db.GetCollection<SealedDocument>("checkpoints");
 
@@ -578,6 +601,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             foreach (var id in ids)
             {
                 if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
+                RaiseNotesChanged(id);
             }
 
             foreach (var collection in ContentCollections)
@@ -746,7 +770,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// Runs once a minute (<see cref="VaultSweeper"/>). Locks vaults idle for longer than the timeout, then the
     /// least recently used ones while the working sets exceed the memory cap; a vault used within
-    /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired.
+    /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired, and change
+    /// times older than any cursor the version list answers.
     /// Keys go with the vault, not zeroed: a request still holding it must not see its key change.
     /// </summary>
     public void Sweep()
@@ -772,6 +797,20 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         {
             vault.Trash = vault.Trash.RemoveAll(t => now - t.Trashed.DeletedAt > NoteWriter.TrashRetention);
             vault.Moves = vault.Moves.RemoveAll(m => now - m.MovedAt > Kumbu.Core.Notes.Moves.Retention);
+            // No cursor reaches back further than this (older ones get the full list): the change record needn't either.
+            var forgotten = now - (Api.SyncApi.MaxCursorAge + Api.SyncApi.Overlap);
+            // Under the gate, which writes record under, so no new time is lost; if a write holds it, next minute.
+            if (vault.ChangedAt.Values.Any(t => t < forgotten) && vault.Gate.Wait(0))
+            {
+                try
+                {
+                    vault.ChangedAt = vault.ChangedAt.RemoveRange(vault.ChangedAt.Where(c => c.Value < forgotten).Select(c => c.Key));
+                }
+                finally
+                {
+                    vault.Gate.Release();
+                }
+            }
         }
     }
 
@@ -802,8 +841,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     public int OpenCount => _open.Count;
 
     /// <summary>Reads one note again after a compare-and-swap failed: someone else wrote it.</summary>
+    /// <summary>Takes <paramref name="vault"/> out of the working set (if it is still the one there) after it failed to follow
+    /// a committed write: the next request loads the vault again.</summary>
+    internal void Forget(UnlockedVault vault, Exception reason)
+    {
+        if (_open.TryRemove(KeyValuePair.Create(vault.Id, vault))) log.LogWarning(reason, "Vault {VaultId} is read again: it couldn't follow a write made through an older copy", vault.Id);
+    }
+
+    /// <summary>For tests: runs at the start of <see cref="RefreshAsync"/>, to make it fail.</summary>
+    internal Func<Task>? RefreshFaultAt { get; set; }
+
     internal async Task RefreshAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
+        if (RefreshFaultAt is { } fault) await fault();
         var pathId = vault.PathId(path);
         var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
         var key = Convert.ToBase64String(pathId);

@@ -7,6 +7,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { setAutoRefresh, storedAutoRefresh } from "./autoRefresh";
+import { deviceOf } from "./ChangedElsewhere";
 
 beforeEach(() => localStorage.clear());
 
@@ -24,15 +25,25 @@ const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], not
 const texts: Record<string, string> = { v1: "# Plan\n\nFirst.\n\nSecond.\n", v2: "# Plan\n\nFirst.\n\nSecond, changed by liz.\n" };
 
 /** The note as the server holds it: its version (a hash of the text, so a text written again has its version again), and the minute of its last write. */
-type Server = { version: string; writer: string; at: number; gone: string | null; failNotes: boolean; noteReads: number; gate: Promise<void> | null };
-const newServer = (): Server => ({ version: "v1", writer: "ada", at: 0, gone: null, failNotes: false, noteReads: 0, gate: null });
+type Server = {
+  version: string;
+  writer: string;
+  kind: string | null;
+  at: number;
+  gone: string | null;
+  failNotes: boolean;
+  noteReads: number;
+  gate: Promise<void> | null;
+};
+const newServer = (): Server => ({ version: "v1", writer: "ada", kind: null, at: 0, gone: null, failNotes: false, noteReads: 0, gate: null });
 const iso = (minute: number) => new Date(Date.UTC(2026, 9, 25, 9, minute)).toISOString();
 const note = (s: Server) => ({ path: PLAN, content: texts[s.version], version: s.version, lastWriter: s.writer, lastWriteAt: iso(s.at), current: true });
 
 /** Someone writes `version` elsewhere, a minute after the last write. */
-function writeElsewhere(s: Server, version: string, writer = "liz") {
+function writeElsewhere(s: Server, version: string, writer = "liz", kind: string | null = null) {
   s.version = version;
   s.writer = writer;
+  s.kind = kind;
   s.at += 1;
 }
 
@@ -49,7 +60,7 @@ function api(server: Server, puts: unknown[] = [], previousSignInAt: string | nu
     "GET /api/version/Work/plan.md": () =>
       server.gone !== null
         ? json(404, { error: server.gone })
-        : json(200, { path: PLAN, version: server.version, lastWriter: server.writer, lastWriteAt: iso(server.at) }),
+        : json(200, { path: PLAN, version: server.version, lastWriter: server.writer, lastWriteAt: iso(server.at), lastWriterKind: server.kind }),
     "PUT /api/notes/Work/plan.md": async (r) => {
       const body = (await r.json()) as { content: string; version: string };
       puts.push(body);
@@ -87,6 +98,14 @@ const backToThePage = () =>
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
 const bar = () => screen.findByRole("region", { name: "Changed elsewhere" });
+
+describe("deviceOf", () => {
+  it("is the part of the key name after Obsidian, or the whole label", () => {
+    expect(deviceOf("Work – Obsidian Android-7Q")).toBe("Android-7Q");
+    expect(deviceOf("liz")).toBe("liz");
+    expect(deviceOf("Work – Obsidian My Obsidian Phone")).toBe("My Obsidian Phone");
+  });
+});
 
 describe("a change made elsewhere to the open note, in Read mode", () => {
   it("is shown in a bar, and the text on screen stays until Refresh, which tints what changed", async () => {
@@ -188,6 +207,31 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(screen.getByText("Second, changed by liz.")).toBeInTheDocument();
   });
 
+  it("says_you_changed_it_in_Obsidian_for_a_device_write", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "Work – Obsidian Laptop", "device");
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent(/^You changed this note in Obsidian \(Laptop\) (just now|.* ago|yesterday)/);
+    expect(within(await bar()).getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
+  it("keeps an agent's wording for an agent's write", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "liz (edit)", "agent");
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent(/^liz changed this note/);
+  });
+
   it("names the user when they changed it in another tab or on another device", async () => {
     const server = newServer();
     api(server);
@@ -213,6 +257,21 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated by liz");
     expect(document.querySelector("[data-changed]")).toHaveTextContent("Second, changed by liz.");
+  });
+
+  it("says the user changed it in Obsidian when a device's write is taken at once", async () => {
+    setAutoRefresh(true);
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "Work – Obsidian Laptop", "device");
+    backToThePage();
+
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated: you changed this note in Obsidian (Laptop)");
+    expect(document.querySelector("[data-changed]")?.getAttribute("data-writer")).toBe("you, in Obsidian (Laptop)");
   });
 
   it("tries each new version once when reading it fails, rather than asking again and again", async () => {
