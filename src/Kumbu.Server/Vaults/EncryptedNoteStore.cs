@@ -516,8 +516,17 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         var targets = new List<UnlockedVault> { vault };
         if (catalog.Current(vault.Id) is { } current && !ReferenceEquals(current, vault))
         {
-            foreach (var path in paths) await catalog.RefreshAsync(current, path, CancellationToken.None);
-            targets.Add(current);
+            try
+            {
+                foreach (var path in paths) await catalog.RefreshAsync(current, path, CancellationToken.None);
+                targets.Add(current);
+            }
+            catch (Exception e)
+            {
+                // The write has committed and stands; the current object just can't show it. It is let go, so the next
+                // request loads the vault afresh (and a sync cursor from before gets the full list).
+                catalog.Forget(current, e);
+            }
         }
 
         var now = catalog.Now;

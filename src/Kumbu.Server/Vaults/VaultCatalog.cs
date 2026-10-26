@@ -841,8 +841,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     public int OpenCount => _open.Count;
 
     /// <summary>Reads one note again after a compare-and-swap failed: someone else wrote it.</summary>
+    /// <summary>Takes <paramref name="vault"/> out of the working set (if it is still the one there) after it failed to follow
+    /// a committed write: the next request loads the vault again.</summary>
+    internal void Forget(UnlockedVault vault, Exception reason)
+    {
+        if (_open.TryRemove(KeyValuePair.Create(vault.Id, vault))) log.LogWarning(reason, "Vault {VaultId} is read again: it couldn't follow a write made through an older copy", vault.Id);
+    }
+
+    /// <summary>For tests: runs at the start of <see cref="RefreshAsync"/>, to make it fail.</summary>
+    internal Func<Task>? RefreshFaultAt { get; set; }
+
     internal async Task RefreshAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
+        if (RefreshFaultAt is { } fault) await fault();
         var pathId = vault.PathId(path);
         var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
         var key = Convert.ToBase64String(pathId);

@@ -251,6 +251,42 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_committed_write_through_an_older_object_succeeds_when_reading_it_again_fails()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        var stale = new EncryptedNoteStore(Catalog, new UserCredential(user.User.Id, user.UserKey));
+        Assert.Contains(user.Vault, await stale.ListVaultsAsync(Ct));
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog.Sweep();
+        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var path = Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("late.md");
+        var hints = 0;
+        Action<string> counted = id =>
+        {
+            if (id == current.Id) Interlocked.Increment(ref hints);
+        };
+        Catalog.NotesChanged += counted;
+        Catalog.RefreshFaultAt = () => throw new MongoDB.Driver.MongoConnectionException(new MongoDB.Driver.Core.Connections.ConnectionId(new MongoDB.Driver.Core.Servers.ServerId(new MongoDB.Driver.Core.Clusters.ClusterId(), new System.Net.DnsEndPoint("localhost", 27017))), "gone");
+        try
+        {
+            Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+        }
+        finally
+        {
+            Catalog.RefreshFaultAt = null;
+            Catalog.NotesChanged -= counted;
+        }
+
+        Assert.Equal(1, hints);
+        // The object that couldn't follow is let go: the next request reads the vault afresh, with the note.
+        Assert.False(current.ChangedAt.ContainsKey(path));
+        var reloaded = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        Assert.NotSame(current, reloaded);
+        Assert.True(reloaded.Notes.ContainsKey(path));
+    }
+
+    [Fact]
     public async Task A_pending_vault_answers_503_not_404()
     {
         var user = await NewAsync(Api);

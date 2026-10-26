@@ -60,7 +60,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         try
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, connection.Closed);
-            var sending = connection.SendLoopAsync(linked.Token);
+            var sending = Observed(connection.SendLoopAsync(linked.Token));
             var buffer = new byte[1024];
             while (socket.State == WebSocketState.Open && !linked.IsCancellationRequested)
             {
@@ -122,6 +122,13 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         }
     }
 
+    /// <summary>A task that may be left behind (a send given up on): its fault, if any, is observed rather than left to the finalizer.</summary>
+    private static Task Observed(Task task)
+    {
+        _ = task.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return task;
+    }
+
     /// <summary>On the writer's thread, under its vault's gate: only marks and enqueues.</summary>
     private void OnNotesChanged(string vaultId)
     {
@@ -175,7 +182,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
                     send.CancelAfter(SendTimeout);
                     try
                     {
-                        await socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, endOfMessage: true, send.Token).WaitAsync(send.Token);
+                        await Observed(socket.SendAsync(Encoding.UTF8.GetBytes(message), WebSocketMessageType.Text, endOfMessage: true, send.Token)).WaitAsync(send.Token);
                     }
                     catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                     {
