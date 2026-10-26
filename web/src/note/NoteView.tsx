@@ -23,6 +23,7 @@ import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
+import { createdPath } from "./wikiLinks";
 import { registerScrollTop, takeRestore } from "../update/apply";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
@@ -228,7 +229,7 @@ export default function NoteView({ path }: { path: string }) {
 
   const createMissing = useCallback(
     (target: string) => {
-      const created = `${folderOf(path)}/${target.endsWith(".md") ? target : `${target}.md`}`;
+      const created = createdPath(path, target);
       createNote.mutate(created, {
         onSuccess: () => {
           openNote(created, "write");

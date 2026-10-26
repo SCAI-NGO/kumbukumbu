@@ -95,6 +95,26 @@ describe("a checkpoint in the web app", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  it("keeps Markdown links inside the checkpoint", async () => {
+    api({
+      "GET /api/vaults/Work/checkpoints/before-cleanup/notes/plan.md": () =>
+        json(200, {
+          path: "/Work/plan.md",
+          content: "[the idea](ideas/xyz.md) and [gone](/Work/gone.md)\n",
+          links: [
+            { line: 1, raw: "[the idea](ideas/xyz.md)", kind: "note", target: "ideas/xyz.md", path: "/Work/ideas/xyz.md", candidates: [] },
+            { line: 1, raw: "[gone](/Work/gone.md)", kind: "not_found", target: "/Work/gone.md", path: null, candidates: [] },
+          ],
+        }),
+    });
+    renderApp("/checkpoints/Work/before-cleanup/plan.md");
+    const article = await screen.findByRole("article");
+    expect(await within(article).findByRole("link", { name: "the idea" })).toHaveAttribute("href", "/checkpoints/Work/before-cleanup/ideas/xyz.md");
+    expect(within(article).getByText("not in this checkpoint")).toBeInTheDocument();
+    expect(within(article).queryByRole("link", { name: "gone" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Create the note/ })).toBeNull();
+  });
+
   it("never asks for today's notes or links", async () => {
     const { fetch, article } = await openPlan();
     await userEvent.click(within(article).getByRole("button", { name: /two/ }));

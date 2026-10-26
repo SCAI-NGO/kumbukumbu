@@ -15,6 +15,15 @@ const link = (line: number, raw: string, kind: string, path: string | null = nul
   candidates,
 });
 
+const mdLink = (line: number, raw: string, kind: string, target: string, path: string | null = null, candidates: string[] = []): LinkView => ({
+  line,
+  raw,
+  target,
+  kind,
+  path,
+  candidates,
+});
+
 function show(
   source: string,
   links: LinkView[] = [],
@@ -125,6 +134,49 @@ describe("MarkdownView", () => {
   it("leaves wiki links in code alone", () => {
     show("`[[plan]]`\n\n```\n[[plan]]\n```", []);
     expect(screen.getAllByText("[[plan]]")).toHaveLength(2);
+  });
+
+  describe("a Markdown link", () => {
+    it("opens the note a Markdown link resolves to", () => {
+      show("See [the plan](/Work/plan.md) and [x](https://x.org).", [mdLink(1, "[the plan](/Work/plan.md)", "note", "/Work/plan.md", "/Work/projects/plan.md")]);
+      expect(screen.getByRole("link", { name: "the plan" })).toHaveAttribute("href", "/notes/Work/projects/plan.md");
+      const x = screen.getByRole("link", { name: "x" });
+      expect(x).toHaveAttribute("href", "https://x.org");
+      expect(x).toHaveAttribute("target", "_blank");
+    });
+
+    it("matches Markdown links by line and occurrence", () => {
+      show("[p](plan.md) and [p](plan.md)", [mdLink(1, "[p](plan.md)", "note", "plan.md", "/V/a/plan.md"), mdLink(1, "[p](plan.md)", "not_found", "plan.md")]);
+      expect(screen.getAllByRole("link", { name: "p" }).map((a) => a.getAttribute("href"))).toEqual(["/notes/V/a/plan.md"]);
+      expect(screen.getByRole("button", { name: "Create the note “plan.md”" })).toBeInTheDocument();
+    });
+
+    it("asks which note an ambiguous Markdown link means", async () => {
+      show("[the plan](plan.md)", [mdLink(1, "[the plan](plan.md)", "ambiguous", "plan.md", null, ["/V/a/plan.md", "/V/b/plan.md"])]);
+      const opener = screen.getByRole("button", { name: /the plan/ });
+      expect(opener).toHaveTextContent("2 notes");
+      await userEvent.click(opener);
+      const hrefs = within(screen.getByRole("dialog")).getAllByRole("link").map((a) => a.getAttribute("href"));
+      expect(hrefs).toEqual(["/notes/V/a/plan.md", "/notes/V/b/plan.md"]);
+    });
+
+    it("creates the note a missing Markdown link names", async () => {
+      const onCreateMissing = vi.fn();
+      show("Next: [new](/Work/new.md)", [mdLink(1, "[new](/Work/new.md)", "not_found", "/Work/new.md")], { onCreateMissing });
+      await userEvent.click(screen.getByRole("button", { name: "Create the note “/Work/new.md”" }));
+      expect(onCreateMissing).toHaveBeenCalledWith("/Work/new.md");
+    });
+
+    it("keeps a Markdown link the answer doesn't have as plain text", () => {
+      show("[p](plan.md)", []);
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
+      expect(screen.getByText("p")).toBeInTheDocument();
+    });
+
+    it("finds a Markdown link below blanked front matter by the note's own line and raw", () => {
+      show('\n\n\nSee [p](<my plan.md> "title")', [mdLink(4, '[p](<my plan.md> "title")', "note", "my plan.md", "/V/my plan.md")]);
+      expect(screen.getByRole("link", { name: "p" })).toHaveAttribute("href", "/notes/V/my%20plan.md");
+    });
   });
 
   describe("lists", () => {
