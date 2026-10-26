@@ -138,7 +138,8 @@ html.sheet-open { overflow: hidden; }
 .veil.on { opacity: 1; }
 .moment.pop { position: fixed; z-index: 11; margin: 0; opacity: 1; animation: none; translate: none;
   background: #fff; cursor: default; padding: 26px 30px; font-size: 1.05em; transform-origin: top left;
-  box-shadow: 0 14px 0 -6px var(--b), 0 18px 40px -18px rgba(74,69,83,.35); max-height: calc(100vh - 32px); overflow: auto; }
+  box-shadow: 0 14px 0 -6px var(--b), 0 18px 40px -18px rgba(74,69,83,.35); max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px); overflow: auto; }
 .moment.pop:hover { transform: none; }
 .moment.pop b { font: 600 26px/1.25 Fraunces, Georgia, serif; margin: 0 72px 8px 0; }
 .moment.pop .more { display: block; }

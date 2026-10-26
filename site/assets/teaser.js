@@ -63,13 +63,18 @@ function popOut(card) {
   closeButton.textContent = 'close ×';
   sheet.prepend(closeButton);
 
-  const width = Math.min(600, innerWidth - 32);
-  sheet.style.width = width + 'px';
-  sheet.style.left = (innerWidth - width) / 2 + 'px';
-  sheet.style.top = '0px';
+  // Centred, at most 600 px wide; placed again on resize, e.g. when a phone is turned.
+  const place = () => {
+    const width = Math.min(600, innerWidth - 32);
+    sheet.style.width = width + 'px';
+    sheet.style.left = (innerWidth - width) / 2 + 'px';
+    sheet.style.top = '0px';
+    sheet.style.top = Math.max(16, (innerHeight - sheet.offsetHeight) / 2) + 'px';
+  };
   document.documentElement.classList.add('sheet-open');
   document.body.append(veil, sheet);
-  sheet.style.top = Math.max(16, (innerHeight - sheet.offsetHeight) / 2) + 'px';
+  place();
+  addEventListener('resize', place);
 
   // Measured at both ends, so a resize while the sheet is open still shrinks it to the card's spot.
   const invert = () => {
@@ -101,6 +106,7 @@ function popOut(card) {
     if (closingSheet) return;
     closingSheet = true;
     removeEventListener('keydown', onKey, true);
+    removeEventListener('resize', place);
     veil.classList.remove('on');
     if (instant) { finish(); return; }
     sheet.getAnimations().forEach(a => a.cancel());
