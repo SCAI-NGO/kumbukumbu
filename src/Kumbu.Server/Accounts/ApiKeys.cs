@@ -28,11 +28,19 @@ public static class KeyRights
     };
 }
 
+/// <summary>Who holds a key (spec §5a): an agent, or one of the user's own devices, paired from Obsidian. A device's
+/// writes are the user's own in the web app's views.</summary>
+public enum ApiKeyKind
+{
+    Agent,
+    Device,
+}
+
 /// <summary>An API key as its owner sees it in a list; never the key itself, which is shown once at creation.
 /// <c>ExpiresAt</c> is null for a key that doesn't expire.</summary>
 public sealed record ApiKeyInfo(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt = null);
+    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent);
 
 /// <summary>A key that was presented and checked: whose it is, and the name its writes carry.</summary>
 public sealed record ResolvedApiKey(User User, string Id, string Name);
@@ -78,11 +86,12 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// revoked has that name (compared case-insensitively), and <see cref="CredentialsChangedException"/> if the
     /// user's credentials changed at or after <paramref name="credentialReadAt"/> (when the session's password was
     /// read) or the user is inactive. With <paramref name="expiresInDays"/> (one of <see cref="ExpiryDays"/>, else
-    /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one.
+    /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one. The
+    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards.
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null)
+        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent)
     {
         var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
@@ -96,7 +105,8 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var key = Secrets.New(KeyPrefix);
         var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
-        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)));
+        // Written for devices only: an agent key's meta stays what every key's was before kinds existed.
+        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null);
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
         // The meta and name id are sealed under this user key: it must still be the one in force (UserKeyRotation).
@@ -338,7 +348,10 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         doc.CreatedAt,
         doc.LastUsedAt,
         doc.RevokedAt,
-        doc.ExpiresAt);
+        doc.ExpiresAt,
+        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent);
+
+    private const string DeviceKind = "device";
 
     /// <summary>Finds the key without storing it; HKDF suffices, as the key is random.</summary>
     private static byte[] Lookup(string key) => VaultCrypto.Derive(key, LookupLabel, []);
@@ -348,6 +361,12 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     private static byte[] MetaKey(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, MetaLabel, Encoding.UTF8.GetBytes(userId));
 
     private static string MetaContext(string keyId) => $"api-key:{keyId}:meta";
+
+    /// <summary>For tests: a meta sealed as <see cref="CreateAsync"/> seals it.</summary>
+    internal static byte[] SealMeta(byte[] userKey, string userId, string keyId, byte[] plain) => VaultCrypto.Seal(MetaKey(userKey, userId), plain, MetaContext(keyId));
+
+    /// <summary>For tests: a meta's plaintext.</summary>
+    internal static byte[] OpenMeta(byte[] userKey, string userId, string keyId, byte[] sealedMeta) => VaultCrypto.Open(MetaKey(userKey, userId), sealedMeta, MetaContext(keyId));
 
     /// <summary>A key without expiry keeps the context every key had before expiry existed.</summary>
     private static string WriterContext(string keyId, DateTime? expiresAt) =>
@@ -410,7 +429,8 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     private sealed record ApiKeyMeta(
         [property: JsonPropertyName("name")] string Name,
-        [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults);
+        [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
+        [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
 }
 
 /// <summary>An API key (collection <c>api_keys</c>). Nothing here is the key; name and vaults are sealed.</summary>

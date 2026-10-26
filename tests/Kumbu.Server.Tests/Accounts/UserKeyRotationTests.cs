@@ -167,6 +167,20 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_rotation_keeps_a_keys_kind()
+    {
+        var account = await AccountAsync("Arbeit");
+        await Keys().CreateAsync(account.User, account.Key, account.ReadAt, "Arbeit – Obsidian Laptop", Grant(account.Vaults["Arbeit"]), Ct, kind: ApiKeyKind.Device);
+        await Keys().CreateAsync(account.User, account.Key, account.ReadAt, "agent", Grant(account.Vaults["Arbeit"]), Ct);
+
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, null, Ct))!;
+
+        var kinds = (await Keys().ListAsync(account.User, rotation.NewUserKey, Ct)).ToDictionary(k => k.Name, k => k.Kind);
+        Assert.Equal(ApiKeyKind.Device, kinds["Arbeit – Obsidian Laptop"]);
+        Assert.Equal(ApiKeyKind.Agent, kinds["agent"]);
+    }
+
+    [Fact]
     public async Task The_old_user_key_opens_nothing()
     {
         var account = await AccountAsync("Arbeit", "Diary");
