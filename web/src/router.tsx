@@ -9,6 +9,8 @@ import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
 import { useSession } from "./state/session";
+import { useApplyUpdates } from "./update/apply";
+import UpdateBar from "./update/UpdateBar";
 
 /** Opts into the v7 behaviour now, which also keeps React Router's warnings out of the console. */
 export const routerFuture = {
@@ -19,11 +21,15 @@ export const routerFuture = {
   v7_skipActionErrorRevalidation: true,
 };
 
-/** Sends to sign-in, with the way back, as soon as any request found the session gone. */
+/**
+ * Sends to sign-in, with the way back, as soon as any request found the session gone; and reloads into a new
+ * release, signed in or not.
+ */
 function Root() {
   const ended = useSession((s) => s.ended);
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
+  useApplyUpdates();
 
   useEffect(() => {
     if (!ended) return;
@@ -31,7 +37,12 @@ function Root() {
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <UpdateBar />
+    </>
+  );
 }
 
 /** The signed-in part of the app. */

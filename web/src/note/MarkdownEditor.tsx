@@ -19,7 +19,18 @@ import { useAutosave } from "./useAutosave";
  * with a conflict or a failed save open, the user stays here and decides. A session that ends meanwhile leaves the
  * unsaved text in memory (never in storage), and the note opens with it again once the same user is back.
  */
-export default function MarkdownEditor({ path, note, elsewhere }: { path: string; note: NoteView; elsewhere?: ReturnType<typeof useChangedElsewhere> }) {
+export default function MarkdownEditor({
+  path,
+  note,
+  elsewhere,
+  scrollTop,
+}: {
+  path: string;
+  note: NoteView;
+  elsewhere?: ReturnType<typeof useChangedElsewhere>;
+  /** Where the source starts scrolled to: after a reload into a new release, where the writer was. */
+  scrollTop?: number;
+}) {
   const save = useSaveNote(path);
   const queryClient = useQueryClient();
   const [draft] = useState(() => {
@@ -36,6 +47,10 @@ export default function MarkdownEditor({ path, note, elsewhere }: { path: string
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
   const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const initialScroll = useRef(scrollTop);
+  useLayoutEffect(() => {
+    if (initialScroll.current && textarea.current) textarea.current.scrollTop = initialScroll.current;
+  }, []);
   const [diff, setDiff] = useState(false);
   // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
   const [dismissed, setDismissed] = useState<string | null>(null);
