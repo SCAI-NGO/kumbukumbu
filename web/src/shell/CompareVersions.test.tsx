@@ -15,10 +15,11 @@ const PLAN = "/Work/plan.md";
 const texts: Record<string, string> = { v1: "# Plan\nZebras first.\n", v2: "# Plan\nLions now.\n", now: "# Plan\nLions now.\nTigers later.\n" };
 const view = (version: string, current: boolean) => ({ path: PLAN, content: texts[version], version, lastWriter: "liz", lastWriteAt: "2026-10-26T09:00:00Z", current });
 
-function api({ gone = false } = {}) {
+function api({ gone = false, lost = [] as string[] } = {}) {
   return fakeApi({
     "GET /api/notes/Work/plan.md": (r) => {
       const version = new URL(r.url).searchParams.get("version");
+      if (version && lost.includes(version)) return json(404, { error: `/Work/plan.md has no version ${version}` });
       if (version) return json(200, view(version, false));
       return gone ? json(404, { error: "/Work/plan.md: No such note" }) : json(200, view("now", true));
     },
@@ -99,5 +100,22 @@ describe("comparing two versions of a note", () => {
     show({ before: "v2" });
 
     expect(await screen.findByText("The text didn't change in this change.")).toBeInTheDocument();
+  });
+
+  it("says a version is no longer kept instead of waiting for it", async () => {
+    api();
+    show({ version: null, before: null });
+
+    expect(screen.getAllByText("This version is no longer kept")).toHaveLength(1);
+    expect(screen.queryByText("Loading …")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Against now" }));
+    expect(screen.getByText("This version is no longer kept")).toBeInTheDocument();
+  });
+
+  it("says a version couldn't be read instead of waiting for it", async () => {
+    api({ lost: ["v1"] });
+    show();
+
+    expect(await screen.findByText("This version couldn't be read")).toBeInTheDocument();
   });
 });

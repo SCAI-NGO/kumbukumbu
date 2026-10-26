@@ -98,6 +98,51 @@ public sealed class ActivityApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Rows_ending_at_the_same_instant_are_all_paged()
+    {
+        // The clock stands still: three writers' changesets end at the same instant.
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        foreach (var name in new[] { "b", "c" })
+        {
+            var key = await user.KeyAsync(name + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+            using var put = await user.SendAsync(HttpMethod.Put, user.Url(name + ".md"), new { content = name + "\n" }, bearer: key);
+            Assert.Equal(HttpStatusCode.Created, put.StatusCode);
+        }
+
+        var first = await ActivityAsync(user, "?limit=2");
+        var rows = first["rows"]!.AsArray();
+        Assert.True(first["more"]!.GetValue<bool>());
+        var last = rows[1]!;
+        var before = Uri.EscapeDataString(last["to"]!.GetValue<DateTime>().ToUniversalTime().ToString("O"));
+        var next = await ActivityAsync(user, $"?limit=2&before={before}&key={Uri.EscapeDataString(Text(last, "key"))}");
+
+        var paths = rows.Concat(next["rows"]!.AsArray()).Select(r => Text(r!["files"]![0], "path")).Order();
+        Assert.Equal(["/Arbeit/a.md", "/Arbeit/b.md", "/Arbeit/c.md"], paths);
+        Assert.False(next["more"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task A_removal_and_a_rename_through_the_api_are_one_row()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateAsync("b.md", "b\n");
+        _time.Advance(TimeSpan.FromMinutes(11));
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("a.md"));
+        _time.Advance(TimeSpan.FromMinutes(1));
+        using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/b.md", to = "/Arbeit/c.md" });
+        Assert.True(removed.IsSuccessStatusCode);
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+
+        var row = (await ActivityAsync(user))["rows"]![0]!;
+
+        Assert.Equal(
+            [("/Arbeit/a.md", "deleted"), ("/Arbeit/c.md", "renamed")],
+            row["files"]!.AsArray().Select(f => (Text(f, "path"), Text(f, "kind"))).Order());
+    }
+
+    [Fact]
     public async Task A_bad_limit_or_before_is_400()
     {
         var user = await NewAsync(Api);

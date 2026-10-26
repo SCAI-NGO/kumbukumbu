@@ -8,6 +8,7 @@ import { secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
+import { writerText } from "../api/activity";
 import CompareVersions from "../shell/CompareVersions";
 import ModeChips, { MODES } from "./ModeChips";
 import SearchResultCard from "./SearchResultCard";
@@ -128,7 +129,7 @@ export default function SearchSheet() {
                       <span className="truncate font-mono text-[12px] text-dim">{crumbOf(r.path)}</span>
                       {r.snippet && <span className="line-clamp-2 text-[14px] text-text-body">{r.snippet}</span>}
                       <span className="text-[12px] text-muted">
-                        <span>Earlier version · {timeText(r.writtenAt)}</span> · by {r.writer}
+                        <span>Earlier version · {timeText(r.writtenAt)}</span> · by {writerText(r)}
                       </span>
                     </button>
                   </li>
@@ -170,7 +171,7 @@ export default function SearchSheet() {
       {comparing && (
         <Sheet title={comparing.path.slice(comparing.path.lastIndexOf("/") + 1)} onClose={() => setComparing(null)}>
           <p className="text-sm text-muted">
-            Earlier version · {timeText(comparing.writtenAt)} · by {comparing.writer}
+            Earlier version · {timeText(comparing.writtenAt)} · by {writerText(comparing)}
           </p>
           <CompareVersions path={comparing.path} version={comparing.version} before={comparing.before} trashed={false} beforeLost={comparing.beforeLost} initial="now" versionLabel="This version" />
         </Sheet>

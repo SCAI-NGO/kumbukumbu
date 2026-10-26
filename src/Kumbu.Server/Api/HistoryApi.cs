@@ -55,15 +55,18 @@ public sealed record RestoredView(string Message);
 /// A note in a changeset. <c>kind</c>: <c>added</c>, <c>changed</c>, <c>renamed</c> (from <c>from</c>) or <c>deleted</c>.
 /// <c>version</c>: the state the changeset left (null for deleted); <c>before</c>: the state before it, null when there
 /// was none or it is no longer kept (<c>beforeLost</c>). <c>trashed</c>: the note is in the trash now. Both versions
-/// open with <c>?version=</c> on the note, or in the trash.
+/// open with <c>?version=</c> on the note, or in the trash. For <c>renamed</c>: <c>from</c> → <c>to</c> is that rename;
+/// <c>path</c> is where the note is now (or was deleted), which differs when it moved on since.
 /// </summary>
-public sealed record ActivityFileView(string Path, string Kind, string? From, string? Version, string? Before, bool BeforeLost, bool Trashed);
+public sealed record ActivityFileView(string Path, string Kind, string? From, string? Version, string? Before, bool BeforeLost, bool Trashed, string? To);
 
-/// <summary>A changeset: what one writer did close together in time, <c>from</c> to <c>to</c>. <c>id</c> is null for a
-/// write that joins no changeset (a restore, a seed, older moves and removals). <c>writerKind</c> as on a note.</summary>
-public sealed record ActivityRowView(string? Id, string Writer, string? WriterKind, DateTime From, DateTime To, IReadOnlyList<ActivityFileView> Files);
+/// <summary>A changeset: what one writer did close together in time, <c>from</c> to <c>to</c>. <c>id</c> is null for
+/// writes that join no changeset (a restore, a seed, older moves and removals; one row per commit). <c>writerKind</c> as
+/// on a note; <c>restore</c>: the row restored a version or a checkpoint. <c>key</c> tells rows apart for paging.</summary>
+public sealed record ActivityRowView(string? Id, string Writer, string? WriterKind, DateTime From, DateTime To, IReadOnlyList<ActivityFileView> Files, string Key, bool Restore);
 
-/// <summary>The vault's changesets, newest first; <c>more</c>: older ones follow (ask again with <c>before</c> = the last row's <c>to</c>).</summary>
+/// <summary>The vault's changesets, newest first; <c>more</c>: older ones follow (ask again with <c>before</c> = the last
+/// row's <c>to</c> and <c>key</c> = its <c>key</c>).</summary>
 public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More);
 
 /// <summary>
@@ -140,10 +143,11 @@ public static class HistoryApi
 
     /// <summary>
     /// The vault's changesets for the Activity sheet, newest first: <c>limit</c> rows (1 to 100, default 50), only
-    /// those that ended before <c>before</c> (an ISO time). Sessions only: it names every writer of the vault.
+    /// those after the last row shown: <c>before</c> (its <c>to</c>, an ISO time) and <c>key</c> (its key; without it,
+    /// rows that ended before <c>before</c>). Sessions only: it names every writer of the vault.
     /// </summary>
     private static async Task<Ok<ActivityView>> ActivityAsync(
-        string vault, string? before, int? limit, INoteStore store, WriterKinds kinds, CancellationToken ct)
+        string vault, string? before, string? key, int? limit, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var max = limit ?? DefaultActivityRows;
         if (max is < 1 or > MaxActivityRows) throw ApiErrors.BadRequest($"limit is 1 to {MaxActivityRows}.");
@@ -167,14 +171,14 @@ public static class HistoryApi
         }
 
         // One more than asked, to know whether there are more.
-        var rows = Activity.Rows(notes, await store.ListTrashAsync(root, ct), await store.ListMovesAsync(root, ct), until, max + 1);
+        var rows = Activity.Rows(notes, await store.ListTrashAsync(root, ct), await store.ListMovesAsync(root, ct), until, max + 1, key);
         var kindOf = new Dictionary<string, string?>(StringComparer.Ordinal);
         var views = new List<ActivityRowView>();
         foreach (var row in rows.Take(max))
         {
             if (!kindOf.TryGetValue(row.Writer, out var kind)) kindOf[row.Writer] = kind = await kinds.OfAsync(row.Writer, ct);
             views.Add(new ActivityRowView(row.Id, row.Writer, kind, row.From, row.To, [.. row.Files.Select(f => new ActivityFileView(
-                f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed))]));
+                f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed, f.To))], row.Key, row.Restore));
         }
 
         return TypedResults.Ok(new ActivityView(views, rows.Count > max));

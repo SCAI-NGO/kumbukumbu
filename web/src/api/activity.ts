@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, call } from "./client";
 import type { components } from "./schema";
 
@@ -7,16 +7,31 @@ export type ActivityRow = components["schemas"]["ActivityRowView"];
 export type ActivityFile = components["schemas"]["ActivityFileView"];
 
 /**
- * The vault's changesets, newest first, a page at a time (sessions only): the next page asks for the rows before the
- * last row's end, while the server says there are more.
+ * The vault's changesets, newest first, a page at a time (sessions only): the next page asks for the rows after the
+ * last one shown (its end and its key, as rows can end at the same instant), while the server says there are more.
  */
 export const useActivity = (vault: string) =>
   useInfiniteQuery({
     queryKey: ["activity", vault],
-    queryFn: ({ pageParam }) =>
-      call(api.GET("/api/vaults/{vault}/activity", { params: { path: { vault }, query: pageParam ? { before: pageParam } : {} } })),
-    initialPageParam: null as string | null,
-    getNextPageParam: (last) => (last.more && last.rows.length > 0 ? last.rows[last.rows.length - 1].to : undefined),
+    queryFn: ({ pageParam }) => call(api.GET("/api/vaults/{vault}/activity", { params: { path: { vault }, query: pageParam ?? {} } })),
+    initialPageParam: null as { before: string; key: string } | null,
+    getNextPageParam: (last) => {
+      const end = last.rows.at(-1);
+      return last.more && end ? { before: end.to, key: end.key } : undefined;
+    },
+  });
+
+/**
+ * A note's text now, read once for a comparison and kept apart from the open note's cache: the open note never
+ * changes under the reader, and the comparison never shows an old "now".
+ */
+export const useNoteNow = (path: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ["activity", "now", path],
+    queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: { path: { vault: path.split("/")[1], path: path.split("/").slice(2).join("/") } } })),
+    enabled,
+    gcTime: 0,
+    staleTime: 0,
   });
 
 /**

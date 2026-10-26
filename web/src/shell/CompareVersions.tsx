@@ -2,7 +2,8 @@
 import { useMemo, useState } from "react";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useNote, useNoteVersion } from "../api/notes";
+import { useNoteVersion } from "../api/notes";
+import { useNoteNow } from "../api/activity";
 import { FormError } from "../components/form";
 import { lineDiff, type DiffLine } from "../note/lineDiff";
 
@@ -32,19 +33,33 @@ export default function CompareVersions({ path, version, before, trashed, before
   const againstNow = mode === "now";
   const left = useNoteVersion(path, againstNow ? version : before);
   const right = useNoteVersion(path, againstNow ? null : version);
-  // The text as the open note shows it, if it is open: a read now would replace it under the reader.
-  const now = useNote(path, { refetchOnMount: false, enabled: againstNow && !trashed });
+  const now = useNoteNow(path, againstNow && !trashed);
   const rightText = againstNow ? now.data?.content : right.data?.content;
   const gone = againstNow && (trashed || (now.error instanceof HttpError && now.error.status === 404));
 
-  const leftMissing = againstNow ? null : before === null ? (beforeLost ? "Earlier versions are no longer kept" : "Added in this change") : null;
+  // Every column either shows lines or says why not: never "Loading" for a version nobody will fetch.
+  const unread = (q: { error: unknown }) => (q.error ? "This version couldn't be read" : null);
+  const notKept = "This version is no longer kept";
+  const leftMissing = againstNow
+    ? version === null
+      ? notKept
+      : unread(left)
+    : before === null
+      ? beforeLost
+        ? "Earlier versions are no longer kept"
+        : "Added in this change"
+      : unread(left);
+  const rightMissing = againstNow ? (gone ? "This note is in the trash now" : unread(now)) : version === null ? notKept : unread(right);
   const diff = useMemo(() => {
     if (rightText === undefined || gone) return null;
-    if (leftMissing) return lineDiff("", rightText).filter((l) => !(l.kind === "removed" && l.text === ""));
+    // Added: every line is new. Otherwise there is nothing to compare with, so the text shows as it is.
+    if (leftMissing) return leftMissing === "Added in this change" ? lineDiff("", rightText) : lineDiff(rightText, rightText);
     return left.data ? lineDiff(left.data.content, rightText) : null;
   }, [left.data, rightText, leftMissing, gone]);
+  // Without a left side, the right one shows its text as it is; without a right side, the left one does.
+  const leftOnly = useMemo(() => (rightMissing && left.data ? lineDiff(left.data.content, left.data.content) : null), [rightMissing, left.data]);
   const unchanged = !againstNow && before !== null && before === version;
-  const error = [left.error, againstNow ? (gone ? null : now.error) : right.error].find((e) => e);
+  const error = [left.error, againstNow ? (gone ? null : now.error) : right.error].find((e) => e && !(e instanceof HttpError && e.status === 404));
 
   const tabClass = (on: boolean) =>
     `min-h-11 flex-1 rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
@@ -63,8 +78,8 @@ export default function CompareVersions({ path, version, before, trashed, before
       {error && <FormError>{errorText(error)}</FormError>}
       {unchanged && <p className="text-sm text-text-body">The text didn't change in this change.</p>}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <Column label={labels[0]} message={leftMissing} lines={diff?.filter((l) => l.kind !== "added")} />
-        <Column label={labels[1]} message={gone ? "This note is in the trash now" : null} lines={diff?.filter((l) => l.kind !== "removed")} />
+        <Column label={labels[0]} message={leftMissing} lines={leftOnly ?? diff?.filter((l) => l.kind !== "added")} />
+        <Column label={labels[1]} message={rightMissing} lines={diff?.filter((l) => l.kind !== "removed")} />
       </div>
     </>
   );

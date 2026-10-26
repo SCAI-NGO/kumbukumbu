@@ -4025,6 +4025,7 @@ export interface paths {
             parameters: {
                 query?: {
                     before?: string;
+                    key?: string;
                     limit?: number | string;
                 };
                 header?: never;
@@ -4684,6 +4685,7 @@ export interface components {
             before: null | string;
             beforeLost: boolean;
             trashed: boolean;
+            to: null | string;
         };
         ActivityRowView: {
             id: null | string;
@@ -4694,6 +4696,8 @@ export interface components {
             /** Format: date-time */
             to: string;
             files: components["schemas"]["ActivityFileView"][];
+            key: string;
+            restore: boolean;
         };
         ActivityView: {
             rows: components["schemas"]["ActivityRowView"][];
@@ -4929,6 +4933,7 @@ export interface components {
             snippet: string;
             before: null | string;
             beforeLost: boolean;
+            writerKind: null | string;
         };
         EmbeddingProviderView: {
             name: string;

@@ -110,7 +110,7 @@ public class ActivityTests
         Assert.Equal(3, rows.Count);
         var restore = rows[0];
         Assert.Null(restore.Id);
-        Assert.Equal("liz", restore.Writer);
+        Assert.Equal(("liz", true), (restore.Writer, restore.Restore));
         Assert.Equal((ActivityFileKind.Changed, V("a1"), V("a2")), (restore.Files[0].Kind, restore.Files[0].Version, restore.Files[0].Before));
     }
 
@@ -139,21 +139,101 @@ public class ActivityTests
 
         var file = Assert.Single(Assert.Single(Rows(notes, moves: moves), r => r.Id == X.Id).Files);
 
-        Assert.Equal((ActivityFileKind.Renamed, V("c"), V("c")), (file.Kind, file.Version, file.Before));
+        Assert.Equal((ActivityFileKind.Renamed, V("c"), V("c"), "/W/d.md"), (file.Kind, file.Version, file.Before, file.To));
     }
 
     [Fact]
-    public void Moves_and_removals_without_a_changeset_are_rows_of_their_own()
+    public void Moves_and_removals_without_a_changeset_are_one_row_per_commit()
     {
         var moves = new[]
         {
-            new MoveRecord(P("/W/a.md"), P("/W/b.md"), "liz", T0),
-            new MoveRecord(P("/W/c.md"), P("/W/d.md"), "liz", T0),
+            // One folder mv from before moves carried a changeset: one writer, one instant.
+            new MoveRecord(P("/W/a.md"), P("/W/x/a.md"), "liz", T0),
+            new MoveRecord(P("/W/c.md"), P("/W/x/c.md"), "liz", T0),
+            // Another commit.
+            new MoveRecord(P("/W/e.md"), P("/W/f.md"), "liz", T0.AddMinutes(1)),
         };
 
         var rows = Rows([], moves: moves);
 
-        Assert.Equal(2, rows.Count);
+        Assert.Equal([1, 2], rows.Select(r => r.Files.Count));
         Assert.All(rows, r => Assert.Null(r.Id));
     }
+
+    [Fact]
+    public void A_checkpoint_restore_is_one_row_marked_as_a_restore()
+    {
+        var at = T0.AddHours(1);
+        var notes = Enumerable.Range(0, 60)
+            .Select(i => Note($"/W/n{i:D2}.md", "then", at, null, H($"now {i}", T0, X)) with { LastWriter = "ada (restore)" })
+            .ToArray();
+
+        var rows = Rows(notes);
+
+        var restore = rows[0];
+        Assert.True(restore.Restore);
+        Assert.Equal(("ada", 60), (restore.Writer, restore.Files.Count));
+        Assert.False(rows.Single(r => r.Id == X.Id).Restore);
+    }
+
+    [Fact]
+    public void Rows_ending_at_the_same_instant_page_by_their_key()
+    {
+        var notes = Enumerable.Range(0, 5)
+            .Select(i => Note($"/W/n{i}.md", "x", T0, new Changeset($"c{i}", T0)))
+            .ToArray();
+
+        var shown = new List<ActivityRow>();
+        DateTime? before = null;
+        string? key = null;
+        while (true)
+        {
+            var page = Activity.Rows(notes, [], [], before, 2, key);
+            if (page.Count == 0) break;
+            shown.AddRange(page);
+            (before, key) = (page[^1].To, page[^1].Key);
+        }
+
+        Assert.Equal(["c0", "c1", "c2", "c3", "c4"], shown.Select(r => r.Id).Order());
+        Assert.Equal(5, shown.Select(r => r.Key).Distinct().Count());
+    }
+
+    [Fact]
+    public void A_note_renamed_and_moved_again_later_is_one_file()
+    {
+        var at = T0.AddMinutes(5);
+        var notes = new[] { Note("/W/final.md", "new text", at, X, H("old text", T0.AddDays(-1))) };
+        var moves = new[]
+        {
+            new MoveRecord(P("/W/old.md"), P("/W/plan.md"), "liz", at, X),
+            new MoveRecord(P("/W/plan.md"), P("/W/final.md"), "liz", Y.Started, Y),
+        };
+
+        var rows = Rows(notes, moves: moves);
+
+        var file = Assert.Single(Assert.Single(rows, r => r.Id == X.Id).Files);
+        Assert.Equal(("/W/final.md", ActivityFileKind.Renamed, "/W/old.md", "/W/plan.md"), (file.Path, file.Kind, file.From, file.To));
+        Assert.Equal((V("new text"), V("old text")), (file.Version, file.Before));
+        var later = Assert.Single(Assert.Single(rows, r => r.Id == Y.Id).Files);
+        Assert.Equal(("/W/final.md", "/W/plan.md", V("new text"), V("new text")), (later.Path, later.From, later.Version, later.Before));
+    }
+
+    [Fact]
+    public void A_later_note_at_the_same_path_is_not_followed()
+    {
+        // a.md is renamed to b.md, b.md deleted; a new b.md is made and moved to c.md.
+        var trashed = Note("/W/b.md", "first", T0, null);
+        var notes = new[] { Note("/W/c.md", "second", T0.AddHours(2), null) };
+        var trash = new[] { new TrashedNote(trashed, "liz", T0.AddHours(1), Y) };
+        var moves = new[]
+        {
+            new MoveRecord(P("/W/a.md"), P("/W/b.md"), "liz", T0.AddMinutes(1), X),
+            new MoveRecord(P("/W/b.md"), P("/W/c.md"), "liz", T0.AddHours(3)),
+        };
+
+        var file = Assert.Single(Assert.Single(Rows(notes, trash, moves), r => r.Id == X.Id).Files);
+
+        Assert.Equal(("/W/b.md", V("first"), true), (file.Path, file.Version, file.Trashed));
+    }
+
 }

@@ -75,7 +75,10 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
                 >
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="flex w-full items-baseline gap-2">
-                      <span className="min-w-0 flex-1 truncate font-medium text-text">{writerText(row)}</span>
+                      <span className="min-w-0 flex-1 truncate font-medium text-text">
+                        {writerText(row)}
+                        {row.restore && " · restore"}
+                      </span>
                       <span className="flex-none text-[12px] text-dim">{ago(row.to)}</span>
                     </span>
                     <span className="text-sm text-muted">{spanText(row)}</span>
@@ -92,7 +95,7 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
                           onClick={() => setChosen(f)}
                           className="flex min-h-11 w-full items-baseline gap-2 px-3.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
                         >
-                          <span className="min-w-0 flex-1 truncate text-text">{f.kind === "renamed" && f.from ? renameText(f.from, f.path) : inVault(f.path)}</span>
+                          <span className="min-w-0 flex-1 truncate text-text">{f.kind === "renamed" && f.from ? renameText(f.from, f.to ?? f.path) : inVault(f.path)}</span>
                           <span className="flex-none font-mono text-[11px] text-dim">
                             {f.kind}
                             {f.trashed && f.kind !== "deleted" ? " · in the trash" : ""}

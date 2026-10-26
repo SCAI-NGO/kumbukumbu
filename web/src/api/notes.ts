@@ -86,14 +86,13 @@ export function useCreateNote() {
  * taken when the user says so. `refetchOnMount: false` for a view next to the note (its history), which must not
  * read it again either.
  */
-export const useNote = (path: string, { refetchOnMount = true, enabled = true }: { refetchOnMount?: boolean; enabled?: boolean } = {}) =>
+export const useNote = (path: string, { refetchOnMount = true }: { refetchOnMount?: boolean } = {}) =>
   useQuery({
     queryKey: ["note", path],
     queryFn: () => call(api.GET("/api/notes/{vault}/{path}", { params: params(path) })),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount,
-    enabled,
   });
 
 /** The note's links as the server resolves them; asked again for every version, as its text decides them. */

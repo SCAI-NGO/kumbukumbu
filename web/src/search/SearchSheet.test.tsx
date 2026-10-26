@@ -289,7 +289,7 @@ describe("the search sheet", () => {
 });
 
 describe("search in earlier versions", () => {
-  const earlier = { path: "/Work/plan.md", version: "old1", writtenAt: "2026-10-20T09:00:00Z", writer: "liz", startLine: 0, endLine: 3, snippet: "Zebras first.", before: null, beforeLost: false };
+  const earlier = { path: "/Work/plan.md", version: "old1", writtenAt: "2026-10-20T09:00:00Z", writer: "liz", startLine: 0, endLine: 3, snippet: "Zebras first.", before: null, beforeLost: false, writerKind: "agent" };
 
   it("the_switch_is_off_by_default", async () => {
     const asked: string[] = [];
@@ -315,7 +315,7 @@ describe("search in earlier versions", () => {
 
     const list = await within(sheet()).findByRole("list", { name: "Earlier versions" });
     expect(within(list).getByText(/^Earlier version · /)).toBeInTheDocument();
-    expect(list).toHaveTextContent("liz");
+    expect(list).toHaveTextContent("by Agent liz");
     expect(asked.at(-1)!.searchParams.get("q")).toBe("zebras");
 
     // A tap compares that version with today's text.

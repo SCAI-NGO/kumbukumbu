@@ -101,8 +101,10 @@ public sealed record SearchResultView(string Path, string Address, int StartLine
 public sealed record SearchView(IReadOnlyList<SearchResultView> Results, int NotIndexed, string? Notice);
 
 /// <summary>A section of an earlier version: <c>version</c> opens with <c>?version=</c> on the note; lines as a search
-/// result's. <c>before</c>: the version before it, null when there was none or it is no longer kept (<c>beforeLost</c>).</summary>
-public sealed record EarlierResultView(string Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before, bool BeforeLost);
+/// result's. <c>before</c>: the version before it, null when there was none or it is no longer kept (<c>beforeLost</c>).
+/// <c>writer</c> without the tool ("liz", not "liz (mv)"), <c>writerKind</c> as on a note.</summary>
+public sealed record EarlierResultView(
+    string Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before, bool BeforeLost, string? WriterKind);
 
 /// <summary>A note whose last write is by one of the user's agents (<c>writer</c>, the API key's or connection's name).</summary>
 public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version);
@@ -437,7 +439,7 @@ public static class NoteApi
     /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
     /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
     /// </summary>
-    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
         if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
@@ -460,9 +462,13 @@ public static class NoteApi
             }
         }
 
-        return TypedResults.Ok(EarlierSearch.Find(notes, query, max)
-            .Select(h => new EarlierResultView(h.Path.Value, h.Version, h.WrittenAt, h.Writer, h.StartLine, h.EndLine, h.Snippet, h.Before, h.BeforeLost))
-            .ToArray());
+        var views = new List<EarlierResultView>();
+        foreach (var h in EarlierSearch.Find(notes, query, max, ct))
+        {
+            views.Add(new EarlierResultView(h.Path.Value, h.Version, h.WrittenAt, h.Writer, h.StartLine, h.EndLine, h.Snippet, h.Before, h.BeforeLost, await kinds.OfAsync(h.Writer, ct)));
+        }
+
+        return TypedResults.Ok(views.ToArray());
     }
 
     private static async Task<Ok<SearchView>> SearchAsync(string? q, string? mode, string? path, int? n, INoteStore store, ISearchIndex index, CancellationToken ct)

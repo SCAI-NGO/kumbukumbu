@@ -17,10 +17,12 @@ const INBOX = "/Work/inbox.md";
 const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [{ name: "inbox.md", path: INBOX, size: 10 }] } };
 const noteView = { path: INBOX, content: "# Inbox\n", version: "i1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z", current: true };
 
-type File = { path: string; kind: string; from?: string | null; version?: string | null; before?: string | null; beforeLost?: boolean; trashed?: boolean };
-const file = (f: File) => ({ from: null, version: "v2", before: "v1", beforeLost: false, trashed: false, ...f });
-const row = (writer: string, writerKind: string | null, files: File[], to = "2026-10-26T09:10:00Z", from = "2026-10-26T09:00:00Z") => ({
+type File = { path: string; kind: string; from?: string | null; to?: string | null; version?: string | null; before?: string | null; beforeLost?: boolean; trashed?: boolean };
+const file = (f: File) => ({ from: null, to: null, version: "v2", before: "v1", beforeLost: false, trashed: false, ...f });
+const row = (writer: string, writerKind: string | null, files: File[], to = "2026-10-26T09:10:00Z", from = "2026-10-26T09:00:00Z", restore = false) => ({
   id: `${writer}-${to}`,
+  key: `c:${writer}-${to}`,
+  restore,
   writer,
   writerKind,
   from,
@@ -132,6 +134,7 @@ describe("the vault's activity", () => {
     expect(await within(dialog).findByText("You")).toBeInTheDocument();
     const asked = fetch.mock.calls.map(([r]) => new URL((r as Request).url)).filter((u) => u.pathname === "/api/vaults/Work/activity");
     expect(asked.at(-1)!.searchParams.get("before")).toBe("2026-10-26T09:10:00Z");
+    expect(asked.at(-1)!.searchParams.get("key")).toBe("c:liz-2026-10-26T09:10:00Z");
     expect(within(dialog).queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
@@ -173,5 +176,22 @@ describe("the vault's activity", () => {
     expect(within(compare).getByText("Deleted in this change")).toBeInTheDocument();
     await userEvent.click(within(compare).getByRole("button", { name: "Open the trash" }));
     expect(await screen.findByRole("dialog", { name: "Trash" })).toBeInTheDocument();
+  });
+
+  it("shows a rename as it was, also when the note moved on since", async () => {
+    api(() => json(200, { rows: [row("liz", "agent", [{ path: "/Work/final.md", kind: "renamed", from: "/Work/old.md", to: "/Work/plan.md" }])], more: false }));
+    const dialog = await openActivity();
+    const [first] = await rowsOf(dialog);
+    await userEvent.click(within(first).getByRole("button", { expanded: false }));
+
+    expect(within(first).getByRole("list", { name: "Files" })).toHaveTextContent("old.md → plan.md");
+  });
+
+  it("marks a restore", async () => {
+    api(() => json(200, { rows: [row("ada", "user", [{ path: "/Work/plan.md", kind: "changed" }], undefined, undefined, true)], more: false }));
+    const dialog = await openActivity();
+
+    const [first] = await rowsOf(dialog);
+    expect(first).toHaveTextContent("You · restore");
   });
 });

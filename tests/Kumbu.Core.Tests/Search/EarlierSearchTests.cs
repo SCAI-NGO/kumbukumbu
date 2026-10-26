@@ -23,7 +23,7 @@ public class EarlierSearchTests
         var old = "# Plan\n\nZebras first.\n";
         var notes = new[] { Note("/W/plan.md", "# Plan\n\nLions now.\n", H(old, 1)) };
 
-        var hit = Assert.Single(EarlierSearch.Find(notes, "zebras", 10));
+        var hit = Assert.Single(EarlierSearch.Find(notes, "zebras", 10, TestContext.Current.CancellationToken));
 
         Assert.Equal((P("/W/plan.md"), VersionToken.Of(old), T0.AddHours(-1), "liz"), (hit.Path, hit.Version, hit.WrittenAt, hit.Writer));
         Assert.Contains("Zebras first.", hit.Snippet);
@@ -38,8 +38,8 @@ public class EarlierSearchTests
             Note("/W/plan.md", "# Plan\n\n## Animals\nZebras stay.\n\n## Weather\nSunny.\n", H("# Plan\n\n## Animals\nZebras stay.\n\n## Weather\nRainy.\n", 1)),
         };
 
-        Assert.Empty(EarlierSearch.Find(notes, "zebras", 10));
-        Assert.Single(EarlierSearch.Find(notes, "rainy", 10));
+        Assert.Empty(EarlierSearch.Find(notes, "zebras", 10, TestContext.Current.CancellationToken));
+        Assert.Single(EarlierSearch.Find(notes, "rainy", 10, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -47,8 +47,8 @@ public class EarlierSearchTests
     {
         var notes = new[] { Note("/W/plan.md", "now\n", H("# A\nZebras here.\n# B\nLions there.\n", 1)) };
 
-        Assert.Empty(EarlierSearch.Find(notes, "zebras lions", 10));
-        Assert.Single(EarlierSearch.Find(notes, "ZEBRAS here", 10));
+        Assert.Empty(EarlierSearch.Find(notes, "zebras lions", 10, TestContext.Current.CancellationToken));
+        Assert.Single(EarlierSearch.Find(notes, "ZEBRAS here", 10, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -61,13 +61,32 @@ public class EarlierSearchTests
             Note("/W/other.md", "x\n", H("Zebras elsewhere.\n", 5)),
         };
 
-        var hits = EarlierSearch.Find(notes, "zebras", 10);
+        var hits = EarlierSearch.Find(notes, "zebras", 10, TestContext.Current.CancellationToken);
 
         Assert.Equal([("/W/plan.md", "liz"), ("/W/other.md", "liz")], hits.Select(h => (h.Path.Value, h.Writer)));
         Assert.Equal(T0.AddHours(-1), hits[0].WrittenAt);
         Assert.Equal(VersionToken.Of("# Plan\nLions before.\n"), hits[0].Before);
         Assert.Null(hits[1].Before);
         Assert.False(hits[1].BeforeLost);
-        Assert.Single(EarlierSearch.Find(notes, "zebras", 1));
+        Assert.Single(EarlierSearch.Find(notes, "zebras", 1, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void A_cancelled_search_stops()
+    {
+        var notes = Enumerable.Range(0, 1000).Select(i => Note($"/W/n{i}.md", "now\n", H("Zebras then.\n", 1))).ToArray();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => EarlierSearch.Find(notes, "zebras", 10, cancelled.Token));
+    }
+
+    [Fact]
+    public void Words_split_over_sections_of_one_version_still_find_nothing()
+    {
+        // The whole version holds both words, so it passes the quick check; no one section does.
+        var notes = new[] { Note("/W/plan.md", "now\n", H("# A\nZebras.\n# B\nLions.\n", 1)) };
+
+        Assert.Empty(EarlierSearch.Find(notes, "zebras lions", 10, TestContext.Current.CancellationToken));
     }
 }

@@ -82,11 +82,15 @@ public class ChangesetRecordTests
         // A checkpoint restore that trashes a note created since: its trash record has none either.
         await Run("mkcp /Work before");
         await Create("/Work/new.md", "new\n");
+        await Run("mv /Work/older.md /Work/moved.md");
         var preview = await _sh.RunAsync("restore --checkpoint before /Work/", Ct);
         var plan = preview.Output.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))["plan: ".Length..];
         await Run($"restore --checkpoint before --plan {plan} /Work");
 
         var trashed = (await _store.ListTrashAsync(P("/Work/new.md"), Ct)).Single();
         Assert.Null(trashed.Changeset);
+        // ... and its move back has none either.
+        var back = (await _store.ListMovesAsync(P("/Work"), Ct)).Single(m => m.From == P("/Work/moved.md"));
+        Assert.Null(back.Changeset);
     }
 }
