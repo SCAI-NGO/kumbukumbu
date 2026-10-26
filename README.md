@@ -136,7 +136,7 @@ Good to know:
 - **Plain `/mcp` is for API keys only** (Claude Code, Hermes and other agents on your machine, as above). It has no OAuth: pasted into claude.ai, the consent page explains that you need a connection's URL. A connection's URL in turn takes no API key.
 - **The app's provider holds the refresh token.** The token exchange happens between Kumbu² and the provider's servers (Anthropic for Claude; OpenAI, xAI… for theirs), so the provider keeps a refresh token that, with Kumbu²'s database, opens exactly the connection's vaults. That is consistent with what you already accept: the provider sees whatever it reads anyway. Give a connection only the vaults you'd let that provider read, and read-only where writing isn't needed. Revoke ends it at once.
 - **Access tokens last an hour** by default and are refreshed by the app; `KUMBU_OAUTH_ACCESS_TOKEN_MINUTES` (5 to 1440) changes that. Every refresh replaces the refresh token too.
-- The details, from the consent to the tokens' slots: `docs/security-architecture.md`, §6 "Connections (OAuth)".
+- The details, from the consent to the tokens' slots: `docs/security-architecture.md`, §6 "Connections (OAuth)", with a diagram of the flow and of a connection's states.
 
 ### Recovery keys
 

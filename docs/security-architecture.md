@@ -319,6 +319,100 @@ A **connection** is a credential for an app that signs in with OAuth 2.1 (claude
 - **The issuer is `KUMBU_PUBLIC_URL`.** Unset, the origin of every OAuth address (the issuer, the metadata's endpoints, the `resource`, the `iss` of a redirect) is taken from the request's scheme and `Host` header (`OAuth/OAuthUrls.cs:32–33`), and the two metadata documents carrying it are served `Cache-Control: public, max-age=300` (`OAuth/Discovery.cs:15`): a request with a forged `Host` could leave another origin in a shared cache in front of the server for 5 minutes. A public instance must set `KUMBU_PUBLIC_URL` (README).
 - **Tested end to end with the MCP SDK's own OAuth client** (ModelContextProtocol 2.3.0), once identifying itself with a metadata document and once registering itself: from the 401 on the connection's URL through both metadata documents, the authorisation with the owner's consent and the token exchange, to a tool call; and both handshakes, the legacy `initialize` and the 2026-07-28 `server/discover`, on a connection's URL (`tests/Kumbu.Server.Tests/OAuth/SdkFlowTests.cs`).
 
+#### The flow, and the states of a connection
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (browser)
+    participant C as claude.ai
+    participant M as Kumbu² (MCP /mcp/c/{id})
+    participant O as Kumbu² (OAuth)
+    participant W as Kumbu² web app
+    participant DB as MongoDB
+
+    Note over C,O: Discovery
+    C->>M: POST /mcp/c/{id} (probe, no token)
+    M-->>C: 401, WWW-Authenticate: resource_metadata
+    C->>O: GET protected-resource metadata (PRM)
+    O-->>C: resource = /mcp/c/{id}, authorization_servers
+    C->>O: GET authorization-server metadata
+    O-->>C: endpoints, S256, CIMD supported
+    opt client_id is a metadata URL (CIMD)
+        O->>C: GET https://claude.ai/oauth/mcp-oauth-client-metadata
+        C-->>O: name, redirect_uris (cached, checked)
+    end
+
+    Note over U,W: Authorisation and consent
+    U->>O: GET /oauth/authorize (client_id, redirect_uri, PKCE S256, resource, state), anonymous
+    O->>DB: store the request (10 min)
+    O-->>U: 303 /consent?request=id
+    U->>W: open the consent page
+    opt no session
+        W-->>U: sign-in, then back to the consent
+    end
+    W->>O: GET /api/oauth/requests/id (session)
+    alt the connection's vault is being re-encrypted
+        O-->>W: 503, the request stays usable
+    else
+        O-->>W: app, rights, "Connect" or "Renew"
+    end
+    U->>W: Allow
+    W->>O: POST /api/oauth/requests/id/decision
+    O->>DB: vault keys wrapped under the code (slots, TTL 60 s)
+    O-->>U: redirect_uri?code, state, iss
+
+    Note over C,DB: Tokens
+    U->>C: redirect with code
+    C->>O: POST /oauth/token (code, code_verifier)
+    O->>DB: one transaction: re-wrap to refresh and access slots, delete the code's slots, earlier tokens become tombstones
+    O-->>C: access_token (60 min), refresh_token
+    C->>M: tool calls, Bearer access token
+    M->>DB: open the token's slots, per request
+    M-->>C: results (writer label = connection name)
+
+    Note over C,DB: Refresh
+    C->>O: POST /oauth/token (refresh_token)
+    O->>DB: rotate both tokens and the refresh slots, mark the old one used
+    O-->>C: new pair
+    C->>O: the same refresh_token again within 30 s (retry)
+    O-->>C: the same pair
+    C->>O: the used refresh_token again after 30 s
+    O->>DB: revoke the connection's tokens (refresh_reused)
+    O-->>C: 400 invalid_grant
+
+    Note over U,C: Revocation
+    U->>W: Revoke (final) or Change rights
+    W->>DB: slots deleted, records kept as tombstones for 24 h
+    C->>M: tool call with the old access token
+    M-->>C: 401 invalid_token (not counted as a wrong key)
+    C-->>U: "Reconnect"
+```
+
+A connection is in one of five states, shown in the list. Revoked wins over expired, which wins over the rest; a connection never authorised stays *waiting* whatever revokes its tokens meanwhile (`Accounts/Connections.cs`, `StateOf`). The reasons on the edges are `ConnectionReasons`; a final Revoke and a vault deletion that leaves no vault lead to *revoked*, every other reason to *needs_reconnect*.
+
+```mermaid
+flowchart LR
+    waiting([waiting])
+    connected([connected])
+    needs([needs_reconnect])
+    revoked([revoked])
+    expired([expired])
+
+    waiting -->|"first token exchange"| connected
+    connected -->|"password_changed, recovery, deactivated, rights_changed, rekeyed, refresh_reused, code_reused, client_revoked"| needs
+    needs -->|"Reconnect, fresh consent, token exchange"| connected
+    waiting -->|"owner's Revoke"| revoked
+    connected -->|"owner's Revoke"| revoked
+    needs -->|"owner's Revoke"| revoked
+    waiting -->|"vault deletion leaves no vault: vault_deleted"| revoked
+    connected -->|"vault_deleted"| revoked
+    needs -->|"vault_deleted"| revoked
+    waiting -->|"expiry date reached"| expired
+    connected -->|"expiry date reached"| expired
+    needs -->|"expiry date reached"| expired
+```
+
 ### Deleting vaults and accounts
 
 All in `src/Kumbu.Server/Accounts/Deletion.cs`, from a signed-in session only (API keys and the dev token get 403):
