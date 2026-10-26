@@ -5,8 +5,15 @@ import { defineConfig } from "vitest/config";
 
 const server = "http://localhost:8083";
 
+// The image build passes the version and commit (Dockerfile), the same as the server's: `0.2.0+a6362ec`. Without
+// both, as in `vite dev` and local builds, `0.0.0-dev`, which turns update detection off.
+const { KUMBU_VERSION, KUMBU_GIT_SHA } = process.env;
+const version = KUMBU_VERSION && KUMBU_GIT_SHA ? `${KUMBU_VERSION}+${KUMBU_GIT_SHA}` : "0.0.0-dev";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // At the top level, so the tests have it too.
+  define: { __KUMBU_VERSION__: JSON.stringify(version) },
   server: { proxy: { "/api": server, "/mcp": server } },
   build: {
     rollupOptions: {
