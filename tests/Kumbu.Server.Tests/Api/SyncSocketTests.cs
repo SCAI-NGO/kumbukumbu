@@ -256,6 +256,30 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_deleted_vault_is_dropped_from_the_socket()
+    {
+        var user = await NewAsync(Api);
+        using var second = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Privat" });
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        var vaults = await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct);
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user.User, user.UserKey, DateTime.UtcNow, "Both – Obsidian Laptop", vaults.ToDictionary(v => v.Id, _ => KeyRight.Write), Ct, kind: ApiKeyKind.Device);
+        using var socket = await ConnectAsync(await TicketAsync(user, key));
+        var privat = vaults.Single(v => v.Name == "Privat");
+
+        using var deleted = await user.SendAsync(HttpMethod.Post, "/api/vaults/Privat/delete", new { password = Password, confirm = "Privat" });
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Equal(Changed("Privat"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+        await Api.Services.GetRequiredService<SyncHub>().CheckAsync(Ct);
+        catalog.RaiseNotesChanged(privat.Id);
+
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
+        await user.CreateAsync("plan.md", "x\n");
+        Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task A_request_without_an_upgrade_is_400()
     {
         var user = await NewAsync(Api);

@@ -296,5 +296,12 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("There is no vault 'Fremd'.", await ErrorAsync(foreign));
         Assert.Equal("There is no vault 'Privat'.", await ErrorAsync(notGiven));
         Assert.Equal("There is no vault 'Nirgends'.", await ErrorAsync(unknown));
+
+        // Deleting at a version is no way in either.
+        var version = (await other.ReadAsync("secret.md"))["version"]!.GetValue<string>();
+        using var delete = await owner.SendAsync(HttpMethod.Delete, $"/api/notes/Fremd/secret.md?version={version}", bearer: key);
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+        Assert.Equal("There is no vault 'Fremd'.", await ErrorAsync(delete));
+        Assert.Equal("theirs\n", (await other.ReadAsync("secret.md"))["content"]!.GetValue<string>());
     }
 }

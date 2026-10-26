@@ -185,7 +185,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles(webApp);
 
 // The sync hints (GET /api/ws); the server pings every 30 s, so proxies and phones keep the connection.
-app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterval });
+// A peer that answers no ping within a minute (a phone that went away) is dropped, not kept until TCP gives up.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterval, KeepAliveTimeout = TimeSpan.FromSeconds(60) });
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();

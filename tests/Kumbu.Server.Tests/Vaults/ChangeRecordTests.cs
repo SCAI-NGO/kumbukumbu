@@ -20,8 +20,16 @@ namespace Kumbu.Server.Tests.Vaults;
 /// for each path it touched, and raises <see cref="VaultCatalog.NotesChanged"/> once per commit.
 /// </summary>
 [Collection("app")]
-public sealed class ChangeRecordTests(KumbuAppFactory app)
+public sealed class ChangeRecordTests(KumbuAppFactory app) : IDisposable
 {
+    private readonly List<Action<string>> _handlers = [];
+
+    /// <summary>The handlers go with the test: the catalog is the whole collection's.</summary>
+    public void Dispose()
+    {
+        foreach (var handler in _handlers) Catalog.NotesChanged -= handler;
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private WebApplicationFactory<Program> Api => app.PublicApi;
@@ -45,10 +53,12 @@ public sealed class ChangeRecordTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(Api);
         var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
         var hints = new ConcurrentQueue<string>();
-        Catalog.NotesChanged += id =>
+        Action<string> handler = id =>
         {
             if (id == vault.Id) hints.Enqueue(id);
         };
+        Catalog.NotesChanged += handler;
+        _handlers.Add(handler);
         return new World(user, vault, hints);
     }
 
@@ -181,13 +191,21 @@ public sealed class ChangeRecordTests(KumbuAppFactory app)
     {
         var world = await WorldAsync();
         await world.User.CreateAsync("plan.md", "one\n");
-        var recorded = world.Vault.ChangedAt[world.Path("plan.md")];
+        var path = world.Path("plan.md");
+        var seen = world.Vault.Notes[path].Note;
+        // Another writer gets there first: the compare-and-swap on the revision seen fails inside the transaction.
+        using (var other = await world.User.SendAsync(HttpMethod.Put, world.User.Url("plan.md"), new { content = "two\n", version = seen.Version }))
+        {
+            Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        }
+
+        var recorded = world.Vault.ChangedAt[path];
         world.Hints.Clear();
+        var store = new EncryptedNoteStore(Catalog, new UserCredential(world.User.User.Id, world.User.UserKey));
 
-        using var stale = await world.User.SendAsync(HttpMethod.Put, world.User.Url("plan.md"), new { content = "two\n", version = "000000000000" });
+        Assert.False(await store.TryReplaceAsync(seen, seen with { Content = "three\n", Revision = seen.Revision + 1 }, Ct));
 
-        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
-        Assert.Equal(recorded, world.Vault.ChangedAt[world.Path("plan.md")]);
+        Assert.Equal(recorded, world.Vault.ChangedAt[path]);
         Assert.Empty(world.Hints);
     }
 
