@@ -2,6 +2,7 @@
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const section = document.getElementById('section');
 const plants = [...document.querySelectorAll('.plant')];
+const announcer = document.getElementById('announcer');
 
 function openSection(name) {
   const template = document.getElementById('tpl-' + name);
@@ -12,11 +13,20 @@ function openSection(name) {
     plant.setAttribute('aria-expanded', on);
   }
   section.replaceChildren(template.content.cloneNode(true));
+  const heading = section.querySelector('h2');
+  heading.id = 'section-title';
+  section.removeAttribute('aria-label');
+  section.setAttribute('aria-labelledby', 'section-title');
+  announcer.textContent = 'Showing: ' + heading.textContent;
   for (const card of section.querySelectorAll('.moment')) {
     card.addEventListener('click', () => popOut(card));
+    // Enter opens on keydown, Space on keyup, as native buttons do. Opening on Space's keydown would move
+    // focus to "close" before the keyup, and browsers that click a button on keyup (Firefox) would close it.
     card.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); popOut(card); }
+      if (e.key === 'Enter') { e.preventDefault(); popOut(card); }
+      else if (e.key === ' ') e.preventDefault();
     });
+    card.addEventListener('keyup', e => { if (e.key === ' ') { e.preventDefault(); popOut(card); } });
   }
   // On a phone the section starts below the fold; bring its top into view.
   if (section.getBoundingClientRect().top > innerHeight * 0.75)
