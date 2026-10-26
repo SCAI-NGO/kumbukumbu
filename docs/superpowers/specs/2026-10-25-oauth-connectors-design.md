@@ -4,16 +4,16 @@ Date: 2026-10-25. Decided with Chris in a brainstorming session, from a brief by
 
 ## 1. Why
 
-Kumbu² works well from Claude Code with a static API key. claude.ai (web, Desktop and the mobile apps) can't send a static header to a custom connector: it expects OAuth. Chris wants to show Kumbu² on Tuesday 2026-10-27 to COR.energy's CTO and team in **Claude Desktop, claude.ai on the web and on the phone**, and Kumbu² is a general-purpose tool for everyone, so other app clients (Grok, ChatGPT and whatever comes) should connect the same way.
+Kumbu² works well from Claude Code with a static API key. claude.ai (web, Desktop and the mobile apps) can't send a static header to a custom connector: it expects OAuth. Chris wants to show Kumbu² on Tuesday 2026-10-27 to a workplace CTO and team in **Claude Desktop, claude.ai on the web and on the phone**, and Kumbu² is a general-purpose tool for everyone, so other app clients (Grok, ChatGPT and whatever comes) should connect the same way.
 
 ## 2. What the user sees (the demo, decided by Chris)
 
 The connection starts **in Kumbu²**, like a Discord app authorisation that shows its rights (decided by Chris):
 
-1. Chris has a Kumbu² account for his work and a vault `cor.energy`.
-2. In Kumbu², **Connect an app** (with "Claude" as the first suggestion): he names the connection, e.g. "cor.energy", chooses **vaults and rights** per vault (none / read / read and write — exactly as for an API key) and optionally an **expiry** (as for API keys).
-3. Kumbu² shows the connection's **own connector URL**, e.g. `https://kumbu.tidesson.net/mcp/c/k7f3q9`, with a copy button and three lines of instructions ("In claude.ai: Settings → Connectors → Add custom connector, paste this URL, leave client ID and secret empty; tip: name the connector like this connection, e.g. 'Kumbu cor.energy'"). The id in the URL is not a secret; it only says *which* connection is meant.
-4. In claude.ai (his work account) he adds the connector with that URL. Claude sends him to **Kumbu²'s consent page** (a page of the React app, in its look). Not signed in to Kumbu² there (e.g. in the phone's in-app browser)? Kumbu²'s normal sign-in comes first, then back. The page says exactly what is being connected: "**Claude** (claude.ai) wants to use your connection **cor.energy**: vault cor.energy, read and write" — **Allow** or **Deny**. This page is Kumbu²'s own; Claude never sees the password.
+1. Chris has a Kumbu² account for his work and a vault `Work`.
+2. In Kumbu², **Connect an app** (with "Claude" as the first suggestion): he names the connection, e.g. "Work", chooses **vaults and rights** per vault (none / read / read and write — exactly as for an API key) and optionally an **expiry** (as for API keys).
+3. Kumbu² shows the connection's **own connector URL**, e.g. `https://kumbu.tidesson.net/mcp/c/k7f3q9`, with a copy button and three lines of instructions ("In claude.ai: Settings → Connectors → Add custom connector, paste this URL, leave client ID and secret empty; tip: name the connector like this connection, e.g. 'Kumbu Work'"). The id in the URL is not a secret; it only says *which* connection is meant.
+4. In claude.ai (his work account) he adds the connector with that URL. Claude sends him to **Kumbu²'s consent page** (a page of the React app, in its look). Not signed in to Kumbu² there (e.g. in the phone's in-app browser)? Kumbu²'s normal sign-in comes first, then back. The page says exactly what is being connected: "**Claude** (claude.ai) wants to use your connection **Work**: vault Work, read and write" — **Allow** or **Deny**. This page is Kumbu²'s own; Claude never sees the password.
 5. Allow → back in Claude the connector shows *Connected*; a connector added on claude.ai is available in Desktop and the mobile apps too. Deny → Claude gets `access_denied`.
 6. In Kumbu², the connection is listed next to the API keys: name, its connector URL (copyable again), client once authorised, vaults and rights, created, last used, expiry, **Revoke**.
 

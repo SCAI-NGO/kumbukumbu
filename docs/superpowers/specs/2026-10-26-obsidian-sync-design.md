@@ -1,6 +1,6 @@
 # Obsidian sync plugin and pairing — Design
 
-Date: 2026-10-26. Decided with Chris in a brainstorming session on the morning before the COR.energy demo (Tuesday 2026-10-27). It replaces the draft [obsidian-plugin-design-spec.md](../../obsidian-plugin-design-spec.md) of 2026-10-22: what that draft settled (conflict copies with a callout, AGPL, the secret in `SecretStorage`) is carried over here, and the rest is updated to the server as it is now (steps 7 to 10 have landed since). Where this document says *Claude's call*, the decision was not discussed with Chris and is open to review.
+Date: 2026-10-26. Decided with Chris in a brainstorming session on the morning before a demo (Tuesday 2026-10-27). It replaces the draft [obsidian-plugin-design-spec.md](../../obsidian-plugin-design-spec.md) of 2026-10-22: what that draft settled (conflict copies with a callout, AGPL, the secret in `SecretStorage`) is carried over here, and the rest is updated to the server as it is now (steps 7 to 10 have landed since). Where this document says *Claude's call*, the decision was not discussed with Chris and is open to review.
 
 Plugin code lives in [SCAI-NGO/kumbu-obsidian](https://github.com/SCAI-NGO/kumbu-obsidian) (created 2026-10-26, licence, README and an `obisdian/` vault only); the server, web app and this document live here.
 
@@ -8,7 +8,7 @@ Plugin code lives in [SCAI-NGO/kumbu-obsidian](https://github.com/SCAI-NGO/kumbu
 
 A person writes in Obsidian as they always do, on a laptop or a phone. Their notes are in Kumbu², where their agents read and write them. A change on either side shows up on the other within seconds while online, and on the next start otherwise. Nobody loses an edit: a real conflict produces two visible versions, never a silent overwrite.
 
-At COR.energy this is a personal second brain per employee; sharing between people is out of scope.
+In the first workplace pilot this is a personal second brain per person; sharing between people is out of scope.
 
 ### The demo (decided by Chris)
 

@@ -8,7 +8,7 @@
 
 A person writes in Obsidian as they always do, on desktop or mobile, online or offline. Their notes are in Kumbu², where their agents read and write them. Changes on either side show up on the other within seconds while online, and after reconnecting otherwise. Nobody loses an edit, ever: a conflict produces two visible versions, never a silent overwrite.
 
-At COR.energy this is a personal second brain per employee; sharing between people is out of scope (handled by another tool).
+In the first workplace pilot this is a personal second brain per person; sharing between people is out of scope (handled by another tool).
 
 ### Success criteria
 - Edit a note in Obsidian → an agent can `cat` the new text a few seconds later.

@@ -115,8 +115,6 @@ public sealed partial class WelcomeTextTests
     {
         foreach (var (name, content) in WelcomeVault.Texts())
         {
-            Assert.False(CorRegex().IsMatch(content), $"{name} names COR");
-            Assert.DoesNotContain("cor.energy", content, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("tidesson", content, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(
                 content.Split("{{").Length - 1,
@@ -168,7 +166,4 @@ public sealed partial class WelcomeTextTests
 
     [GeneratedRegex(@"renam\w* (the|this|your|a) (whole )?vault|vault\w* can be renamed", RegexOptions.IgnoreCase)]
     private static partial Regex VaultRenameRegex();
-
-    [GeneratedRegex(@"\bCOR\b", RegexOptions.IgnoreCase)]
-    private static partial Regex CorRegex();
 }

@@ -25,14 +25,14 @@ public sealed class ConnectionApiTests(KumbuAppFactory app)
         using var second = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Privat" });
         Assert.Equal(HttpStatusCode.Created, second.StatusCode);
 
-        using var created = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "cor.energy", vaults = Vaults(user.Vault, "write"), expiresInDays = 90 });
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/connections", new { name = "Work", vaults = Vaults(user.Vault, "write"), expiresInDays = 90 });
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var json = await JsonAsync(created);
         var id = json["id"]!.GetValue<string>();
         Assert.Matches("^[a-z2-7]{16}$", id);
         Assert.Equal($"/api/connections/{id}", created.Headers.Location!.OriginalString);
-        Assert.Equal("cor.energy", json["name"]!.GetValue<string>());
+        Assert.Equal("Work", json["name"]!.GetValue<string>());
         Assert.Equal(KumbuAppFactory.PublicUrl + "/mcp/c/" + id, json["url"]!.GetValue<string>());
         Assert.Equal("write", json["vaults"]![user.Vault]!.GetValue<string>());
         Assert.Equal("waiting", json["state"]!.GetValue<string>());

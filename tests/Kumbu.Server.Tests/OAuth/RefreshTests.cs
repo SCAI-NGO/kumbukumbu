@@ -24,7 +24,7 @@ namespace Kumbu.Server.Tests.OAuth;
 public sealed class RefreshTests(KumbuAppFactory app)
 {
     private const string Callback = "https://claude.test/cb";
-    private const string Name = "cor.energy";
+    private const string Name = "Work";
     private const string Initialize =
         """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}""";
 

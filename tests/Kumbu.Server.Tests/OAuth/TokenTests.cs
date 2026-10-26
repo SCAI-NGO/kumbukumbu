@@ -29,7 +29,7 @@ namespace Kumbu.Server.Tests.OAuth;
 public sealed class TokenTests(KumbuAppFactory app)
 {
     private const string Callback = "https://claude.test/cb";
-    private const string Name = "cor.energy";
+    private const string Name = "Work";
     private const string Initialize =
         """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}""";
 
@@ -47,7 +47,7 @@ public sealed class TokenTests(KumbuAppFactory app)
             s.AddSingleton<TimeProvider>(time);
         }));
 
-    /// <summary>A user with vaults <c>Arbeit</c> (write) and <c>Privat</c> (read) on one connection named <c>cor.energy</c>.</summary>
+    /// <summary>A user with vaults <c>Arbeit</c> (write) and <c>Privat</c> (read) on one connection named <c>Work</c>.</summary>
     private static async Task<(RestClient Owner, string Id)> ConnectionAsync(WebApplicationFactory<Program> api, int? expiresInDays = null)
     {
         var owner = await RestClient.NewAsync(api);

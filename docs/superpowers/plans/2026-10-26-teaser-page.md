@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- British English; no COR-specific content; the worldbuilding project is never named; no personal names.
+- British English; no content specific to one organisation; the worldbuilding project is never named; no personal names.
 - No request leaves the page's own origin except the user clicking an outside link: no Google Fonts, no CDN, no analytics, no cookies.
 - Every outside link: `target="_blank" rel="noopener"`.
 - Palette "Meadow" and type sizes exactly as in the sketch; light only.

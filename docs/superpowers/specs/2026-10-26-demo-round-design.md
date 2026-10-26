@@ -1,10 +1,10 @@
 # The demo round: app updates and PWA, export and import, welcome vault, activity, GDPR deletion — Design
 
-Date: 2026-10-26. Decided with Chris in a brainstorming session on the day before the COR.energy demo (Tuesday 2026-10-27). Five independent features, one pull request each, planned together with the Obsidian sync ([2026-10-26-obsidian-sync-design.md](2026-10-26-obsidian-sync-design.md)). Where this document says *Claude's call*, the decision was not discussed with Chris and is open to review.
+Date: 2026-10-26. Decided with Chris in a brainstorming session on the day before a demo (Tuesday 2026-10-27). Five independent features, one pull request each, planned together with the Obsidian sync ([2026-10-26-obsidian-sync-design.md](2026-10-26-obsidian-sync-design.md)). Where this document says *Claude's call*, the decision was not discussed with Chris and is open to review.
 
 ## Global
 
-- **Audience:** Kumbu² is built by SCAI for an open audience of users and deployers. COR.energy is invited to use and sponsor it; it is not the client. Nothing in code, copy, defaults or docs names COR or its addresses; whatever a deployer would want to set is configuration.
+- **Audience:** Kumbu² is built by SCAI for an open audience of users and deployers. An organisation that pilots it is invited to use and sponsor it; it is not the client. Nothing in code, copy, defaults or docs names an organisation or its addresses; whatever a deployer would want to set is configuration.
 - **Users:** prosumers and professionals. Defaults trust them; safer options are offered, not forced.
 - **Language:** all product text in English for now (British spelling, as the repo); other languages later.
 - **Who may:** export, import and everything in §5 are for **sessions only** (the user, or an admin for §5), never for API keys, connections or agents.

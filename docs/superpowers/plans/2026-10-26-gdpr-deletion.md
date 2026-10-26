@@ -181,7 +181,7 @@ test("Copy reply writes replyText to the clipboard; Download receipt saves kumbu
 
 - [ ] **Step 1:** README: how an admin handles a privacy request (identity, one month, the button, the receipt kept as a record, the reply), that **deletions don't reach backups**, and the new variable with format and example (`privacy@example.org`). `.env.example`: `KUMBU_PRIVACY_CONTACT=privacy@example.org` commented as optional.
 - [ ] **Step 2:** `security-architecture.md`: active users can be deleted in one step; what the receipt holds and doesn't.
-- [ ] **Step 3: Verify** no doc names a real organisation's address: `rg -n -i "cor\.energy|@cor" README.md .env.example docs/security-architecture.md` shows no new hits from this task.
+- [ ] **Step 3: Verify** no doc shows a real organisation's address.
 - [ ] **Step 4: Commit** `Document deletion for privacy requests`
 
 *(Tasks 5 and 6 form one unit and are dropped together if time runs short.)*

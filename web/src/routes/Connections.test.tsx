@@ -13,7 +13,7 @@ const vaults = [
 ];
 const base = {
   id: "c1",
-  name: "cor.energy",
+  name: "Work",
   url,
   vaults: { Arbeit: "write" },
   createdAt: "2026-10-01T09:00:00Z",
@@ -61,18 +61,18 @@ describe("Connections", () => {
     expect(screen.getByRole("heading", { name: "Connections" })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
     const dialog = screen.getByRole("dialog", { name: "Connect an app" });
-    expect(within(dialog).getByLabelText("Name")).toHaveAttribute("placeholder", "e.g. cor.energy");
+    expect(within(dialog).getByLabelText("Name")).toHaveAttribute("placeholder", "e.g. Work");
     expect(within(dialog).getByText("Claude")).toBeInTheDocument();
-    await userEvent.type(within(dialog).getByLabelText("Name"), "cor.energy");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
     await userEvent.click(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Read and write"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
 
     expect(await screen.findByText(url)).toBeInTheDocument();
-    expect(bodies).toEqual([{ name: "cor.energy", vaults: { Arbeit: "write" }, expiresInDays: 90 }]);
+    expect(bodies).toEqual([{ name: "Work", vaults: { Arbeit: "write" }, expiresInDays: 90 }]);
     expect(screen.getByText("Connector URL")).toBeInTheDocument();
     expect(screen.getByText("1. In claude.ai: Settings → Connectors → Add custom connector.")).toBeInTheDocument();
     expect(screen.getByText("2. Paste this URL. Leave client ID and secret empty.")).toBeInTheDocument();
-    expect(screen.getByText("3. Tip: name the connector like this connection, e.g. 'Kumbu cor.energy'.")).toBeInTheDocument();
+    expect(screen.getByText("3. Tip: name the connector like this connection, e.g. 'Kumbu Work'.")).toBeInTheDocument();
     expect(screen.getByText("Other apps: add a remote MCP server with this URL; it signs in with OAuth.")).toBeInTheDocument();
     expect(screen.getByText("The address is not a secret: it only says which connection is meant. Access needs your consent in Kumbu².")).toBeInTheDocument();
 
@@ -153,7 +153,7 @@ describe("Connections", () => {
   ])("explains the reason %s", async (reason, text) => {
     api([{ ...base, state: "revoked", reason, revokedAt: "2026-10-06T09:00:00Z" }]);
     renderApp("/keys");
-    expect((await screen.findByText("cor.energy")).closest("li")).toHaveTextContent(`Revoked: ${text}`);
+    expect((await screen.findByText("Work")).closest("li")).toHaveTextContent(`Revoked: ${text}`);
   });
 
   it("changing rights says the app has to reconnect", async () => {
@@ -162,7 +162,7 @@ describe("Connections", () => {
       "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), json(200, { ...base, vaults: { Home: "read" }, state: "needs_reconnect", reason: "rights_changed" })),
     });
     renderApp("/keys");
-    await userEvent.click(await screen.findByRole("button", { name: "Change rights of cor.energy" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change rights of Work" }));
     const dialog = screen.getByRole("dialog", { name: "Change rights" });
     expect(dialog).toHaveTextContent("The app has to reconnect after this.");
     expect(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Read and write")).toBeChecked();
@@ -180,15 +180,15 @@ describe("Connections", () => {
     let calls = 0;
     const fetch = api([base], { "DELETE /api/connections/c1": () => (calls++, noContent()) });
     renderApp("/keys");
-    await userEvent.click(await screen.findByRole("button", { name: "Revoke cor.energy" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Revoke Work" }));
     const confirm = screen.getByRole("alertdialog");
-    expect(confirm).toHaveTextContent("Revoke cor.energy?");
+    expect(confirm).toHaveTextContent("Revoke Work?");
     expect(confirm).toHaveTextContent("The app loses access at once. Its address can't be used again; make a new connection instead.");
     await userEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(calls).toBe(0);
 
     const before = gets(fetch);
-    await userEvent.click(screen.getByRole("button", { name: "Revoke cor.energy" }));
+    await userEvent.click(screen.getByRole("button", { name: "Revoke Work" }));
     await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(calls).toBe(1));
     await waitFor(() => expect(gets(fetch)).toBe(before + 1));
@@ -200,7 +200,7 @@ describe("Connections", () => {
     renderApp("/keys", queryClient);
     await userEvent.click(await screen.findByRole("button", { name: "Connect an app" }));
     const dialog = screen.getByRole("dialog", { name: "Connect an app" });
-    await userEvent.type(within(dialog).getByLabelText("Name"), "cor.energy");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Work");
     await userEvent.click(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Read"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Connect an app" }));
     await screen.findByText(url);

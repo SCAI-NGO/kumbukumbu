@@ -37,7 +37,7 @@ The page starts from moments the reader knows, not from features. Use cases and 
 - …someone says "too complicated for me" because jargon came too early.
 - …it promises what isn't tested, e.g. that a particular open-weights model works well. Say "any app that speaks MCP", not "works great with model X".
 - …it names the author's personal projects. The example is "a worldbuilding project", never by name.
-- …it is COR-specific in any way (`kumbu-open-audience`: SCAI builds for an open audience).
+- …it is specific to one organisation in any way (`kumbu-open-audience`: SCAI builds for an open audience).
 - …it tracks visitors or leaks their address to third parties.
 
 ## Non-goals

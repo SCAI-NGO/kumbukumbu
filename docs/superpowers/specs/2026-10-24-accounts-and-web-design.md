@@ -1,12 +1,12 @@
 # Accounts, the Web App and a Public Deployment — Design (steps 8 and 9a)
 
 **Date:** 2026-10-24
-**Scope:** build order step 8 (users, admin, invites, API keys) together with the first part of step 9 (the web app, mobile first) and a public deployment, for the COR.energy presentation on Tuesday 2026-10-27. GitHub login, passkeys and OAuth for claude.ai are designed here but built after the must-haves.
+**Scope:** build order step 8 (users, admin, invites, API keys) together with the first part of step 9 (the web app, mobile first) and a public deployment, for the first workplace presentation on Tuesday 2026-10-27. GitHub login, passkeys and OAuth for claude.ai are designed here but built after the must-haves.
 **Status:** written with Chris on 2026-10-24 (brainstorming over chat while he was away). Decisions he made are marked *Chris*; the rest are Claude's calls, marked *call*, for review.
 
 ## 1. Intent
 
-Kumbu² has to be usable by people other than its developer: invited, signed in, with their own vaults, in a web app on the phone and the laptop, and with Claude reading and writing their notes through MCP. The presentation shows exactly that, as a developer at COR.energy would meet it:
+Kumbu² has to be usable by people other than its developer: invited, signed in, with their own vaults, in a web app on the phone and the laptop, and with Claude reading and writing their notes through MCP. The presentation shows exactly that, as a developer at a workplace would meet it:
 
 1. Chris sends an invitation. The developer opens the link, creates an account, downloads a recovery key.
 2. The (at first empty) web app: create a vault, upload Markdown (files or a whole Obsidian folder), read and edit notes.
@@ -15,7 +15,7 @@ Kumbu² has to be usable by people other than its developer: invited, signed in,
 
 Success on Tuesday (*Chris*): MCP with Claude works; uploading, viewing and editing Markdown works; admin and invitations work; the CTO document exists. Nice to have, in this order: OAuth so claude.ai can add Kumbu² as a connector; GitHub login; passkeys. The focus is "a great post-auth experience" (*Chris*).
 
-Non-goals for this step: attachments (v1 stays text; *Chris*: upload means Markdown files and folders), team sharing of vaults (concept: personal notes), the desktop layout (mobile first works on the desktop too; *Chris*), Kubernetes manifests (after Tuesday, if COR wants an instance), Kanban (v2).
+Non-goals for this step: attachments (v1 stays text; *Chris*: upload means Markdown files and folders), team sharing of vaults (concept: personal notes), the desktop layout (mobile first works on the desktop too; *Chris*), Kubernetes manifests (after Tuesday, if an organisation wants an instance), Kanban (v2).
 
 Anti-goals: an admin who can read users' notes; a public instance where the dev token still opens everything; a sign-up path that skips the recovery key.
 
@@ -24,7 +24,7 @@ Anti-goals: an admin who can read users' notes; a public instance where the dev 
 | Instance | Where | Notes |
 |---|---|---|
 | `kumbu.tidesson.net` | Chris's VPS, Docker Compose behind Traefik with Let's Encrypt (*Chris*) | The community reference installation and the demo. Public. |
-| `kumbu.internal.cor.energy` | COR.energy's Kubernetes with an ingress (*Chris*) | Only if the presentation goes well; publicly reachable, so people can work from anywhere (*Chris*). A later step: published image, manifests or a Helm chart. |
+| `kumbu.example.internal` | An employer's Kubernetes with an ingress (*Chris*) | Only if the presentation goes well; publicly reachable, so people can work from anywhere (*Chris*). A later step: published image, manifests or a Helm chart. |
 
 Consequences (*call*):
 - **The dev token is off on a public instance.** `Kumbu:DevToken` becomes optional; without it, only user sessions and API keys open vaults. Compose for Traefik doesn't set it.

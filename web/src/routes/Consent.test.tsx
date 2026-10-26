@@ -11,7 +11,7 @@ const view = {
   requestId: "r1",
   client: { name: "Claude · claude.ai", host: "claude.ai", verified: true },
   redirectHost: "claude.ai",
-  connection: { name: "cor.energy", vaults: { Arbeit: "write", Privat: "read" }, expiresAt: null as string | null, currentClient: null },
+  connection: { name: "Work", vaults: { Arbeit: "write", Privat: "read" }, expiresAt: null as string | null, currentClient: null },
   renewal: false,
   problem: null as string | null,
 };
@@ -50,7 +50,7 @@ describe("Consent", () => {
     api();
     renderApp("/consent?request=r1");
     expect(await screen.findByRole("heading", { name: "Connect Claude · claude.ai?" })).toBeInTheDocument();
-    expect(screen.getByText(/wants to use your connection/)).toHaveTextContent("Claude · claude.ai (claude.ai) wants to use your connection cor.energy:");
+    expect(screen.getByText(/wants to use your connection/)).toHaveTextContent("Claude · claude.ai (claude.ai) wants to use your connection Work:");
     expect(screen.getByText("Arbeit: read and write")).toBeInTheDocument();
     expect(screen.getByText("Privat: read")).toBeInTheDocument();
     expect(screen.getByText("It returns to claude.ai afterwards.")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("Consent", () => {
   it("says when it renews a connection", async () => {
     api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, renewal: true }) });
     renderApp("/consent?request=r1");
-    expect(await screen.findByRole("heading", { name: "Renew cor.energy for Claude · claude.ai?" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Renew Work for Claude · claude.ai?" })).toBeInTheDocument();
     expect(screen.getByText("This renews the connection with the same vaults and rights.")).toBeInTheDocument();
   });
 
