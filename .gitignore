@@ -486,3 +486,9 @@ $RECYCLE.BIN/
 .env
 /src/Kumbu.Server/wwwroot/
 .claude/worktrees/
+
+# Obsidian vault state (settings stay tracked)
+obisdian/.obsidian/workspace.json
+obisdian/.obsidian/workspace-mobile.json
+obisdian/.obsidian/cache
+obisdian/.trash/
