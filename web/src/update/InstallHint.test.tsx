@@ -48,6 +48,17 @@ describe("the install hint", () => {
     expect(hint()).not.toBeInTheDocument();
   });
 
+  it("is shown on one visit only, even without an answer", () => {
+    device({ phone: true, standalone: false });
+    renderHint();
+    expect(hint()).toBeInTheDocument();
+    cleanup();
+
+    renderHint();
+
+    expect(hint()).not.toBeInTheDocument();
+  });
+
   it("is not shown on a desktop pointer", () => {
     device({ phone: false, standalone: false });
     renderHint();

@@ -10,11 +10,14 @@ interface UpdateState {
   available: Version | null;
   /** The reload into `available` happened, yet this is still the old app (a cache in the way): not tried again. */
   failed: Version | null;
+  /** The failure the user put away (`0.2.0+a6362ec`): not shown again in this tab. */
+  dismissed: string | null;
   /** The semver this tab just reloaded into, for a short notice. */
   updated: string | null;
   /** A response's header; null (an older server, a test double) leaves everything as it was. */
   report(server: string | null): void;
   fail(v: Version): void;
+  dismissFailed(): void;
   markUpdated(semver: string | null): void;
 }
 
@@ -22,13 +25,21 @@ export const useUpdate = create<UpdateState>()((set, get) => ({
   server: null,
   available: null,
   failed: null,
+  dismissed: null,
   updated: null,
   // Every API response reports: the same version again changes nothing, so nothing re-renders.
   report: (server) => {
     if (!server || server === get().server) return;
-    set({ server, available: newerOnServer(appVersion, server) });
+    // The server runs this app's own build again (a deploy that settled, a rollback): nothing failed any more.
+    set({ server, available: newerOnServer(appVersion, server), ...(server === appVersion ? { failed: null } : {}) });
   },
-  fail: (v) => set({ failed: v }),
+  fail: (v) => {
+    if (get().dismissed !== `${v.semver}+${v.sha}`) set({ failed: v });
+  },
+  dismissFailed: () => {
+    const { failed } = get();
+    if (failed) set({ failed: null, dismissed: `${failed.semver}+${failed.sha}` });
+  },
   markUpdated: (semver) => set({ updated: semver }),
 }));
 

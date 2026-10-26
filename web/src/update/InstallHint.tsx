@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { BarButton } from "../note/ChangedElsewhere";
 
@@ -42,11 +42,15 @@ function dismiss(): void {
 
 /**
  * Without a service worker Chrome shows no install banner of its own (spec §1): once, on a phone that hasn't
- * installed Kumbu², a short hint leads to the steps in Settings. "Not now" is for good, on this device.
+ * installed Kumbu², a short hint leads to the steps in Settings. It is not shown again on this device, answered or not.
  */
 export default function InstallHint() {
   const [shown, setShown] = useState(() => isPhone() && !isStandalone() && !dismissed());
   const navigate = useNavigate();
+  // Once means once: shown on this visit, not on the next, whether or not it was answered.
+  useEffect(() => {
+    if (shown) dismiss();
+  }, [shown]);
   if (!shown) return null;
 
   const close = () => {

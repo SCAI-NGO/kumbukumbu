@@ -10,6 +10,7 @@ import { useEditor } from "../state/editor";
 import { collectFromDrop, collectFromInput, type Picked } from "./collectFiles";
 import ConflictList from "./ConflictList";
 import { planUpload, toBatches, type Skipped, type UploadFile } from "./planUpload";
+import { useHoldUpdates } from "../update/apply";
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -83,6 +84,8 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
   // A batch in flight is finished first: closing then would leave the user without the summary. Conflicts need a
   // choice: closing would drop the held new notes of their batches without a word.
   const busy = view.kind === "reading" || view.kind === "running" || view.kind === "conflicts";
+  // A reload into a new release would cut the upload off between batches: it waits.
+  useHoldUpdates(busy);
   const close = () => {
     if (!busy) setOverlay("none");
   };

@@ -21,6 +21,8 @@ test("the manifest says what the spec says", () => {
   expect(m.display).toBe("standalone");
   expect(m.start_url).toBe("/");
   expect(m.scope).toBe("/");
+  // A stable identity: a later change of start_url stays the same installed app.
+  expect(m.id).toBe("/");
   expect(m.theme_color).toBe("#111113");
   expect(m.background_color).toBe("#111113");
 });
@@ -57,6 +59,7 @@ test("the page links the manifest and the icons", () => {
     '<link rel="icon" href="/favicon.svg" type="image/svg+xml"',
     '<link rel="apple-touch-icon" href="/apple-touch-icon.png"',
     '<meta name="theme-color" content="#111113"',
+    '<meta name="mobile-web-app-capable" content="yes"',
     '<meta name="apple-mobile-web-app-capable" content="yes"',
     '<meta name="apple-mobile-web-app-title" content="Kumbu²"',
     '<meta name="apple-mobile-web-app-status-bar-style" content="black"',

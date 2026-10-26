@@ -1,6 +1,7 @@
 {
   "name": "Kumbu²",
   "short_name": "Kumbu²",
+  "id": "/",
   "display": "standalone",
   "start_url": "/",
   "scope": "/",

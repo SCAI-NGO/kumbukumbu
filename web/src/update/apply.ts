@@ -35,36 +35,78 @@ const full = (v: Version) => `${v.semver}+${v.sha}`;
 /** The page's reload, replaceable in tests (jsdom's `location.reload` can't be stubbed). */
 export const page = { reload: () => window.location.reload() };
 
-let scrollTop: () => number = () => 0;
+let scrollTop: (() => number) | null = null;
 
-/** The open note's view says how far down its reader is; null when it goes. */
+/** The open note's view says how far down its reader is; null when it goes (then nothing is restored). */
 export function registerScrollTop(getter: (() => number) | null): void {
-  scrollTop = getter ?? (() => 0);
+  scrollTop = getter;
+}
+
+let holds = 0;
+
+/**
+ * Something a reload would lose that isn't the note editor's (a secret shown once and not saved yet, an upload
+ * running) holds updates until it lets go: the next navigation or return to the page tries again.
+ */
+export function holdUpdates(): () => void {
+  holds++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    holds--;
+  };
+}
+
+/** Holds updates while `active`. */
+export function useHoldUpdates(active: boolean): void {
+  useEffect(() => (active ? holdUpdates() : undefined), [active]);
+}
+
+// Text typed into a field (a dialog's name, a form, the sign-in screen) is lost by a reload too: the fields typed
+// into are remembered, and hold updates while they are on the page and not empty. The note editor's source has
+// its own guard (beforeRead), and its text is never empty.
+const notTyped = new Set(["checkbox", "radio", "range", "file", "color", "button", "submit", "reset", "hidden", "image"]);
+const typed = new Set<HTMLInputElement | HTMLTextAreaElement>();
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "input",
+    (e) => {
+      const field = e.target;
+      if (field instanceof HTMLTextAreaElement && field.id !== "markdown-source") typed.add(field);
+      else if (field instanceof HTMLInputElement && !notTyped.has(field.type)) typed.add(field);
+    },
+    true,
+  );
+}
+
+function busy(): boolean {
+  for (const field of typed) if (!field.isConnected || field.value === "") typed.delete(field);
+  return holds > 0 || typed.size > 0;
 }
 
 /**
- * Reloads into the server's newer build if that is safe now: Read mode always is; Write mode once the editor has
- * saved everything (no conflict, no failure). At most once per version: if this is still the old app after the
- * reload, it says so instead of trying again.
+ * Reloads into the server's newer build if that is safe now: nothing holds it (a secret not saved, an upload,
+ * typed text), no text a session end kept waits for its sign-in, and an open editor has saved everything (no
+ * conflict, no failure); asked twice, as a keystroke may come in while the first save runs. At most once per
+ * version: if this is still the old app after the reload, it says so instead of trying again. `reason` is who
+ * asked: the bar's button, or the watcher; both are held back the same way.
  */
-export async function tryReload(reason: "auto" | "button", reload = () => page.reload()): Promise<boolean> {
+export async function tryReload(_reason: "auto" | "button", reload = () => page.reload()): Promise<boolean> {
   const { available, fail } = useUpdate.getState();
   if (!available) return false;
   if (read(reloadedKey) === full(available)) {
     fail(available);
     return false;
   }
-  const { mode, beforeRead } = useEditor.getState();
-  if (mode === "write") {
-    // Before the editor has loaded there is no guard: nothing typed yet, but on its own the app doesn't guess.
-    if (!beforeRead) {
-      if (reason === "auto") return false;
-    } else if (!(await beforeRead({ reread: false }))) {
-      return false;
-    }
-  }
+  // A search hit's section waits to be scrolled to (memory only): the reload would open the note at the top.
+  const { mode, beforeRead, draft, scrollTarget } = useEditor.getState();
+  if (draft || scrollTarget || busy()) return false;
+  if (beforeRead && !((await beforeRead({ reread: false })) && (await beforeRead({ reread: false })))) return false;
+  if (busy()) return false;
   write(reloadedKey, full(available));
-  write(restoreKey, JSON.stringify({ mode, scrollTop: Math.max(0, Math.round(scrollTop())) } satisfies Restore));
+  // Only from a note's page: the URL says which note, this says where in it. Anywhere else nothing is restored.
+  write(restoreKey, scrollTop ? JSON.stringify({ mode, scrollTop: Math.max(0, Math.round(scrollTop())) } satisfies Restore) : null);
   reload();
   return true;
 }
@@ -82,6 +124,11 @@ export function takeRestore(): Restore | null {
     return null;
   }
 }
+
+// The server runs this app's own build again: the guard for another build is over (store.ts clears `failed`).
+useUpdate.subscribe((state, previous) => {
+  if (state.server !== previous.server && state.server === appVersion) write(reloadedKey, null);
+});
 
 /** After a reload: this app is the version it reloaded for, so say so. Still the old one: the guard fires later. */
 function settleReload(): void {
@@ -103,12 +150,15 @@ export function useApplyUpdates(): void {
   useEffect(settleReload, []);
 
   useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      void checkVersion().then(() => tryReload("auto"));
-    };
+    const check = () => void checkVersion().then(() => tryReload("auto"));
+    const onVisible = () => document.visibilityState === "visible" && check();
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    // A part of the app that won't load (a lazy page's old chunk, gone after a deploy) means a new release, likely.
+    window.addEventListener("vite:preloadError", check);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("vite:preloadError", check);
+    };
   }, []);
 
   // A version this tab already reloaded for, and still old: said at once, not at the next navigation.

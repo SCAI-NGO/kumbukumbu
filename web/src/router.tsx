@@ -8,6 +8,7 @@ import { RouteError } from "./components/AppError";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
+import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
 import { useApplyUpdates } from "./update/apply";
 import UpdateBar from "./update/UpdateBar";
@@ -34,13 +35,18 @@ function Root() {
   useEffect(() => {
     if (!ended) return;
     useSession.setState({ ended: false });
+    // Write mode ends with the session: the editor keeps its unsaved text as a draft, and the note opens again
+    // after signing in (in Write mode, with the draft). Left on, Write mode would outlive the editor.
+    useEditor.setState({ mode: "read", currentPath: null });
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
+  // The shell shows the update bar under its own top bar; every other page has it above.
+  const inShell = pathname === "/" || pathname.startsWith("/notes/");
   return (
     <>
+      {!inShell && <UpdateBar />}
       <Outlet />
-      <UpdateBar />
     </>
   );
 }

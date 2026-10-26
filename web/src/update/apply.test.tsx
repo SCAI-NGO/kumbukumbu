@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { useLeaveGuard } from "../components/shownOnce";
+import { routerFuture } from "../router";
 import userEvent from "@testing-library/user-event";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
-import { page, tryReload } from "./apply";
+import { holdUpdates, page, registerScrollTop, tryReload } from "./apply";
 import { useUpdate } from "./store";
 import UpdateBar from "./UpdateBar";
 
@@ -42,6 +46,7 @@ afterEach(() => {
   useUpdate.setState(initialUpdate, true);
   useSession.getState().reset();
   useEditor.getState().reset();
+  registerScrollTop(null);
   // A stubbed visibilityState goes back to jsdom's own.
   delete (document as { visibilityState?: unknown }).visibilityState;
 });
@@ -112,11 +117,12 @@ describe("applying an update", () => {
     });
     useEditor.setState({ mode: "write", beforeRead });
     useUpdate.getState().report(NEWER);
+    registerScrollTop(() => 0);
 
     expect(await tryReload("auto", () => order.push("reload"))).toBe(true);
 
     expect(beforeRead).toHaveBeenCalledWith({ reread: false });
-    expect(order).toEqual(["save", "reload"]);
+    expect(order).toEqual(["save", "save", "reload"]);
     expect(JSON.parse(sessionStorage.getItem("kumbu.update.restore")!).mode).toBe("write");
   });
 
@@ -225,5 +231,224 @@ describe("applying an update", () => {
     for (let i = 0; i < sessionStorage.length; i++) {
       expect(sessionStorage.getItem(sessionStorage.key(i)!)).toMatch(/^(\d[\w.\-+]*|\{"mode":"(read|write)","scrollTop":\d+\})$/);
     }
+  });
+
+  it("restores Read mode's scroll position after the reload", async () => {
+    v.app = NEWER;
+    sessionStorage.setItem("kumbu.update.reloadedFor", NEWER);
+    sessionStorage.setItem("kumbu.update.restore", JSON.stringify({ mode: "read", scrollTop: 180 }));
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+
+    const scroller = (await screen.findByRole("article")).parentElement!;
+    expect(scroller.scrollTop).toBe(180);
+    expect(useEditor.getState().mode).toBe("read");
+  });
+
+  it("keeps no restore record from a page without a note", async () => {
+    useEditor.setState({ mode: "write" });
+    serverAt(NEWER);
+    renderApp("/signin");
+    await screen.findByRole("button", { name: /sign in/i });
+
+    becomeVisible();
+
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(atReload).toBeNull();
+  });
+
+  it("waits with the reload while a search hit's section is still to be shown", async () => {
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+    act(() => useUpdate.getState().report(NEWER));
+    act(() => useEditor.getState().setScrollTarget({ path: "/Work/inbox.md", line: 3 }));
+
+    expect(await act(() => tryReload("auto"))).toBe(false);
+    act(() => useEditor.getState().setScrollTarget(null));
+    expect(await act(() => tryReload("auto"))).toBe(true);
+  });
+
+  it("asks the editor again if text came in while it saved", async () => {
+    let calls = 0;
+    // The first save finishes, but a keystroke during it left new text: the second ask saves that too.
+    const beforeRead = vi.fn(async () => ++calls >= 1);
+    useEditor.setState({ mode: "write", beforeRead });
+    useUpdate.getState().report(NEWER);
+
+    expect(await tryReload("button")).toBe(true);
+
+    expect(beforeRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reload if the second ask finds text it can't save", async () => {
+    const answers = [true, false];
+    useEditor.setState({ mode: "write", beforeRead: vi.fn(async () => answers.shift()!) });
+    useUpdate.getState().report(NEWER);
+
+    expect(await tryReload("button")).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("looks for a new release when a part of the app fails to load", async () => {
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+
+    act(() => {
+      window.dispatchEvent(new Event("vite:preloadError"));
+    });
+
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("where the update says it (I1)", () => {
+  it("puts the bar under the top bar in the shell, not over it", async () => {
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+    act(() => useEditor.getState().setMode("write"));
+    await screen.findByLabelText("Markdown source");
+
+    act(() => useUpdate.getState().report(NEWER));
+
+    const bar = await screen.findByRole("region", { name: "Update" });
+    expect(screen.getAllByRole("region", { name: "Update" })).toHaveLength(1);
+    const shell = screen.getByTestId("shell");
+    expect(shell).toContainElement(bar);
+    const header = shell.querySelector("header")!;
+    const main = shell.querySelector("main")!;
+    expect(header.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bar.closest(".fixed")).toBeNull();
+  });
+
+  it("puts the sentence above the page outside the shell", async () => {
+    sessionStorage.setItem("kumbu.update.reloadedFor", NEWER);
+    serverAt(NEWER);
+    renderApp("/signin");
+    await screen.findByRole("button", { name: /sign in/i });
+
+    act(() => useUpdate.getState().report(NEWER));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.compareDocumentPosition(screen.getByRole("main")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alert.closest(".fixed")).toBeNull();
+  });
+
+  it("lets the couldn't-load sentence be dismissed, for good in this tab", async () => {
+    sessionStorage.setItem("kumbu.update.reloadedFor", NEWER);
+    serverAt(NEWER);
+    const router = renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+    act(() => useUpdate.getState().report(NEWER));
+    const alert = await screen.findByRole("alert");
+
+    await userEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
+    await act(() => router.navigate("/notes/Work/inbox.md"));
+    becomeVisible();
+
+    await screen.findByText("Some text.");
+    expect(screen.queryByText(/couldn't load version/)).not.toBeInTheDocument();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("forgets a failure once the server runs this app's own build again", () => {
+    sessionStorage.setItem("kumbu.update.reloadedFor", NEWER);
+    useUpdate.getState().report(NEWER);
+    useUpdate.getState().fail(useUpdate.getState().available!);
+
+    useUpdate.getState().report("0.1.0-pre.41+aaaaaaa");
+
+    expect(useUpdate.getState().failed).toBeNull();
+    expect(useUpdate.getState().available).toBeNull();
+  });
+});
+
+describe("what a reload must never lose (I2, I3)", () => {
+  const draft = { username: "ada", path: "/Work/plan.md", text: "unsaved words", version: "v1" };
+
+  it("never reloads over text a session end kept, and offers no Update there", async () => {
+    useEditor.setState({ mode: "write", draft });
+    serverAt(NEWER);
+    renderApp("/signin");
+    await screen.findByRole("button", { name: /sign in/i });
+
+    act(() => useUpdate.getState().report(NEWER));
+    becomeVisible();
+
+    expect(await tryReload("button")).toBe(false);
+    expect(screen.queryByRole("region", { name: "Update" })).not.toBeInTheDocument();
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(reload).not.toHaveBeenCalled();
+    expect(useEditor.getState().draft).toEqual(draft);
+  });
+
+  it("holds the reload while a secret is shown and not yet saved", async () => {
+    function Secret() {
+      const [saved, setSaved] = useState(false);
+      useLeaveGuard(saved);
+      return (
+        <button type="button" onClick={() => setSaved(true)}>
+          Copy
+        </button>
+      );
+    }
+    const router = createMemoryRouter([{ path: "/", element: <Secret /> }], { initialEntries: ["/"], future: routerFuture });
+    render(<RouterProvider router={router} future={{ v7_startTransition: true }} />);
+    useUpdate.getState().report(NEWER);
+
+    expect(await tryReload("auto")).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(await tryReload("auto")).toBe(true);
+  });
+
+  it("holds the reload while something holds it, until it lets go", async () => {
+    useUpdate.getState().report(NEWER);
+    const release = holdUpdates();
+    const other = holdUpdates();
+
+    expect(await tryReload("auto")).toBe(false);
+    release();
+    release();
+    expect(await tryReload("auto")).toBe(false);
+    other();
+    expect(await tryReload("auto")).toBe(true);
+  });
+
+  it("holds the reload while typed text stands in a field on the page", async () => {
+    render(
+      <form>
+        <label>
+          New name <input type="text" defaultValue="" />
+        </label>
+        <label>
+          Remember <input type="checkbox" />
+        </label>
+      </form>,
+    );
+    useUpdate.getState().report(NEWER);
+    await userEvent.click(screen.getByLabelText("Remember"));
+    expect(await tryReload("auto", vi.fn())).toBe(true);
+    sessionStorage.clear();
+
+    await userEvent.type(screen.getByLabelText("New name"), "Ideas");
+    expect(await tryReload("auto")).toBe(false);
+
+    await userEvent.clear(screen.getByLabelText("New name"));
+    expect(await tryReload("auto")).toBe(true);
+  });
+
+  it("lets a typed field go once it has left the page", async () => {
+    const { unmount } = render(<input aria-label="Search" />);
+    useUpdate.getState().report(NEWER);
+    await userEvent.type(screen.getByLabelText("Search"), "plan");
+    expect(await tryReload("auto")).toBe(false);
+
+    unmount();
+
+    expect(await tryReload("auto")).toBe(true);
   });
 });

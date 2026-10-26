@@ -4,40 +4,47 @@ import { useEditor } from "../state/editor";
 import { tryReload } from "./apply";
 import { useUpdate } from "./store";
 
-const barClass = "flex min-h-11 flex-wrap items-center gap-x-1 rounded-[12px] border border-accent bg-surface-2 py-1 pr-1.5 pl-3.5 text-[13px] text-text shadow-lg";
+const barClass = "flex min-h-11 flex-none flex-wrap items-center gap-x-1 border-b border-line bg-surface pr-1.5 pl-4 text-[13px] text-text";
+const Dot = () => <span aria-hidden className="size-2 flex-none rounded-full bg-accent" />;
 
 /**
- * What the update watcher has to say, over the page: the bar while Write mode holds the reload back, the sentence
- * when a reload didn't bring the new version, and a short notice after one did.
+ * What the update watcher has to say, in the page's flow like the changed-elsewhere bar (never over the top bar):
+ * the shell puts it under its top bar, the router's root above every other page. The bar while an open editor
+ * holds the reload back, the sentence when a reload didn't bring the new version, a short notice after one did.
  */
 export default function UpdateBar() {
   const available = useUpdate((s) => s.available);
   const failed = useUpdate((s) => s.failed);
   const updated = useUpdate((s) => s.updated);
-  const mode = useEditor((s) => s.mode);
+  // An editor is open (its guard is set), and no text a session end kept is waiting: only then can Update save first.
+  const editing = useEditor((s) => s.beforeRead !== null && s.draft === null);
   useTimeout(updated !== null, 4_000, () => useUpdate.getState().markUpdated(null));
 
-  let content = null;
   if (failed) {
-    content = (
-      <p role="alert" className={barClass}>
-        {`Kumbu² couldn't load version ${failed.semver}. Reload the page, or ask your admin.`}
-      </p>
+    return (
+      <div role="alert" className={barClass}>
+        <Dot />
+        <span className="min-w-0 flex-1 py-2 pl-1.5">{`Kumbu² couldn't load version ${failed.semver}. Reload the page, or ask your admin.`}</span>
+        <BarButton onClick={() => useUpdate.getState().dismissFailed()}>Dismiss</BarButton>
+      </div>
     );
-  } else if (available && mode === "write") {
-    content = (
+  }
+  if (available && editing) {
+    return (
       <section aria-label="Update" className={barClass}>
-        <span className="min-w-0 flex-1 py-2">{`Kumbu² ${available.semver} is available`}</span>
+        <Dot />
+        <span className="min-w-0 flex-1 py-2 pl-1.5">{`Kumbu² ${available.semver} is available`}</span>
         <BarButton onClick={() => void tryReload("button")}>Update</BarButton>
       </section>
     );
-  } else if (updated) {
-    content = (
-      <p role="status" aria-label="Updated" className={barClass}>
-        {`Updated to ${updated}`}
+  }
+  if (updated) {
+    return (
+      <p role="status" aria-label="Updated" className={`${barClass} py-2`}>
+        <Dot />
+        <span className="pl-1.5">{`Updated to ${updated}`}</span>
       </p>
     );
   }
-  if (!content) return null;
-  return <div className="pointer-events-auto fixed inset-x-3 top-[max(env(safe-area-inset-top),0.75rem)] z-50 mx-auto max-w-md">{content}</div>;
+  return null;
 }
