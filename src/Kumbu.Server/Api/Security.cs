@@ -166,26 +166,28 @@ public sealed class AccountLimits : IDisposable
 
     public TimeSpan? Recovery(HttpContext context) => Take(_recoveryByAddress, Address(context));
 
+    /// <summary>Redeeming a pairing code: 10 attempts a minute per address.</summary>
+    public TimeSpan? Redeem(HttpContext context) => Take(_redeemByAddress, Address(context));
+
     /// <summary>
-    /// Redeeming a pairing code: 10 attempts a minute per address, and none at all while the server has seen 100
-    /// wrong codes in the last minute. A wrong code can't tell which code it was aimed at, so there is no count per
-    /// code; the server-wide limit bounds a guess spread over many addresses.
+    /// Whether the server has seen 100 wrong codes in the last minute. A wrong code can't tell which code it was aimed
+    /// at, so there is no count per code; this bounds a guess spread over many addresses. While it holds, only a code
+    /// that is open gets through (the caller asks), so an attack doesn't lock everyone else out of pairing.
     /// </summary>
-    public TimeSpan? Redeem(HttpContext context)
+    public bool RedeemsBlocked()
     {
-        using (var probe = _redeemFailures.AttemptAcquire(ServerWide, 0))
-        {
-            if (!probe.IsAcquired) return Window;
-        }
-
-        return Take(_redeemByAddress, Address(context));
+        using var probe = _redeemFailures.AttemptAcquire(ServerWide, 0);
+        return !probe.IsAcquired;
     }
 
-    /// <summary>A wrong or expired code: counts towards the server-wide limit of <see cref="Redeem"/>.</summary>
-    public void RedeemFailed()
+    /// <summary>A wrong or expired code, counted towards <see cref="RedeemsBlocked"/>; true for the one that used up the minute's allowance.</summary>
+    public bool RedeemFailed()
     {
-        using var _ = _redeemFailures.AttemptAcquire(ServerWide);
+        using var lease = _redeemFailures.AttemptAcquire(ServerWide);
+        return lease.IsAcquired && RedeemsBlocked();
     }
+
+    public static readonly TimeSpan RedeemRetryAfter = Window;
 
     private const string ServerWide = "*";
 

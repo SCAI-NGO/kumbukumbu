@@ -200,6 +200,69 @@ public sealed class PairingTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task An_expired_record_is_dropped_and_its_key_zeroed_without_another_pairing()
+    {
+        var a = await AccountAsync();
+        var copy = (byte[])a.Key.Clone();
+        Pairings().Create(a.User, copy, a.ReadAt, a.VaultId, "Work", null);
+
+        _time.Advance(Kumbu.Server.Accounts.Pairings.Lifetime + TimeSpan.FromMinutes(1));
+
+        Assert.Equal(0, Pairings().Count);
+        Assert.All(copy, b => Assert.Equal(0, b));
+    }
+
+    [Fact]
+    public async Task A_long_vault_name_pairs_with_a_long_device_name()
+    {
+        var vault = new string('V', 60);
+        var a = await AccountAsync(vault);
+        var device = new string('D', 32);
+
+        var first = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.VaultId, vault, null).Code, device, Ct);
+        var second = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.VaultId, vault, null).Code, device, Ct);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.InRange(first.KeyName.Length, 1, 64);
+        Assert.EndsWith($"… – Obsidian {device}", first.KeyName, StringComparison.Ordinal);
+        Assert.Equal(first.KeyName + " 2", second!.KeyName);
+        Assert.Equal(vault, first.Vault);
+    }
+
+    [Fact]
+    public async Task Codes_made_at_once_for_one_vault_leave_one_open()
+    {
+        var a = await AccountAsync();
+
+        var codes = await Task.WhenAll(Enumerable.Range(0, 50).Select(_ => Task.Run(() => Code(a), Ct)));
+
+        Assert.Equal(1, Pairings().Count);
+        Assert.Single(codes, c => Pairings().IsOpen(c.Code));
+    }
+
+    [Fact]
+    public async Task A_vault_being_rekeyed_keeps_the_code_for_a_retry()
+    {
+        var a = await AccountAsync();
+        var code = Code(a);
+        Catalog().RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(a.VaultId, a.User.Id, a.Key, Ct));
+        }
+        finally
+        {
+            Catalog().RekeyFaultAt = null;
+        }
+
+        await Assert.ThrowsAsync<VaultBusyException>(() => Pairings().RedeemAsync(code.Code, "Laptop", Ct));
+        await Catalog().RekeyAsync(a.VaultId, a.User.Id, a.Key, Ct);
+
+        Assert.NotNull(await Pairings().RedeemAsync(code.Code, "Laptop", Ct));
+    }
+
+    [Fact]
     public async Task A_wrong_code_is_null()
     {
         var a = await AccountAsync();

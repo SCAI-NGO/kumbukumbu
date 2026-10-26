@@ -20,8 +20,30 @@ public sealed record RedeemedKey(string Key, string Vault, string KeyName);
 /// against an offline guess, so it is never written to MongoDB or a log, and the copy is zeroed when the record goes
 /// (redeemed, expired, replaced, or the process ends).
 /// </summary>
-public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> log)
+public sealed class Pairings : IDisposable
 {
+    private readonly ApiKeys keys;
+    private readonly TimeProvider time;
+    private readonly ILogger<Pairings> log;
+    private readonly ITimer _sweeper;
+    private readonly Lock _creating = new();
+
+    public Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> log)
+    {
+        this.keys = keys;
+        this.time = time;
+        this.log = log;
+        // An expired record goes within a minute, with its copy of the user key, whether or not anyone pairs again.
+        _sweeper = time.CreateTimer(_ => Sweep(), null, SweepInterval, SweepInterval);
+    }
+
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>The longest a key name may be (<see cref="WriterNames"/>), with room for a number " 20".</summary>
+    private const int MaxName = 64 - 3;
+
+    private const string Infix = " – Obsidian ";
+
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
     /// <summary>Crockford's Base32: no I, L, O or U, so a code read aloud or off a phone isn't misread.</summary>
@@ -34,6 +56,12 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
     private readonly ConcurrentDictionary<string, Record> _records = new(StringComparer.Ordinal);
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
+
+    /// <summary>For tests: how many records are held.</summary>
+    internal int Count => _records.Count;
+
+    /// <summary>Whether the code is open now (made, not used, not expired).</summary>
+    public bool IsOpen(string code) => _records.TryGetValue(Normalise(code), out var r) && Now < r.ExpiresAt;
 
     /// <summary>
     /// A new code for the user's vault, replacing the open one of the same user and vault. <paramref name="userKey"/> is
@@ -49,16 +77,20 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
         }
 
         Sweep();
-        foreach (var (code, open) in _records)
+        var record = new Record(user, userKey, credentialReadAt, vaultId, vaultName, expiresInDays, Now + Lifetime);
+        string raw;
+        // Replacing and adding in one step: of two codes made at once for a vault, one stays open.
+        lock (_creating)
         {
-            if (open.User.Id == user.Id && open.VaultId == vaultId && _records.TryRemove(code, out var replaced)) replaced.Drop();
+            foreach (var (code, open) in _records)
+            {
+                if (open.User.Id == user.Id && open.VaultId == vaultId && _records.TryRemove(code, out var replaced)) replaced.Drop();
+            }
+
+            do raw = NewCode();
+            while (!_records.TryAdd(raw, record));
         }
 
-        var now = Now;
-        var record = new Record(user, userKey, credentialReadAt, vaultId, vaultName, expiresInDays, now + Lifetime);
-        string raw;
-        do raw = NewCode();
-        while (!_records.TryAdd(raw, record));
         return new PairingCode(Format(raw), record.ExpiresAt);
     }
 
@@ -72,13 +104,22 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
         var clean = Device(device);
         Sweep();
         var normal = Normalise(code);
-        if (!_records.TryGetValue(normal, out var peeked)) return null;
-        var baseName = $"{peeked.VaultName} – Obsidian {clean}";
-        WriterNames.Check(peeked.User, baseName, "A device key");
-        // Taken out first: of two redeems at once, only one gets the record.
+        // Taken out first: of two redeems at once, only one gets the record. Nothing about the code is said before
+        // this, so an answer tells a code that exists from one that doesn't only by succeeding.
         if (!_records.TryRemove(normal, out var record)) return null;
+        var keep = false;
         try
         {
+            var baseName = Name(record.VaultName, clean);
+            try
+            {
+                WriterNames.Check(record.User, baseName, "A device key");
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+
             if (Now >= record.ExpiresAt) return null;
             for (var n = 1; n <= MaxNumber; n++)
             {
@@ -108,9 +149,15 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
             // The vault no longer opens with the copy of the user key: it was deleted, or the user key rotated.
             return null;
         }
+        catch (Exception e) when (e is Vaults.VaultBusyException or MongoDB.Driver.MongoException && Now < record.ExpiresAt)
+        {
+            // Being re-encrypted, or MongoDB failing just now: the device retries, and its code must still be there.
+            keep = _records.TryAdd(normal, record);
+            throw;
+        }
         finally
         {
-            record.Drop();
+            if (!keep) record.Drop();
         }
     }
 
@@ -137,6 +184,21 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
         }
 
         return text.ToString();
+    }
+
+    /// <summary>"&lt;vault&gt; – Obsidian &lt;device&gt;", the vault's name shortened with "…" so that the whole stays within
+    /// <see cref="MaxName"/>: every device name of 1 to 32 characters fits, however long the vault's name is.</summary>
+    private static string Name(string vault, string device)
+    {
+        var room = MaxName - Infix.Length - device.Length;
+        if (vault.Length > room)
+        {
+            var cut = room - 1;
+            if (char.IsHighSurrogate(vault[cut - 1])) cut--;
+            vault = vault[..cut] + "…";
+        }
+
+        return vault + Infix + device;
     }
 
     public static string Format(string raw) => raw.Length == Length ? $"{raw[..4]}-{raw[4..]}" : raw;
@@ -172,6 +234,15 @@ public sealed class Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> 
         foreach (var (code, record) in _records)
         {
             if (now >= record.ExpiresAt && _records.TryRemove(code, out var expired)) expired.Drop();
+        }
+    }
+
+    public void Dispose()
+    {
+        _sweeper.Dispose();
+        foreach (var code in _records.Keys)
+        {
+            if (_records.TryRemove(code, out var record)) record.Drop();
         }
     }
 

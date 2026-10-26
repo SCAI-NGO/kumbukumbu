@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using static Kumbu.Server.Tests.Api.RestClient;
 
@@ -11,11 +14,23 @@ namespace Kumbu.Server.Tests.Api;
 
 /// <summary><c>POST /api/vaults/{vault}/pairing</c> and <c>POST /api/pairing/redeem</c> (sync spec §4).</summary>
 [Collection("app")]
-public sealed class PairingApiTests(KumbuAppFactory app)
+public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private WebApplicationFactory<Program> Api => app.PublicApi;
+    private WebApplicationFactory<Program>? _api;
+
+    /// <summary>With limits of its own: the server-wide failure count of one test must not reach another's.</summary>
+    private WebApplicationFactory<Program> Api => _api ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+    {
+        s.RemoveAll<AccountLimits>();
+        s.AddSingleton<AccountLimits>();
+    }));
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_api is not null) await _api.DisposeAsync();
+    }
 
     private static async Task<JsonNode> CodeAsync(RestClient user, object? body = null)
     {
@@ -138,5 +153,24 @@ public sealed class PairingApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.NotNull(limited.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task After_100_wrong_codes_a_minute_only_open_codes_get_through()
+    {
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        for (var i = 0; i < AccountLimits.RedeemFailuresPerServer; i++)
+        {
+            using var wrong = await RedeemAsync("ZZZZ-ZZZZ", "Laptop");
+            Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
+        }
+
+        using var limited = await RedeemAsync("YYYY-YYYY", "Laptop");
+        using var open = await RedeemAsync(code, "Laptop");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.NotNull(limited.Headers.RetryAfter);
+        Assert.Equal(HttpStatusCode.Created, open.StatusCode);
     }
 }
