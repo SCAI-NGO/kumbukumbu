@@ -105,6 +105,7 @@ export function summaryText(s: ImportSummary): string {
 // The server's sentence for a note it kept because `skip` met it; such a note is a conflict, settled by keeping it.
 const EXISTS = "a note exists at this path";
 const CHANGED = "changed after the comparison; kept as it is";
+const DELETED = "deleted after the comparison; not brought back";
 const SIGNED_OUT = "You were signed out; sign in and import the rest again.";
 
 class SignedOut extends Error {}
@@ -142,9 +143,10 @@ export async function runImport(
     const { plan, replace, fresh, toSend } = work[i];
     const name = plan.target;
     const skip = (list: Skipped[]) => summary.skipped.push(...list.map((s) => ({ path: `${name}/${s.path}`, reason: s.reason })));
-    const keep = (paths: string[]) => {
+    /** Differing notes left alone because they changed after the comparison; `now`: the vault's versions now. */
+    const keep = (paths: string[], now: Map<string, string>) => {
       summary.kept += paths.length;
-      skip(paths.map((path) => ({ path, reason: CHANGED })));
+      skip(paths.map((path) => ({ path, reason: now.has(path) ? CHANGED : DELETED })));
     };
     skip([...plan.vault.skipped, ...fresh.skipped]);
     let sent = 0;
@@ -168,7 +170,7 @@ export async function runImport(
       const now = await importApi.versions(name);
       const still = paths.filter((p) => now.get(p) === plan.seen.get(p));
       const changed = paths.filter((p) => now.get(p) !== plan.seen.get(p));
-      keep(changed);
+      keep(changed, now);
       if (changed.length) advance(changed.length);
       return still;
     };
@@ -184,9 +186,13 @@ export async function runImport(
           }
         }
         if (replace) {
-          const differing = toBatches(pick(plan, await stillAsSeen(plan.differing)));
+          const differing = toBatches(pick(plan, plan.differing));
           skip(differing.skipped);
-          for (const files of differing.batches) {
+          // Read again before each batch: a note may change while the batches before it upload.
+          for (const batch of differing.batches) {
+            const still = new Set(await stillAsSeen(batch.map((f) => f.path)));
+            const files = batch.filter((f) => still.has(f.path));
+            if (files.length === 0) continue;
             try {
               await send(files, "replace");
             } catch (err) {

@@ -207,6 +207,26 @@ describe("runImport against changes made meanwhile", () => {
     expect(summary).toMatchObject({ replaced: 1, kept: 1, failed: [] });
   });
 
+  it("the versions are read again before each replace batch, so a change during an earlier batch is kept", async () => {
+    const many = Array.from({ length: 201 }, (_, i) => note(`n${i}.md`));
+    const compared = new Map(many.map((n) => [n.path, `old-${n.path}`]));
+    const { api, uploads } = fakeApi();
+    // n200.md, in the second batch, is written in Obsidian while the first batch uploads.
+    api.versions = vi.fn(async () => (uploads.length === 0 ? new Map(compared) : new Map([...compared, ["n200.md", "newer"]])));
+    const summary = await run(planImport([vault("Work", many)], [{ name: "Work", versions: compared }]), { Work: "replace" }, api);
+    expect(uploads.map((u) => [u.files.length, u.onConflict])).toEqual([[200, "replace"]]);
+    expect(api.versions).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({ replaced: 200, kept: 1 });
+    expect(summary.skipped).toEqual([{ path: "Work/n200.md", reason: "changed after the comparison; kept as it is" }]);
+  });
+
+  it("a note deleted after the comparison says so, and isn't brought back", async () => {
+    const { api, uploads } = fakeApi({ versions: vi.fn(async () => new Map([["a.md", "old-a"]])) });
+    const summary = await run(plans(), { Work: "replace" }, api);
+    expect(uploads.map((u) => u.files.map((f) => f.path))).toEqual([["a.md"]]);
+    expect(summary.skipped).toEqual([{ path: "Work/b.md", reason: "deleted after the comparison; not brought back" }]);
+  });
+
   it("a fresh note the server finds there already counts as kept, not as no conflict", async () => {
     const { api } = fakeApi({
       upload: vi.fn(async () => ({ written: 0, replaced: 0, skipped: [{ path: "a.md", reason: "a note exists at this path" }] })),
