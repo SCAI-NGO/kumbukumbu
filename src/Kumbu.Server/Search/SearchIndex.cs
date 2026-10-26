@@ -125,13 +125,13 @@ public sealed class SearchIndex : BackgroundService
     public async Task IndexAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
         // Not even waiting during a re-keying run: it holds the gate until its finish.
-        if (!_catalog.MayIndex(vault)) return;
+        if (!MayIndex(vault, path)) return;
         await vault.IndexGate.WaitAsync(ct);
         try
         {
             // An upsert now would bring back an embedding of a vault that is gone, or seal one under a vault key
             // that a re-keying replaced.
-            if (!_catalog.MayIndex(vault)) return;
+            if (!MayIndex(vault, path)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {
@@ -160,7 +160,7 @@ public sealed class SearchIndex : BackgroundService
                 // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
                 // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
                 // Nor does anything more of a vault being deleted or re-keyed.
-                if (vault.EmbeddingProvider != provider || !_catalog.MayIndex(vault)) return;
+                if (vault.EmbeddingProvider != provider || !MayIndex(vault, path)) return;
                 float[][] vectors;
                 try
                 {
@@ -178,7 +178,7 @@ public sealed class SearchIndex : BackgroundService
             // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
             // or deleted the vault.
             if (vault.EmbeddingProvider != provider) return;
-            if (!_catalog.MayIndex(vault)) return;
+            if (!MayIndex(vault, path)) return;
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update
@@ -193,6 +193,18 @@ public sealed class SearchIndex : BackgroundService
         {
             vault.IndexGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="vault"/> may be indexed now (<see cref="VaultCatalog.MayIndex"/>). If not, and another
+    /// object of the vault is current (one made after a re-keying), the note goes to the queue again for that one:
+    /// the queue holds a note once per vault, so the new object's catch-up skipped it while it waited here.
+    /// </summary>
+    private bool MayIndex(UnlockedVault vault, VaultPath path)
+    {
+        if (_catalog.MayIndex(vault)) return true;
+        if (_catalog.Current(vault.Id) is { } current) Enqueue(current, [path]);
+        return false;
     }
 
     /// <summary>Waits until nothing is queued (tests, and a search that wants a fresh index).</summary>

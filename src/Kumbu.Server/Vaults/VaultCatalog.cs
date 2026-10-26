@@ -276,6 +276,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// The vault keys of <paramref name="vaultIds"/>, opened from the user's own slots: <see cref="ArgumentException"/>
     /// (its message starting with <paramref name="noun"/>, "An API key", "A connection") if a vault isn't the user's
     /// or no longer exists. What an API key or a connection is given must be the user's own.
+    /// <see cref="VaultBusyException"/> for a vault in its two-key period: its user slot still wraps the old key, which
+    /// must not go into a new slot.
     /// </summary>
     internal async Task<IReadOnlyDictionary<string, byte[]>> UserVaultKeysAsync(
         string userId, byte[] userKey, IReadOnlyCollection<string> vaultIds, string noun, CancellationToken ct)
@@ -284,7 +286,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var ids = vaultIds.ToList();
         var userSlots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
             & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(userKey, userId)) & Builders<SlotDocument>.Filter.In(s => s.Vault, ids)).ToListAsync(ct);
-        var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => v.Id).ToListAsync(ct)).ToHashSet();
+        var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => new { v.Id, v.RekeyStartedAt }).ToListAsync(ct))
+            .ToDictionary(v => v.Id, v => v.RekeyStartedAt is not null, StringComparer.Ordinal);
 
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var vaultId in ids)
@@ -302,7 +305,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 }
             }
 
-            if (vaultKey is null || !existing.Contains(vaultId)) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
+            if (vaultKey is null || !existing.TryGetValue(vaultId, out var pending)) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
+            if (pending) throw VaultBusyException.Being();
             result[vaultId] = vaultKey;
         }
 
@@ -313,13 +317,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
     /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
     /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
-    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction.
+    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction, after checking
+    /// the returned vault keys again there (<see cref="RequireSameVaultKeysAsync"/>).
     /// </summary>
-    internal async Task<IReadOnlyList<SlotDocument>> ApiKeySlotsAsync(
+    internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, byte[]> VaultKeys)> ApiKeySlotsAsync(
         string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
-        return [.. vaults.Select(v => new SlotDocument
+        IReadOnlyList<SlotDocument> slots = [.. vaults.Select(v => new SlotDocument
         {
             Vault = v.Key,
             Kind = SlotDocument.ApiKey,
@@ -328,6 +333,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))), ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
+        await IssueFaultAsync("after-wrap");
+        return (slots, vaultKeys);
     }
 
     /// <summary>
@@ -337,14 +344,17 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// token's id, so a slot can't be moved to another token or connection, nor read as an API key's. With
     /// <paramref name="expiresAt"/> the slot carries it for the TTL index. The vault keys come from the user's own
     /// slots, so <see cref="ArgumentException"/> if a vault isn't the user's. Not stored here: the caller inserts them
-    /// with the token's record, in one transaction.
+    /// with the token's record, in one transaction, after checking the returned vault keys again there
+    /// (<see cref="RequireSameVaultKeysAsync"/>).
     /// </summary>
-    internal async Task<IReadOnlyList<SlotDocument>> ConnectionSlotsFromUserAsync(
+    internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, byte[]> VaultKeys)> ConnectionSlotsFromUserAsync(
         string userId, byte[] userKey, string connectionId, string tokenId, string token, IReadOnlyDictionary<string, Accounts.KeyRight> vaults,
         DateTime? expiresAt, CancellationToken ct)
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
-        return WrapConnectionSlots([.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key], v.Value))], connectionId, tokenId, token, expiresAt);
+        var slots = WrapConnectionSlots([.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key], v.Value))], connectionId, tokenId, token, expiresAt);
+        await IssueFaultAsync("after-wrap");
+        return (slots, vaultKeys);
     }
 
     /// <summary>A vault key opened from a token's slot, with the right sealed into it.</summary>
@@ -804,13 +814,24 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             if (IsDeleted(id)) return null;
             if (_open.TryGetValue(id, out var cached))
             {
-                return CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", [])) ? cached : null;
+                if (CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []))) return cached;
+                // A key held from before a re-keying here (a request that opened its slot just before the finish, say).
+                if (WasRekeyed(id)) throw VaultBusyException.Just();
+                return null;
             }
 
             var doc = await Vaults.Find(v => v.Id == id).FirstOrDefaultAsync(ct);
             if (doc is null) return null;
-            var meta = JsonSerializer.Deserialize<VaultMeta>(
-                VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
+            VaultMeta meta;
+            try
+            {
+                meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
+            }
+            catch (CryptographicException) when (WasRekeyed(id))
+            {
+                throw VaultBusyException.Just();
+            }
+
             var provider = meta.Embeddings ?? Search.EmbeddingProviders.Internal;
 
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.

@@ -95,7 +95,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var key = Secrets.New(KeyPrefix);
-        var slots = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
+        var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
         var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)));
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
@@ -139,6 +139,10 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                         // The slots were wrapped before the transaction: a vault deleted since is seen here, or its
                         // deletion conflicts on the user document written above, so no slot outlives its vault.
                         await catalog.RequireVaultsAsync(s, [.. vaults.Keys], "An API key", token);
+                        // A re-keying of a vault that started or finished since its key was opened: the slot would
+                        // carry the old key. Its start and finish write the user document (a rise of vaultsRekeyed),
+                        // which conflicts with the rise of keysCreated above, so a retry reads them.
+                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys, token);
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);

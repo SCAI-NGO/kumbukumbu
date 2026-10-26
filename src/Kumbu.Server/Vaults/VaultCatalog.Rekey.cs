@@ -78,6 +78,12 @@ public sealed partial class VaultCatalog
     /// <summary>For tests: called after each batch of a run commits, with the vault id, its documents and sealed bytes.</summary>
     internal Action<string, int, long>? RekeyBatchCommitted { get; set; }
 
+    /// <summary>For tests: awaited when an API key's or a code's slots were wrapped from the user's (<c>"after-wrap"</c>)
+    /// and inside its transaction before the vault keys are checked again (<c>"before-check"</c>).</summary>
+    internal Func<string, Task>? IssueFaultAt { get; set; }
+
+    private Task IssueFaultAsync(string point) => IssueFaultAt?.Invoke(point) ?? Task.CompletedTask;
+
     /// <summary>At most this many documents per batch transaction.</summary>
     internal int BatchDocuments { get; set; } = 500;
 
@@ -118,6 +124,43 @@ public sealed partial class VaultCatalog
     /// <summary>The condition of <see cref="CheckWritable"/>, for indexing, which does nothing rather than throw.</summary>
     internal bool MayIndex(UnlockedVault vault) =>
         !vault.Pending && !vault.Deleted && !IsDeleted(vault.Id) && !IsBusy(vault.Id) && HasCurrentKey(vault);
+
+    /// <summary>
+    /// The object of the vault in the working set, if it holds the vault's current key; else null (not loaded, or in
+    /// a run or its two-key period). What was meant for an older object of the vault goes to this one.
+    /// </summary>
+    internal UnlockedVault? Current(string vaultId) =>
+        _open.TryGetValue(vaultId, out var vault) && MayIndex(vault) ? vault : null;
+
+    /// <summary>
+    /// Inside the transaction that stores slots wrapping <paramref name="wrapped"/> (vault id → the vault key wrapped,
+    /// as <see cref="UserVaultKeysAsync"/> opened it before the transaction): every vault is outside its two-key period
+    /// and the user's slot on it, read again, still opens to the same key. Else <see cref="VaultBusyException"/>
+    /// ("just re-encrypted"): a re-keying started or finished since the keys were opened, and the slots would carry
+    /// the old key. A start or a finish that commits after this transaction's reads conflicts with its write (the
+    /// user document for an API key, the connection for a code), so the retry reads what it wrote.
+    /// </summary>
+    internal async Task RequireSameVaultKeysAsync(
+        IClientSessionHandle session, string userId, byte[] userKey, IReadOnlyDictionary<string, byte[]> wrapped, CancellationToken ct)
+    {
+        await IssueFaultAsync("before-check");
+        var ids = wrapped.Keys.ToList();
+        if (ids.Count == 0) return;
+        if (await Vaults.Find(session, Builders<VaultDocument>.Filter.In(v => v.Id, ids) & Builders<VaultDocument>.Filter.Ne(v => v.RekeyStartedAt, null)).AnyAsync(ct))
+        {
+            throw VaultBusyException.Just();
+        }
+
+        var f = Builders<SlotDocument>.Filter;
+        var slots = await Slots.Find(session, f.Eq(sl => sl.Kind, SlotDocument.User) & f.Eq(sl => sl.Lookup, UserLookup(userKey, userId)) & f.In(sl => sl.Vault, ids)).ToListAsync(ct);
+        foreach (var (vaultId, key) in wrapped)
+        {
+            if (!slots.Any(sl => sl.Vault == vaultId && OpenUserSlot(userKey, sl) is { } current && CryptographicOperations.FixedTimeEquals(current, key)))
+            {
+                throw VaultBusyException.Just();
+            }
+        }
+    }
 
     /// <summary>The user's vaults (by their user slots under <paramref name="userKey"/>) in their two-key period.</summary>
     internal async Task<IReadOnlyList<string>> PendingVaultIdsAsync(string userId, byte[] userKey, CancellationToken ct)

@@ -880,6 +880,75 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_stale_cached_key_answers_just_reencrypted()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/plan.md", "plan"), Ct));
+        var (apiKey, info) = await Keys().CreateAsync(a.User, a.Key, a.ReadAt, "agent", new Dictionary<string, KeyRight> { [id] = KeyRight.Write }, Ct);
+        // The key's slot as a restored backup would bring it back: it still wraps the old vault key.
+        var old = await Slots.Find(s => s.KeyId == info.Id).ToListAsync(Ct);
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        await Slots.InsertManyAsync(old, cancellationToken: Ct);
+
+        // Not in memory: the vault's meta doesn't open under the old key.
+        Assert.Equal(VaultBusyException.JustReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => Catalog().OpenForApiKeyAsync(info.Id, apiKey, Ct))).Message);
+        // In memory under the new key: the old key is not the cached one.
+        Assert.Single(await Store(a).UnlockedVaultsAsync(Ct));
+        Assert.Equal(VaultBusyException.JustReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => Catalog().OpenForApiKeyAsync(info.Id, apiKey, Ct))).Message);
+        Assert.Equal("plan", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task The_index_queue_moves_to_the_new_object()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // An index that doesn't run yet: what is queued stays queued until it starts.
+        await _index!.StopAsync(Ct);
+        _index.Dispose();
+        var index = _index = new SearchIndex(Catalog(), EmbeddingProviders.Of(new FakeEmbedder(), new EmbeddingProvider("remote", "Remote", null, _remote)), NullLogger<SearchIndex>.Instance);
+        var stale = Store(a);
+        var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.True(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nwritten just before the run\n", "lea", Now.AddHours(1)), Ct));
+        Assert.Equal(1, index.Queued);
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        // The new object's catch-up finds the note queued already, for the old object.
+        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        await index.StartAsync(Ct);
+        await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
+
+        var note = (await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.Equal("# Plan\n\nwritten just before the run\n", note.Content);
+        Assert.Equal(note.Version, current.Embeddings[P("/Arbeit/plan.md")].Version);
+        var reloaded = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single();
+        Assert.Equal(note.Version, reloaded.Embeddings[P("/Arbeit/plan.md")].Version);
+    }
+
+    [Fact]
+    public async Task An_embedding_call_under_way_is_cancelled_by_the_mark()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        _remote.Hang = true;
+        var store = Store(a);
+        var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nembedded while the run begins\n", "lea", Now.AddHours(1)), Ct));
+        await _remote.Hanging.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        // The call holds the index gate, which the run waits for: the mark cancels it.
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        _remote.Hang = false;
+        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        var note = (await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        Assert.Equal(note.Version, current.Embeddings[P("/Arbeit/plan.md")].Version);
+    }
+
+    [Fact]
     public async Task Only_VaultBusyException_answers_503()
     {
         static async Task<(int? Status, string? RetryAfter, string? Message)> AnswerAsync(Exception e)
@@ -1289,6 +1358,165 @@ public sealed class RekeyApiTests(KumbuAppFactory app)
         using var response = await flow.TokenAsync();
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
         return (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(response))["access_token"]!.GetValue<string>();
+    }
+
+    private Task<(string Key, ApiKeyInfo Info)> CreateKeyAsync(Kumbu.Server.Tests.Api.RestClient owner, string vaultId, string name) =>
+        Api.Services.GetRequiredService<ApiKeys>().CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read }, Ct);
+
+    private async Task<string> ConnectionAsync(Kumbu.Server.Tests.Api.RestClient owner)
+    {
+        using var created = await owner.SendAsync(HttpMethod.Post, "/api/connections", new { name = "claude", vaults = new Dictionary<string, string> { ["Arbeit"] = "write" } });
+        Assert.Equal(System.Net.HttpStatusCode.Created, created.StatusCode);
+        return (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(created))["id"]!.GetValue<string>();
+    }
+
+    /// <summary>A run of the vault that stops after its start, as a crash there would: the vault is left in its two-key period.</summary>
+    private async Task StopAfterStartAsync(string vaultId, Kumbu.Server.Tests.Api.RestClient owner)
+    {
+        Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+    }
+
+    /// <summary>Runs <paramref name="during"/> the first time an issuing reaches <paramref name="point"/>.</summary>
+    private void OnceAt(string point, Func<Task> during)
+    {
+        var done = false;
+        Catalog.IssueFaultAt = async p =>
+        {
+            if (p != point || done) return;
+            done = true;
+            await during();
+        };
+    }
+
+    private Task<long> SlotsOnAsync(string vaultId, string kind) =>
+        Catalog.Slots.CountDocumentsAsync(s => s.Vault == vaultId && s.Kind == kind, cancellationToken: Ct);
+
+    private async Task<string> RefusedConsentAsync(Kumbu.Server.Tests.Api.RestClient owner, string connectionId)
+    {
+        var flow = await OAuth.OAuthFlow.StartAsync(Api, owner, connectionId, await OAuth.OAuthFlow.RegisterAsync(Api, Callback), Callback);
+        using var response = await flow.DecideAsync(allow: true);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        return await Kumbu.Server.Tests.Api.RestClient.ErrorAsync(response);
+    }
+
+    /// <summary>After the vault was re-keyed: a new API key and a new consent open it, under its new key.</summary>
+    private async Task AssertIssuedUnderTheNewKeyAsync(Kumbu.Server.Tests.Api.RestClient owner, string vaultId, string connectionId, string keyName)
+    {
+        var (key, _) = await CreateKeyAsync(owner, vaultId, keyName);
+        using (var read = await owner.GetAsync(owner.Url("plan.md"), bearer: key)) Assert.Equal(System.Net.HttpStatusCode.OK, read.StatusCode);
+        var access = await AccessAsync(owner, connectionId);
+        await using var client = await McpAsync(connectionId, access);
+        Assert.Contains("# Plan", await CatAsync(client, "/Arbeit/plan.md"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_key_or_code_prepared_before_the_start_and_committed_after_fails()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        var connectionId = await ConnectionAsync(owner);
+        try
+        {
+            // The key's slots wrap the vault key; the run's start commits before the key's transaction.
+            OnceAt("after-wrap", () => StopAfterStartAsync(vaultId, owner));
+            var key = await Assert.ThrowsAsync<VaultBusyException>(() => CreateKeyAsync(owner, vaultId, "agent"));
+            Assert.Equal(VaultBusyException.JustReencrypted, key.Message);
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.ApiKey));
+            // Prepared during the period, it is refused before anything is wrapped.
+            Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => CreateKeyAsync(owner, vaultId, "agent"))).Message);
+            await Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct);
+
+            // The same for a code: the consent's slots wrap the vault key, then a run starts.
+            OnceAt("after-wrap", () => StopAfterStartAsync(vaultId, owner));
+            Assert.Equal(VaultBusyException.JustReencrypted, await RefusedConsentAsync(owner, connectionId));
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.Connection));
+            Catalog.IssueFaultAt = null;
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RefusedConsentAsync(owner, connectionId));
+            // The consent page met the pending vault and started the runner: the resume is its.
+            await Api.Services.GetRequiredService<RekeyRunner>().RunAsync(vaultId, owner.User.Id, owner.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        }
+        finally
+        {
+            Catalog.IssueFaultAt = null;
+        }
+
+        await AssertIssuedUnderTheNewKeyAsync(owner, vaultId, connectionId, "agent");
+    }
+
+    [Fact]
+    public async Task A_key_or_code_prepared_before_the_finish_and_committed_after_fails()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        var connectionId = await ConnectionAsync(owner);
+        try
+        {
+            // A whole run, start to finish, between the wrapping and the transaction: the vault is out of its
+            // period again, but its user slot now opens to another key than the one wrapped.
+            OnceAt("after-wrap", () => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+            Assert.Equal(VaultBusyException.JustReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => CreateKeyAsync(owner, vaultId, "agent"))).Message);
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.ApiKey));
+
+            OnceAt("after-wrap", () => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+            Assert.Equal(VaultBusyException.JustReencrypted, await RefusedConsentAsync(owner, connectionId));
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.Connection));
+        }
+        finally
+        {
+            Catalog.IssueFaultAt = null;
+        }
+
+        await AssertIssuedUnderTheNewKeyAsync(owner, vaultId, connectionId, "agent");
+    }
+
+    [Fact]
+    public async Task A_key_or_code_issued_across_a_rekey_wraps_the_new_key_or_fails()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        var connectionId = await ConnectionAsync(owner);
+        try
+        {
+            // The code's transaction has read the connection, the user and its vaults, and the run's start commits
+            // only now: its checks would pass on what it read, but its write to the connection conflicts with the
+            // start's, and the retry sees the vault in its period.
+            OnceAt("before-check", () => StopAfterStartAsync(vaultId, owner));
+            Assert.Equal(VaultBusyException.JustReencrypted, await RefusedConsentAsync(owner, connectionId));
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.Connection));
+            await Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct);
+
+            // The key's transaction has written the user document when a run starts: the start's write to it
+            // conflicts until the key commits, and then revokes the key with the vault.
+            Task<RekeySummary>? run = null;
+            OnceAt("before-check", async () =>
+            {
+                run = Task.Run(() => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct), Ct);
+                await Task.Delay(500, Ct);
+                Assert.False(run.IsCompleted);
+            });
+            var (key, info) = await CreateKeyAsync(owner, vaultId, "agent");
+            var summary = await run!.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            Assert.Equal([info.Id], summary.RevokedApiKeys);
+            Assert.Null(await Api.Services.GetRequiredService<ApiKeys>().ResolveAsync(key, Ct));
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.ApiKey));
+        }
+        finally
+        {
+            Catalog.IssueFaultAt = null;
+        }
+
+        await AssertIssuedUnderTheNewKeyAsync(owner, vaultId, connectionId, "agent 2");
     }
 
     [Fact]

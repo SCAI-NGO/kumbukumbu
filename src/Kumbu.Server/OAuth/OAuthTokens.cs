@@ -140,9 +140,10 @@ public sealed class OAuthTokens(
         // Whole milliseconds, as MongoDB keeps them, so the slots' expiry reads back equal to the record's.
         var expiresAt = Milliseconds(now + CodeLifetime);
         IReadOnlyList<SlotDocument> slots;
+        IReadOnlyDictionary<string, byte[]> vaultKeys;
         try
         {
-            slots = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, expiresAt, ct);
+            (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, expiresAt, ct);
         }
         catch (ArgumentException)
         {
@@ -190,6 +191,10 @@ public sealed class OAuthTokens(
                 // deletion under way writes this document too, and conflicts.
                 var kept = Live(slots, current);
                 if (kept.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
+                // A re-keying of a vault that started or finished since its key was opened: the slot would carry the
+                // old key. Its start and finish raise the wraps of every connection that lists the vault, as the
+                // write below does, so one of the two conflicts and the retry reads the other.
+                await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, kept.Select(k => k.Vault).Distinct().ToDictionary(v => v, v => vaultKeys[v]), token);
                 await Docs.InsertOneAsync(s, record, cancellationToken: token);
                 await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
                 await connections.SetClientAsync(s, user, userKey, connectionId, connected, token);
