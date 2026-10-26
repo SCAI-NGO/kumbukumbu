@@ -67,6 +67,21 @@ describe("a checkpoint in the web app", () => {
     expect(screen.queryByRole("button", { name: "Note actions" })).toBeNull();
   });
 
+  it("says so when the checkpoint holds no notes", async () => {
+    // A folder checkpoint of an empty folder: the folders above it, and no note anywhere.
+    const empty = {
+      checkpoint: { ...checkpoint, notes: 0 },
+      root: { name: "Work", path: "/Work", folders: [{ name: "ideas", path: "/Work/ideas", folders: [], notes: [] }], notes: [] },
+    };
+    api({ "GET /api/vaults/Work/checkpoints/before-cleanup/tree": () => json(200, empty) });
+    renderApp("/checkpoints/Work/before-cleanup");
+
+    expect(await screen.findByText("This checkpoint holds no notes.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ideas" })).toBeNull();
+    const banner = screen.getByRole("region", { name: "Checkpoint" });
+    expect(within(banner).getByRole("button", { name: "Back to today" })).toBeInTheDocument();
+  });
+
   /** The plan note, open. */
   async function openPlan() {
     const fetch = api();

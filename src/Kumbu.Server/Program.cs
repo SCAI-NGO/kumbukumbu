@@ -172,6 +172,8 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
 var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
 app.UseSecurityHeaders(publicUrl);
 app.Use(ApiErrors.BadRequestsAsync);
+// Dot segments in an /api URL are refused as the client sent them: Kestrel resolves them before routing.
+app.Use(ApiPaths.RefuseDotSegmentsAsync);
 
 // The web app (web/, built into wwwroot): index.html changes with every build and must be revalidated, the
 // hashed files under /assets never change. Before routing: static files need no caller.
