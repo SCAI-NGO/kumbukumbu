@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<!-- Social preview source (1200x630). Re-render: chromium --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 --screenshot=og.png file://$PWD/og.html && magick og.png -strip -colors 128 PNG8:og.png -->
+<html lang="en"><head><meta charset="utf-8"><title>Kumbu² social preview</title>
+<style>
+@font-face { font-family: Fraunces; font-weight: 600; src: url(fonts/fraunces-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: Nunito; font-weight: 400; src: url(fonts/nunito-latin-400-normal.woff2) format("woff2"); }
+:root { --paper:#fbf8f2; --ink:#4a4553; --graphite:#6d6676; --stem:#8fae86;
+  --a:#cfe3c9; --a-deep:#9cc293; --b:#f8d5c2; --b-deep:#eaa98a; --c:#dcd3f0; --c-deep:#b2a3dc; --d:#f6e3b4; --d-deep:#e2c27a; }
+html, body { margin:0; width:1200px; height:630px; overflow:hidden; }
+body { position:relative; background:var(--paper); color:var(--ink);
+  background-image: radial-gradient(rgba(0,0,0,.025) 1px, transparent 1px); background-size:4px 4px; }
+h1 { position:absolute; top:44px; left:0; right:0; margin:0; text-align:center;
+  font:600 128px/1 Fraunces, serif; letter-spacing:-.02em; }
+h1 sup { font-size:.45em; color:var(--c-deep); vertical-align:top; position:relative; top:-.05em; }
+p { position:absolute; top:196px; left:150px; right:150px; margin:0; text-align:center;
+  font:400 36px/1.4 Nunito, sans-serif; color:var(--graphite); }
+svg { position:absolute; left:0; top:0; }
+.pencil { filter:url(#pencil); }
+.ground { fill:none; stroke:var(--graphite); stroke-width:2; stroke-linecap:round; }
+.stem { fill:none; stroke:var(--stem); stroke-width:4; stroke-linecap:round; }
+.leaf { stroke:var(--graphite); stroke-width:1.5; fill:var(--a); }
+.petal { stroke:var(--graphite); stroke-width:1.5; fill:var(--petal); }
+.heart { stroke:var(--graphite); stroke-width:1.5; fill:var(--heart); }
+</style></head><body>
+<h1>Kumbu<sup>2</sup></h1>
+<p>One calm place for your notes — on every device, and for every AI you think with.</p>
+<svg width="1200" height="630" viewBox="0 0 1200 630">
+<defs>
+<filter id="pencil" x="-5%" y="-5%" width="110%" height="110%">
+<feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="4" result="n"/>
+<feDisplacementMap in="SourceGraphic" in2="n" scale="3"/></filter>
+<g id="petals">
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24"/>
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(60)"/>
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(120)"/>
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(180)"/>
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(240)"/>
+<ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(300)"/></g>
+</defs>
+<g class="pencil">
+<path class="ground" d="M60 590 C 250 582, 400 596, 600 588 S 950 580, 1140 591"/>
+<path class="stem" d="M300 588 C 290 540, 318 490, 305 440"/>
+<path class="stem" d="M500 587 C 512 530, 486 480, 500 408"/>
+<path class="stem" d="M700 588 C 688 535, 714 480, 698 424"/>
+<path class="stem" d="M900 587 C 910 540, 886 500, 900 452"/>
+<path class="leaf" d="M298 538 C 326 520, 348 524, 356 532 C 336 548, 314 550, 298 538 Z"/>
+<path class="leaf" d="M502 500 C 476 484, 456 488, 448 496 C 466 511, 488 513, 502 500 Z"/>
+<path class="leaf" d="M695 520 C 722 504, 744 508, 752 516 C 732 532, 710 534, 695 520 Z"/>
+<path class="leaf" d="M902 530 C 876 514, 856 518, 848 526 C 866 541, 888 543, 902 530 Z"/>
+<g style="--petal:var(--b);--heart:var(--b-deep)" transform="translate(305 410)"><use href="#petals"/><circle class="heart" r="12"/></g>
+<g style="--petal:var(--c);--heart:var(--c-deep)" transform="translate(500 378)"><use href="#petals"/><circle class="heart" r="12"/></g>
+<g style="--petal:var(--d);--heart:var(--d-deep)" transform="translate(698 394)"><use href="#petals"/><circle class="heart" r="12"/></g>
+<g style="--petal:var(--a);--heart:var(--a-deep)" transform="translate(900 422)"><use href="#petals"/><circle class="heart" r="12"/></g>
+</g></svg>
+</body></html>
