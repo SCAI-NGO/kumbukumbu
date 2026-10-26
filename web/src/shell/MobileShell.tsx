@@ -78,7 +78,7 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
               className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[12px] border border-line bg-surface px-4 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
             >
               <span className="truncate font-medium">{v.name}</span>
-              <span className="flex-none font-mono text-[12px] text-dim">{v.notes === 1 ? "1 note" : `${v.notes} notes`}</span>
+              <span className="flex-none font-mono text-[12px] text-dim">{v.pending ? "Being re-encrypted" : v.notes === 1 ? "1 note" : `${v.notes} notes`}</span>
             </button>
           </li>
         ))}

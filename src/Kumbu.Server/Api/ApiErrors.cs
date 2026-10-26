@@ -68,6 +68,11 @@ public static class ApiErrors
             SetRetryAfter(context.HttpContext, BusyRetryAfter);
             return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
         }
+        // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
+        catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
+        {
+            return Result(StatusCodes.Status400BadRequest, e.Message);
+        }
         // Exactly ArgumentException: the services throw it for input they refuse, with a sentence meant for the
         // user. Its subclasses (ArgumentNullException, ...) come from bugs and say nothing a user could act on.
         catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))

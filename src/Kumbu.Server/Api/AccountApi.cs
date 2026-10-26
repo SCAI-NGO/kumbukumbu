@@ -44,6 +44,10 @@ public sealed record RegenerateRecoveryKeyRequest(string CurrentPassword);
 
 public sealed record RecoveryKeyView(string RecoveryKey);
 
+/// <summary>"Re-encrypt my vaults": the current password, so a stolen session alone can't rotate the keys and take the
+/// new recovery key.</summary>
+public sealed record ReencryptRequest(string Password);
+
 /// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
 /// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.</summary>
 public sealed record ApiKeyView(
@@ -107,6 +111,7 @@ public static class AccountApi
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
         account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/account/reencrypt", ReencryptAsync).Errors(400, 401, 403, 409, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
         account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409, 503);
@@ -121,7 +126,7 @@ public static class AccountApi
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
-        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
+        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -131,6 +136,9 @@ public static class AccountApi
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
         if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
         SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct));
+        // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
+        // started, and never waited for, so that sign-in is never held up by a re-keying.
+        rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt));
     }
 
@@ -172,12 +180,15 @@ public static class AccountApi
         }
     }
 
-    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>
-    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once. The user key
+    /// is rotated in the recovery; the vaults are re-keyed in the background, after the answer, which never waits for them.</summary>
+    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(
+        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var recoveryKey = await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
+        var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
+        rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -213,6 +224,20 @@ public static class AccountApi
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var recoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, caller.UserKey!, body.CurrentPassword, ct)
             ?? throw ApiErrors.BadRequest("The current password is wrong.");
+        return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
+    }
+
+    /// <summary>
+    /// "Re-encrypt my vaults": a new user key, every API key and app revoked, the vaults re-keyed in the background, and
+    /// a new recovery key, shown here once. This session stays signed in; every other one ends.
+    /// </summary>
+    private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
+        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var recoveryKey = await rekeying.ReencryptAccountAsync(user, caller.UserKey!, body.Password, http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct)
+            ?? throw ApiErrors.BadRequest("The password is wrong.");
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 

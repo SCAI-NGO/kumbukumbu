@@ -170,6 +170,110 @@ describe("Settings", () => {
     expect(router.state.location.pathname).toBe("/settings");
   });
 
+  it("the re-encrypt section says to change a leaked password", async () => {
+    api();
+    renderApp("/settings");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    expect(part).toHaveTextContent(
+      "New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new recovery key. If you think your password leaked, change it too.",
+    );
+  });
+
+  it("re-encrypting shows the new recovery key once", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    const bodies: unknown[] = [];
+    api({ "POST /api/account/reencrypt": async (r) => (bodies.push(await r.json()), json(200, { recoveryKey })) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/settings", queryClient);
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "my password");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+
+    expect(await within(part).findByText(recoveryKey)).toBeInTheDocument();
+    expect(bodies).toEqual([{ password: "my password" }]);
+    await userEvent.click(within(part).getByRole("button", { name: "Copy" }));
+    await userEvent.click(within(part).getByLabelText(/I have stored my recovery key/));
+    await userEvent.click(within(part).getByRole("button", { name: "Continue" }));
+
+    expect(screen.queryByText(recoveryKey)).not.toBeInTheDocument();
+    expect(within(part).getByRole("status")).toHaveTextContent("Your vaults are being re-encrypted");
+    expect(bodies).toHaveLength(1);
+    expect(JSON.stringify({ ...localStorage })).not.toContain(recoveryKey);
+    await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.data))).not.toContain(recoveryKey));
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain(recoveryKey);
+  });
+
+  it("shows the server's sentence when re-encrypting is refused", async () => {
+    api({ "POST /api/account/reencrypt": () => json(400, { error: "The password is wrong." }) });
+    renderApp("/settings");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "wrong");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText("The password is wrong.")).toBeInTheDocument();
+  });
+
+  it("re-encrypting a vault lists the keys and apps that lose access first", async () => {
+    const bodies: unknown[] = [];
+    let release: () => void = () => {};
+    const access = new Promise<void>((resolve) => (release = resolve));
+    api({
+      "GET /api/vaults/Diary/access": async () => (await access, json(200, { apiKeys: ["laptop", "phone"], connections: ["claude"] })),
+      "POST /api/vaults/Diary/rekey": async (r) => (bodies.push(await r.json()), json(200, { revokedApiKeys: 2, disconnectedApps: 1 })),
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderApp("/settings", queryClient);
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    // No password before the list of what loses access is shown.
+    expect(within(dialog).queryByLabelText("Your password")).not.toBeInTheDocument();
+    release();
+    const keys = await within(dialog).findByRole("list", { name: "API keys" });
+    expect(within(keys).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["laptop", "phone"]);
+    const apps = within(dialog).getByRole("list", { name: "Connected apps" });
+    expect(within(apps).getAllByRole("listitem").map((i) => i.textContent)).toEqual(["claude"]);
+
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ password: "my password, long" }]);
+    expect(within(vaultsSection).getByRole("status")).toHaveTextContent("Diary is re-encrypted. 2 API keys were revoked and 1 app was disconnected.");
+    expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state.variables))).not.toContain("my password");
+  });
+
+  it("says when a vault is busy being re-encrypted", async () => {
+    api({
+      "GET /api/vaults/Diary/access": () => json(200, { apiKeys: [], connections: [] }),
+      "POST /api/vaults/Diary/rekey": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
+    });
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    await userEvent.click(await within(vaultsSection).findByRole("button", { name: "Re-encrypt Diary" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Re-encrypt Diary?" });
+    expect(await within(dialog).findByText("No API key or connected app has access to it.")).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Re-encrypt vault" }));
+    expect(await within(dialog).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+  });
+
+  it("a pending vault shows as being re-encrypted", async () => {
+    api({
+      "GET /api/vaults": () =>
+        json(200, [
+          { name: "Work", notes: 3, embeddings: "internal", pending: false },
+          { name: "Diary", notes: 0, embeddings: "internal", pending: true },
+        ]),
+    });
+    renderApp("/settings");
+    const vaultsSection = await screen.findByRole("region", { name: "Vaults" });
+    const diary = (await within(vaultsSection).findByText("Diary")).closest("li")!;
+    expect(diary).toHaveTextContent("Being re-encrypted");
+    expect(diary).not.toHaveTextContent("0 notes");
+    expect(within(vaultsSection).getByText("Work").closest("li")).toHaveTextContent("3 notes");
+  });
+
   it("signs out the other sessions", async () => {
     let ended = 0;
     api({ "POST /api/sessions/end-others": () => (ended++, noContent()) });

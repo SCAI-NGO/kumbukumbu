@@ -76,6 +76,7 @@ builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
 builder.Services.AddSingleton<Deletion>();
+builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<OAuthLimits>();

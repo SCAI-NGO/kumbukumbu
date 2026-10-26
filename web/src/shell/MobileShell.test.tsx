@@ -371,6 +371,22 @@ describe("the shell", () => {
     await waitFor(() => expect(rows()).toEqual(["projects3 notes", "zeta1 note", "inbox", "readme"]));
   });
 
+  it("shows a vault being re-encrypted as such, and its tree as busy for a moment", async () => {
+    signedInApi({
+      "GET /api/vaults": () =>
+        json(200, [
+          { name: "Home", notes: 0, embeddings: "internal", pending: true },
+          { name: "Work", notes: 6, embeddings: "internal", pending: false },
+        ]),
+      "GET /api/vaults/Home/tree": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
+    });
+    renderApp("/");
+    expect(await screen.findByRole("button", { name: /^Home/ })).toHaveTextContent("Being re-encrypted");
+    expect(screen.getByRole("button", { name: /^Work/ })).toHaveTextContent("6 notes");
+    await userEvent.click(screen.getByRole("button", { name: /^Home/ }));
+    expect(await within(await screen.findByRole("dialog", { name: "File tree" })).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+  });
+
   it('asks an empty account to "Create your first vault", and creates it', async () => {
     let vaults: { name: string; notes: number }[] = [];
     let body: unknown;
