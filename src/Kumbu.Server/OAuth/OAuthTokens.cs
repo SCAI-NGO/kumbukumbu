@@ -354,6 +354,8 @@ public sealed class OAuthTokens(
         // Opened before the transaction, as for a code; used only if the transaction finds the record still unused.
         var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
         if (found is null || found.Kind != OAuthTokenKinds.Refresh) return Refused("refresh", null, null, "invalid_grant", InvalidRefresh);
+        // For the log only; resolved before the transaction, so that nothing can fail between its commit and the answer.
+        var clientHost = await clients.HostAsync(found.ClientId, ct);
         var keys = found.UsedAt is null && found.RevokedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, refreshToken, ct) : [];
 
         var access = Secrets.New(AccessPrefix);
@@ -469,10 +471,9 @@ public sealed class OAuthTokens(
         {
             return retry
                 ? await RefreshAsync(refreshToken, clientId, resource, retry: false, ct)
-                : Refused("refresh", found.ConnectionId, await clients.HostAsync(found.ClientId, ct), "invalid_grant", InvalidRefresh);
+                : Refused("refresh", found.ConnectionId, clientHost, "invalid_grant", InvalidRefresh);
         }
 
-        var clientHost = await clients.HostAsync(found.ClientId, ct);
         if (reused) log.LogWarning("OAuth refresh token {TokenId} was presented again: the tokens of connection {ConnectionId} are revoked", found.Id, found.ConnectionId);
         return result.Pair is not null
             ? Logged(result, "refresh", found.ConnectionId, clientHost, retried ? "retried" : "issued")
@@ -576,6 +577,8 @@ public sealed class OAuthTokens(
         var lookup = Lookup(token);
         var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
         if (found is null || found.Kind != kind || found.RevokedAt is not null) return;
+        // For the log only; resolved before the transaction, so that nothing can fail between its commit and the answer.
+        var clientHost = await clients.HostAsync(found.ClientId, ct);
 
         using var session = await catalog.StartSessionAsync(ct);
         var revoked = await session.WithTransactionAsync(
@@ -601,7 +604,7 @@ public sealed class OAuthTokens(
         {
             OAuthEndpoints.LogStep(
                 log, "revoke", kind == OAuthTokenKinds.Refresh ? ConnectionReasons.ClientRevoked : "access_revoked", found.ConnectionId,
-                await clients.HostAsync(found.ClientId, CancellationToken.None), null);
+                clientHost, null);
         }
     }
 
