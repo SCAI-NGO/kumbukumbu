@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Reflection;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
@@ -115,7 +114,7 @@ builder.Services.AddScoped<Shell>();
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
 builder.Services.AddMcpServer(o =>
     {
-        o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() };
+        o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
     })
@@ -184,6 +183,8 @@ app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
 app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
+// Anonymous, so a tab on the sign-in screen can ask too: the web app compares it with its own when it becomes visible.
+app.MapGet("/api/version", () => TypedResults.Ok(new VersionView(BuildVersion.Full))).AllowAnonymous();
 app.MapMcp("/mcp");
 // One URL per connection (Ruling 18): CallerMiddleware answers for an unknown id and, until a token is valid, 401.
 app.MapMcp("/mcp/c/{id}");
@@ -208,13 +209,5 @@ app.MapFallbackToFile("{**path}", "index.html", webApp).AllowAnonymous();
 
 app.Run();
 return 0;
-
-static string ServerVersion()
-{
-    var informational = typeof(KumbuOptions).Assembly
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-    // Strip SourceLink's "+<commit sha>" suffix; the commit is not something a client needs.
-    return string.IsNullOrEmpty(informational) ? "0.1.0" : informational.Split('+')[0];
-}
 
 public partial class Program;

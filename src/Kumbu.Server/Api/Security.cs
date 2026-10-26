@@ -31,7 +31,7 @@ public static class Security
 
     /// <summary>
     /// The security headers, on every response (API, MCP, static files and errors alike), and
-    /// <c>Cache-Control: no-store</c> on the API's. Added when the response
+    /// <c>Cache-Control: no-store</c> and <c>X-Kumbu-Version</c> on the API's. Added when the response
     /// starts, so that a handler clearing the response doesn't drop them. HSTS when the public URL is https or the
     /// request came over https as the app sees it: behind a trusted proxy that is <c>X-Forwarded-Proto</c>
     /// (see Program.cs), otherwise the connection itself, except to a loopback host (as ASP.NET's own UseHsts):
@@ -52,7 +52,12 @@ public static class Security
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
-                if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";
+                // The build version on every API answer (errors and 401s too): the web app reloads into a newer one.
+                if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+                {
+                    headers.CacheControl = "no-store";
+                    headers["X-Kumbu-Version"] = BuildVersion.Full;
+                }
                 return Task.CompletedTask;
             });
             return next(context);
