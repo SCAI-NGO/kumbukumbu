@@ -287,6 +287,25 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task Remove_with_a_stale_version_trashes_nothing()
+    {
+        var stale = await _writer.RemoveAsync(P("/Work/plan.md"), Ct, version: "000000000000");
+
+        Assert.Equal(ShellResult.Error($"rm: /Work/plan.md has changed since version 000000000000 (it is now {V(Plan)})"), stale);
+        Assert.Equal(Plan, (await Get("/Work/plan.md")).Content);
+        Assert.Empty(await _store.ListTrashAsync(P("/Work/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Remove_with_the_current_version_trashes_it()
+    {
+        var removed = await _writer.RemoveAsync(P("/Work/plan.md"), Ct, version: V(Plan));
+
+        Assert.False(removed.IsError);
+        Assert.Null(await _store.GetAsync(P("/Work/plan.md"), Ct));
+    }
+
+    [Fact]
     public async Task RestoreFromTheTrashDoesNotOverwriteANewNote()
     {
         await _writer.RemoveAsync(P("/Work/plan.md"), Ct);

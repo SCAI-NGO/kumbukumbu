@@ -16,8 +16,9 @@ namespace Kumbu.Server.Api;
 
 /// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to,
 /// <c>internal</c> (the model on this server) unless its owner chose an external one. <c>pending</c>: the vault is being
-/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0).</summary>
-public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending);
+/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>canWrite</c>:
+/// whether the caller may write to it (an API key or connection with only <c>read</c> may not).</summary>
+public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite);
 
 /// <summary>What would lose access if the vault were re-encrypted: the names of the API keys with access to it and of
 /// the connected apps that list it.</summary>
@@ -140,7 +141,7 @@ public static class NoteApi
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
-    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)
+    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, RequestCaller caller, CancellationToken ct)
     {
         var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
         var views = new List<VaultView>();
@@ -148,7 +149,7 @@ public static class NoteApi
         {
             // A vault being re-encrypted has no notes to count yet; it is listed all the same.
             var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
-            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider, vaults[name].Pending));
+            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider, vaults[name].Pending, caller.CanWrite(name)));
         }
 
         return TypedResults.Ok(views.ToArray());
@@ -165,7 +166,7 @@ public static class NoteApi
     /// words. Choosing an external provider is what sends the vault's text there, so the web app asks first.
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
-        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, CancellationToken ct)
+        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
@@ -181,7 +182,7 @@ public static class NoteApi
             index.CatchUp(unlocked);
         }
 
-        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending));
+        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending, caller.CanWrite(unlocked.Name)));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -193,7 +194,7 @@ public static class NoteApi
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
         await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal, Pending: false));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal, Pending: false, CanWrite: true));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
@@ -302,15 +303,26 @@ public static class NoteApi
             : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
         new CurrentNoteView(current.Content, current.Version)));
 
-    private static async Task<NoContent> DeleteAsync(string vault, string? path, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
+    /// <summary><c>version</c>: trash the note only if it is still at that version, else 409 with the note as it is
+    /// now (as a stale <c>PUT</c>). Without it, whatever version the note is at.</summary>
+    private static async Task<Results<NoContent, Conflict<ConflictView>>> DeleteAsync(
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await RequireVaultAsync(store, notePath, ct);
         Refuse(caller, "rm", notePath);
         if (await store.GetAsync(notePath, ct) is null) throw await MissingAsync(store, notePath, ct);
 
-        var result = await writer.RemoveAsync(notePath, ct);
-        return result.IsError ? throw new ApiException(StatusCodes.Status409Conflict, result.Output) : TypedResults.NoContent();
+        var result = await writer.RemoveAsync(notePath, ct, version);
+        if (!result.IsError) return TypedResults.NoContent();
+        if (version is not null)
+        {
+            // Changed since the version the caller saw (checked on the state that would have been trashed), or meanwhile.
+            if (await store.GetAsync(notePath, ct) is { } now && now.Version != version) return Conflict(now, version);
+            if (await store.GetAsync(notePath, ct) is null) throw await MissingAsync(store, notePath, ct);
+        }
+
+        throw new ApiException(StatusCodes.Status409Conflict, result.Output);
     }
 
     private static async Task<Ok<MovedView>> MoveAsync(MoveRequest body, RequestCaller caller, INoteStore store, NoteMover mover, CancellationToken ct)

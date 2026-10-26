@@ -387,6 +387,68 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Delete_with_the_current_version_trashes_it()
+    {
+        var user = await UserAsync();
+        var version = await user.CreateAsync("plan.md", "x\n");
+
+        using var response = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md") + $"?version={version}");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using var gone = await user.GetAsync(user.Url("plan.md"));
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+    }
+
+    [Fact]
+    public async Task Delete_with_a_stale_version_answers_409_with_the_note()
+    {
+        var user = await UserAsync();
+        var first = await user.CreateAsync("plan.md", "x\n");
+        using var edit = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "y\n", version = first });
+        var current = (await JsonAsync(edit))["version"]!.GetValue<string>();
+
+        using var response = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md") + $"?version={first}");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await JsonAsync(response);
+        Assert.Equal($"/Arbeit/plan.md has changed since version {first} (it is now {current}).", body["error"]!.GetValue<string>());
+        Assert.Equal("y\n", body["current"]!["content"]!.GetValue<string>());
+        Assert.Equal(current, body["current"]!["version"]!.GetValue<string>());
+        Assert.Equal("y\n", (await user.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Delete_without_a_version_works_as_before()
+    {
+        var user = await UserAsync();
+        await user.CreateAsync("plan.md", "x\n");
+
+        using var response = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md"));
+        using var again = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md") + "?version=000000000000");
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task Vaults_say_whether_the_caller_can_write()
+    {
+        var user = await UserAsync();
+        var reader = await user.KeyAsync("reader", KeyRight.Read);
+        var writer = await user.KeyAsync("writer", KeyRight.Write);
+
+        async Task<bool> CanWriteAsync(string? bearer)
+        {
+            using var response = await user.GetAsync("/api/vaults", bearer);
+            return Assert.Single((await JsonAsync(response)).AsArray())!["canWrite"]!.GetValue<bool>();
+        }
+
+        Assert.False(await CanWriteAsync(reader));
+        Assert.True(await CanWriteAsync(writer));
+        Assert.True(await CanWriteAsync(null));
+    }
+
+    [Fact]
     public async Task A_read_only_key_reads_over_rest_but_every_write_is_refused()
     {
         var user = await UserAsync();
