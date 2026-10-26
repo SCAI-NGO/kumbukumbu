@@ -29,6 +29,7 @@ public sealed class Rekeying(
         var rotated = await rotation.RotateAsync(user, userKey, password, sessionSecret, ct);
         if (rotated is null) return null;
 
+        var revoked = false;
         try
         {
             // Before the answer, and whatever happens to the request now: access an attacker may hold must not
@@ -36,6 +37,7 @@ public sealed class Rekeying(
             if (RevokeFault is { } fault) await fault();
             await keys.RevokeAllAsync(user, CancellationToken.None);
             await connections.RevokeAllTokensAsync(user, ConnectionReasons.Rekeyed, CancellationToken.None);
+            revoked = true;
         }
         catch (Exception e)
         {
@@ -47,7 +49,9 @@ public sealed class Rekeying(
 
         foreach (var vaultId in rotated.VaultIds) runner.Start(vaultId, user.Id, rotated.NewUserKey);
 
-        log.LogInformation("User {Username} re-encrypts their {Vaults} vaults; API keys and apps are revoked", user.Username, rotated.VaultIds.Count);
+        // After a failed revocation the error above says what happened to the keys; this line must not claim otherwise.
+        if (revoked) log.LogInformation("User {Username} re-encrypts their {Vaults} vaults; API keys and apps are revoked", user.Username, rotated.VaultIds.Count);
+        else log.LogInformation("User {Username} re-encrypts their {Vaults} vaults", user.Username, rotated.VaultIds.Count);
         return rotated.RecoveryKey;
     }
 
