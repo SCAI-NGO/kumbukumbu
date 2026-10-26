@@ -206,6 +206,22 @@ public sealed class OAuthFlow
         return await client.SendAsync(request, Ct);
     }
 
+    /// <summary><c>grant_type=refresh_token</c> with <paramref name="refreshToken"/> and this flow's client id;
+    /// entries in <paramref name="form"/> are added or replace those, a null value removes one.</summary>
+    public Task<HttpResponseMessage> RefreshAsync(string refreshToken, params (string Name, string? Value)[] form) =>
+        TokenAsync([("grant_type", "refresh_token"), ("refresh_token", refreshToken), ("client_id", ClientId), .. form]);
+
+    /// <summary>A POST to <c>/oauth/revoke</c> (RFC 7009) with <paramref name="token"/> and this flow's client id.</summary>
+    public async Task<HttpResponseMessage> RevokeAsync(string token, string? hint = null)
+    {
+        var fields = new Dictionary<string, string> { ["token"] = token, ["client_id"] = ClientId };
+        if (hint is not null) fields["token_type_hint"] = hint;
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/oauth/revoke") { Content = new FormUrlEncodedContent(fields) };
+        request.Headers.Add("X-Forwarded-For", Address());
+        using var client = _api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        return await client.SendAsync(request, Ct);
+    }
+
     /// <summary>Registers a public client with one redirect URI (RFC 7591) and returns its client id: for tests that don't need a metadata document.</summary>
     public static async Task<string> RegisterAsync(WebApplicationFactory<Program> api, string redirectUri, string name = "Test app")
     {

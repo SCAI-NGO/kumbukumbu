@@ -20,15 +20,16 @@ public static partial class OAuthEndpoints
         app.MapPost("/oauth/register", RegisterAsync).AllowAnonymous().ExcludeFromDescription();
         app.MapGet("/oauth/authorize", AuthorizeAsync).AllowAnonymous().ExcludeFromDescription();
         app.MapPost("/oauth/token", TokenAsync).AllowAnonymous().ExcludeFromDescription();
+        app.MapPost("/oauth/revoke", RevokeAsync).AllowAnonymous().ExcludeFromDescription();
     }
 
     /// <summary>A token request is a few hundred bytes of form; more is not one.</summary>
     public const int MaxTokenRequestBytes = 16 * 1024;
 
     /// <summary>
-    /// The token endpoint (spec §4, RFC 6749 §3.2, §4.1.3, §5): a form POST only, each parameter at most once.
-    /// <c>authorization_code</c> exchanges a code (<see cref="OAuthTokens.ExchangeCodeAsync"/>); any other grant is
-    /// <c>unsupported_grant_type</c>. Failures are limited per <c>client_id</c> and network together
+    /// The token endpoint (spec §4, RFC 6749 §3.2, §4.1.3, §5, §6): a form POST only, each parameter at most once.
+    /// <c>authorization_code</c> exchanges a code (<see cref="OAuthTokens.ExchangeCodeAsync"/>), <c>refresh_token</c>
+    /// rotates a refresh token (<see cref="OAuthTokens.RefreshAsync"/>); any other grant is <c>unsupported_grant_type</c>. Failures are limited per <c>client_id</c> and network together
     /// (<see cref="OAuthLimits"/>), so neither a stranger naming claude.ai's client id nor Anthropic's shared range
     /// stops the others. Every answer is <c>no-store</c>; tokens are never logged.
     /// </summary>
@@ -39,15 +40,7 @@ public static partial class OAuthEndpoints
         if (!IsForm(http.Request.ContentType)) return TokenError("invalid_request", "The body must be application/x-www-form-urlencoded.");
         var body = await ReadBodyAsync(http.Request, MaxTokenRequestBytes, ct);
         if (body is null) return TokenError("invalid_request", "The request body is too large.");
-        Dictionary<string, Microsoft.Extensions.Primitives.StringValues> form;
-        try
-        {
-            form = new FormReader(System.Text.Encoding.UTF8.GetString(body)) { ValueCountLimit = 32, KeyLengthLimit = 64, ValueLengthLimit = MaxTokenRequestBytes }.ReadForm();
-        }
-        catch (InvalidDataException)
-        {
-            return TokenError("invalid_request", "The body is not a usable form.");
-        }
+        if (ParseForm(body) is not { } form) return TokenError("invalid_request", "The body is not a usable form.");
 
         // A missing client_id is counted under the empty one: a public client always sends its id.
         var clientId = form.TryGetValue("client_id", out var ids) && ids.Count == 1 ? ids[0] ?? "" : "";
@@ -94,12 +87,54 @@ public static partial class OAuthEndpoints
 
         var grantType = Field("grant_type");
         if (grantType is null) return TokenResult.Failure("invalid_request", "grant_type is required.");
-        if (grantType != "authorization_code") return TokenResult.Failure("unsupported_grant_type", "Only the authorization_code grant is supported.");
+        if (grantType is not ("authorization_code" or "refresh_token"))
+            return TokenResult.Failure("unsupported_grant_type", "Only the authorization_code and refresh_token grants are supported.");
         if (Field("client_id") is not { } clientId) return TokenResult.Failure("invalid_client", "client_id is required: clients are public and identify themselves by it.");
+        if (grantType == "refresh_token")
+        {
+            // A scope, if sent, can't widen the grant (RFC 6749 §6) and narrows nothing either: the rights are the slots'.
+            if (Field("refresh_token") is not { } refreshToken) return TokenResult.Failure("invalid_request", "refresh_token is required.");
+            return await tokens.RefreshAsync(refreshToken, clientId, Field("resource"), ct);
+        }
+
         if (Field("code") is not { } code || Field("redirect_uri") is not { } redirectUri || Field("code_verifier") is not { } verifier)
             return TokenResult.Failure("invalid_request", "code, redirect_uri and code_verifier are required.");
         if (!VerifierShape().IsMatch(verifier)) return TokenResult.Failure("invalid_request", "code_verifier must be 43 to 128 characters of A-Z, a-z, 0-9, '-', '.', '_' and '~'.");
         return await tokens.ExchangeCodeAsync(new CodeExchange(code, clientId, redirectUri, verifier, Field("resource")), ct);
+    }
+
+    /// <summary>
+    /// Revocation by the client (RFC 7009, <see cref="OAuthTokens.RevokeAsync"/>): a form POST with <c>token</c> and
+    /// optionally <c>token_type_hint</c> and <c>client_id</c>. The hint is not needed, the token's prefix says what it
+    /// is. Always 200 with an empty body, also for a token that is unknown, already revoked or not sent, so the answer
+    /// tells nothing about a token (RFC 7009 §2.2); <c>no-store</c> like the token endpoint.
+    /// </summary>
+    private static async Task<IResult> RevokeAsync(HttpContext http, OAuthTokens tokens, CancellationToken ct)
+    {
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers.Pragma = "no-cache";
+        if (IsForm(http.Request.ContentType)
+            && await ReadBodyAsync(http.Request, MaxTokenRequestBytes, ct) is { } body
+            && ParseForm(body) is { } form
+            && form.TryGetValue("token", out var token) && token.Count == 1 && !string.IsNullOrEmpty(token[0]))
+        {
+            await tokens.RevokeAsync(token[0]!, ct);
+        }
+
+        return TypedResults.Ok();
+    }
+
+    /// <summary>A token or revocation request's form, or null if it isn't one.</summary>
+    private static Dictionary<string, Microsoft.Extensions.Primitives.StringValues>? ParseForm(byte[] body)
+    {
+        try
+        {
+            return new FormReader(System.Text.Encoding.UTF8.GetString(body)) { ValueCountLimit = 32, KeyLengthLimit = 64, ValueLengthLimit = MaxTokenRequestBytes }.ReadForm();
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
     }
 
     private static bool IsForm(string? contentType) =>

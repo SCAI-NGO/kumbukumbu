@@ -461,7 +461,7 @@ public sealed class TokenTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Revoking_a_connection_deletes_its_tokens_and_slots_but_not_an_api_keys()
+    public async Task Revoking_a_connection_tombstones_its_tokens_and_deletes_their_slots_but_not_an_api_keys()
     {
         var (flow, access, _) = await ConnectedAsync(Api);
         await flow.Owner.KeyAsync("laptop", KeyRight.Write);

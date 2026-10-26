@@ -473,17 +473,22 @@ internal static class ConnectionRevocation
 
     /// <summary>
     /// Turns the code and token records <paramref name="which"/> selects, unless already revoked, into tombstones, inside
-    /// the caller's transaction: <c>revokedAt</c> set, the lookup kept and the grant dropped, gone after
-    /// <see cref="TombstoneRetention"/>. A revoked token stays recognised (Ruling 12): from Anthropic's shared range a
+    /// the caller's transaction: <c>revokedAt</c> set, the lookup kept, the grant and a used refresh token's kept pair
+    /// dropped, gone after <see cref="TombstoneRetention"/>, or later for a used refresh token whose record was to stay
+    /// longer to recognise its reuse. A revoked token stays recognised (Ruling 12): from Anthropic's shared range a
     /// revoked token counted as a wrong key would lock every claude.ai user of the instance out. A tombstone opens
     /// nothing: its slots are deleted by the caller.
     /// </summary>
-    internal static Task TombstoneAsync(IMongoDatabase db, IClientSessionHandle session, FilterDefinition<BsonDocument> which, DateTime now, CancellationToken ct) =>
-        db.GetCollection<BsonDocument>(TokensCollection).UpdateManyAsync(
-            session,
-            which & Builders<BsonDocument>.Filter.Exists("revokedAt", false),
-            Builders<BsonDocument>.Update.Set("revokedAt", now).Set("purgeAt", now + TombstoneRetention).Unset("grant"),
-            cancellationToken: ct);
+    internal static async Task TombstoneAsync(IMongoDatabase db, IClientSessionHandle session, FilterDefinition<BsonDocument> which, DateTime now, CancellationToken ct)
+    {
+        var tokens = db.GetCollection<BsonDocument>(TokensCollection);
+        var f = Builders<BsonDocument>.Filter;
+        var live = which & f.Exists("revokedAt", false);
+        var used = f.Eq("kind", "refresh") & f.Exists("usedAt");
+        var update = Builders<BsonDocument>.Update.Set("revokedAt", now).Unset("grant").Unset("successor");
+        await tokens.UpdateManyAsync(session, live & used, update.Max("purgeAt", now + TombstoneRetention), cancellationToken: ct);
+        await tokens.UpdateManyAsync(session, live & !used, update.Set("purgeAt", now + TombstoneRetention), cancellationToken: ct);
+    }
 }
 
 /// <summary>A connection (collection <c>connections</c>). Name, rights and client are sealed; the vault ids are not (Ruling 17).</summary>
