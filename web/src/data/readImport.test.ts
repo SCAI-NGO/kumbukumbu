@@ -2,7 +2,7 @@
 import { strToU8, zipSync, type Zippable } from "fflate";
 import { describe, expect, it } from "vitest";
 import { MAX_NOTE_BYTES } from "../upload/planUpload";
-import { readImport, versionOf } from "./readImport";
+import { ImportTooLarge, readImport, versionOf } from "./readImport";
 
 /** A ZIP of these entries; a name ending in "/" is a folder entry. */
 function zip(entries: Record<string, string | Uint8Array>): Uint8Array {
@@ -117,6 +117,51 @@ describe("readImport", () => {
     ]);
   });
 
+  it("names come in NFC, as the server stores them, also from a ZIP made in NFD", async () => {
+    const nfd = "Bu\u0308cher/U\u0308\u00b2.md";
+    const vaults = await readImport(zip({ [nfd]: "x" }), "export.zip");
+    expect(vaults[0].name).toBe("B\u00fccher");
+    expect(vaults[0].notes[0].path).toBe("\u00dc\u00b2.md");
+    const whole = await readImport(zip({ "a.md": "A" }), "Notizbu\u0308cher .zip");
+    expect(whole[0].name).toBe("Notizb\u00fccher");
+  });
+
+  it("vault folders that differ in case or spaces only are one vault", async () => {
+    const vaults = await readImport(zip({ "Work/a.md": "A", "work/b.md": "B", "Work /a.md": "again" }), "export.zip");
+    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md", "b.md"], skipped: [{ path: "a.md", reason: "another file of this upload has the same path" }] }]);
+  });
+
+  it("an entry that is in the ZIP twice is skipped, both copies", async () => {
+    // fflate's zipSync takes an object, so the second copy is spliced in by renaming another entry of the same length.
+    const archive = rename(zip({ "Work/a.md": "first", "Work/b.md": "second", "Work/ok.md": "ok" }), "Work/b.md", "Work/a.md");
+    const vaults = await readImport(archive, "export.zip");
+    expect(shape(vaults)).toEqual([
+      {
+        name: "Work",
+        paths: ["ok.md"],
+        skipped: [
+          { path: "a.md", reason: "in the ZIP more than once" },
+          { path: "a.md", reason: "in the ZIP more than once" },
+        ],
+      },
+    ]);
+  });
+
+  it("a ZIP that separates folders with backslashes only (old Windows tools) is read with them as folders", async () => {
+    const vaults = await readImport(zip({ "Work\\a.md": "A", "Work\\p\\b.md": "B" }), "export.zip");
+    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md", "p/b.md"], skipped: [] }]);
+  });
+
+  it("a byte order mark is kept, so the note's version matches the stored one", async () => {
+    const vaults = await readImport(zip({ "Work/a.md": new Uint8Array([0xef, 0xbb, 0xbf, 0x41]) }), "export.zip");
+    expect(vaults[0].notes[0].content).toBe("\ufeffA");
+  });
+
+  it("refuses a ZIP whose notes would unpack to more than the budget, before unpacking any", async () => {
+    const big = "x".repeat(1000);
+    await expect(readImport(zip({ "Work/a.md": big, "Work/b.md": big }), "export.zip", 1500)).rejects.toThrow(ImportTooLarge);
+  });
+
   it("something that isn't a ZIP is refused", async () => {
     await expect(readImport(strToU8("not a zip"), "x.zip")).rejects.toThrow();
   });
@@ -159,6 +204,17 @@ function withoutUtf8Flag(archive: Uint8Array): Uint8Array {
     // Local header: flags at +6; central directory header: flags at +8.
     const at = signature === 0x04034b50 ? i + 6 : signature === 0x02014b50 ? i + 8 : -1;
     if (at >= 0) view.setUint16(at, view.getUint16(at, true) & ~0x0800, true);
+  }
+  return copy;
+}
+
+/** The archive with entry `from` renamed to `to` (same length) in its local and central headers. */
+function rename(archive: Uint8Array, from: string, to: string): Uint8Array {
+  const copy = archive.slice();
+  const [a, b] = [strToU8(from), strToU8(to)];
+  if (a.length !== b.length) throw new Error("same length only");
+  for (let i = 0; i + a.length <= copy.length; i++) {
+    if (a.every((byte, j) => copy[i + j] === byte)) copy.set(b, i);
   }
   return copy;
 }

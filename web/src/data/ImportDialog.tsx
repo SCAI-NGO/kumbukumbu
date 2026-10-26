@@ -8,7 +8,7 @@ import { FormError, primaryButtonClass, secondaryButtonClass } from "../componen
 import { useDialog } from "../hooks/useDialog";
 import { useHoldUpdates } from "../update/apply";
 import { SkippedList } from "../upload/UploadSheet";
-import { readImport, type ImportVault } from "./readImport";
+import { ImportTooLarge, readImport, vaultKey, type ImportVault } from "./readImport";
 import { planImport, runImport, serverImportApi, summaryText, type Choice, type ImportApi, type ImportSummary, type VaultPlan } from "./runImport";
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -49,8 +49,15 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
     (dialog.current?.querySelector<HTMLElement>("[data-autofocus]") ?? dialog.current)?.focus();
   }, [view.kind, dialog]);
 
-  const existing = new Map((vaults.data ?? []).map((v) => [v.name, v]));
-  const blocked = (name: string) => existing.get(name)?.pending === true;
+  // Matched as the server tells vault names apart: `work` is the vault `Work`.
+  const existing = new Map((vaults.data ?? []).map((v) => [vaultKey(v.name), v]));
+  const mine = (name: string) => existing.get(vaultKey(name));
+  /** Why a vault of the ZIP can't be imported into its namesake, or null. */
+  const blocker = (name: string) => {
+    const vault = mine(name);
+    return vault?.pending ? "Being re-encrypted" : vault && !vault.canWrite ? "Read only" : null;
+  };
+  const blocked = (name: string) => blocker(name) !== null;
 
   async function pick(file: File | undefined) {
     if (!file) return;
@@ -58,8 +65,8 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
     let read: ImportVault[];
     try {
       read = await readImport(new Uint8Array(await file.arrayBuffer()), file.name);
-    } catch {
-      setView({ kind: "pick", error: "This file isn't a ZIP, or it is damaged. Choose another." });
+    } catch (err) {
+      setView({ kind: "pick", error: err instanceof ImportTooLarge ? err.message : "This file isn't a ZIP, or it is damaged. Choose another." });
       return;
     }
     if (read.length === 0) {
@@ -76,7 +83,9 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
     setView({ kind: "checking" });
     let known: { name: string; versions: Map<string, string> }[];
     try {
-      known = await Promise.all(chosen.filter((v) => existing.has(v.name)).map(async (v) => ({ name: v.name, versions: await importApi.versions(v.name) })));
+      known = await Promise.all(
+        chosen.flatMap((v) => mine(v.name) ?? []).map(async ({ name }) => ({ name, versions: await importApi.versions(name) })),
+      );
     } catch (err) {
       setView({ kind: "preview", vaults: read, error: errorText(err) });
       return;
@@ -145,6 +154,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
           <>
             <p className="text-text-body">Tick the vaults to import. A vault you have already is merged into; untick it to skip it.</p>
             {view.error && <FormError>{view.error}</FormError>}
+            {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
             <ul className="flex flex-col gap-2">
               {view.vaults.map((v) => (
                 <li key={v.name}>
@@ -164,9 +174,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
                     />
                     <span className="min-w-0 flex-1 break-words text-text">{v.name}</span>
                     <span className="shrink-0 text-sm text-muted">
-                      {blocked(v.name)
-                        ? "Being re-encrypted"
-                        : `${count(v.notes.length, "note", "notes")}${existing.has(v.name) ? " · exists: merge or skip" : ""}`}
+                      {blocker(v.name) ?? `${count(v.notes.length, "note", "notes")}${mine(v.name) ? " · exists: merge or skip" : ""}`}
                     </span>
                   </label>
                 </li>
@@ -180,7 +188,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
               <button
                 type="button"
                 data-autofocus
-                disabled={vaults.isPending || view.vaults.every((v) => unticked.has(v.name) || blocked(v.name))}
+                disabled={!vaults.data || view.vaults.every((v) => unticked.has(v.name) || blocked(v.name))}
                 onClick={() => void check(view.vaults)}
                 className={`${primaryButtonClass} flex-1`}
               >
@@ -199,14 +207,18 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
         {view.kind === "ask" && (
           <>
             <p className="text-text">
-              {`${count(view.asking[0].differing.length, "note", "notes")} in ${view.asking[0].vault.name} ${view.asking[0].differing.length === 1 ? "differs" : "differ"} from the ZIP.`}
+              {`${count(view.asking[0].differing.length, "note", "notes")} in ${view.asking[0].target} ${view.asking[0].differing.length === 1 ? "differs" : "differ"} from the ZIP.`}
             </p>
             <p className="text-text-body">Replace all with the ZIP's (the history keeps the old versions), or skip all and keep yours. Nothing is written yet.</p>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => answer(view, "skip")} className={`${secondaryButtonClass} flex-1`}>
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={close} className={`${secondaryButtonClass} flex-1`}>
+                Cancel
+              </button>
+              {/* The focus is on the choice that can't overwrite anything. */}
+              <button type="button" data-autofocus onClick={() => answer(view, "skip")} className={`${secondaryButtonClass} flex-1`}>
                 Skip all
               </button>
-              <button type="button" data-autofocus onClick={() => answer(view, "replace")} className={`${primaryButtonClass} flex-1`}>
+              <button type="button" onClick={() => answer(view, "replace")} className={`${primaryButtonClass} flex-1`}>
                 Replace all
               </button>
             </div>
@@ -241,7 +253,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
               <ul aria-label="Failed vaults" className="flex flex-col gap-1.5">
                 {view.summary.failed.map((f) => (
                   <li key={f.vault} className="flex flex-col">
-                    <span className="text-text">{f.vault}</span>
+                    <span className="text-text">{f.written > 0 ? `${f.vault} (${count(f.written, "note", "notes")} written before it stopped)` : f.vault}</span>
                     <span className="text-sm text-muted">{f.reason}</span>
                   </li>
                 ))}

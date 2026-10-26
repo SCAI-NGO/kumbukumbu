@@ -93,7 +93,7 @@ describe("runImport", () => {
       ["changed.md", "old"],
     ]);
     const plans = planImport([vault("Work", [note("same.md"), note("changed.md"), note("new.md")])], [{ name: "Work", versions }]);
-    const { api, created, uploads } = fakeApi();
+    const { api, created, uploads } = fakeApi({ versions: vi.fn(async () => new Map(versions)) });
     const summary = await run(plans, { Work: "replace" }, api);
     expect(created).toEqual([]);
     expect(uploads.map((u) => [u.files.map((f) => f.path), u.onConflict])).toEqual([
@@ -140,7 +140,7 @@ describe("runImport", () => {
       }),
     });
     const summary = await run(planImport([vault("Bad:", [note("a.md")]), vault("Good", [note("b.md")])], []), {}, api);
-    expect(summary.failed).toEqual([{ vault: "Bad:", reason: "'Bad:' contains ':', which Windows can't store" }]);
+    expect(summary.failed).toEqual([{ vault: "Bad:", reason: "'Bad:' contains ':', which Windows can't store", written: 0 }]);
     expect(uploads.map((u) => u.vault)).toEqual(["Good"]);
     expect(summary).toMatchObject({ vaults: 1, imported: 1 });
   });
@@ -167,9 +167,89 @@ describe("runImport", () => {
     });
     const summary = await run(planImport([vault("Work", [note("a.md")]), vault("Ideas", [note("b.md")])], []), {}, api);
     expect(api.upload).toHaveBeenCalledTimes(3);
-    expect(summary.failed).toEqual([{ vault: "Work", reason: "Nothing was uploaded: /Work/a.md changed meanwhile; try again." }]);
+    expect(summary.failed).toEqual([{ vault: "Work", reason: "Nothing was uploaded: /Work/a.md changed meanwhile; try again.", written: 0 }]);
     expect(uploads.map((u) => u.vault)).toEqual(["Ideas"]);
     expect(summary).toMatchObject({ vaults: 1, imported: 1 });
+  });
+});
+
+describe("runImport against changes made meanwhile", () => {
+  const seen = new Map([
+    ["a.md", "old-a"],
+    ["b.md", "old-b"],
+  ]);
+  const plans = () => planImport([vault("Work", [note("a.md"), note("b.md")])], [{ name: "Work", versions: seen }]);
+
+  it("Replace all replaces only the notes still at the version compared against", async () => {
+    // b.md was written in Obsidian after the comparison.
+    const { api, uploads } = fakeApi({ versions: vi.fn(async () => new Map([...seen, ["b.md", "newer-b"]])) });
+    const summary = await run(plans(), { Work: "replace" }, api);
+    expect(uploads.map((u) => [u.files.map((f) => f.path), u.onConflict])).toEqual([[["a.md"], "replace"]]);
+    expect(summary).toMatchObject({ replaced: 1, kept: 1 });
+    expect(summary.skipped).toEqual([{ path: "Work/b.md", reason: "changed after the comparison; kept as it is" }]);
+    expect(summaryText(summary)).toBe("1 vault, 0 notes imported · 1 replaced · 1 kept as it was");
+  });
+
+  it("a replace batch that meets a change (409) is never sent again as it was: the changed note is kept", async () => {
+    let reads = 0;
+    const { api, uploads } = fakeApi({
+      // The run's first read still shows both as compared; by the 409 b.md has changed.
+      versions: vi.fn(async () => (reads++ === 0 ? new Map(seen) : new Map([...seen, ["b.md", "newer-b"]]))),
+    });
+    const upload = api.upload;
+    let calls = 0;
+    api.upload = vi.fn(async (v: string, files: UploadFile[], onConflict: "replace" | "skip") => {
+      if (calls++ === 0) throw new HttpError(409, "Nothing was uploaded: /Work/b.md changed meanwhile; try again.");
+      return upload(v, files, onConflict);
+    });
+    const summary = await run(plans(), { Work: "replace" }, api);
+    expect(uploads.map((u) => [u.files.map((f) => f.path), u.onConflict])).toEqual([[["a.md"], "replace"]]);
+    expect(summary).toMatchObject({ replaced: 1, kept: 1, failed: [] });
+  });
+
+  it("a fresh note the server finds there already counts as kept, not as no conflict", async () => {
+    const { api } = fakeApi({
+      upload: vi.fn(async () => ({ written: 0, replaced: 0, skipped: [{ path: "a.md", reason: "a note exists at this path" }] })),
+    });
+    const summary = await run(planImport([vault("Work", [note("a.md")])], [{ name: "Work", versions: new Map() }]), {}, api);
+    expect(summary).toMatchObject({ imported: 0, kept: 1 });
+    expect(summaryText(summary)).toBe("1 vault, 0 notes imported · 1 kept as it was");
+  });
+});
+
+describe("runImport, vault names and failures", () => {
+  it("a folder `work` merges into the vault `Work`, under the server's spelling", async () => {
+    const [plan] = planImport([vault("work", [note("a.md")])], [{ name: "Work", versions: new Map() }]);
+    expect(plan).toMatchObject({ exists: true, target: "Work", fresh: ["a.md"] });
+    const { api, created, uploads } = fakeApi();
+    const summary = await run([plan], {}, api);
+    expect(created).toEqual([]);
+    expect(uploads.map((u) => u.vault)).toEqual(["Work"]);
+    expect(summary.skipped).toEqual([]);
+  });
+
+  it("a vault that fails after some batches counts as partly imported", async () => {
+    let calls = 0;
+    const { api } = fakeApi({
+      upload: vi.fn(async (_v: string, files: UploadFile[]) => {
+        if (calls++ === 1) throw new HttpError(503, "Work is being re-encrypted; try again in a moment.");
+        return { written: files.length, replaced: 0, skipped: [] };
+      }),
+    });
+    const summary = await run(planImport([vault("Work", Array.from({ length: 300 }, (_, i) => note(`n${i}.md`)))], []), {}, api);
+    expect(summary).toMatchObject({ vaults: 1, imported: 200, failed: [{ vault: "Work", reason: "Work is being re-encrypted; try again in a moment.", written: 200 }] });
+    expect(summaryText(summary)).toBe("1 vault, 200 notes imported · 1 vault partly imported");
+  });
+
+  it("a session that ends stops the whole run", async () => {
+    const { api, uploads } = fakeApi();
+    api.createVault = vi.fn(async () => {
+      throw new HttpError(401, "");
+    });
+    const summary = await run(planImport([vault("A", [note("a.md")]), vault("B", [note("b.md")])], []), {}, api);
+    expect(api.createVault).toHaveBeenCalledTimes(1);
+    expect(uploads).toEqual([]);
+    expect(summary.failed.map((f) => f.vault)).toEqual(["A", "B"]);
   });
 });
 
@@ -186,6 +266,9 @@ describe("summaryText", () => {
 
   it("gives the counts when something was replaced, kept or failed", () => {
     expect(summaryText({ ...clean, replaced: 4, kept: 1 })).toBe("3 vaults, 412 notes imported · 4 replaced · 1 kept as it was");
-    expect(summaryText({ ...clean, vaults: 2, failed: [{ vault: "X", reason: "r" }] })).toBe("2 vaults, 412 notes imported · 1 vault failed");
+    expect(summaryText({ ...clean, vaults: 2, failed: [{ vault: "X", reason: "r", written: 0 }] })).toBe("2 vaults, 412 notes imported · 1 vault failed");
+    expect(summaryText({ ...clean, vaults: 1, failed: [{ vault: "X", reason: "r", written: 200 }] })).toBe(
+      "1 vault, 412 notes imported · 1 vault partly imported",
+    );
   });
 });

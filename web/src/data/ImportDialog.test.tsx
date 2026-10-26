@@ -167,4 +167,117 @@ describe("Import vaults… in Settings", () => {
     const dialog = await openAndPick(new File(["hello"], "notes.zip"));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("This file isn't a ZIP");
   });
+
+  describe("names, rights and failures", () => {
+    /** The user's vaults and their version lists (paths below the vault); uploads write everything. */
+    function serverWith(vaults: { name: string; canWrite?: boolean; pending?: boolean; versions?: Record<string, string> }[], { versionsFail = false } = {}) {
+      const uploads: Upload[] = [];
+      const fetch = fakeApi({
+        "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+        "GET /api/vaults": () =>
+          json(
+            200,
+            vaults.map((v) => ({ name: v.name, notes: 1, embeddings: "internal", pending: v.pending ?? false, canWrite: v.canWrite ?? true })),
+          ),
+        "GET /api/embeddings": () => json(200, []),
+        "GET /api/vaults/*": (request) => {
+          if (versionsFail) return json(503, { error: "Work is being re-encrypted; try again in a moment." });
+          const name = decodeURIComponent(new URL(request.url).pathname.split("/")[3]);
+          const notes = Object.entries(vaults.find((v) => v.name === name)?.versions ?? {}).map(([path, version]) => ({ path: `/${name}/${path}`, version }));
+          return json(200, { full: true, cursor: "c", state: "s", damaged: 0, notes, deleted: [] });
+        },
+        "POST /api/upload/*": async (request) => {
+          const body = (await request.json()) as { files: Upload["files"]; onConflict: string };
+          uploads.push({ vault: decodeURIComponent(new URL(request.url).pathname.split("/")[3]), ...body });
+          const replace = body.onConflict === "replace";
+          return json(200, { written: replace ? 0 : body.files.length, replaced: replace ? body.files.length : 0, skipped: [], conflicts: [] });
+        },
+      });
+      return { fetch, uploads };
+    }
+
+    it("a folder `work` merges into the vault `Work`", async () => {
+      const { uploads } = serverWith([{ name: "Work", versions: {} }]);
+      const dialog = await openAndPick(zipFile({ "work/a.md": "A" }));
+      const row = (await within(dialog).findByRole("checkbox", { name: /work/ })).closest("li")!;
+      expect(within(row).getByText("1 note · exists: merge or skip")).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Import" }));
+      expect(await within(dialog).findByText("1 vault, 1 note imported · ✓ no conflicts")).toBeInTheDocument();
+      expect(uploads.map((u) => u.vault)).toEqual(["Work"]);
+    });
+
+    it("a ZIP made on macOS (NFD names) is compared with the stored NFC paths", async () => {
+      const { uploads } = serverWith([{ name: "Work", versions: { "B\u00fccher.md": await versionOf("old") } }]);
+      const dialog = await openAndPick(zipFile({ "Work/Bu\u0308cher.md": "new" }));
+      await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+      expect(await within(dialog).findByText("1 note in Work differs from the ZIP.")).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Replace all" }));
+      expect(await within(dialog).findByText("1 vault, 0 notes imported · 1 replaced")).toBeInTheDocument();
+      expect(uploads).toEqual([{ vault: "Work", files: [{ path: "B\u00fccher.md", content: "new" }], onConflict: "replace" }]);
+    });
+
+    it("two existing vaults with differing notes are asked about one after the other", async () => {
+      const { uploads } = serverWith([
+        { name: "Work", versions: { "a.md": "old" } },
+        { name: "Ideas", versions: { "b.md": "old" } },
+      ]);
+      const dialog = await openAndPick(zipFile({ "Work/a.md": "A", "Ideas/b.md": "B" }));
+      await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+      expect(await within(dialog).findByText("1 note in Work differs from the ZIP.")).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Skip all" }));
+      expect(await within(dialog).findByText("1 note in Ideas differs from the ZIP.")).toBeInTheDocument();
+      expect(uploads).toEqual([]);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Replace all" }));
+      expect(await within(dialog).findByText("2 vaults, 0 notes imported · 1 replaced · 1 kept as it was")).toBeInTheDocument();
+      expect(uploads.map((u) => [u.vault, u.onConflict])).toEqual([["Ideas", "replace"]]);
+    });
+
+    it("the question can be cancelled, with nothing written; Skip all has the focus", async () => {
+      const { uploads } = serverWith([{ name: "Work", versions: { "a.md": "old" } }]);
+      const dialog = await openAndPick(zipFile({ "Work/a.md": "A" }));
+      await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+      await within(dialog).findByText("1 note in Work differs from the ZIP.");
+      expect(within(dialog).getByRole("button", { name: "Skip all" })).toHaveFocus();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog", { name: "Import vaults" })).not.toBeInTheDocument();
+      expect(uploads).toEqual([]);
+    });
+
+    it("a vault you can only read, or that is being re-encrypted, can't be ticked", async () => {
+      serverWith([
+        { name: "Shared", canWrite: false },
+        { name: "Busy", pending: true },
+      ]);
+      const dialog = await openAndPick(zipFile({ "Shared/a.md": "A", "Busy/b.md": "B", "Mine/c.md": "C" }));
+      const shared = await within(dialog).findByRole("checkbox", { name: /Shared/ });
+      expect(shared).toBeDisabled();
+      expect(shared).not.toBeChecked();
+      expect(within(shared.closest("li")!).getByText("Read only")).toBeInTheDocument();
+      const busy = within(dialog).getByRole("checkbox", { name: /Busy/ });
+      expect(busy).toBeDisabled();
+      expect(within(busy.closest("li")!).getByText("Being re-encrypted")).toBeInTheDocument();
+      expect(within(dialog).getByRole("checkbox", { name: /Mine/ })).toBeChecked();
+    });
+
+    it("a version list that can't be read leads back to the preview with the server's sentence", async () => {
+      const { uploads } = serverWith([{ name: "Work" }], { versionsFail: true });
+      const dialog = await openAndPick(zipFile({ "Work/a.md": "A" }));
+      await userEvent.click(await within(dialog).findByRole("button", { name: "Import" }));
+      expect(await within(dialog).findByText("Work is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+      expect(within(dialog).getByRole("checkbox", { name: /Work/ })).toBeInTheDocument();
+      expect(uploads).toEqual([]);
+    });
+
+    it("can't import while the list of your vaults failed to load", async () => {
+      fakeApi({
+        "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+        "GET /api/vaults": () => json(500, {}),
+        "GET /api/embeddings": () => json(200, []),
+      });
+      const dialog = await openAndPick(zipFile({ "Work/a.md": "A" }));
+      await within(dialog).findByRole("checkbox", { name: /Work/ });
+      expect(await within(dialog).findByText("The server can't be reached right now. Try again in a moment.")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Import" })).toBeDisabled();
+    });
+  });
 });
