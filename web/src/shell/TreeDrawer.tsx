@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
-import { useState } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -10,6 +10,8 @@ import { noteUrl, titleOf } from "../api/paths";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
+import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
+import { useTruncated } from "../hooks/useTruncated";
 import { download, exportUrl } from "../data/exportUrl";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -50,6 +52,80 @@ function FolderMenu({ folder, onNewNote, onMove, extra = [] }: { folder: TreeFol
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />
     </Menu>
+  );
+}
+
+function FolderButton({ folder, count, open, onToggle }: { folder: TreeFolder; count: number; open: boolean; onToggle(): void }) {
+  const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
+  return (
+    <button type="button" aria-expanded={open} onClick={onToggle} {...truncated} className={`${rowClass} pl-1.5 font-medium text-text-body`}>
+      <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />
+      <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+      <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
+      <span className="flex-none font-mono text-[11px] text-dim">
+        {count}
+        <span className="sr-only">{count === 1 ? " note" : " notes"}</span>
+      </span>
+    </button>
+  );
+}
+
+/** A note's entry shows the title; when that is cut off, the path is what the tooltip tells (the title alone may repeat). */
+function NoteButton({ path, current, onOpen }: { path: string; current: boolean; onOpen(): void }) {
+  const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
+  return (
+    <button type="button" aria-current={current ? "page" : undefined} onClick={onOpen} {...truncated} className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}>
+      <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+      <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
+    </button>
+  );
+}
+
+/**
+ * The drag handle on the sidebar's right edge (desktop widths only, see the `md:` in the drawer). A separator that is
+ * focusable is a window splitter (ARIA): arrows resize, Home and End jump to the limits, a double click resets.
+ */
+function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useSidebarWidth>; onDragging(dragging: boolean): void }) {
+  const { width, min, max, set, store, reset } = sidebar;
+  const [drag, setDrag] = useState<{ x: number; width: number } | null>(null);
+
+  const end = () => {
+    if (!drag) return;
+    setDrag(null);
+    onDragging(false);
+    store();
+  };
+  const onKeyDown = (e: KeyboardEvent) => {
+    const next = { ArrowLeft: width - sidebarStep, ArrowRight: width + sidebarStep, Home: min, End: max }[e.key];
+    if (next === undefined) return;
+    e.preventDefault();
+    set(next);
+  };
+  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // no text selection from the press
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDrag({ x: e.clientX, width });
+    onDragging(true);
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the sidebar"
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      onPointerDown={onPointerDown}
+      onPointerMove={(e) => drag && set(drag.width + e.clientX - drag.x, false)}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={reset}
+      className={`absolute inset-y-0 -right-1 z-10 hidden w-2 cursor-col-resize touch-none select-none transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none md:block ${drag ? "bg-accent/40" : ""}`}
+    />
   );
 }
 
@@ -142,6 +218,8 @@ export default function TreeDrawer(props: {
   const providers = useEmbeddingProviders();
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const sidebar = useSidebarWidth();
+  const [resizing, setResizing] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
   const vaultItems: MenuItem[] = [
@@ -160,7 +238,10 @@ export default function TreeDrawer(props: {
 
   return (
     <div className="absolute inset-0 z-20 flex">
-      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" data-drawer className="k-drawer flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" data-drawer
+        style={{ "--sidebar-width": `${sidebar.width}px` } as CSSProperties}
+        className={`k-drawer relative flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface md:w-(--sidebar-width) md:max-w-none ${resizing ? "select-none" : ""}`}
+      >
         <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
           <div className="min-w-0 flex-1">
             <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
@@ -177,31 +258,19 @@ export default function TreeDrawer(props: {
                 <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
                   {row.kind === "folder" ? (
                     <>
-                      <button type="button" aria-expanded={row.open} onClick={() => toggleFolder(row.folder.path)} className={`${rowClass} pl-1.5 font-medium text-text-body`}>
-                        <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${row.open ? "rotate-90" : ""}`} />
-                        <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
-                        <span className="min-w-0 flex-1 truncate">{row.folder.name}</span>
-                        <span className="flex-none font-mono text-[11px] text-dim">
-                          {row.count}
-                          <span className="sr-only">{row.count === 1 ? " note" : " notes"}</span>
-                        </span>
-                      </button>
+                      <FolderButton folder={row.folder} count={row.count} open={row.open} onToggle={() => toggleFolder(row.folder.path)} />
                       <FolderMenu folder={row.folder} onNewNote={onNewNote} onMove={onMove} />
                     </>
                   ) : (
                     <>
-                      <button
-                        type="button"
-                        aria-current={row.path === currentPath ? "page" : undefined}
-                        onClick={() => {
+                      <NoteButton
+                        path={row.path}
+                        current={row.path === currentPath}
+                        onOpen={() => {
                           close();
                           navigate(noteUrl(row.path));
                         }}
-                        className={`${rowClass} pl-[22px] ${row.path === currentPath ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
-                      >
-                        <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
-                        <span className="min-w-0 flex-1 truncate">{titleOf(row.path)}</span>
-                      </button>
+                      />
                       <Menu
                         label={`Actions for ${titleOf(row.path)}`}
                         items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
@@ -230,6 +299,8 @@ export default function TreeDrawer(props: {
           <VaultSwitcher onNewVault={onNewVault} />
           <AccountRow />
         </div>
+        {/* Last in the tab order: the tree and its controls come first. */}
+        <ResizeHandle sidebar={sidebar} onDragging={setResizing} />
       </div>
       <button type="button" aria-label="Close file tree" onClick={close} className="flex-1 bg-black/55" />
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
