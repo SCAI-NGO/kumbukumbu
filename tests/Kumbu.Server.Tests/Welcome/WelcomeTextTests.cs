@@ -143,6 +143,7 @@ public sealed partial class WelcomeTextTests
                  {
                      "Connect Obsidian…", "Export as ZIP", "Activity", "Settings → Your data", "Export my vaults…", "Import vaults…",
                      "drawer → Access", "Connect an app", "Search by meaning…", "Refresh Read mode automatically",
+                     "Settings → Vaults", "Settings → **Install as an app**", "Settings → **About**", "New key",
                  })
         {
             Assert.Contains(label, all, StringComparison.Ordinal);
