@@ -17,6 +17,8 @@ The full page describes v0.2.0 (Obsidian sync, install as an app, export, seeing
 2. **Now, alongside: the full page as an unlisted preview** at `internal-preview.html`, for internal review before launch. It is linked from nowhere and carries `<meta name="robots" content="noindex, nofollow">`; `robots.txt` disallows it. It is *unlisted, not secret*: the repository is public, so anyone who looks at `site/` finds it. Nothing on it may be confidential.
 3. **After v0.2.0 is tagged: launch.** A release check, like the welcome vault's, removes every card describing a feature that didn't make the release and checks every claim against the released code; then the full page becomes `index.html`, and `internal-preview.html` goes.
 
+**Launched** with 0.2.1 on 2026-10-26: the full page is `index.html`; `internal-preview.html` is a small `noindex` page that redirects there, keeping the hash.
+
 The page starts from moments the reader knows, not from features. Use cases and pain points come first; what Kumbu² does and how follow; the technology waits in its own corner for those who want it.
 
 ## Who reads it
