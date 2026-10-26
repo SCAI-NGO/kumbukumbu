@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-22
 **Scope:** The Obsidian plugin that keeps a local Obsidian vault in sync with a Kumbu² vault, and the server API it needs. Builds on [concept.md](concept.md) §13 "Obsidian sync" (build order step 11), which chose a sync plugin over mounting.
-**Status:** Draft by Claude after discussing questions a) to d) with Chris. Conflict handling and licence are settled (§12); everything else is a proposal for review.
+**Status:** Superseded on 2026-10-26 by [the Obsidian sync design](superpowers/specs/2026-10-26-obsidian-sync-design.md), which carries over what this draft settled. Kept for the record.
 
 ## 1. Intent
 
