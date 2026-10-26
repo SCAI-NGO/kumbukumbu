@@ -64,6 +64,8 @@ public class MarkdownLinkTests
     [Theory]
     [InlineData("[[plan|see (x)]]")]
     [InlineData("[[x]](y.md)")]
+    [InlineData("[see [[x]]](y.md)")]
+    [InlineData("[a](x[[y]].md)")]
     public void NoMarkdownLinkInsideAWikilink(string line) =>
         Assert.IsType<WikiLink>(Assert.Single(NoteLink.Parse(line)));
 

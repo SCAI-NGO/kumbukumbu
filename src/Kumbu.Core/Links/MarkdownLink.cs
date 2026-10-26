@@ -79,14 +79,18 @@ public sealed partial record MarkdownLink(
 
     private static void ParseLine(int index, string line, List<MarkdownLink> result)
     {
-        var skip = CodeSpans(line);
-        skip.AddRange(WikiLink.LinkRegex().Matches(line).Select(m => (m.Index, m.Index + m.Length)));
+        var code = CodeSpans(line);
+        var wikilinks = WikiLink.LinkRegex().Matches(line).Select(m => (Start: m.Index, End: m.Index + m.Length)).ToList();
         for (var start = 0; start < line.Length; start++)
         {
-            if (line[start] != '[' || skip.Any(s => start >= s.Start && start < s.End)) continue;
+            if (line[start] != '[' || code.Concat(wikilinks).Any(s => start >= s.Start && start < s.End)) continue;
             if (start > 0 && line[start - 1] == '!') continue;
             if (Escaped(line, start)) continue;
             if (TryParse(index, line, start) is not { } link) continue;
+            // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the
+            // wikilink, not a Markdown link.
+            var end = start + link.Raw.Length;
+            if (wikilinks.Any(w => w.Start < end && start < w.End)) continue;
             result.Add(link);
             start += link.Raw.Length - 1;
         }
