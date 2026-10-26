@@ -11,6 +11,7 @@ public sealed partial class WelcomeTextTests
 {
     private const string ClaudeSection = "## This is how you connect Claude (claude.ai, Desktop and mobile)";
     private const string ClaudeCodeSection = "## This is how you connect Claude Code";
+    private const string ChatGptSection = "## This is how you connect ChatGPT";
     private const string OtherSection = "## This is how you connect any other MCP client";
 
     private static readonly string[] Names =
@@ -103,7 +104,9 @@ public sealed partial class WelcomeTextTests
             if (name == "Connect your AI.md")
             {
                 outside = outside.Replace(Section(content, ClaudeSection), "", StringComparison.Ordinal)
-                    .Replace(Section(content, ClaudeCodeSection), "", StringComparison.Ordinal);
+                    .Replace(Section(content, ClaudeCodeSection), "", StringComparison.Ordinal)
+                    .Replace(Section(content, ChatGptSection), "", StringComparison.Ordinal)
+                    .Replace(Section(content, OtherSection), "", StringComparison.Ordinal);
             }
 
             foreach (var vendor in vendors) Assert.False(outside.Contains(vendor, StringComparison.Ordinal), $"{name} names {vendor}");
@@ -137,9 +140,9 @@ public sealed partial class WelcomeTextTests
     {
         var connect = Text("Connect your AI.md");
         Assert.Contains("*Tested.*", Section(connect, ClaudeCodeSection), StringComparison.Ordinal);
-        Assert.Contains("*Should work, not tested yet.*", Section(connect, ClaudeSection), StringComparison.Ordinal);
-        Assert.Contains("*Should work, not tested yet.*", Section(connect, OtherSection), StringComparison.Ordinal);
-        Assert.DoesNotContain("*Tested.*", Section(connect, ClaudeSection), StringComparison.Ordinal);
+        Assert.Contains("*Tested.*", Section(connect, ClaudeSection), StringComparison.Ordinal);
+        Assert.Contains("*Tested.*", Section(connect, ChatGptSection), StringComparison.Ordinal);
+        Assert.Contains("*Tested with Grok and Mistral (a connection).*", Section(connect, OtherSection), StringComparison.Ordinal);
     }
 
     [Fact]

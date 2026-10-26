@@ -19,7 +19,24 @@ Your Kumbu² address is {{server}}: the address you open Kumbu² at (in a browse
 
 A connector added on claude.ai also works in Claude Desktop and in the mobile apps.
 
-*Should work, not tested yet.*
+*Tested.*
+
+## This is how you connect ChatGPT
+
+ChatGPT on the web and the ChatGPT desktop app connect differently.
+
+**On the web (chatgpt.com):**
+
+1. In Kumbu², open the drawer → Access → **Connect an app**, as for Claude above, and copy the connection's own address.
+2. In ChatGPT, add a custom connector with that address and set its authentication to **DCR** (dynamic client registration). With the default setting, signing in doesn't work.
+3. Kumbu²'s consent page shows what is being connected. Choose **Allow**.
+
+**In the desktop app:** signing in (OAuth) doesn't work there; use an API key instead.
+
+1. In Kumbu², open the drawer → Access → **New key**, choose its vaults and rights, and copy the key: it is shown only once.
+2. In the app, add the connector with the address `{{server}}/mcp`, and add a **custom header** named `Authorization` with the value `Bearer kumbu_…` (your key in place of `kumbu_…`). Leave the app's own field for a token empty: the header is what works.
+
+*Tested.*
 
 ## This is how you connect Claude Code
 
@@ -39,7 +56,7 @@ with your key in place of `kumbu_…`.
 - With an API key: streamable HTTP at `{{server}}/mcp`, with the header `Authorization: Bearer <your key>`.
 - With a connection: the connection's own address, if your client supports signing in to MCP servers (OAuth).
 
-*Should work, not tested yet.*
+*Tested with Grok and Mistral (a connection).*
 
 ## Good to know
 
