@@ -8,6 +8,7 @@ import ConfirmTyped from "../components/ConfirmTyped";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
+import ExportDialog from "../data/ExportDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -25,6 +26,7 @@ export default function Settings() {
       <ReencryptSection />
       <SessionsSection />
       <VaultsSection />
+      <YourDataSection />
       <DeleteAccountSection />
     </AccountScreen>
   );
@@ -345,6 +347,24 @@ function VaultsSection() {
       {rekeyed && <Done>{rekeyed}</Done>}
       {deleting !== null && <DeleteVaultDialog vault={deleting} onClose={() => setDeleting(null)} />}
       {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={setRekeyed} onClose={() => setRekeying(null)} />}
+    </Section>
+  );
+}
+
+/** Taking one's notes out (and, later, bringing them in): rarely used, so it lives here and not in the menus. */
+export function YourDataSection() {
+  const [exporting, setExporting] = useState(false);
+  return (
+    <Section title="Your data">
+      <p className="text-text-body">
+        The export is a ZIP with one folder of Markdown notes per vault, each of which opens in Obsidian as a vault, without history, trash or checkpoints.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <button type="button" onClick={() => setExporting(true)} className={secondaryButtonClass}>
+          Export my vaults…
+        </button>
+      </div>
+      {exporting && <ExportDialog onClose={() => setExporting(false)} />}
     </Section>
   );
 }
