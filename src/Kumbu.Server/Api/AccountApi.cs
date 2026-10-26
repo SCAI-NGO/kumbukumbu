@@ -2,6 +2,7 @@
 using System.Text.Json.Serialization;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Search;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
@@ -71,8 +72,19 @@ public sealed record UpdateUserRequest(bool? Active = null, string? Role = null)
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
 public sealed record DeleteAccountRequest(string Password, string Confirm);
 
-/// <summary>Deleting a deactivated user: the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
+/// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
 public sealed record DeleteUserRequest(string Password, string Confirm);
+
+/// <summary>
+/// What an admin keeps as a record of a deletion for a privacy request: ids, the usernames, the time and counts, never
+/// content or a vault or note name. <c>externalProviders</c>: the labels of every external embedding provider this
+/// instance has configured (a vault's choice is sealed with it, so which ones it used can't be read); empty if none.
+/// <c>privacyContact</c>: <c>Kumbu:Privacy:Contact</c>, or null. <c>listed</c>: the id was added to the list of deleted
+/// users kept outside the database.
+/// </summary>
+public sealed record DeletionReceiptView(
+    string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, int ApiKeys, int Connections,
+    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -295,14 +307,21 @@ public static class AccountApi
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
     }
 
-    private static async Task<NoContent> DeleteUserAsync(
-        string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+    /// <summary>An admin deletes another user, active or not, in one step, and gets the receipt for their records.</summary>
+    private static async Task<Ok<DeletionReceiptView>> DeleteUserAsync(
+        string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index,
+        IOptions<KumbuOptions> options, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        return await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct) is not null
-            ? TypedResults.NoContent()
-            : throw ApiErrors.NotFound("There is no such user.");
+        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
+            ?? throw ApiErrors.NotFound("There is no such user.");
+        return TypedResults.Ok(ReceiptView(deleted, index, options.Value));
     }
+
+    internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(
+        deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.ApiKeys,
+        deleted.Summary.Connections, index.Providers.All.Where(p => p.External).Select(p => p.Label).ToArray(),
+        string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), Listed: false);
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());

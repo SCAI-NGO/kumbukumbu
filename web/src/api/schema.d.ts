@@ -1096,12 +1096,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description No Content */
-                204: {
+                /** @description OK */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["DeletionReceiptView"];
+                    };
                 };
                 /** @description Bad Request */
                 400: {
@@ -4006,6 +4008,24 @@ export interface components {
         DeleteVaultRequest: {
             password: string;
             confirm: string;
+        };
+        DeletionReceiptView: {
+            userId: string;
+            username: string;
+            deletedBy: string;
+            /** Format: date-time */
+            deletedAt: string;
+            /** Format: int32 */
+            vaults: number | string;
+            /** Format: int64 */
+            notes: number | string;
+            /** Format: int32 */
+            apiKeys: number | string;
+            /** Format: int32 */
+            connections: number | string;
+            externalProviders: string[];
+            privacyContact: null | string;
+            listed: boolean;
         };
         EmbeddingProviderView: {
             name: string;

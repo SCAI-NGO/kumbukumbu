@@ -52,6 +52,16 @@ public sealed class KumbuOptions
     public EmbeddingsOptions Embeddings { get; set; } = new();
 
     public OAuthOptions OAuth { get; set; } = new();
+
+    public PrivacyOptions Privacy { get; set; } = new();
+}
+
+/// <summary>What the deletion receipt's reply to a privacy request is signed with.</summary>
+public sealed class PrivacyOptions
+{
+    /// <summary>Optional: the deployer's privacy contact (<c>KUMBU_PRIVACY_CONTACT</c>), e.g. <c>privacy@example.org</c>;
+    /// unset, the reply leaves a placeholder.</summary>
+    public string? Contact { get; set; }
 }
 
 public sealed class OAuthOptions
