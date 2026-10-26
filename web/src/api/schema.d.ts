@@ -1096,12 +1096,14 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description No Content */
-                204: {
+                /** @description OK */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["DeletionReceiptView"];
+                    };
                 };
                 /** @description Bad Request */
                 400: {
@@ -1132,6 +1134,134 @@ export interface paths {
                 };
                 /** @description Not Found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/deletions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeletionsView"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/deletions/repeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RepeatDeletionsRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DeletionReceiptView"][];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -4170,6 +4300,30 @@ export interface components {
             password: string;
             confirm: string;
         };
+        DeletionReceiptView: {
+            userId: string;
+            username: string;
+            deletedBy: string;
+            /** Format: date-time */
+            deletedAt: string;
+            /** Format: int32 */
+            vaults: number | string;
+            /** Format: int64 */
+            notes: number | string;
+            /** Format: int32 */
+            apiKeys: number | string;
+            /** Format: int32 */
+            connections: number | string;
+            /** Format: int32 */
+            invitations: number | string;
+            externalProviders: string[];
+            privacyContact: null | string;
+            listed: boolean;
+        };
+        DeletionsView: {
+            configured: boolean;
+            restored: components["schemas"]["RestoredUserView"][];
+        };
         EmbeddingProviderView: {
             name: string;
             label: string;
@@ -4275,6 +4429,9 @@ export interface components {
             /** Format: int32 */
             disconnectedApps: number | string;
         };
+        RepeatDeletionsRequest: {
+            password: string;
+        };
         RestoreChangeView: {
             kind: string;
             path: string;
@@ -4286,6 +4443,11 @@ export interface components {
         };
         RestoreCheckpointRequest: {
             plan: string;
+        };
+        RestoredUserView: {
+            id: string;
+            username: string;
+            display: string;
         };
         RestoredView: {
             message: string;
