@@ -29,6 +29,13 @@ public sealed record CheckpointEntryView(string Name, string Scope, string Creat
 /// <summary>The vault's checkpoints, oldest first; a vault keeps at most <c>limit</c>.</summary>
 public sealed record CheckpointsView(int Limit, IReadOnlyList<CheckpointEntryView> Checkpoints);
 
+/// <summary>A checkpoint opened: its entry and its notes as a tree, at their paths then. A folder or note checkpoint
+/// shows the folders above it and nothing beside it.</summary>
+public sealed record CheckpointTreeView(CheckpointEntryView Checkpoint, TreeFolder Root);
+
+/// <summary>A note as the checkpoint held it; <c>links</c> resolved among the checkpoint's notes, never today's.</summary>
+public sealed record CheckpointNoteView(string Path, string Content, IReadOnlyList<LinkView> Links);
+
 public sealed record CreateCheckpointRequest(string Name);
 
 /// <summary>
@@ -85,6 +92,8 @@ public static class HistoryApi
         api.MapGet("/vaults/{vault}/trash", TrashAsync).Errors(400, 401, 404, 503);
         api.MapGet("/vaults/{vault}/checkpoints", ListCheckpointsAsync).Errors(400, 401, 404, 503);
         api.MapPost("/vaults/{vault}/checkpoints", CreateCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapGet("/vaults/{vault}/checkpoints/{name}/tree", CheckpointTreeAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/vaults/{vault}/checkpoints/{name}/notes/{**path}", CheckpointNoteAsync).Errors(400, 401, 404, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/preview", PreviewAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/restore", RestoreCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);
@@ -206,6 +215,34 @@ public static class HistoryApi
         var made = await checkpoints.FindAsync(root.Segments[0], body.Name, ct)
             ?? throw new ApiException(StatusCodes.Status409Conflict, $"Checkpoint '{body.Name}' was removed again just now.");
         return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(root.Segments[0])}/checkpoints", View(made));
+    }
+
+    /// <summary>The checkpoint's notes as a tree, as <c>ls</c> shows them; reading needs no write right.</summary>
+    private static async Task<Ok<CheckpointTreeView>> CheckpointTreeAsync(
+        string vault, string name, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+    {
+        var root = ApiPaths.Parse(vault, null, note: false);
+        var view = await OpenCheckpointAsync(root, name, store, checkpoints, ct);
+        return TypedResults.Ok(new CheckpointTreeView(View(view.Checkpoint), NoteApi.TreeOf(root, await view.ReadNotesUnderAsync(root, ct))));
+    }
+
+    /// <summary>One note as the checkpoint held it, its links resolved inside the checkpoint (a note moved since is still where it was).</summary>
+    private static async Task<Ok<CheckpointNoteView>> CheckpointNoteAsync(
+        string vault, string name, string? path, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+    {
+        var notePath = ApiPaths.Parse(vault, path, note: true);
+        var view = await OpenCheckpointAsync(notePath, name, store, checkpoints, ct);
+        var content = await view.ReadAsync(notePath, ct) ?? throw ApiErrors.NotFound($"Checkpoint '{name}' holds no note at {notePath.Value}.");
+        return TypedResults.Ok(new CheckpointNoteView(notePath.Value, content, await NoteApi.LinkViewsAsync(view, notePath, content, ct)));
+    }
+
+    /// <summary>The checkpoint as a read-only tree: one open per request, nothing kept between them.</summary>
+    internal static async Task<CheckpointView> OpenCheckpointAsync(
+        VaultPath root, string name, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+    {
+        await NoteApi.RequireVaultAsync(store, root, ct);
+        var (view, _) = await checkpoints.OpenAsync("cat", root.Segments[0], name, ct);
+        return view ?? throw ApiErrors.NotFound($"There is no checkpoint '{name}' in {root.Segments[0]}.");
     }
 
     /// <summary>

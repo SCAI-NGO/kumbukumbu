@@ -240,23 +240,24 @@ public static class NoteApi
         var root = ApiPaths.Parse(vault, null, note: false);
         await RequireVaultAsync(store, root, ct);
         var notes = await store.ReadNotesUnderAsync(root, ct);
-        return TypedResults.Ok(new TreeView(Folder(root, notes), await store.CountDamagedAsync(root, ct)));
+        return TypedResults.Ok(new TreeView(TreeOf(root, notes), await store.CountDamagedAsync(root, ct)));
+    }
 
-        static TreeFolder Folder(VaultPath dir, IEnumerable<Note> below)
-        {
-            var depth = dir.Segments.Count;
-            var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
-            var folders = groups.GetValueOrDefault(true, [])
-                .GroupBy(n => n.Path.Segments[depth], StringComparer.Ordinal)
-                .OrderBy(g => g.Key, TextOrder.Default)
-                .Select(g => Folder(dir.Child(g.Key), g))
-                .ToList();
-            var files = groups.GetValueOrDefault(false, [])
-                .OrderBy(n => n.Path.Name, TextOrder.Default)
-                .Select(n => new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content)))
-                .ToList();
-            return new TreeFolder(dir.Name, dir.Value, folders, files);
-        }
+    /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
+    internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> below)
+    {
+        var depth = dir.Segments.Count;
+        var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
+        var folders = groups.GetValueOrDefault(true, [])
+            .GroupBy(n => n.Path.Segments[depth], StringComparer.Ordinal)
+            .OrderBy(g => g.Key, TextOrder.Default)
+            .Select(g => TreeOf(dir.Child(g.Key), g))
+            .ToList();
+        var files = groups.GetValueOrDefault(false, [])
+            .OrderBy(n => n.Path.Name, TextOrder.Default)
+            .Select(n => new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content)))
+            .ToList();
+        return new TreeFolder(dir.Name, dir.Value, folders, files);
     }
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
@@ -387,15 +388,19 @@ public static class NoteApi
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var content = await store.ReadAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        return TypedResults.Ok((await NoteLinks.OfAsync(store, notePath, content, ct)).Select(l => new LinkView(
+        return TypedResults.Ok(await LinkViewsAsync(store, notePath, content, ct));
+    }
+
+    /// <summary>The links of a note, resolved against <paramref name="notes"/>: the vault, or a checkpoint's view of it.</summary>
+    internal static async Task<LinkView[]> LinkViewsAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct) =>
+        (await NoteLinks.OfAsync(notes, path, content, ct)).Select(l => new LinkView(
             l.Link.Line + 1,
             l.Link.Raw,
             l.Link.Target,
             KindText(l.Resolution.Kind),
             l.Resolution.Target?.Value,
             l.Resolution.Kind == LinkKind.Ambiguous ? [.. l.Resolution.Candidates.Select(c => c.Value).Order(TextOrder.Default)] : []))
-            .ToArray());
-    }
+            .ToArray();
 
     private static string KindText(LinkKind kind) => kind switch
     {

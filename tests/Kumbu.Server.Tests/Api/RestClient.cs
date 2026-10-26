@@ -9,6 +9,9 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -76,6 +79,24 @@ public sealed class RestClient
         var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(
             User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct, kind: kind);
         return key;
+    }
+
+    /// <summary>One shell command over MCP as <paramref name="bearer"/>, on this client's own factory: for folder
+    /// checkpoints (there is no REST route to make one) and for pinning what the web app tells people to run.</summary>
+    public async Task<(bool IsError, string Text)> ShAsync(string command, string bearer)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(_api.Server.BaseAddress, "mcp"),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" },
+            },
+            _api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: Ct);
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct);
+        return (result.IsError ?? false, Assert.IsType<TextContentBlock>(result.Content[0]).Text);
     }
 
     /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead.</summary>
