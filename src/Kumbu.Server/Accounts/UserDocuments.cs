@@ -92,6 +92,12 @@ public sealed class UserDocument
     [BsonElement("rekeyPending"), BsonIgnoreIfNull]
     public List<string>? RekeyPending { get; set; }
 
+    /// <summary>How many re-keying starts and finishes touched the user's vaults; incremented in each of their
+    /// transactions, a real write to this document, so that a vault, key or connection created at the same time
+    /// conflicts with them (rekeying design §3).</summary>
+    [BsonElement("vaultsRekeyed")]
+    public long VaultsRekeyed { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

@@ -15,6 +15,11 @@ public sealed class VaultDocument
 
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; }
+
+    /// <summary>Set while the vault is re-keyed (its two-key period, rekeying design §3): from the start transaction
+    /// to the finish. Meanwhile the vault loads only as a placeholder and nothing writes to it.</summary>
+    [BsonElement("rekeyStartedAt"), BsonIgnoreIfNull]
+    public DateTime? RekeyStartedAt { get; set; }
 }
 
 /// <summary>A key slot: the vault key, wrapped with a key derived from one credential.</summary>
@@ -25,6 +30,13 @@ public sealed class SlotDocument
 
     /// <summary>The vault key wrapped by the owner's user key (accounts design §3); has no recovery slot of its own.</summary>
     public const string User = "user";
+
+    /// <summary>
+    /// The new vault key of a re-keying run (rekeying design §3), wrapped as the owner's <see cref="User"/> slot is,
+    /// under the same lookup but without a name hash: at most one per vault (unique partial index), from the start
+    /// of the run to its finish, which wraps it into the user slot and deletes this one.
+    /// </summary>
+    public const string UserNext = "user-next";
 
     /// <summary>A slot of one OAuth token (code, access or refresh) of a connection; vanishes with the token.</summary>
     public const string Connection = "connection";

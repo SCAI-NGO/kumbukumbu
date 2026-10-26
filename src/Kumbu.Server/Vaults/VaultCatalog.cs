@@ -17,7 +17,7 @@ namespace Kumbu.Server.Vaults;
 /// in-memory working set with an idle timeout and a memory cap, and creates new vaults. Vault keys exist
 /// only here, in memory; MongoDB holds them only wrapped.
 /// </summary>
-public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time, ILogger<VaultCatalog> log)
+public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time, ILogger<VaultCatalog> log)
 {
     private const string LookupLabel = "kumbu/v1/key-lookup";
     private const string KeyKekLabel = "kumbu/v1/key-kek";
@@ -35,8 +35,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();
 
-    /// <summary>Per vault, what cancels its embedding calls when it is deleted (<see cref="DeletionToken"/>).</summary>
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _deletions = new();
+    /// <summary>Per vault, what cancels its embedding calls when it is deleted or re-keyed (<see cref="InterruptToken"/>).</summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _interrupts = new();
     private volatile bool _ready;
 
     internal IMongoCollection<VaultDocument> Vaults { get; } = db.GetCollection<VaultDocument>("vaults");
@@ -127,7 +127,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }, cancellationToken: ct);
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now);
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
         return vault;
@@ -154,7 +155,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 continue;
             }
 
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(vault);
+            if (await LoadAsync(slot.Vault, vaultKey, ct) is not { } vault) continue;
+            result.Add(vault);
+            // Only a session meets a placeholder: the start of a run deleted every API key and connection slot.
+            if (vault.Pending) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
         }
 
         return result;
@@ -236,7 +240,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             throw;
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now);
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
         return vault;
@@ -457,7 +462,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
-    /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="DeletionToken"/>):
+    /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
     /// from then on the vault isn't loaded, written or indexed, whatever <see cref="UnlockedVault"/> object a request
     /// or the search index's queue still holds, and no more of its text goes to an external provider. Then the vault in
     /// memory is taken off writes and indexing (both its gates), which waits for a write or an embedding call already
@@ -474,12 +479,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     {
         await EnsureReadyAsync(ct);
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        var held = new List<UnlockedVault>();
+        var held = new List<VaultLocks>();
+        var seen = new List<UnlockedVault>();
         var tombstoned = ids.Where(id => _deleted.TryAdd(id, 0)).ToList();
-        foreach (var id in ids)
-        {
-            if (_deletions.TryRemove(id, out var deletion)) deletion.Cancel();
-        }
+        foreach (var id in ids) Interrupt(id);
 
         IReadOnlyList<string> revoked = [];
         IReadOnlyList<string> revokedConnections = [];
@@ -487,22 +490,26 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         try
         {
             // In id order, so two deletions can't each hold a gate the other waits for. A vault loaded after this
-            // look is held by nobody, but the tombstone keeps it from writing and indexing already.
+            // look is held by nobody, but the tombstone keeps it from writing and indexing already. A re-keying run
+            // holds both gates; it sees the tombstone at its next batch and lets go of them.
             foreach (var id in ids)
             {
-                if (!_open.TryGetValue(id, out var vault)) continue;
-                await vault.Gate.WaitAsync(ct);
+                var open = _open.TryGetValue(id, out var vault);
+                if (!open && !IsRekeying(id)) continue;
+                if (open) seen.Add(vault!);
+                var locks = LocksFor(id);
+                await locks.Gate.WaitAsync(ct);
                 try
                 {
-                    await vault.IndexGate.WaitAsync(ct);
+                    await locks.IndexGate.WaitAsync(ct);
                 }
                 catch
                 {
-                    vault.Gate.Release();
+                    locks.Gate.Release();
                     throw;
                 }
 
-                held.Add(vault);
+                held.Add(locks);
             }
 
             // After the gates: nothing that holds _loading waits for a gate, so this order can't deadlock.
@@ -539,7 +546,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             tombstoned.Clear();
             foreach (var keyId in revoked) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
             foreach (var connectionId in revokedConnections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
-            foreach (var vault in held) vault.Deleted = true;
+            foreach (var vault in seen) vault.Deleted = true;
             foreach (var id in ids)
             {
                 if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
@@ -556,10 +563,10 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         {
             // A deletion that failed takes its tombstones back: the vault is still there.
             foreach (var id in tombstoned) _deleted.TryRemove(id, out _);
-            foreach (var vault in held)
+            foreach (var locks in held)
             {
-                vault.IndexGate.Release();
-                vault.Gate.Release();
+                locks.IndexGate.Release();
+                locks.Gate.Release();
             }
 
             if (loading) _loading.Release();
@@ -620,13 +627,23 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// written or indexed again, whatever <see cref="UnlockedVault"/> object a caller still holds.</summary>
     public bool IsDeleted(string vaultId) => _deleted.ContainsKey(vaultId);
 
-    /// <summary>Cancelled when the vault is deleted: an embedding call for it stops, rather than holding up the deletion.
-    /// Already cancelled for a vault deleted (or being deleted) now.</summary>
-    internal CancellationToken DeletionToken(string vaultId)
+    /// <summary>
+    /// Cancelled when the vault is deleted or a re-keying run marks it: an embedding call for it stops, rather than
+    /// holding up the deletion or the run for minutes. Already cancelled while either is in force. After a run (finished
+    /// or not), the next call gets a fresh token, so indexing of the vault resumes.
+    /// </summary>
+    internal CancellationToken InterruptToken(string vaultId)
     {
-        var token = _deletions.GetOrAdd(vaultId, _ => new CancellationTokenSource()).Token;
-        // After the lookup: a deletion tombstones first and cancels second, so one of the two catches it.
-        return IsDeleted(vaultId) ? new CancellationToken(canceled: true) : token;
+        var token = _interrupts.GetOrAdd(vaultId, _ => new CancellationTokenSource()).Token;
+        // After the lookup: a deletion tombstones first and a run marks first, each cancelling second, so one of the
+        // two catches it.
+        return IsDeleted(vaultId) || IsRekeying(vaultId) ? new CancellationToken(canceled: true) : token;
+    }
+
+    /// <summary>Cancels the vault's interrupt token and forgets it, after the tombstone or the mark is in place.</summary>
+    private void Interrupt(string vaultId)
+    {
+        if (_interrupts.TryRemove(vaultId, out var source)) source.Cancel();
     }
 
     /// <summary>Deletes an API key's slots, outside a transaction (an expired key, on its first use after expiry).</summary>
@@ -731,11 +748,13 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// </summary>
     internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, CancellationToken ct)
     {
+        CheckWritable(vault);
         await vault.Gate.WaitAsync(ct);
         try
         {
-            // Deleted since the request read it (here, or in another process: then only its document is gone).
-            if (vault.Deleted || IsDeleted(vault.Id)) throw new VaultDeletedException();
+            // Deleted since the request read it (here, or in another process: then only its document is gone), or
+            // re-keyed meanwhile.
+            CheckWritable(vault);
             var result = await Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(provider)), cancellationToken: ct);
             if (result.MatchedCount == 0) throw new VaultDeletedException();
             vault.EmbeddingProvider = provider;
@@ -787,8 +806,13 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             if (doc is null) return null;
             var meta = JsonSerializer.Deserialize<VaultMeta>(
                 VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
+            var provider = meta.Embeddings ?? Search.EmbeddingProviders.Internal;
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now) { EmbeddingProvider = meta.Embeddings ?? Search.EmbeddingProviders.Internal };
+            // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
+            // Never in the working set, never with a current key id, never announced to the search index.
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider };
+
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider };
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))
@@ -815,6 +839,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 .OfType<StoredCheckpoint>()
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
 
+            RecordKey(vault);
             _open[id] = vault;
             log.LogInformation("Unlocked vault {VaultId} ({Notes})", vault.Id, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
             Unlocked?.Invoke(vault);
@@ -949,6 +974,15 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.ConnectionId) }),
                 // A token's slots vanish physically when it expires (spec §5); only slots with expiresAt carry one.
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.ExpiresAt), new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+                // One run at a time per vault: at most one slot with its new key.
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.Vault),
+                    new CreateIndexOptions<SlotDocument>
+                    {
+                        Unique = true,
+                        Name = "vault_user_next",
+                        PartialFilterExpression = Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.UserNext),
+                    }),
                 // One vault name per user: only user slots carry a nameId.
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup).Ascending(s => s.NameId),

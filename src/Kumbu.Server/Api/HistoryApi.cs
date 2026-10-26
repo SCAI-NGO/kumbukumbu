@@ -157,7 +157,7 @@ public static class HistoryApi
         {
             (preview, error) = await checkpoints.PreviewWholeAsync(root.Segments[0], name, ct);
         }
-        catch (VaultUnavailableException e)
+        catch (VaultUnavailableException e) when (e is not VaultBusyException)
         {
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
@@ -183,7 +183,7 @@ public static class HistoryApi
         {
             result = await checkpoints.ApplyWholeAsync(root.Segments[0], name, body.Plan, ct);
         }
-        catch (VaultUnavailableException e)
+        catch (VaultUnavailableException e) when (e is not VaultBusyException)
         {
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }

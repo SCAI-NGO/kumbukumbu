@@ -124,11 +124,14 @@ public sealed class SearchIndex : BackgroundService
     /// if the note is gone.</summary>
     public async Task IndexAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
+        // Not even waiting during a re-keying run: it holds the gate until its finish.
+        if (!_catalog.MayIndex(vault)) return;
         await vault.IndexGate.WaitAsync(ct);
         try
         {
-            // An upsert now would bring back an embedding of a vault that is gone.
-            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+            // An upsert now would bring back an embedding of a vault that is gone, or seal one under a vault key
+            // that a re-keying replaced.
+            if (!_catalog.MayIndex(vault)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {
@@ -149,15 +152,15 @@ public sealed class SearchIndex : BackgroundService
             var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
-            // A deletion of the vault cancels a call under way: it waits for this gate, and a provider that hangs
-            // with retries would hold it up for minutes.
-            using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.DeletionToken(vault.Id));
+            // A deletion or a re-keying of the vault cancels a call under way: it waits for this gate, and a provider
+            // that hangs with retries would hold it up for minutes.
+            using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.InterruptToken(vault.Id));
             foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))
             {
                 // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
                 // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
-                // Nor does anything more of a vault being deleted.
-                if (vault.EmbeddingProvider != provider || vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+                // Nor does anything more of a vault being deleted or re-keyed.
+                if (vault.EmbeddingProvider != provider || !_catalog.MayIndex(vault)) return;
                 float[][] vectors;
                 try
                 {
@@ -175,7 +178,7 @@ public sealed class SearchIndex : BackgroundService
             // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
             // or deleted the vault.
             if (vault.EmbeddingProvider != provider) return;
-            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+            if (!_catalog.MayIndex(vault)) return;
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update

@@ -127,11 +127,13 @@ public static class NoteApi
 
     private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)
     {
-        var providers = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.EmbeddingProvider, StringComparer.Ordinal);
+        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
-            views.Add(new VaultView(name, (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count, providers[name]));
+            // A vault being re-encrypted has no notes to count yet; it is listed all the same.
+            var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
+            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider));
         }
 
         return TypedResults.Ok(views.ToArray());
@@ -158,7 +160,7 @@ public static class NoteApi
             throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
         }
 
-        if (unlocked.EmbeddingProvider != body.Provider)
+        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider)
         {
             await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
             index.CatchUp(unlocked);

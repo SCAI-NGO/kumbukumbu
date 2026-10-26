@@ -1,0 +1,847 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Kumbu.Core.Crypto;
+using Kumbu.Core.Notes;
+using Kumbu.Server.Accounts;
+using Kumbu.Server.Search;
+using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using static Kumbu.Server.Tests.Vaults.VaultWorld;
+using FakeEmbedder = Kumbu.Server.Tests.Search.FakeEmbedder;
+
+namespace Kumbu.Server.Tests.Vaults;
+
+/// <summary>Stage 2 of re-keying (rekeying design §3–§5): a vault's documents sealed again under a new vault key, in
+/// batches with a two-key period, safe against crashes, stale writers and deletions.</summary>
+[Collection("mongo")]
+public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
+{
+    private const string Password = "correct horse battery staple";
+
+    private static readonly string[] Collections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts"];
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private readonly IMongoDatabase _db = fixture.NewDatabase();
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 26, 9, 0, 0, TimeSpan.Zero));
+    private readonly Argon2Kdf _kdf = new(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1));
+    private readonly CapturedLog _log = new();
+    private readonly FakeEmbedder _remote = new(model: "remote-1", dimensions: 8);
+    private VaultCatalog? _catalog;
+    private SearchIndex? _index;
+
+    private DateTime Now => _time.GetUtcNow().UtcDateTime;
+
+    /// <summary>How many texts of notes (not queries) went to the external provider.</summary>
+    private int RemoteNotes
+    {
+        get
+        {
+            lock (_remote.Seen) return _remote.Seen.Count(s => !s.Query);
+        }
+    }
+
+    private ILoggerFactory Logs => LoggerFactory.Create(b => b.AddProvider(_log));
+
+    private VaultCatalog Catalog() => _catalog ??= NewCatalog();
+
+    /// <summary>Another server process on the same database.</summary>
+    private VaultCatalog NewCatalog() => new(_db, Options.Create(new KumbuOptions()), _time, Logs.CreateLogger<VaultCatalog>());
+
+    private SearchIndex Index() =>
+        _index ??= new SearchIndex(Catalog(), EmbeddingProviders.Of(new FakeEmbedder(), new EmbeddingProvider("remote", "Remote", null, _remote)), NullLogger<SearchIndex>.Instance);
+
+    private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
+
+    private Connections Connections() => new(_db, Catalog(), _time, NullLogger<Connections>.Instance);
+
+    private UserKeyRotation Rotation() => new(_db, _kdf, _time, NullLogger<UserKeyRotation>.Instance);
+
+    private UserCatalog Users() => new(_db, _kdf, Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance, Rotation());
+
+    private IMongoCollection<SlotDocument> Slots => _db.GetCollection<SlotDocument>("slots");
+
+    private IMongoCollection<SealedDocument> Docs(string collection) => _db.GetCollection<SealedDocument>(collection);
+
+    private IMongoCollection<BsonDocument> Raw(string collection) => _db.GetCollection<BsonDocument>(collection);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_index is not null)
+        {
+            await _index.StopAsync(CancellationToken.None);
+            _index.Dispose();
+        }
+    }
+
+    private sealed record Account(User User, byte[] Key, DateTime ReadAt, Dictionary<string, string> Vaults)
+    {
+        public string Id(string vault) => Vaults[vault];
+    }
+
+    /// <summary>A new user, signed in, with a vault of their own for each name.</summary>
+    private async Task<Account> AccountAsync(params string[] vaults)
+    {
+        var users = Users();
+        var username = "u" + Guid.NewGuid().ToString("N")[..12];
+        await users.CreateAsync(username, Password, Roles.User, Ct);
+        var (user, key, readAt) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
+        var ids = new Dictionary<string, string>();
+        foreach (var name in vaults) ids[name] = (await Catalog().CreateForUserAsync(name, user.Id, key, Ct, readAt)).Id;
+        return new Account(user, key, readAt, ids);
+    }
+
+    /// <summary>A request of the user: its own store, as every request has.</summary>
+    private EncryptedNoteStore Store(Account a, VaultCatalog? catalog = null, byte[]? key = null) =>
+        new(catalog ?? Catalog(), new UserCredential(a.User.Id, key ?? a.Key), _index);
+
+    private StoredNote New(string path, string content) => new(P(path), content, 1, "lea", Now, []);
+
+    private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>
+        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), "lea", new DateTime(2026, 10, 26, 9, 0, 0, DateTimeKind.Utc), [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]);
+
+    /// <summary>
+    /// The vault "Arbeit" as the brief has it: notes, one with history, a trashed note, a move, embeddings by an external
+    /// provider the owner chose, and two checkpoints that share a text.
+    /// </summary>
+    private async Task<Account> FilledAsync(params string[] more)
+    {
+        var a = await AccountAsync(["Arbeit", .. more]);
+        await Index().StartAsync(Ct);
+        var store = Store(a);
+        var vault = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit");
+        await Catalog().SetEmbeddingProviderAsync(vault, "remote", Ct);
+
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/plan.md", "# Plan\n\nalpha beta gamma\n"), Ct));
+        for (var i = 1; i <= 3; i++)
+        {
+            var current = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+            Assert.True(await store.TryReplaceAsync(current, NoteWriter.Next(current, $"# Plan\n\nalpha beta gamma, take {i}\n", "lea", Now.AddMinutes(20 * i)), Ct));
+        }
+
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/ideen/a.md", "the same text\n"), Ct));
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/b.md", "the same text\n"), Ct));
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/weg.md", "gone soon\n"), Ct));
+        Assert.True(await store.TryTrashAsync((await store.GetAsync(P("/Arbeit/weg.md"), Ct))!, "lea", Now, Ct));
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/alt.md", "moving delta\n"), Ct));
+        var old = (await store.GetAsync(P("/Arbeit/alt.md"), Ct))!;
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { Moves = { (old, old with { Path = P("/Arbeit/neu.md"), Revision = old.Revision + 1 }) } }, "lea", Now, Ct));
+
+        var na = (await store.GetAsync(P("/Arbeit/ideen/a.md"), Ct))!;
+        var nb = (await store.GetAsync(P("/Arbeit/b.md"), Ct))!;
+        Assert.True(await store.TryAddCheckpointAsync(Cp("eins", "/Arbeit", na, nb), [new Note(na.Path, na.Content), new Note(nb.Path, nb.Content)], Ct));
+        Assert.True(await store.TryAddCheckpointAsync(Cp("zwei", "/Arbeit/ideen/a.md", na), [new Note(na.Path, na.Content)], Ct));
+        await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.Equal(4, await Docs("embeddings").CountDocumentsAsync(d => d.Vault == a.Id("Arbeit"), cancellationToken: Ct));
+        return a;
+    }
+
+    /// <summary>What the user sees of every vault, as one text: two equal snapshots read the same.</summary>
+    private async Task<string> SnapshotAsync(EncryptedNoteStore store)
+    {
+        var root = Kumbu.Core.Paths.VaultPath.Root;
+        var notes = new List<object>();
+        foreach (var path in (await store.ListNotesUnderAsync(root, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal))
+        {
+            var n = (await store.GetAsync(path, Ct))!;
+            notes.Add(new { Path = n.Path.Value, n.Content, n.Revision, n.LastWriter, n.LastWriteAt, History = n.History.Select(h => new { h.Content, h.WrittenBy, h.WrittenAt }) });
+        }
+
+        var checkpoints = new List<object>();
+        foreach (var c in await store.ListCheckpointsAsync(root, Ct))
+        {
+            checkpoints.Add(new { c.Name, c.Scope, c.CreatedAt, Notes = (await store.ReadCheckpointAsync(c, Ct)).Select(n => new { Path = n.Path.Value, n.Content }) });
+        }
+
+        var search = await store.SearchAsync(root, "alpha delta", 10, Ct);
+        return JsonSerializer.Serialize(new
+        {
+            Vaults = (await store.UnlockedVaultsAsync(Ct)).OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new { v.Name, v.EmbeddingProvider }),
+            Notes = notes,
+            Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt }),
+            Moves = (await store.ListMovesAsync(root, Ct)).Select(m => new { From = m.From.Value, To = m.To.Value, m.MovedBy }),
+            Checkpoints = checkpoints,
+            Search = new { search.State, search.Pending, Hits = search.Hits.Select(h => new { Path = h.Path.Value, h.StartLine, Score = Math.Round(h.Score, 5) }) },
+        });
+    }
+
+    /// <summary>The vault key in the vault's slot of <paramref name="kind"/>, under <paramref name="userKey"/>.</summary>
+    private async Task<byte[]> VaultKeyAsync(byte[] userKey, string vaultId, string kind = SlotDocument.User)
+    {
+        var slot = await Slots.Find(s => s.Vault == vaultId && s.Kind == kind).SingleAsync(Ct);
+        return VaultCrypto.Open(VaultCrypto.Derive(userKey, "kumbu/v1/user-slot-kek", Encoding.UTF8.GetBytes(vaultId)), slot.Wrapped, $"slot:{vaultId}:{kind}");
+    }
+
+    /// <summary>Whether the document opens under <paramref name="vaultKey"/>, with its pid matching what it holds.</summary>
+    private static bool Opens(byte[] vaultKey, string collection, SealedDocument doc)
+    {
+        var v = new UnlockedVault(doc.Vault, "", vaultKey, DateTime.UtcNow, new VaultLocks());
+        try
+        {
+            var pid = collection switch
+            {
+                "notes" => v.PathId(v.OpenNote(doc).Path),
+                "trash" => v.PathId(v.OpenTrash(doc).Note.Path),
+                "moves" => v.PathId(v.OpenMove(doc).From),
+                "embeddings" => v.PathId(v.OpenEmbeddings(doc).Path),
+                "checkpoints" => v.NameId(v.OpenCheckpoint(doc).Checkpoint.Name),
+                _ => v.TextId(v.OpenText(doc)),
+            };
+            return CryptographicOperations.FixedTimeEquals(pid, doc.PathId);
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private async Task<List<(string Collection, SealedDocument Doc)>> DocumentsAsync(string vaultId)
+    {
+        var all = new List<(string, SealedDocument)>();
+        foreach (var c in Collections) all.AddRange((await Docs(c).Find(d => d.Vault == vaultId).ToListAsync(Ct)).Select(d => (c, d)));
+        return all;
+    }
+
+    /// <summary>Every document of the vault, raw, to compare before and after.</summary>
+    private async Task<string> RawAsync(string vaultId)
+    {
+        var all = new List<string>();
+        foreach (var c in Collections)
+        {
+            all.AddRange((await Raw(c).Find(new BsonDocument("vault", vaultId)).Sort(new BsonDocument("_id", 1)).ToListAsync(Ct)).Select(d => c + ":" + d.ToJson()));
+        }
+
+        return string.Join('\n', all);
+    }
+
+    private async Task<BsonDocument> UserDocAsync(Account a) => await Raw("users").Find(new BsonDocument("_id", a.User.Id)).SingleAsync(Ct);
+
+    private static Task WaitUntilAsync(Func<bool> condition, int seconds = 10) => WaitUntilAsync(() => Task.FromResult(condition()), seconds);
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition, int seconds = 10)
+    {
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        while (!await condition())
+        {
+            if (DateTime.UtcNow > until) throw new TimeoutException("The condition did not hold in time");
+            await Task.Delay(20, Ct);
+        }
+    }
+
+    /// <summary>Throws at <paramref name="point"/> once, as a crash there would stop the run.</summary>
+    private void CrashOnceAt(string point)
+    {
+        var crashed = false;
+        Catalog().RekeyFaultAt = p =>
+        {
+            if (p != point || crashed) return Task.CompletedTask;
+            crashed = true;
+            throw new InvalidOperationException("crash at " + point);
+        };
+    }
+
+    [Fact]
+    public async Task Everything_opens_with_the_new_key_and_reads_the_same()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // As stored: in memory a fresh embedding has full floats, MongoDB holds halves.
+        var before = await SnapshotAsync(Store(a, NewCatalog()));
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        var embedded = RemoteNotes;
+
+        var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        // notes (6 with the moved one gone: plan, a, b, neu), trash 1, moves 1, embeddings 4, checkpoints 2, texts 1.
+        Assert.Equal(13, summary.Documents);
+        Assert.Equal(0, summary.Damaged);
+        Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
+        Assert.Equal(before, await SnapshotAsync(Store(a)));
+        // A second process loads it with the new key too.
+        Assert.Equal(before, await SnapshotAsync(Store(a, NewCatalog())));
+        // Nothing is embedded again: the resealed embeddings are current.
+        await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.Equal(embedded, RemoteNotes);
+        var user = await UserDocAsync(a);
+        Assert.DoesNotContain(id, user.GetValue("rekeyPending", new BsonArray()).AsBsonArray.Select(v => v.AsString));
+        Assert.Equal(2, user["vaultsRekeyed"].ToInt64());
+        Assert.False(await Raw("vaults").Find(new BsonDocument { ["_id"] = id, ["rekeyStartedAt"] = new BsonDocument("$exists", true) }).AnyAsync(Ct));
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Kind == SlotDocument.UserNext, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Nothing_is_sealed_under_the_old_key_any_more()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        var before = (await DocumentsAsync(id)).ToDictionary(d => d.Doc.Id, d => d.Doc.PathId);
+        Assert.All(await DocumentsAsync(id), d => Assert.True(Opens(oldKey, d.Collection, d.Doc), d.Collection));
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var newKey = await VaultKeyAsync(a.Key, id);
+        var after = await DocumentsAsync(id);
+        Assert.Equal(before.Keys.Order(), after.Select(d => d.Doc.Id).Order());
+        foreach (var (collection, doc) in after)
+        {
+            Assert.False(Opens(oldKey, collection, doc), collection);
+            Assert.True(Opens(newKey, collection, doc), collection);
+            Assert.NotEqual(before[doc.Id], doc.PathId);
+            // Nor does the blob open under the old key with any pid.
+            var old = new UnlockedVault(id, "", oldKey, Now, new VaultLocks());
+            Assert.Null(old.Reseal(collection, doc, old, new Dictionary<string, byte[]>()));
+        }
+
+        var meta = (await Raw("vaults").Find(new BsonDocument("_id", id)).SingleAsync(Ct))["meta"].AsByteArray;
+        Assert.ThrowsAny<CryptographicException>(() => VaultCrypto.Open(VaultCrypto.Derive(oldKey, "kumbu/v1/content", []), meta, $"vault:{id}"));
+        VaultCrypto.Open(VaultCrypto.Derive(newKey, "kumbu/v1/content", []), meta, $"vault:{id}");
+        // The only slot left on the vault is the owner's, with the new key.
+        Assert.Equal([SlotDocument.User], (await Slots.Find(s => s.Vault == id).ToListAsync(Ct)).Select(s => s.Kind));
+    }
+
+    [Fact]
+    public async Task Api_keys_with_the_vault_are_revoked_and_connections_disconnected()
+    {
+        var a = await AccountAsync("Arbeit", "Privat");
+        var (both, bothInfo) = await Keys().CreateAsync(
+            a.User, a.Key, a.ReadAt, "both", new Dictionary<string, KeyRight> { [a.Id("Arbeit")] = KeyRight.Write, [a.Id("Privat")] = KeyRight.Read }, Ct);
+        var (other, otherInfo) = await Keys().CreateAsync(a.User, a.Key, a.ReadAt, "other", new Dictionary<string, KeyRight> { [a.Id("Privat")] = KeyRight.Read }, Ct);
+        var claude = await Connections().CreateAsync(a.User, a.Key, a.ReadAt, "claude", new Dictionary<string, KeyRight> { [a.Id("Arbeit")] = KeyRight.Write }, Ct);
+        var elsewhere = await Connections().CreateAsync(a.User, a.Key, a.ReadAt, "elsewhere", new Dictionary<string, KeyRight> { [a.Id("Privat")] = KeyRight.Read }, Ct);
+        var revoked = await Connections().CreateAsync(a.User, a.Key, a.ReadAt, "revoked", new Dictionary<string, KeyRight> { [a.Id("Arbeit")] = KeyRight.Read }, Ct);
+        Assert.True(await Connections().RevokeAsync(a.User, revoked.Id, Ct));
+        var (keysWithAccess, connectionsWithAccess) = await Catalog().AccessAsync(a.Id("Arbeit"), Ct);
+        Assert.Equal([bothInfo.Id], keysWithAccess);
+        Assert.Equal([claude.Id], connectionsWithAccess);
+
+        var summary = await Catalog().RekeyAsync(a.Id("Arbeit"), a.User.Id, a.Key, Ct);
+
+        Assert.Equal([bothInfo.Id], summary.RevokedApiKeys);
+        Assert.Equal([claude.Id], summary.DisconnectedConnections);
+        // Revoked whole: its slot on the other vault went too, and its name is free.
+        Assert.Null(await Keys().ResolveAsync(both, Ct));
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.KeyId == bothInfo.Id, cancellationToken: Ct));
+        Assert.NotNull((await Keys().ListAsync(a.User, a.Key, Ct)).Single(i => i.Id == bothInfo.Id).RevokedAt);
+        await Keys().CreateAsync(a.User, a.Key, a.ReadAt, "both", new Dictionary<string, KeyRight> { [a.Id("Privat")] = KeyRight.Read }, Ct);
+        Assert.NotNull(await Keys().ResolveAsync(other, Ct));
+        Assert.Equal([a.Id("Privat")], (await Catalog().OpenForApiKeyAsync(otherInfo.Id, other, Ct)).Select(v => v.Vault.Id));
+
+        var connections = (await Connections().ListAsync(a.User, a.Key, Ct)).ToDictionary(i => i.Id);
+        var claudeDoc = await Raw("connections").Find(new BsonDocument("_id", claude.Id)).SingleAsync(Ct);
+        Assert.Equal(ConnectionReasons.Rekeyed, claudeDoc["tokensRevokedReason"].AsString);
+        // The start and the finish each wrote it: a code being issued at the same time conflicts.
+        Assert.Equal(2, claudeDoc["wraps"].ToInt64());
+        Assert.Null(connections[claude.Id].RevokedAt);
+        Assert.Null(connections[elsewhere.Id].Reason);
+        Assert.Equal(ConnectionReasons.Revoked, connections[revoked.Id].Reason);
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == a.Id("Arbeit") && s.Kind != SlotDocument.User, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task An_old_credential_with_an_old_backup_cannot_read_later_writes()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/early.md", "written before"), Ct));
+        var (apiKey, info) = await Keys().CreateAsync(a.User, a.Key, a.ReadAt, "agent", new Dictionary<string, KeyRight> { [id] = KeyRight.Write }, Ct);
+        // The backup: everything of the vault, its slots included.
+        var backup = new Dictionary<string, List<BsonDocument>>();
+        foreach (var c in Collections.Append("slots").Append("vaults"))
+        {
+            backup[c] = await Raw(c).Find(new BsonDocument(c == "vaults" ? "_id" : "vault", id)).ToListAsync(Ct);
+        }
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/later.md", "written after the re-keying"), Ct));
+        var later = await Raw("notes").Find(new BsonDocument("vault", id)).ToListAsync(Ct);
+
+        // The old backup, with the documents written since added to it, opened with the revoked API key.
+        var restored = fixture.NewDatabase();
+        foreach (var (c, docs) in backup.Where(b => b.Value.Count > 0)) await restored.GetCollection<BsonDocument>(c).InsertManyAsync(docs, cancellationToken: Ct);
+        var known = backup["notes"].Select(d => d["_id"]).ToHashSet();
+        await restored.GetCollection<BsonDocument>("notes").InsertManyAsync(later.Where(d => !known.Contains(d["_id"])), cancellationToken: Ct);
+        var oldWorld = new VaultCatalog(restored, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
+        var store = new EncryptedNoteStore(oldWorld, new ApiKeyCredential(info.Id, apiKey));
+
+        Assert.Equal("written before", await store.ReadAsync(P("/Arbeit/early.md"), Ct));
+        Assert.Null(await store.ReadAsync(P("/Arbeit/later.md"), Ct));
+        Assert.Equal(1, await store.CountDamagedAsync(P("/Arbeit"), Ct));
+    }
+
+    [Fact]
+    public async Task A_vault_being_deleted_is_not_rekeyed()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        Task<RekeySummary>? during = null;
+
+        await Catalog().DeleteVaultsAsync([id], (_, _) =>
+        {
+            during = Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+            return Task.CompletedTask;
+        }, Ct);
+
+        await Assert.ThrowsAsync<VaultDeletedException>(() => during!);
+        await Assert.ThrowsAsync<VaultDeletedException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        // In another process, without the tombstone: the vault document is gone.
+        await Assert.ThrowsAsync<VaultDeletedException>(() => NewCatalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == id, cancellationToken: Ct));
+        Assert.Empty(await DocumentsAsync(id));
+    }
+
+    [Theory]
+    [InlineData("after-start")]
+    [InlineData("after-batch")]
+    [InlineData("inside-finish")]
+    [InlineData("after-finish")]
+    public async Task A_crash_at_any_point_leaves_one_consistent_key(string point)
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // As stored: in memory a fresh embedding has full floats, MongoDB holds halves.
+        var before = await SnapshotAsync(Store(a, NewCatalog()));
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        Catalog().BatchDocuments = 3;
+        CrashOnceAt(point);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+
+        Assert.False(Catalog().IsRekeying(id));
+        var done = point == "after-finish";
+        var newKey = await VaultKeyAsync(a.Key, id, done ? SlotDocument.User : SlotDocument.UserNext);
+        Assert.NotEqual(oldKey, newKey);
+        var docs = await DocumentsAsync(id);
+        Assert.All(docs, d => Assert.True(Opens(oldKey, d.Collection, d.Doc) ^ Opens(newKey, d.Collection, d.Doc), $"{d.Collection} {d.Doc.Id}"));
+        var underNew = docs.Count(d => Opens(newKey, d.Collection, d.Doc));
+        if (point == "after-start") Assert.Equal(0, underNew);
+        else if (point == "after-batch") Assert.InRange(underNew, 1, docs.Count - 1);
+        else Assert.Equal(docs.Count, underNew);
+        var pending = (await UserDocAsync(a)).GetValue("rekeyPending", new BsonArray()).AsBsonArray.Select(v => v.AsString).ToList();
+        Assert.Equal(!done, pending.Contains(id));
+        if (!done)
+        {
+            // The user slot and the meta still agree on the old key; the vault answers "being re-encrypted".
+            Assert.Equal(oldKey, await VaultKeyAsync(a.Key, id));
+            var busy = await Assert.ThrowsAsync<VaultBusyException>(() => Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+            Assert.Equal(VaultBusyException.BeingReencrypted, busy.Message);
+
+            // Resumed by another process, as after a restart.
+            Catalog().RekeyFaultAt = null;
+            var resumed = await NewCatalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+            Assert.Empty(resumed.RevokedApiKeys);
+            Assert.Equal(newKey, await VaultKeyAsync(a.Key, id));
+        }
+
+        Assert.All(await DocumentsAsync(id), d => Assert.True(Opens(newKey, d.Collection, d.Doc), d.Collection));
+        Assert.Equal(before, await SnapshotAsync(Store(a, NewCatalog())));
+        Assert.Equal(before, await SnapshotAsync(Store(a)));
+        Assert.DoesNotContain(id, (await UserDocAsync(a)).GetValue("rekeyPending", new BsonArray()).AsBsonArray.Select(v => v.AsString));
+    }
+
+    [Fact]
+    public async Task A_finish_that_matches_nothing_keeps_the_vault_pending()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        // While the run is in its passes, the user slot is wrapped again (the same key, a new seal), as by a writer the
+        // run doesn't know of.
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            var kek = VaultCrypto.Derive(a.Key, "kumbu/v1/user-slot-kek", Encoding.UTF8.GetBytes(id));
+            await Slots.UpdateOneAsync(
+                s => s.Vault == id && s.Kind == SlotDocument.User, Builders<SlotDocument>.Update.Set(s => s.Wrapped, VaultCrypto.Seal(kek, oldKey, $"slot:{id}:user")), cancellationToken: Ct);
+        };
+
+        var refused = await Assert.ThrowsAsync<VaultBusyException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+
+        Assert.Equal(VaultBusyException.BeingReencrypted, refused.Message);
+        Assert.False(Catalog().IsRekeying(id));
+        Assert.Equal(oldKey, await VaultKeyAsync(a.Key, id));
+        Assert.Equal(1, await Slots.CountDocumentsAsync(s => s.Vault == id && s.Kind == SlotDocument.UserNext, cancellationToken: Ct));
+        Assert.True(await Raw("vaults").Find(new BsonDocument { ["_id"] = id, ["rekeyStartedAt"] = new BsonDocument("$exists", true) }).AnyAsync(Ct));
+        Assert.Contains(id, (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString));
+        await Assert.ThrowsAsync<VaultBusyException>(() => Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+
+        Catalog().RekeyFaultAt = null;
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_stale_object_writes_nothing_and_destroys_nothing()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // A request that opened the vault before the run, and writes during it and after it.
+        var stale = Store(a);
+        var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single();
+        var checkpoint = (await stale.ListCheckpointsAsync(P("/Arbeit"), Ct)).First();
+        var writes = new (string Name, Func<Task> Write)[]
+        {
+            ("create", () => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct)),
+            ("replace", () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct)),
+            ("trash", () => stale.TryTrashAsync(plan, "lea", Now, Ct)),
+            ("restore", () => stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", Now, Ct)),
+            ("move", () => stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", Now, Ct)),
+            ("checkpoint", () => stale.TryAddCheckpointAsync(Cp("drei", "/Arbeit/plan.md", plan), [new Note(plan.Path, plan.Content)], Ct)),
+            ("uncheckpoint", () => stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct)),
+            ("provider", () => Catalog().SetEmbeddingProviderAsync(staleVault, EmbeddingProviders.Internal, Ct)),
+            ("index", async () =>
+            {
+                await Index().IndexAsync(staleVault, P("/Arbeit/plan.md"), Ct);
+                throw new VaultUnavailableException("indexing does nothing, as it should");
+            }),
+        };
+        var during = new List<string>();
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            foreach (var (name, write) in writes)
+            {
+                // Refused at once, not queued behind the run, which holds the gates.
+                var e = await Assert.ThrowsAnyAsync<VaultUnavailableException>(() => write().WaitAsync(TimeSpan.FromSeconds(5), Ct));
+                if (e is VaultBusyException) during.Add(e.Message);
+            }
+        };
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        var after = await RawAsync(id);
+        var embedded = RemoteNotes;
+
+        Assert.Equal(Enumerable.Repeat(VaultBusyException.BeingReencrypted, writes.Length - 1), during);
+        foreach (var (name, write) in writes)
+        {
+            var e = await Assert.ThrowsAnyAsync<VaultUnavailableException>(write);
+            if (name != "index") Assert.Equal(VaultBusyException.JustReencrypted, e.Message);
+        }
+
+        Assert.Equal(after, await RawAsync(id));
+        Assert.Equal(embedded, RemoteNotes);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task The_fences_refuse_a_write_with_the_old_pid()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // Another process holds the vault with the old key and knows nothing of the run: only the database can refuse it.
+        var other = NewCatalog();
+        var stale = Store(a, other);
+        var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        var b = (await stale.GetAsync(P("/Arbeit/b.md"), Ct))!;
+        var checkpoint = (await stale.ListCheckpointsAsync(P("/Arbeit"), Ct)).First();
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        var after = await RawAsync(id);
+
+        Assert.False(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct));
+        Assert.False(await stale.TryTrashAsync(b, "lea", Now, Ct));
+        Assert.NotEmpty(await stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", Now, Ct));
+        Assert.Null(await stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", Now, Ct));
+        Assert.False(await stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct));
+
+        Assert.Equal(after, await RawAsync(id));
+        var store = Store(a);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await store.ReadAsync(P("/Arbeit/plan.md"), Ct));
+        Assert.Equal("the same text\n", await store.ReadAsync(P("/Arbeit/b.md"), Ct));
+        Assert.Single(await store.ListTrashAsync(P("/Arbeit"), Ct));
+        Assert.Equal(2, (await store.ListCheckpointsAsync(P("/Arbeit"), Ct)).Count);
+    }
+
+    [Fact]
+    public async Task A_document_sealed_under_the_old_key_with_a_new_pid_is_resealed()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        var path = P("/Arbeit/b.md");
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            // As a writer of another process might leave it: the new key's pid on a blob sealed under the old key.
+            var next = new UnlockedVault(id, "", await VaultKeyAsync(a.Key, id, SlotDocument.UserNext), Now, new VaultLocks());
+            var old = new UnlockedVault(id, "", oldKey, Now, new VaultLocks());
+            await Docs("notes").UpdateOneAsync(d => d.Vault == id && d.PathId == old.PathId(path), Builders<SealedDocument>.Update.Set(d => d.PathId, next.PathId(path)), cancellationToken: Ct);
+        };
+
+        var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.Equal(0, summary.Damaged);
+        var newKey = await VaultKeyAsync(a.Key, id);
+        Assert.All(await DocumentsAsync(id), d => Assert.True(Opens(newKey, d.Collection, d.Doc), d.Collection));
+        Assert.Equal("the same text\n", await Store(a).ReadAsync(path, Ct));
+    }
+
+    [Fact]
+    public async Task A_duplicate_pid_keeps_the_higher_revision()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/plan.md", "older"), Ct));
+        // A second document for the same path, newer, under a pid of its own (written outside Kumbu², say).
+        var k = new UnlockedVault(id, "", await VaultKeyAsync(a.Key, id), Now, new VaultLocks());
+        var newer = ObjectId.GenerateNewId();
+        await Docs("notes").InsertOneAsync(
+            new SealedDocument { Id = newer, Vault = id, PathId = RandomNumberGenerator.GetBytes(32), Revision = 5, Blob = k.SealNote(newer, New("/Arbeit/plan.md", "newer") with { Revision = 5 }) },
+            cancellationToken: Ct);
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var left = Assert.Single(await Docs("notes").Find(d => d.Vault == id).ToListAsync(Ct));
+        Assert.Equal(newer, left.Id);
+        Assert.Equal("newer", await Store(a, NewCatalog()).ReadAsync(P("/Arbeit/plan.md"), Ct));
+        Assert.Contains(_log.Lines, l => l.Contains("claim one pid", StringComparison.Ordinal) && l.Contains(newer.ToString(), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_damaged_document_is_counted_and_left()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var damaged = ObjectId.GenerateNewId();
+        await Docs("notes").InsertOneAsync(new SealedDocument { Id = damaged, Vault = id, PathId = RandomNumberGenerator.GetBytes(32), Revision = 1, Blob = RandomNumberGenerator.GetBytes(64) }, cancellationToken: Ct);
+        var raw = (await Raw("notes").Find(new BsonDocument("_id", damaged)).SingleAsync(Ct)).ToJson();
+
+        var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.Equal(1, summary.Damaged);
+        Assert.Equal(13, summary.Documents);
+        Assert.Equal(raw, (await Raw("notes").Find(new BsonDocument("_id", damaged)).SingleAsync(Ct)).ToJson());
+        Assert.Single(_log.Lines, l => l.Contains($"Document {damaged} of vault {id}", StringComparison.Ordinal) && l.Contains("neither key", StringComparison.Ordinal));
+        Assert.Equal(1, await Store(a).CountDamagedAsync(P("/Arbeit"), Ct));
+    }
+
+    [Fact]
+    public async Task A_deletion_during_a_run_wins_within_one_batch()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        Catalog().BatchDocuments = 2;
+        var batches = 0;
+        var batchesAfterDeletion = 0;
+        Task<long>? deletion = null;
+        Catalog().RekeyBatchCommitted = (_, _, _) =>
+        {
+            batches++;
+            if (deletion is not null) batchesAfterDeletion++;
+        };
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-batch" || deletion is not null) return;
+            deletion = Catalog().DeleteVaultsAsync([id], (_, _) => Task.CompletedTask, Ct);
+            await WaitUntilAsync(() => Catalog().IsDeleted(id));
+        };
+
+        await Assert.ThrowsAsync<VaultDeletedException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        await deletion!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+        Assert.Equal(1, batches);
+        Assert.Equal(0, batchesAfterDeletion);
+        Assert.Empty(await DocumentsAsync(id));
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == id, cancellationToken: Ct));
+        Assert.Empty(await Store(a).ListVaultsAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_large_document_goes_alone_in_its_batch()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var store = Store(a);
+        for (var i = 0; i < 6; i++) Assert.True(await store.TryCreateAsync(New($"/Arbeit/{i}.md", new string((char)('a' + i), 10_000)), Ct));
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/big.md", new string('z', 100_000)), Ct));
+        Catalog().BatchBytes = 30_000;
+        var batches = new List<(int Documents, long Bytes)>();
+        Catalog().RekeyBatchCommitted = (_, n, bytes) => batches.Add((n, bytes));
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.Contains(batches, b => b is { Documents: 1, Bytes: > 100_000 });
+        Assert.All(batches.Where(b => b.Bytes > 30_000), b => Assert.Equal(1, b.Documents));
+        Assert.Equal(7, batches.Sum(b => b.Documents));
+        Assert.True(batches.Count >= 4, $"{batches.Count} batches");
+        Assert.Equal(new string('z', 100_000), await Store(a).ReadAsync(P("/Arbeit/big.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Rekeys_2000_notes_in_batches_within_the_limits()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var k = new UnlockedVault(id, "", await VaultKeyAsync(a.Key, id), Now, new VaultLocks());
+        // 2000 notes, each with 10 earlier versions of 2 KB, and embeddings: written straight to the database.
+        var random = new Random(7);
+        string Text(int n) => string.Concat(Enumerable.Range(0, n / 8).Select(_ => (char)('a' + random.Next(26)) + "bcdefg "));
+        for (var start = 0; start < 2000; start += 200)
+        {
+            var notes = new List<SealedDocument>();
+            var embeddings = new List<SealedDocument>();
+            for (var i = start; i < start + 200; i++)
+            {
+                var path = P($"/Arbeit/notes/{i:D4}.md");
+                var note = new StoredNote(path, Text(2048), 11, "lea", Now, [.. Enumerable.Range(0, 10).Select(h => new HistoryEntry(Text(2048), "lea", Now.AddMinutes(-h)))]);
+                var docId = ObjectId.GenerateNewId();
+                notes.Add(new SealedDocument { Id = docId, Vault = id, PathId = k.PathId(path), Revision = 11, Blob = k.SealNote(docId, note) });
+                var vectors = new NoteEmbeddings("arctic-m", note.Version, [new EmbeddedChunk(0, "h" + i, [.. Enumerable.Range(0, 768).Select(_ => (float)random.NextDouble())])]);
+                embeddings.Add(new SealedDocument { Id = ObjectId.GenerateNewId(), Vault = id, PathId = k.PathId(path), Blob = k.SealEmbeddings(path, vectors) });
+            }
+
+            await Docs("notes").InsertManyAsync(notes, cancellationToken: Ct);
+            await Docs("embeddings").InsertManyAsync(embeddings, cancellationToken: Ct);
+        }
+
+        var batches = new List<(int Documents, long Bytes)>();
+        Catalog().RekeyBatchCommitted = (_, n, bytes) => batches.Add((n, bytes));
+        var clock = Stopwatch.StartNew();
+
+        var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        clock.Stop();
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"Re-keyed 2000 notes with embeddings in {clock.Elapsed.TotalSeconds:0.0} s: {batches.Sum(b => b.Bytes) / 1024.0 / 1024.0:0.0} MiB sealed, "
+            + $"{batches.Count} batches, largest {batches.Max(b => b.Bytes) / 1024.0 / 1024.0:0.00} MiB / {batches.Max(b => b.Documents)} documents");
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(50), $"took {clock.Elapsed}");
+        Assert.Equal(4000, summary.Documents);
+        Assert.Equal(4000, batches.Sum(b => b.Documents));
+        Assert.All(batches, b => Assert.True(b.Bytes <= Catalog().BatchBytes && b.Documents <= Catalog().BatchDocuments, $"{b.Documents} documents, {b.Bytes} bytes"));
+        var store = Store(a);
+        Assert.Equal(2000, (await store.ListNotesUnderAsync(P("/Arbeit"), Ct)).Count);
+        Assert.Equal(10, (await store.GetAsync(P("/Arbeit/notes/1234.md"), Ct))!.History.Count);
+    }
+
+    [Fact]
+    public async Task A_pending_vault_answers_being_reencrypted()
+    {
+        var a = await FilledAsync("Privat");
+        var id = a.Id("Arbeit");
+        Assert.True(await Store(a).TryCreateAsync(New("/Privat/p.md", "private"), Ct));
+        CrashOnceAt("after-start");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        var unlocked = new List<string>();
+        Catalog().Unlocked += v => unlocked.Add(v.Id);
+        var found = new List<(string, string, byte[])>();
+        Catalog().RekeyPendingFound += (v, u, k) => found.Add((v, u, k));
+        var store = Store(a);
+
+        // The name lists keep it.
+        Assert.Equal(["Arbeit", "Privat"], (await store.ListVaultsAsync(Ct)).Order(StringComparer.Ordinal));
+        var placeholder = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit");
+        Assert.True(placeholder.Pending);
+        Assert.Equal("remote", placeholder.EmbeddingProvider);
+        Assert.Empty(placeholder.Notes);
+        Assert.Equal([(id, a.User.Id)], found.Select(f => (f.Item1, f.Item2)));
+        Assert.Equal(a.Key, found[0].Item3);
+        Assert.Contains((await Catalog().OpenForUserAsync(a.User.Id, a.Key, Ct)).Select(v => (v.Name, v.Pending)), v => v == ("Arbeit", true));
+        Assert.Equal([id], await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
+
+        // Every single-vault path refuses it.
+        var reads = new Func<Task>[]
+        {
+            () => store.ReadAsync(P("/Arbeit/plan.md"), Ct),
+            () => store.ListNotesUnderAsync(P("/Arbeit"), Ct),
+            () => store.ListTrashAsync(P("/Arbeit"), Ct),
+            () => store.ListCheckpointsAsync(P("/Arbeit"), Ct),
+            () => store.CountDamagedAsync(P("/Arbeit"), Ct),
+            () => store.SearchAsync(P("/Arbeit"), "alpha", 5, Ct),
+            () => store.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct),
+            () => store.TryRemoveCheckpointAsync("Arbeit", "eins", Ct),
+            () => store.LatestChangesetAsync("Arbeit", "lea", Ct),
+            () => Catalog().SetEmbeddingProviderAsync(placeholder, EmbeddingProviders.Internal, Ct),
+        };
+        foreach (var read in reads) Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(read)).Message);
+
+        // Cross-vault paths leave it out.
+        Assert.Equal(["/Privat/p.md"], (await store.ListNotesUnderAsync(Kumbu.Core.Paths.VaultPath.Root, Ct)).Select(p => p.Value));
+        Assert.Empty(await store.ListTrashAsync(Kumbu.Core.Paths.VaultPath.Root, Ct));
+        Assert.Empty(await store.ListCheckpointsAsync(Kumbu.Core.Paths.VaultPath.Root, Ct));
+        Assert.Equal(0, await store.CountDamagedAsync(Kumbu.Core.Paths.VaultPath.Root, Ct));
+
+        // Indexing through it does nothing.
+        var embeddings = await RawAsync(id);
+        await Index().IndexAsync(placeholder, P("/Arbeit/plan.md"), Ct);
+        Assert.Equal(embeddings, await RawAsync(id));
+        Assert.DoesNotContain(id, unlocked);
+        Assert.Equal(1, Catalog().OpenCount);
+    }
+
+    [Fact]
+    public async Task Indexing_resumes_after_a_finish()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var before = Catalog().InterruptToken(id);
+        Catalog().RekeyFaultAt = p =>
+        {
+            if (p == "after-start") Assert.True(Catalog().InterruptToken(id).IsCancellationRequested);
+            return Task.CompletedTask;
+        };
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.True(before.IsCancellationRequested);
+        Assert.False(Catalog().InterruptToken(id).IsCancellationRequested);
+        var store = Store(a);
+        var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        var embedded = RemoteNotes;
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nsomething else entirely\n", "lea", Now.AddHours(2)), Ct));
+        await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.True(RemoteNotes > embedded);
+        var vault = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single();
+        Assert.Equal((await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!.Version, vault.Embeddings[P("/Arbeit/plan.md")].Version);
+    }
+
+    [Fact]
+    public async Task A_rotation_during_the_two_key_period_rewraps_the_new_key_too()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        CrashOnceAt("after-batch");
+        Catalog().BatchDocuments = 3;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        var next = await VaultKeyAsync(a.Key, id, SlotDocument.UserNext);
+
+        var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
+
+        Assert.Equal(next, await VaultKeyAsync(rotation.NewUserKey, id, SlotDocument.UserNext));
+        await Assert.ThrowsAsync<VaultNotRekeyableException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        await Catalog().RekeyAsync(id, a.User.Id, rotation.NewUserKey, Ct);
+        Assert.Equal(next, await VaultKeyAsync(rotation.NewUserKey, id));
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a, key: rotation.NewUserKey).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Only_VaultBusyException_answers_503()
+    {
+        static async Task<(int? Status, string? RetryAfter, string? Message)> AnswerAsync(Exception e)
+        {
+            var http = new DefaultHttpContext();
+            var result = await Kumbu.Server.Api.ApiErrors.Filter(new DefaultEndpointFilterInvocationContext(http), _ => throw e);
+            var json = Assert.IsType<JsonHttpResult<Kumbu.Server.Api.ApiError>>(result);
+            return (json.StatusCode, http.Response.Headers.RetryAfter.ToString(), json.Value!.Error);
+        }
+
+        Assert.Equal((503, "5", VaultBusyException.BeingReencrypted), await AnswerAsync(VaultBusyException.Being()));
+        Assert.Equal((503, "5", VaultBusyException.JustReencrypted), await AnswerAsync(VaultBusyException.Just()));
+        Assert.Equal((404, "", new VaultDeletedException().Message), await AnswerAsync(new VaultDeletedException()));
+        // Any other unavailable vault stays what it was: a fault, not "try again".
+        var other = new VaultUnavailableException("MongoDB runs standalone");
+        Assert.Same(other, await Assert.ThrowsAsync<VaultUnavailableException>(() => AnswerAsync(other)));
+        Assert.Throws<ArgumentException>(() => new VaultBusyException("Something else."));
+    }
+}
+

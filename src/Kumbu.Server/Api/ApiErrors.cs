@@ -62,6 +62,12 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }
+        // Only the busy vault of a re-keying: every other VaultUnavailableException keeps its mapping.
+        catch (Kumbu.Server.Vaults.VaultBusyException e)
+        {
+            SetRetryAfter(context.HttpContext, BusyRetryAfter);
+            return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
+        }
         // Exactly ArgumentException: the services throw it for input they refuse, with a sentence meant for the
         // user. Its subclasses (ArgumentNullException, ...) come from bugs and say nothing a user could act on.
         catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
@@ -76,6 +82,9 @@ public static class ApiErrors
         foreach (var status in statuses) builder.Produces<ApiError>(status);
         return builder;
     }
+
+    /// <summary>How long a client waits before asking a vault being re-encrypted again.</summary>
+    internal static readonly TimeSpan BusyRetryAfter = TimeSpan.FromSeconds(5);
 
     public static IResult Result(int status, string message) => TypedResults.Json(new ApiError(message), statusCode: status);
 
