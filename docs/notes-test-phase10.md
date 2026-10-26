@@ -6,8 +6,10 @@ Branch `step-10-oauth`. For Chris, on `https://kumbu.tidesson.net` after deployi
 
 On the phone, about five minutes. Do items 2 and 5 once beforehand, so the connector is already there.
 
+Don't run **Re-encrypt my vaults** right before the demo: it disconnects every app, and the connector would need a reconnect first.
+
 - [ ] 1. In Kumbu² (phone browser): Access → **Connect an app**, name `demo`, one vault read and write, 90 days. Show the connector URL and **Copy**.
-- [ ] 2. In the Claude app: Settings → Connectors → **Add custom connector**, paste the URL, leave client ID and secret empty.
+- [ ] 2. Beforehand, in claude.ai on the web: Settings → Connectors → **Add custom connector**, paste the URL, leave client ID and secret empty. It then appears in Claude Desktop and in the Claude app on the phone.
 - [ ] 3. Kumbu²'s consent page opens: point at the app name, the vault and "read and write". **Allow**.
 - [ ] 4. Back in Claude, ask "list my Kumbu vaults", then "write a note `demo` with three bullet points".
 - [ ] 5. In Kumbu²: the note is there, the history shows the writer `demo`, and the Access page shows "Connected" and "last used just now".
