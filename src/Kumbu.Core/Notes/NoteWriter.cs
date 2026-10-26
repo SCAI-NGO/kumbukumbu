@@ -22,12 +22,16 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// <summary>
     /// The note after a write in <paramref name="changeset"/>. The state it replaces goes into the history,
     /// unless it belongs to the same changeset: then it was an intermediate step of the same session.
+    /// The state a note was created with is the exception, a version of its own even within the changeset (a
+    /// conflict copy's first state is the evidence of the conflict).
     /// Without a changeset (a restore), the new state joins none, so it stays a version of its own.
     /// </summary>
     public static StoredNote Next(
         StoredNote current, string content, string writer, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
     {
-        var coalesce = !keepCurrent && changeset is not null && current.Changeset?.Id == changeset.Id;
+        // A note without history is still in the state it was created with: every later write leaves an entry.
+        var created = current.History.Count == 0;
+        var coalesce = !keepCurrent && !created && changeset is not null && current.Changeset?.Id == changeset.Id;
         // A state already on top of the history (after a restore, say) is not kept twice.
         var duplicate = current.History.Count > 0 && current.History[0].Content == current.Content;
         IReadOnlyList<HistoryEntry> history = coalesce || duplicate
@@ -47,7 +51,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
     /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
     public Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
-        Changeset.ForAsync(store, path.Segments[0], caller.Writer, Now, ct);
+        Changeset.ForAsync(store, path.Segments[0], caller.Writer, caller.ChangesetIdle, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
     public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct)

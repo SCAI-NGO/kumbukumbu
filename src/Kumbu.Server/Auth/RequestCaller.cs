@@ -21,11 +21,14 @@ public enum CallerKind
 public sealed class RequestCaller : ICaller
 {
     private readonly VaultCatalog _catalog;
+    private readonly bool _human;
 
     private RequestCaller(
-        CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null, DateTime? credentialReadAt = null)
+        CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null, DateTime? credentialReadAt = null,
+        bool device = false)
     {
         Kind = kind;
+        _human = kind == CallerKind.Session || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
         User = user;
@@ -40,6 +43,9 @@ public sealed class RequestCaller : ICaller
     public User? User { get; }
 
     public string Writer { get; }
+
+    /// <summary>A person (the session, an Obsidian device key) gets the shorter changeset; agents, connections and the dev token the agent's.</summary>
+    public TimeSpan ChangesetIdle => _human ? Changeset.HumanIdle : Changeset.Idle;
 
     /// <summary>The user key, for a session only: what the account endpoints need to rewrap or list the user's slots.</summary>
     internal byte[]? UserKey { get; }
@@ -67,7 +73,7 @@ public sealed class RequestCaller : ICaller
     {
         var credential = new ApiKeyCredential(key.Id, apiKey);
         await credential.OpenWithRightsAsync(catalog, ct);
-        return new(CallerKind.ApiKey, key.User, key.Name, credential, catalog);
+        return new(CallerKind.ApiKey, key.User, key.Name, credential, catalog, device: key.Kind == ApiKeyKind.Device);
     }
 
     /// <summary>A connection's access token, its vaults already opened: null if it opens none (its slots were deleted

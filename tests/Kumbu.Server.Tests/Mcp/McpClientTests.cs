@@ -161,13 +161,14 @@ public sealed class McpClientTests(KumbuAppFactory app)
         Assert.Equal("# Scratch\n\n- eins\n- two\n", Text(await ShAsync($"cat {path}")));
         Assert.Equal($"appended to {path} (now 4 lines)", Text(appended));
 
-        // Creating and both edits came from the same writer within ten minutes: one session, one version.
-        var history = Text(await ShAsync($"history {path}"));
-        Assert.Single(history.Split('\n'));
+        // Both edits came from the same writer within ten minutes: one version. The created state is one of its own.
+        var history = Text(await ShAsync($"history {path}")).Split('\n');
+        Assert.Equal(2, history.Length);
+        Assert.StartsWith(v1, history[1], StringComparison.Ordinal);
 
-        var restored = await ShAsync($"restore {path} {v1}");
+        var restored = await ShAsync($"restore {path} {Token(edited)}");
         Assert.True(restored.IsError);
-        Assert.StartsWith($"restore: {path} has no version {v1}", Text(restored), StringComparison.Ordinal);
+        Assert.StartsWith($"restore: {path} has no version {Token(edited)}", Text(restored), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -184,7 +184,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         }
 
         var batch = new NoteBatch();
-        var changeset = await Changeset.ForAsync(store, path.Segments[0], writer, now, ct);
+        var changeset = await Changeset.ForAsync(store, path.Segments[0], writer, caller.ChangesetIdle, now, ct);
         var changed = new List<string>();
         var total = 0;
         foreach (var (notePath, version) in plan.Notes)

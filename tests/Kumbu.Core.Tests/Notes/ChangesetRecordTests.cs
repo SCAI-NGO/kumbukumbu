@@ -72,6 +72,40 @@ public class ChangesetRecordTests
     }
 
     [Fact]
+    public async Task A_folder_renamed_one_note_at_a_time_is_one_changeset_and_keeps_each_history()
+    {
+        // Obsidian renames a folder as one move per note, a moment apart.
+        const int count = 30;
+        for (var i = 0; i < count; i++) await Create($"/Work/dir/n{i}.md", $"n{i}\n");
+        await Create("/Work/hub.md", string.Concat(Enumerable.Range(0, count).Select(i => $"[[dir/n{i}]]\n")));
+        _time.Advance(TimeSpan.FromHours(1));
+        for (var i = 0; i < count; i++) await _writer.WriteAsync($"/Work/dir/n{i}.md", $"n{i} edited\n", VersionToken.Of($"n{i}\n"), Ct);
+        _time.Advance(TimeSpan.FromHours(1));
+
+        var mover = new NoteMover(_store, _time, new FixedCaller("chris", Human: true));
+        for (var i = 0; i < count; i++)
+        {
+            Assert.False((await mover.MoveAsync(P($"/Work/dir/n{i}.md"), P($"/Work/renamed/n{i}.md"), rewriteLinks: true, Ct)).IsError);
+            _time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        var moves = await _store.ListMovesAsync(P("/Work"), Ct);
+        Assert.Equal(count, moves.Count);
+        Assert.Single(moves.Select(m => m.Changeset?.Id).Distinct());
+        for (var i = 0; i < count; i++)
+        {
+            var note = (await _store.GetAsync(P($"/Work/renamed/n{i}.md"), Ct))!;
+            Assert.Equal($"n{i} edited\n", note.Content);
+            Assert.Equal([$"n{i}\n"], note.History.Select(h => h.Content));
+        }
+
+        // The hub's links were rewritten thirty times in one changeset: one version, the state before the rename.
+        var hub = (await _store.GetAsync(P("/Work/hub.md"), Ct))!;
+        Assert.Equal(string.Concat(Enumerable.Range(0, count).Select(i => $"[[renamed/n{i}]]\n")), hub.Content);
+        Assert.Equal([string.Concat(Enumerable.Range(0, count).Select(i => $"[[dir/n{i}]]\n"))], hub.History.Select(h => h.Content));
+    }
+
+    [Fact]
     public async Task A_restore_joins_no_changeset()
     {
         // A trash restore: the note comes back without a changeset.

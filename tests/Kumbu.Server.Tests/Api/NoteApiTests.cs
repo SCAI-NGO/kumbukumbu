@@ -285,9 +285,10 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal(1, backlinks[0]!["line"]!.GetValue<int>());
         Assert.Equal("[[kumbu]] and [[missing]]", backlinks[0]!["text"]!.GetValue<string>());
 
-        // Two writes of one user close together form one changeset: one version, as in 'history'.
+        // Two writes of one user close together form one changeset, but the state a note was created with stays a version.
         var history = (await JsonAsync(historyResponse)).AsArray();
-        Assert.Single(history);
+        Assert.Equal(2, history.Count);
+        Assert.Equal(first, history[1]!["version"]!.GetValue<string>());
         Assert.True(history[0]!["current"]!.GetValue<bool>());
         Assert.Equal(user.Username, history[0]!["writer"]!.GetValue<string>());
         Assert.Equal(3, history[0]!["lines"]!.GetValue<int>());

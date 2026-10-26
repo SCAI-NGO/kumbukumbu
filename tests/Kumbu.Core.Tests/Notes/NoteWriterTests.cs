@@ -230,6 +230,60 @@ public class NoteWriterTests
     }
 
     [Fact]
+    public async Task AHumanWritersChangesetEndsAfterTwoIdleMinutes()
+    {
+        // Obsidian autosaves every few seconds: with an agent's ten minutes, an hour of typing would leave one version.
+        var human = new NoteWriter(_store, _time, new FixedCaller("chris", Human: true));
+        var v1 = (await human.EditAsync("/Work/plan.md", V(Plan), null, "a", Ct)).Version!.Token;
+        _time.Advance(TimeSpan.FromSeconds(110));
+        var v2 = (await human.EditAsync("/Work/plan.md", v1, null, "b", Ct)).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(2));
+        await human.EditAsync("/Work/plan.md", v2, null, "c", Ct);
+
+        Assert.Equal([Plan + "a\nb", Plan], (await Get("/Work/plan.md")).History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task AnAgentsChangesetOutlastsTwoIdleMinutes()
+    {
+        var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;
+        _time.Advance(TimeSpan.FromMinutes(3));
+        await Edit("/Work/plan.md", v1, null, "b");
+
+        Assert.Equal([Plan], (await Get("/Work/plan.md")).History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task ANotesCreatedStateIsNeverCoalescedAway()
+    {
+        // A conflict copy, or a note made and edited in one Obsidian session: its first state is a version of its own.
+        var created = (await Write("/Work/copy.md", "first\n", null)).Version!.Token;
+        _time.Advance(TimeSpan.FromSeconds(5));
+        var second = (await Write("/Work/copy.md", "second\n", created)).Version!.Token;
+        Assert.Equal(["first\n"], (await Get("/Work/copy.md")).History.Select(h => h.Content));
+
+        // Only creation is special: a third write in the same changeset coalesces as usual.
+        _time.Advance(TimeSpan.FromSeconds(5));
+        await Write("/Work/copy.md", "third\n", second);
+        Assert.Equal(["first\n"], (await Get("/Work/copy.md")).History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task AMoveFollowedByAnEditCoalescesAsBefore()
+    {
+        var created = (await Write("/Work/a.md", "first\n", null)).Version!.Token;
+        _time.Advance(TimeSpan.FromHours(1));
+        var mover = new NoteMover(_store, _time, new FixedCaller(Writers.Dev));
+        Assert.False((await mover.MoveAsync(P("/Work/a.md"), P("/Work/b.md"), rewriteLinks: true, Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var second = (await Write("/Work/b.md", "second\n", created)).Version!.Token;
+        await Write("/Work/b.md", "third\n", second);
+
+        // The move made no version; the state before the changeset is kept once, the step in between is not.
+        Assert.Equal(["first\n"], (await Get("/Work/b.md")).History.Select(h => h.Content));
+    }
+
+    [Fact]
     public async Task HistoryKeepsTheLastTen()
     {
         var version = V(Plan);
