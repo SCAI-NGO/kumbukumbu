@@ -208,9 +208,11 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
     /// and revokes its tokens (Ruling 4): the server never holds a refresh token, so it can't re-wrap the slots,
     /// and the list never shows rights the tokens don't have. An authorised connection then needs a reconnect
     /// (<see cref="ConnectionReasons.RightsChanged"/>). Null if the user has no such connection that is neither
-    /// revoked nor expired.
+    /// revoked nor expired. <see cref="CredentialsChangedException"/>, as at creation, if the user is inactive, their
+    /// credentials changed at or after <paramref name="credentialReadAt"/>, or the user key isn't the one in force.
     /// </summary>
-    public async Task<ConnectionInfo?> SetVaultsAsync(User user, byte[] userKey, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct)
+    public async Task<ConnectionInfo?> SetVaultsAsync(
+        User user, byte[] userKey, DateTime credentialReadAt, string id, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct)
     {
         if (vaults.Count == 0) throw new ArgumentException("A connection needs at least one vault.", nameof(vaults));
         await EnsureReadyAsync(ct);
@@ -229,12 +231,16 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
                     var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)) };
-                    // As at creation: a vault deleted since the check above is seen here, or its deletion conflicts on
-                    // the user document.
-                    // Opening the meta above already needs the user key in force; the key id says so in the clear too.
+                    // As at creation: the user document is checked and written here, so a credentials change, a
+                    // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
+                    // above is seen here, or its deletion conflicts on the user document.
                     var keyId = UserCatalog.KeyId(userKey, user.Id);
-                    var owner = await Users.UpdateOneAsync(s, u => u.Id == user.Id && u.KeyId == keyId, Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1), cancellationToken: token);
-                    if (owner.MatchedCount == 0) return false;
+                    var owner = await Users.UpdateOneAsync(
+                        s,
+                        u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
+                        Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1),
+                        cancellationToken: token);
+                    if (owner.MatchedCount == 0) throw new CredentialsChangedException();
                     await catalog.RequireVaultsAsync(s, [.. vaults.Keys], Noun, token);
                     await Docs.UpdateOneAsync(
                         s,

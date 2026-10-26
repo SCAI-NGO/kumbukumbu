@@ -242,7 +242,7 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
                 Task.Run(async () => { using var _ = await second.TokenAsync(); }, Ct),
                 Task.Run(() => Quietly(async () => { using var _ = await again.DecideAsync(allow: true); }), Ct),
                 Task.Run(() => Quietly(() => connections.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, $"late-{round}", both, Ct)), Ct),
-                Task.Run(() => Quietly(() => connections.SetVaultsAsync(owner.User, owner.UserKey, flow.ConnectionId, both, Ct)), Ct));
+                Task.Run(() => Quietly(() => connections.SetVaultsAsync(owner.User, owner.UserKey, DateTime.UtcNow, flow.ConnectionId, both, Ct)), Ct));
 
             Assert.Equal(0, await Collection("slots").CountDocumentsAsync(new BsonDocument("vault", vaults["Privat"]), cancellationToken: Ct));
             Assert.Equal(0, await Collection("connections").CountDocumentsAsync(new BsonDocument("vaults", vaults["Privat"]), cancellationToken: Ct));

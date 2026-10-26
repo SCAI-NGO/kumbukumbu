@@ -144,24 +144,42 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var result = new List<UnlockedVault>();
         foreach (var slot in slots)
         {
-            byte[] vaultKey;
+            if (OpenUserSlot(slot) is not { } vaultKey) continue;
+            UnlockedVault? vault;
             try
             {
-                vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                vault = await LoadAsync(slot.Vault, vaultKey, ct);
             }
-            catch (CryptographicException)
+            catch (VaultBusyException)
             {
-                log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
-                continue;
+                // A finish committed between the slot read and the load: the slot read gave the old key, the vault is
+                // now under the new one. Its slot, read again, wraps the new key. Once only: a second failure is real.
+                var again = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
+                    & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup) & Builders<SlotDocument>.Filter.Eq(s => s.Vault, slot.Vault)).FirstOrDefaultAsync(ct);
+                if (again is null || OpenUserSlot(again) is not { } newKey) continue;
+                vault = await LoadAsync(slot.Vault, newKey, ct);
             }
 
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is not { } vault) continue;
+            if (vault is null) continue;
             result.Add(vault);
             // Only a session meets a placeholder: the start of a run deleted every API key and connection slot.
             if (vault.Pending) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
         }
 
         return result;
+
+        byte[]? OpenUserSlot(SlotDocument slot)
+        {
+            try
+            {
+                return VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
+                return null;
+            }
+        }
     }
 
     /// <summary>

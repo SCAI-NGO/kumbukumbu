@@ -72,6 +72,16 @@ describe("Consent", () => {
     expect(screen.getByText("This renews the connection with the same vaults and rights.")).toBeInTheDocument();
   });
 
+  it("tries once more when a vault was just re-encrypted", async () => {
+    let calls = 0;
+    api({
+      "GET /api/oauth/requests/r1": () => (++calls === 1 ? json(503, { error: "This vault was just re-encrypted; try again." }) : json(200, view)),
+    });
+    renderApp("/consent?request=r1");
+    expect(await screen.findByRole("heading", { name: "Connect Claude · claude.ai?" }, { timeout: 3000 })).toBeInTheDocument();
+    expect(calls).toBe(2);
+  });
+
   it("allow navigates to the redirect", async () => {
     const fetch = api();
     renderApp("/consent?request=r1");

@@ -192,6 +192,26 @@ public sealed class ConnectionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_stale_session_or_an_inactive_user_cannot_change_the_rights()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
+        var created = await Connections().CreateAsync(user, userKey, JustRead, "phone", Grant(vaults["Notes"]), Ct);
+        var users = _db.GetCollection<UserDocument>("users");
+
+        await users.UpdateOneAsync(u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.CredentialsChangedAt, JustRead), cancellationToken: Ct);
+        await Assert.ThrowsAsync<CredentialsChangedException>(() =>
+            Connections().SetVaultsAsync(user, userKey, JustRead.AddSeconds(-1), created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
+
+        await users.UpdateOneAsync(u => u.Id == user.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAsync<CredentialsChangedException>(() =>
+            Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
+
+        // Unchanged, tokens and all.
+        Assert.Equal(KeyRight.Write, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Vaults[vaults["Notes"]]);
+    }
+
+    [Fact]
     public async Task Creating_one_is_counted_on_the_user()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
@@ -231,7 +251,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         var expired = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
         Assert.Equal(ConnectionState.Expired, expired.State);
         Assert.Equal("expired", expired.Reason);
-        Assert.Null(await Connections().SetVaultsAsync(user, userKey, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
+        Assert.Null(await Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
     }
 
     [Fact]
@@ -263,7 +283,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         Assert.Equal(ConnectionReasons.Revoked, revoked.Reason);
         Assert.NotNull(revoked.RevokedAt);
         Assert.False(await Connections().RevokeAsync(user, created.Id, Ct));
-        Assert.Null(await Connections().SetVaultsAsync(user, userKey, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
+        Assert.Null(await Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct));
         await Connections().CreateAsync(user, userKey, JustRead, "phone", Grant(vaults["Notes"]), Ct);
     }
 
@@ -275,7 +295,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         var created = await Connections().CreateAsync(user, userKey, JustRead, "phone", Grant(vaults["Notes"]), Ct);
 
         Assert.False(await Connections().RevokeAsync(other, created.Id, Ct));
-        Assert.Null(await Connections().SetVaultsAsync(other, otherKey, created.Id, Grant(otherVaults["Notes"]), Ct));
+        Assert.Null(await Connections().SetVaultsAsync(other, otherKey, JustRead, created.Id, Grant(otherVaults["Notes"]), Ct));
         Assert.Equal(ConnectionState.Waiting, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).State);
         Assert.Empty(await Connections().ListAsync(other, otherKey, Ct));
     }
@@ -288,7 +308,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         var created = await Connections().CreateAsync(user, userKey, JustRead, "phone", Grant(vaults["Work"]), Ct);
 
         var changed = await Connections().SetVaultsAsync(
-            user, userKey, created.Id, new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Read, [vaults["Diary"]] = KeyRight.Write }, Ct);
+            user, userKey, JustRead, created.Id, new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Read, [vaults["Diary"]] = KeyRight.Write }, Ct);
 
         Assert.NotNull(changed);
         var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
@@ -298,8 +318,8 @@ public sealed class ConnectionTests(MongoFixture fixture)
         var doc = await _db.GetCollection<BsonDocument>("connections").Find(Builders<BsonDocument>.Filter.Eq("_id", created.Id)).SingleAsync(Ct);
         Assert.Equal(new[] { vaults["Work"], vaults["Diary"] }.Order(), doc["vaults"].AsBsonArray.Select(v => v.AsString).Order());
 
-        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(user, userKey, created.Id, new Dictionary<string, KeyRight>(), Ct));
-        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(user, userKey, created.Id, Grant(theirs["Secret"]), Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, new Dictionary<string, KeyRight>(), Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, Grant(theirs["Secret"]), Ct));
         Assert.Equal(2, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Vaults.Count);
     }
 
@@ -312,7 +332,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         await _db.GetCollection<ConnectionDocument>("connections").UpdateOneAsync(
             c => c.Id == created.Id, Builders<ConnectionDocument>.Update.Set(c => c.AuthorisedAt, JustRead), cancellationToken: Ct);
 
-        await Connections().SetVaultsAsync(user, userKey, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct);
+        await Connections().SetVaultsAsync(user, userKey, JustRead, created.Id, Grant(vaults["Notes"], KeyRight.Read), Ct);
 
         var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
         Assert.Equal(ConnectionState.NeedsReconnect, listed.State);

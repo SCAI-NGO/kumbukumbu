@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, call } from "../api/client";
+import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AuthScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -50,13 +50,15 @@ export default function Consent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // gcTime 0: nothing about the request is kept once the page is left. A refusal is final; no retries.
+  // gcTime 0: nothing about the request is kept once the page is left. A refusal is final; only a 503 (a vault
+  // re-encrypted just as the request was read, which a second read gets past) is tried once more.
   const request = useQuery({
     queryKey: ["consent", id],
     queryFn: () => call(api.GET("/api/oauth/requests/{id}", { params: { path: { id } } })),
     enabled: id !== "",
     gcTime: 0,
-    retry: false,
+    retry: (failures, error) => failures < 1 && error instanceof HttpError && error.status === 503,
+    retryDelay: 500,
     refetchOnWindowFocus: false,
   });
 

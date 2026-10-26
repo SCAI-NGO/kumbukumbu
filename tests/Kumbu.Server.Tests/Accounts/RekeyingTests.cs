@@ -410,6 +410,44 @@ public sealed class RekeyingTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_session_listing_vaults_while_a_finish_commits_gets_them()
+    {
+        var (owner, vaults) = await OwnerAsync();
+        var id = vaults["Arbeit"];
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog.RekeyFaultAt = async point =>
+        {
+            if (point != "inside-finish" || !Catalog.IsRekeying(id)) return;
+            reached.TrySetResult();
+            await release.Task;
+        };
+        try
+        {
+            var run = Catalog.RekeyAsync(id, owner.User.Id, owner.UserKey, Ct);
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+            // The listing reads the user slot (still K: the finish hasn't committed) and then waits for the finish.
+            var listing = owner.GetAsync("/api/vaults");
+            await Task.Delay(500, Ct);
+            Assert.False(listing.IsCompleted);
+            release.TrySetResult();
+            await run;
+
+            using var response = await listing;
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var listed = (await RestClient.JsonAsync(response)).AsArray();
+            Assert.Equal(["Arbeit"], listed.Select(v => v!["name"]!.GetValue<string>()));
+            Assert.All(listed, v => Assert.False(v!["pending"]!.GetValue<bool>()));
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+            release.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task Access_lists_what_will_lose_access()
     {
         var (owner, vaults) = await OwnerAsync("Diary");

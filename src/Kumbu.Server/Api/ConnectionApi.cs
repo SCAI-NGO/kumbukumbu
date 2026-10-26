@@ -59,7 +59,7 @@ public static class ConnectionApi
     public static void MapConnectionApi(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/connections").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
-        group.MapGet("", ListAsync).Errors(401, 403);
+        group.MapGet("", ListAsync).Errors(401, 403, 503);
         group.MapPost("", CreateAsync).Errors(400, 401, 403, 409, 503);
         group.MapPut("/{id}/vaults", SetVaultsAsync).Errors(400, 401, 403, 404, 503);
         group.MapDelete("/{id}", RevokeAsync).Errors(401, 403, 404);
@@ -67,7 +67,7 @@ public static class ConnectionApi
         // The consent page's calls (Ruling 8): session-only too, so the decision, a POST, also passes the Origin check
         // (Security.UseCallerRules), which is its CSRF guard.
         var consent = app.MapGroup("/api/oauth/requests").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
-        consent.MapGet("/{id}", ConsentAsync).Errors(401, 403, 404);
+        consent.MapGet("/{id}", ConsentAsync).Errors(401, 403, 404, 503);
         consent.MapPost("/{id}/decision", DecideAsync).Errors(400, 401, 403, 404, 409, 503);
     }
 
@@ -202,7 +202,7 @@ public static class ConnectionApi
     {
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
-        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
+        var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
         return TypedResults.Ok(View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 

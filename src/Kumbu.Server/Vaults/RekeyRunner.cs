@@ -13,7 +13,9 @@ namespace Kumbu.Server.Vaults;
 /// failures in a row and the awaiters of its next attempt.</item>
 /// <item>After the n-th failure in a row an entry keeps its user key and waits min(2ⁿ⁻¹ minutes, 1 hour) before going
 /// back to the queue's tail. <see cref="Start"/> on a queued or backing-off entry only swaps in the newer key and never
-/// resets the backoff; <see cref="RunAsync"/> also moves a backing-off entry to the queue at once.</item>
+/// resets the backoff; <see cref="RunAsync"/> also moves a backing-off entry to the queue at once. On a running entry
+/// both swap in the key for the next attempt, and a changed key (or <see cref="RunAsync"/>) makes a failure of the
+/// attempt under way requeue at once instead of backing off.</item>
 /// </list>
 /// An entry ends, and its key is dropped, when its run succeeds, when the vault is gone, and when the key held isn't
 /// one the vault's owner slots open with (<see cref="VaultNotRekeyableException"/>): the vault then stays pending for
@@ -79,7 +81,7 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
     }
 
     /// <summary>Queues the vault, fire and forget: a queued or backing-off entry gets the newer key and keeps its place
-    /// and its backoff; a running one is left alone.</summary>
+    /// and its backoff; a running one gets it for its next attempt, which follows at once should this one fail.</summary>
     public void Start(string vaultId, string userId, byte[] userKey)
     {
         lock (_lock) Upsert(vaultId, userId, userKey, endBackoff: false);
@@ -110,7 +112,11 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
 
         if (entry.State == State.Running)
         {
-            if (endBackoff) entry.RunRequested = true;
+            // The next attempt takes the newer key. A rotation that committed mid-run makes the one under way fail with
+            // the replaced key, so that attempt must not back off holding it.
+            var newer = !string.Equals(entry.UserId, userId, StringComparison.Ordinal) || !entry.UserKey.AsSpan().SequenceEqual(userKey);
+            (entry.UserId, entry.UserKey) = (userId, userKey);
+            if (endBackoff || newer) entry.RunRequested = true;
             return entry;
         }
 
@@ -163,6 +169,11 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
             End(entry);
             entry.Next.TrySetResult(summary);
         }
+        catch (VaultNotRekeyableException e) when (KeyReplaced(entry, userId, userKey))
+        {
+            // Refused for the key this attempt took, while a newer one came: not the end, the next attempt has it.
+            Fail(entry, e, stopping);
+        }
         catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException)
         {
             log.LogInformation("Re-keying vault {VaultId} ends: {Reason}", entry.VaultId, e.Message);
@@ -185,8 +196,13 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
         }
     }
 
+    private bool KeyReplaced(Entry entry, string userId, byte[] userKey)
+    {
+        lock (_lock) return !string.Equals(entry.UserId, userId, StringComparison.Ordinal) || !entry.UserKey.AsSpan().SequenceEqual(userKey);
+    }
+
     /// <summary>The awaiters of the attempt get its failure first; only then does the backoff begin, unless a
-    /// <see cref="RunAsync"/> came meanwhile, which ends it at once.</summary>
+    /// <see cref="RunAsync"/> or a newer key came meanwhile, which ends it at once.</summary>
     private void Fail(Entry entry, Exception e, CancellationToken stopping)
     {
         TaskCompletionSource<RekeySummary> failed;

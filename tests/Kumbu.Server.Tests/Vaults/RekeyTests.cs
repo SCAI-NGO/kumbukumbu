@@ -1080,6 +1080,36 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Start_during_a_run_swaps_the_key_and_retries_at_once_if_the_run_fails()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attempts = 0;
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start" || Interlocked.Increment(ref attempts) != 1) return;
+            reached.TrySetResult();
+            await release.Task;
+        };
+        var runner = await RunnerAsync();
+        runner.Start(id, a.User.Id, a.Key);
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.True(runner.IsRunning(id));
+
+        // A rotation commits mid-run: the key the run holds no longer opens the vault's slots, and its finish fails.
+        var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
+        runner.Start(id, a.User.Id, rotation.NewUserKey);
+        release.TrySetResult();
+
+        // No backoff: the next attempt follows at once, with the newer key.
+        await WaitUntilAsync(async () => (await Catalog().PendingVaultIdsAsync(a.User.Id, rotation.NewUserKey, Ct)).Count == 0);
+        Assert.Equal(2, attempts);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a, key: rotation.NewUserKey).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
     public async Task RunAsync_rethrows_a_failure_then_backs_off()
     {
         var a = await FilledAsync();
