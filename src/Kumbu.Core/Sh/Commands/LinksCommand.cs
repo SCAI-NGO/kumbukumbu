@@ -17,8 +17,9 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     public string Help => """
         links <path>[#section]
           List the [[wikilinks]], ![[embeds]] and Markdown links [text](target) of a note (or of one
-          section), one per line: line, the link as written, and where it leads: a note's path, 'not found', 'ambiguous' with the
-          candidates, 'attachment' for files that are not notes, or 'this note' for [[#Heading]].
+          section), one per line: line, the link as written, and where it leads: a note's path,
+          'not found', 'ambiguous' with the candidates, 'attachment' for files that are not notes,
+          or 'this note' for [[#Heading]].
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.
           A link resolves within its vault, ignoring case: the note whose path ends with the link

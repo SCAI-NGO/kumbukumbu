@@ -160,7 +160,7 @@
 - [ ] **Step 1: Write the failing test** `TheToolDescriptionRecommendsAbsoluteMarkdownLinks`: `Manual.ToolDescription` contains `[text](/Folder/Note.md)` and `%20`; `Manual.WriteDescription` contains `[text](/Folder/Note.md)`.
 - [ ] **Step 2: Run** it — expected: FAIL.
 - [ ] **Step 3: Change the texts.** `ToolDescription`, instead of the "Follow a [[wikilink]]" line:
-  `Links: every form is read, [[wikilinks]] and Markdown links; follow one with 'links <path>'. Write new links as [text](/Folder/Note.md), absolute in the vault, %20 for spaces ([notes](/Work/Meeting%20Notes.md)): unambiguous, survives moving the note it stands in, standard Markdown every tool reads.`
+  `Links: every form is read, [[wikilinks]] and Markdown links; follow one with 'links <path>'. Write new links as [text](/Folder/Note.md): the path inside the vault, without the vault's name (/Work/projects/plan.md is linked as [plan](/projects/plan.md)), %20 for spaces: unambiguous, survives moving the note it stands in, standard Markdown every tool reads.`
   The `links` line: `the links of a note ([[wikilinks]], [text](note.md)) and where they lead`. `WriteDescription`: `Link to other notes as [text](/Folder/Note.md) (absolute in the vault, %20 for spaces).` `LinksCommand` help names Markdown links and their forms (`/`, `./`, `../`, a path or name, `%20` or `<…>`).
 - [ ] **Step 4: Run** `dotnet test tests/Kumbu.Core.Tests` — expected: PASS (fix any test pinning the old texts).
 - [ ] **Step 5: Commit** `Recommend absolute Markdown links to agents`.
