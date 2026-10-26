@@ -57,6 +57,29 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>Raised when a vault is unlocked (or created), so the search index can catch up with it.</summary>
     public event Action<UnlockedVault>? Unlocked;
 
+    /// <summary>
+    /// Raised with a vault's id after every committed change to its notes or trash, and when it is deleted: what the
+    /// sync hints are made of. Handlers run on the writer's thread, under the vault's gate: they must only enqueue.
+    /// </summary>
+    public event Action<string>? NotesChanged;
+
+    /// <summary>A handler that throws is logged; the write it reports has committed and stands.</summary>
+    internal void RaiseNotesChanged(string vaultId)
+    {
+        if (NotesChanged is not { } handlers) return;
+        foreach (var handler in handlers.GetInvocationList().Cast<Action<string>>())
+        {
+            try
+            {
+                handler(vaultId);
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "A handler of NotesChanged failed for vault {VaultId}", vaultId);
+            }
+        }
+    }
+
     /// <summary>Named checkpoints: one document each, the name as a keyed hash in "pid".</summary>
     internal IMongoCollection<SealedDocument> Checkpoints { get; } = db.GetCollection<SealedDocument>("checkpoints");
 
@@ -578,6 +601,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             foreach (var id in ids)
             {
                 if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
+                RaiseNotesChanged(id);
             }
 
             foreach (var collection in ContentCollections)

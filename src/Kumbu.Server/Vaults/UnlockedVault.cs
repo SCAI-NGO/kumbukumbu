@@ -31,8 +31,22 @@ public sealed class UnlockedVault
         KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
+        Horizon = now;
         Touch(now);
     }
+
+    /// <summary>
+    /// Since when <see cref="ChangedAt"/> knows every change: this object's creation. A sync client's cursor from
+    /// before it (a restart, the vault locked and unlocked, re-keyed) gets the full list instead (sync spec §5).
+    /// </summary>
+    public DateTime Horizon { get; }
+
+    /// <summary>
+    /// When each path last changed by a commit through this object (or, for a request still holding an older one, by
+    /// that commit: <see cref="EncryptedNoteStore"/> records it here too). Set under <see cref="Gate"/>, after the
+    /// commit, so a time is never earlier than the change it stands for became visible.
+    /// </summary>
+    public ImmutableDictionary<VaultPath, DateTime> ChangedAt { get; set; } = ImmutableDictionary<VaultPath, DateTime>.Empty;
 
     public string Id { get; }
 

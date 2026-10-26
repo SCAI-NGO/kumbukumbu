@@ -494,12 +494,30 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
             index?.Enqueue(vault, paths);
+            Record(vault, paths);
             return true;
         }
         finally
         {
             vault.Gate.Release();
         }
+    }
+
+    /// <summary>
+    /// The change record and the hint (sync spec §5), under the gate after the commit: every way a note changes
+    /// commits here, so none is missed. Checkpoints made or removed change no note and record nothing. A request
+    /// holding an older object of the vault records on the current one too, which a sync client asks.
+    /// </summary>
+    private void Record(UnlockedVault vault, IReadOnlyList<VaultPath> paths)
+    {
+        if (paths.Count == 0) return;
+        var now = catalog.Now;
+        foreach (var target in catalog.Current(vault.Id) is { } current && !ReferenceEquals(current, vault) ? new[] { vault, current } : [vault])
+        {
+            target.ChangedAt = target.ChangedAt.SetItems(paths.Select(p => KeyValuePair.Create(p, now)));
+        }
+
+        catalog.RaiseNotesChanged(vault.Id);
     }
 
     private static async Task AbortAsync(IClientSessionHandle session)
