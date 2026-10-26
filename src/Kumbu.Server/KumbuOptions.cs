@@ -52,6 +52,26 @@ public sealed class KumbuOptions
     public EmbeddingsOptions Embeddings { get; set; } = new();
 
     public OAuthOptions OAuth { get; set; } = new();
+
+    public PrivacyOptions Privacy { get; set; } = new();
+
+    public DeletionsOptions Deletions { get; set; } = new();
+}
+
+/// <summary>Where the ids of deleted users are listed, outside the database (<see cref="Accounts.DeletionList"/>).</summary>
+public sealed class DeletionsOptions
+{
+    /// <summary>Optional: a directory of its own (Compose: <c>/deletions</c> on the <c>deletions</c> volume), kept out
+    /// of database restores. Unset, deletions are not listed and a restored user can't be detected.</summary>
+    public string? Path { get; set; }
+}
+
+/// <summary>What the deletion receipt's reply to a privacy request is signed with.</summary>
+public sealed class PrivacyOptions
+{
+    /// <summary>Optional: the deployer's privacy contact (<c>KUMBU_PRIVACY_CONTACT</c>), e.g. <c>privacy@example.org</c>;
+    /// unset, the reply leaves a placeholder.</summary>
+    public string? Contact { get; set; }
 }
 
 public sealed class OAuthOptions

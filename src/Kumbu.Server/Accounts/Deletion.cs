@@ -1,29 +1,44 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Server.Vaults;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
-/// <summary>What a deletion removed, for the log and the caller: counts only, never a name.</summary>
-public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections);
+/// <summary>What a deletion removed, for the log and the caller: counts only, never a name. <c>Notes</c> counts the
+/// documents in the <c>notes</c> collection of the deleted vaults (by vault id, so no key is needed); <c>Invitations</c>
+/// the invitations the user joined with whose note and link to them were erased.</summary>
+public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0, int Invitations = 0);
+
+/// <summary>A user an admin deleted, for the receipt: ids, the usernames, the time and the counts; no content and no
+/// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>.</summary>
+public sealed record DeletedUser(string Id, string Username, string Display, string DeletedBy, DateTime DeletedAt, DeletionSummary Summary, bool Listed);
 
 /// <summary>
-/// Deleting for good: one vault (its owner), one's own account, or a deactivated user's account (an admin). Each is
+/// Deleting for good: one vault (its owner), one's own account, or any other user's account (an admin, for a privacy
+/// request, say). Each is
 /// one MongoDB transaction, so a fault leaves everything or nothing. A typed confirmation is checked here, not only
 /// in the web app, so no single careless request deletes anything; deleting one's own account also needs the
 /// password, so a stolen session alone can't. The log names ids, usernames and counts, never a vault name or content.
 /// <para>
-/// A user's invitations stay: they are the instance's record of who invited whom (the accounts they made exist on
-/// their own), and the remaining admins see and can revoke an open one, as after a deactivation.
+/// The invitations a user created stay: they are the instance's record of who invited whom (the accounts they made
+/// exist on their own), and the remaining admins see and can revoke an open one, as after a deactivation. The one the
+/// user joined with stays as a used invitation, but without its note (which often names the invitee) and without
+/// the link to the user, so nothing in the database still names or points to the person.
 /// </para>
 /// </summary>
-public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalog users, ILogger<Deletion> log)
+public sealed class Deletion(
+    IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, RestoredDeletions restored, TimeProvider time, ILogger<Deletion> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
     private IMongoCollection<UserSlotDocument> UserSlots { get; } = db.GetCollection<UserSlotDocument>("user_slots");
 
     private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>("api_keys");
+
+    private IMongoCollection<BsonDocument> Notes { get; } = db.GetCollection<BsonDocument>("notes");
+
+    private IMongoCollection<InvitationDocument> InvitationDocs { get; } = db.GetCollection<InvitationDocument>("invitations");
 
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
@@ -56,37 +71,78 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
         var summary = await DeleteAccountAsync(user.Id, Builders<UserDocument>.Filter.Where(u => u.Id == user.Id && u.Role != Roles.PrimaryAdmin), ct)
             ?? throw new NotPermittedException("Your account changed meanwhile; nothing was deleted.");
+        // After the commit, and whatever happens to the request now: the deletion is done either way.
+        await list.AddAsync(user.Id, CancellationToken.None);
         log.LogInformation(
-            "User {Username} deleted their account: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
-            user.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
+            "User {UserId} deleted their account: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+            user.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
         return true;
     }
 
     /// <summary>
-    /// An admin deletes a deactivated user; false if there is no such user. <paramref name="confirm"/> must be their
-    /// username (any case), and <paramref name="password"/> the admin's own (it must open <paramref name="actorKey"/>),
-    /// so a stolen admin session alone deletes nobody. Only a deactivated user: deactivating first ended their
-    /// sessions and revoked their keys, and takes a deliberate step of its own. Never the primary admin.
+    /// An admin deletes another user, active or not, in one step; null if there is no such user. <paramref name="confirm"/>
+    /// must be their username (any case), and <paramref name="password"/> the admin's own (it must open
+    /// <paramref name="actorKey"/>), so a stolen admin session alone deletes nobody. The user's sessions, API keys and
+    /// connections go in the same transaction as everything else, so an active user's next request is refused. Never the
+    /// primary admin, and never the admin themselves: they delete their own account in Settings.
     /// </summary>
-    public async Task<bool> DeleteUserAsync(User actor, byte[] actorKey, string password, string userId, string confirm, CancellationToken ct)
+    public async Task<DeletedUser?> DeleteUserAsync(User actor, byte[] actorKey, string password, string userId, string confirm, CancellationToken ct)
     {
         var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
         // Before anything about the target: without the password, nobody learns whether the user exists.
         if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
+        if (userId == acting.Id) throw new NotPermittedException("Delete your own account in Settings.");
         var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
-        if (target is null) return false;
+        if (target is null) return null;
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deleted.");
-        if (target.Active) throw new NotPermittedException("Only a deactivated user can be deleted: deactivate them first.");
         if (!ConfirmsUsername(confirm, target.Username)) throw new ArgumentException("Type the username to confirm.", nameof(confirm));
 
-        // Checked again in the transaction: a reactivation since the read above stops the deletion.
-        var summary = await DeleteAccountAsync(
-            userId, Builders<UserDocument>.Filter.Where(u => u.Id == userId && !u.Active && u.Role != Roles.PrimaryAdmin), ct)
-            ?? throw new NotPermittedException("The user was reactivated or changed meanwhile; nothing was deleted.");
+        // Checked again in the transaction: the target can't have become primary admin meanwhile.
+        var summary = await DeleteAccountAsync(userId, Builders<UserDocument>.Filter.Where(u => u.Id == userId && u.Role != Roles.PrimaryAdmin), ct)
+            ?? throw new NotPermittedException("The user changed meanwhile; nothing was deleted.");
+        var listed = await list.AddAsync(userId, CancellationToken.None);
         log.LogInformation(
-            "{Admin} deleted user {Username}: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
-            acting.Username, target.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
-        return true;
+            "{Admin} deleted user {UserId}: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+            acting.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
+        return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed);
+    }
+
+    /// <summary>
+    /// After a backup restore: an admin deletes again, in one step, every user on the <see cref="DeletionList"/> that
+    /// the restore brought back, with their own password (no username to type: the list names them). Each user goes
+    /// in a transaction of their own, so one that fails doesn't stop the others (it is logged and stays on the
+    /// users page). Never the primary admin and never the admin themselves. Nothing is added to the list: the ids
+    /// are on it already.
+    /// </summary>
+    public async Task<IReadOnlyList<DeletedUser>> RepeatAsync(User actor, byte[] actorKey, string password, CancellationToken ct)
+    {
+        var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
+
+        var done = new List<DeletedUser>();
+        foreach (var target in await restored.FindAsync(ct))
+        {
+            if (target.Id == acting.Id) continue;
+            DeletionSummary? summary;
+            try
+            {
+                summary = await DeleteAccountAsync(target.Id, Builders<UserDocument>.Filter.Where(u => u.Id == target.Id && u.Role != Roles.PrimaryAdmin), ct);
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // One user that fails doesn't cost the others their deletion, or the admin the receipts of those done.
+                log.LogError("{Admin} could not delete user {UserId} again after a restore ({Error})", acting.Username, target.Id, e.Message);
+                continue;
+            }
+
+            if (summary is null) continue;
+            log.LogInformation(
+                "{Admin} deleted user {UserId} again after a restore: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+                acting.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
+            done.Add(new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, Listed: true));
+        }
+
+        return done;
     }
 
     private static bool ConfirmsUsername(string typed, string username) => string.Equals(typed.Trim(), username, StringComparison.OrdinalIgnoreCase);
@@ -100,8 +156,10 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
     private async Task<DeletionSummary?> DeleteAccountAsync(string userId, FilterDefinition<UserDocument> stillDeletable, CancellationToken ct)
     {
         var vaults = await OwnedVaultsAsync(userId, ct);
+        var notes = await CountNotesAsync(vaults, ct);
         var keyCount = 0;
         var connectionCount = 0;
+        var invitationCount = 0;
         long documents;
         try
         {
@@ -117,6 +175,13 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
                 // The user document is deleted above, in this transaction: a connection being created or a token being
                 // issued writes it or the connection's document, and conflicts.
                 connectionCount = await ConnectionRevocation.DeleteAllAsync(db, s, userId, token);
+                // The invitation they joined with stays a used one, but its note (often the invitee's name) and its
+                // link to them go: nothing left names or points to the person.
+                invitationCount = (int)(await InvitationDocs.UpdateManyAsync(
+                    s,
+                    i => i.UsedBy == userId,
+                    Builders<InvitationDocument>.Update.Unset(i => i.Note).Unset(i => i.UsedBy),
+                    cancellationToken: token)).ModifiedCount;
             }, ct);
         }
         catch (UserChangedException)
@@ -127,9 +192,18 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
         // A vault the user made between the read above and the transaction (from another tab, say) has an owner
         // that no longer exists: it goes too.
         var late = await OwnedVaultsAsync(userId, ct);
-        if (late.Count > 0) documents += await catalog.DeleteVaultsAsync(late, (_, _) => Task.CompletedTask, ct);
-        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount);
+        if (late.Count > 0)
+        {
+            notes += await CountNotesAsync(late, ct);
+            documents += await catalog.DeleteVaultsAsync(late, (_, _) => Task.CompletedTask, ct);
+        }
+
+        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount, notes, invitationCount);
     }
+
+    /// <summary>The notes in these vaults, counted by vault id: the receipt's count, read without any key.</summary>
+    private async Task<long> CountNotesAsync(IReadOnlyList<string> vaults, CancellationToken ct) =>
+        vaults.Count == 0 ? 0 : await Notes.CountDocumentsAsync(Builders<BsonDocument>.Filter.In("vault", vaults), cancellationToken: ct);
 
     /// <summary>The vaults whose user slot names this owner, orphans of a failed create included.</summary>
     private async Task<IReadOnlyList<string>> OwnedVaultsAsync(string userId, CancellationToken ct) =>

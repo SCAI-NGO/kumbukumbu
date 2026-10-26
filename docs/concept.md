@@ -4,7 +4,7 @@
 > From *kumbuka*, "to remember". The reduplication intensifies the word: **kumbu × kumbu = kumbu²**.
 > The superscript ² also reads as "second" — a second brain.
 
-**Status:** Concept, October 2026. Nothing built yet.
+**Status:** Concept of October 2026. Steps 1 to 10 of the build order (§12) are built; step 11 (Obsidian sync) is in progress for v0.2.0.
 **License:** AGPLv3 (it's a hosted network service — exactly the case the AGPL exists for).
 **Command / short name:** `kumbu`
 
@@ -36,7 +36,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 
 ### Vaults
 - **Every top-level directory is a vault** = a cryptographic boundary with its own vault key.
-- On user creation, one vault is created (the user names it).
+- A user creates their vaults themselves after joining (in the web app or with `POST /api/vaults`).
 - Permissions exist **only at vault level** (read / write). No per-subdirectory rights.
 - Paths always include the vault name (`/Work/notes/x.md`) — consistent addressing across keys. No `cd` — paths are always absolute.
 
@@ -63,7 +63,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - `backlinks X` = all edges with target X, **filtered to vaults the caller can see** (no existence leaks across vaults).
 - **Content is never rewritten automatically** (decided Oct 22, 2026): not on import, not on `write`/`edit`. Writes are stored verbatim; the Obsidian sync plugin depends on it, as any rewrite would come back to Obsidian as a remote edit.
 - Links **resolve at read time**, leniently, by Obsidian's rules (shortest unique name; a path where the name is ambiguous).
-- Kumbu² writes links only where it must, in `mv`, and then in the most specific form. An explicit normalize command may come later.
+- Kumbu² writes links only where it must, in `mv`, and then in the most specific form. No normalize command was built, and none is planned: content is never rewritten automatically (above).
 - Links inside code blocks / inline code are never touched.
 - `mv` rewrites all links pointing to the moved note.
 
@@ -74,18 +74,19 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - A changeset ends after 10 minutes without a write by its writer, and after **1 hour** at most, so a long agent session or the Obsidian sync can't make one endless changeset. `restore` is a **checkpoint**: it never joins a changeset, so a restore can be undone on its own. (Decided Oct 24, 2026.)
 - **Named checkpoints** (v1, decided Oct 24, 2026): `mkcp <path> <name>` marks the current state of a note, a folder or a vault under a name; `lscp [path]` lists checkpoints; `rmcp <path> <name>` removes one. A checkpoint is kept until `rmcp`, never pushed out of the history and never expired, so it pins the content it points at beyond the 10 versions of the history. The manual tells agents to set or remove them **only when the user asks**. In Git terms a changeset is a commit and a checkpoint a tag: a named pointer to a state, set on purpose; unlike Git, which keeps every commit, Kumbu² keeps 10 versions, so a checkpoint must hold on to its content itself.
   - **Browse a checkpoint like the current state:** `--checkpoint <name>` on reading commands, as `--version` for one note, but also on `ls` and `rg` over folders, since a checkpoint covers a tree. `diff` against a checkpoint; `restore` to one, for a folder with a preview and plan token as `replace`.
-  - **Web UI (step 9):** browse a checkpoint like the current state, as GitHub shows a repository at a commit, and **export** it (a zip of the notes as they were).
+  - **Web UI, later:** browse a checkpoint like the current state, as GitHub shows a repository at a commit, and **export** it (a zip of the notes as they were). Step 9 built making, restoring and removing checkpoints only; the v0.2.0 export covers the current notes.
   - **Limit:** 10 named checkpoints per vault by default, configurable: `Kumbu:Vaults:CheckpointLimit`, in `.env` as `KUMBU_CHECKPOINT_LIMIT` (documented in `.env.example` and the README). `mkcp` beyond the limit fails and names `lscp` and `rmcp`.
   - Built in step 6b, together with changesets.
 - `rm` is a soft delete into trash; **trash expiry 30 days**.
 
-## 5. Agent interface (MCP) — three tools
+## 5. Agent interface (MCP) — four tools
 
 | Tool | Purpose | Payload |
 |---|---|---|
-| `sh` | Structure + reading: `ls`, `cat`, `rg`, `outline`, `semsearch`, `backlinks`, `tags`, `history`, `restore`, `mkdir`, `mv`, `rm`, `help` | Paths only — **never Markdown content** |
+| `sh` | Structure + reading: `ls`, `cat`, `outline`, `rg`, `semsearch`, `links`, `backlinks`, `history`, `diff`, `restore`, `mv`, `rm`, `trash`, `mkcp`, `lscp`, `rmcp`, `help` (`mkdir` is refused with a hint: folders exist through their notes) | Paths only — **never Markdown content** |
 | `edit` | `str_replace`, replace/append/insert section — with version token | Content (JSON params) |
 | `write` | Create note or fully overwrite — with version token | Content (JSON params) |
+| `replace` | A literal change across a folder or vault, previewed with a plan token, then applied | JSON params |
 
 Rationale: models speak Unix fluently → reading in their native language. Writing multi-line Markdown through a shell string means quoting hell → content goes through structured JSON params.
 
@@ -123,11 +124,11 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
   - **Password slot:** passwords are low-entropy → **Argon2id**.
   - **Recovery key slot:** generated at registration, **must** be downloaded/confirmed.
   - **OAuth token slot:** see §9.
-- Revoking a key = deleting its slot. Password change = rewrap.
+- Revoking a key = deleting its slot. Password change = rewrap. Since step 10, **re-keying** goes further: a new user key or a new vault key, because revoking a slot doesn't protect old copies of the database (`docs/security-architecture.md` §3).
 - **An admin cannot reset a password or recover a vault.** No password + no recovery key = data gone. Documented honestly.
-- Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 8) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id) come with logins in step 8. Recovery keys are written once to a file for the operator, never logged.
+- Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 8) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id, 64 MiB, 3 passes, 4 lanes) came with logins in step 8. Recovery keys are written once to a file for the operator, never logged.
 - **Unlocked vault = in-memory working set** (texts, vectors, link graph). Server restart = everything locked (feature).
-  - Idle TTL: **15 min** for API/OAuth access, **30 min** for web sessions.
+  - Idle TTL: **15 min** for every unlocked vault, whoever opened it (`Kumbu:Vaults:IdleMinutes`); a web session itself ends after 30 idle minutes.
   - Global memory cap (configurable, default ~512 MB), LRU eviction of whole vaults.
   - A request may only use a cached unlocked vault if it presents a valid credential for *that* vault. The cache saves computation, never replaces authorization.
 - **Never** in Redis, logs or URLs: plaintext content, vault keys, KEKs.
@@ -140,10 +141,10 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - **Deactivating a user** kills all their API keys and sessions immediately.
 - Admins see metadata (who, storage used), never content.
 - **API keys:** named, per-vault read/write rights, shown once at creation, afterwards only by prefix (`kumbu_ab12…`). A key without at least one right can't exist (no slot = can't decrypt anything).
-- Rate limiting on login and invalid keys (Redis).
+- Rate limiting on login and invalid keys, in memory (one instance).
 - **Later:** sharing vaults between users (needs asymmetric crypto), TOTP/2FA.
 
-**Login through GitHub** (direction from Chris, Oct 24, 2026, for the COR.energy pitch): at COR.energy every internal tool for developers (Rancher, Argo CD, Mongo Express …) signs in through GitHub, and Kumbu² should fit in. To settle with step 8:
+**Login through GitHub** (direction from Chris, Oct 24, 2026; **postponed, not built**): in many companies every internal tool for developers (Rancher, Argo CD, Mongo Express …) signs in through GitHub, and Kumbu² should fit in. To settle when it is taken up:
 - **GitHub as the identity provider, limited to an organisation and optionally a team** (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`), the pattern of oauth2-proxy and Argo CD. The first login of a member creates the user; leaving the organisation ends the access. Invites become an option for deployments without an organisation.
 - **Admins through a GitHub team** (`KUMBU_GITHUB_ADMIN_TEAM`) instead of, or next to, the bootstrap token.
 - **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, later a passkey with PRF); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
@@ -152,10 +153,10 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 ## 9. Client access
 
 - **Bearer API keys:** Claude Code, opencode, Hermes, Chatsundere etc.
-- **OAuth 2.1:** app connectors (Claude.ai, ChatGPT, Grok). Kumbu² is **its own authorization server** — no external identity provider needed (that's only the "Login with Google/GitHub" use case). The consent screen is just another way to create a key slot (choose vaults + rights) — no second permission world.
+- **OAuth 2.1:** app connectors (Claude.ai, ChatGPT, Grok). Kumbu² is **its own authorization server** — no external identity provider needed (that's only the "Login with Google/GitHub" use case). A connection is just another key slot: its vaults and rights are chosen when the user creates it on the Access page, and the consent screen then only allows or denies — no second permission world.
 - Bearer API keys + OAuth cover every client type; **no keys in URLs** (proxy logs, and here keys are key material).
 
-### OAuth flow (for reference)
+### OAuth flow (for reference; as built in step 10 the client uses the connection's own address `/mcp/c/{id}`, the endpoints are `/oauth/authorize` and `/oauth/token`, and clients identify themselves by a client metadata document, with dynamic registration as a fallback; `docs/security-architecture.md` §6)
 1. Client calls `/mcp` without token → `401` pointing to metadata.
 2. Client reads `/.well-known/…` metadata → finds Kumbu² as authorization server.
 3. Client registers itself automatically → `client_id` (verify current MCP spec mechanism).
@@ -175,22 +176,22 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 - **Revocation:** delete all slots of the grant — immediate.
 - (Rejected: self-contained access tokens carrying the encrypted vault key — stateless, but not revocable before expiry.)
 - **README note:** the refresh token lives at Anthropic / OpenAI / xAI, so they hold key material to the vault. Consistent with the threat model (they see content when reading anyway), but stated plainly.
-- Implementation: use a proven library for the protocol edge cases (evaluate OpenIddict); understand the flow, don't hand-roll the security details.
+- Implementation: OpenIddict was evaluated and decided against; Kumbu² has its own, small authorisation server, written against the MCP authorisation specification and tested end to end with the SDK's OAuth client (step 10).
 
 ## 10. Obsidian compatibility
 
 - **Export:** near-trivial — it's Markdown. Link resolution must follow Obsidian's rules (shortest unique name) or be exported in fully-qualified form.
-- **Import:** lenient parsing → mechanical normalization. Plugin syntax preserved as is, otherwise ignored.
+- **Import:** notes are stored as they come (content is never rewritten, §4). Plugin syntax preserved as is, otherwise ignored. A ZIP import of whole vaults comes with v0.2.0.
 - The work project (Obsidian + Nextcloud, plain files) is a **separate thing**. Import/export is the bridge.
 
 ## 11. Tech stack
 
-- **Backend:** C# / .NET current LTS, official MCP C# SDK (evaluate first)
+- **Backend:** C# / .NET current LTS, the official MCP C# SDK (`ModelContextProtocol.AspNetCore`)
 - **Persistence:** MongoDB (notes, versions, slots, vectors, link graph — all vault data encrypted)
-- **Transient:** Redis (sessions, rate limits, invite tokens — no plaintext, no keys)
+- **Transient:** no Redis. Sessions and invitations live in MongoDB, rate limits and unlocked vaults in memory. Redis comes once there are several instances (hints, rate limits, pairing, the vault cache together).
 - **Embeddings:** ONNX Runtime in-process
 - **Frontend:** TypeScript + Vite + React + Tailwind, pnpm — admin (users, invites, keys, vaults) + Markdown reader
-- **Deployment:** `compose.yaml`, later integrated into Komodo
+- **Deployment:** `compose.yaml`; on the VPS, Komodo follows the published image's `:latest`, which moves only on a release tag
 - **Branding:** project name *Kumbukumbu*, wordmark *Kumbu²*, command `kumbu`. README explains the word's origin. No Africa clichés in the logo.
 
 ## 12. Build order (walking skeleton first)
@@ -198,15 +199,15 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 1. MCP server in C# with `sh` (`ls`, `cat`), notes as plaintext in Mongo, wired into Claude Code → see how a model talks to the tool.
 2. `sh` parser + pipes (unit-tested — deterministic, perfect test target).
 3. `edit` / `write` with version tokens; history + trash.
-4. Heading index, sections, links, backlinks, link normalizer (unit-tested).
+4. Heading index, sections, links, backlinks (unit-tested). The link normalizer was dropped: content is never rewritten (§4).
 5. Encryption: vaults, slots, HKDF/Argon2id, recovery key.
 6. Agent tools for larger changes: view and diff earlier versions, changes across many notes.
 6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
 7. Embeddings + hybrid search; first, the decisions and fixes from the phase 6b test (`docs/notes-test-phase6b.md`): a folder restore moves moved notes back and rewrites their links; `replace` warns about links that would lead to another note and names the note named after the old text; small fixes.
 8. Users, admin, invites, API keys. **Built** (users with a user key, sessions as slots, API keys with per-vault rights sealed into their slots, invitations, the `bootstrap-admin` command, admin tools, and the REST API under `/api`; `CONCEPTS.md` chapter 10).
-9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. The prototype is the template for look and feel only; where it differs from this concept (links across vaults, per-chunk authorship, note ids, keys instead of the user), the concept wins. TypeScript. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
-10. OAuth authorization server for app connectors.
-11. Obsidian sync plugin.
+9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. **Built** (`web/`, served from the image). The prototype is the template for look and feel only; where it differs from this concept (links across vaults, per-chunk authorship, note ids, keys instead of the user), the concept wins. TypeScript. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
+10. OAuth authorization server for app connectors, and re-keying. **Built** (connections at `/mcp/c/{id}`; `docs/security-architecture.md` §3 and §6).
+11. Obsidian sync plugin. In progress for v0.2.0 (`docs/superpowers/specs/2026-10-26-obsidian-sync-design.md`).
 
 Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10. Step 6b was added on Oct 24, 2026 without renumbering, so step numbers stay stable from here on.
 
@@ -220,14 +221,15 @@ v2 also brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct
 
 v2 also brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. One vault carries at most one board, and cards are on a par with notes. Leaning: a board is its own data model with import and export, with MCP tools for card operations. Details and open questions in §13.
 
-Each step = a chapter in `CONCEPTS.md`.
+Each step = a chapter in `CONCEPTS.md` (steps 9 and 10 are still missing theirs).
 
 ## 13. Open questions
 
-- Verify the current MCP authorization spec details (client registration mechanism, metadata endpoints) before implementing §9.
-- Evaluate the official MCP C# SDK and OpenIddict.
+- *Resolved:* MCP authorisation details and OpenIddict → an own authorisation server with client metadata documents and dynamic registration (`docs/security-architecture.md` §6); the official MCP C# SDK is in use.
 
-### Obsidian sync (build order step 11, once the core is done and deployable)
+### Obsidian sync (build order step 11)
+
+*Superseded by the design of 2026-10-26 (`docs/superpowers/specs/2026-10-26-obsidian-sync-design.md`): pairing through "Connect Obsidian…" instead of pasting a key, device keys, a first-sync merge. Kept for the record.*
 - **Obsidian sync plugin (preferred, leaning decision Oct 22, 2026).** Humans keep a local copy of their vaults in Obsidian; a plugin syncs it with Kumbu². Chosen over mounting because it works offline and does not fight Obsidian's file watching over a network drive.
   - Own GitHub repo (TypeScript, pnpm, esbuild): Obsidian plugins are distributed from GitHub releases. Test installs via BRAT; listing in `obsidianmd/obsidian-releases` later.
   - Authenticates with an API key (§7) as `Authorization: Bearer <key>`; HTTP through Obsidian's `requestUrl` (no CORS, works on mobile).

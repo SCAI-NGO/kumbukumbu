@@ -76,7 +76,11 @@ builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<DeletionList>();
+builder.Services.AddSingleton<RestoredDeletions>();
+builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
+builder.Services.AddSingleton<Kumbu.Server.Welcome.WelcomeVault>();
 builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
@@ -207,6 +211,7 @@ app.MapHistoryApi();
 app.MapUploadApi();
 app.MapSyncApi();
 app.MapPairingApi();
+app.MapExportApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
