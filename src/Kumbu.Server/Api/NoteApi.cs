@@ -54,10 +54,12 @@ public sealed record TreeNote(string Name, string Path, int Size);
 
 /// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
 /// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
-/// can't go on top of), with the writer and time of that version in <c>lastWriter</c> and <c>lastWriteAt</c>.</summary>
-public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt, bool Current)
+/// can't go on top of), with the writer and time of that version in <c>lastWriter</c> and <c>lastWriteAt</c>.
+/// <c>lastWriterKind</c>, for sessions only: <c>user</c>, <c>device</c>, <c>agent</c>, <c>server</c>, or null.</summary>
+public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt, bool Current, string? LastWriterKind = null)
 {
-    public static NoteView From(StoredNote note) => new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt, Current: true);
+    public static async Task<NoteView> FromAsync(StoredNote note, WriterKinds kinds, CancellationToken ct) =>
+        new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt, Current: true, await kinds.OfAsync(note.LastWriter, ct));
 }
 
 /// <summary>Without <c>version</c> a note is created; with it, the note is overwritten if it is still at that version.</summary>
@@ -84,8 +86,8 @@ public sealed record LinkView(int Line, string Raw, string Target, string Kind, 
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
 /// <summary>A version of a note, newest first; <c>size</c> in bytes (UTF-8), <c>changeset</c> the short id of its
-/// changeset, if it is in one.</summary>
-public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset);
+/// changeset, if it is in one. <c>writerKind</c>, for sessions only, as <c>lastWriterKind</c> on a note.</summary>
+public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -97,7 +99,7 @@ public sealed record SearchResultView(string Path, string Address, int StartLine
 /// all with <c>mode=meaning</c>). <c>notice</c>: a sentence when the ranking isn't what was asked for.</summary>
 public sealed record SearchView(IReadOnlyList<SearchResultView> Results, int NotIndexed, string? Notice);
 
-/// <summary>A note whose last write is by one of the user's API keys (<c>writer</c>, the key's name).</summary>
+/// <summary>A note whose last write is by one of the user's agents (<c>writer</c>, the API key's or connection's name).</summary>
 public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version);
 
 /// <summary>
@@ -251,20 +253,20 @@ public static class NoteApi
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
     /// (as <c>cat --version</c>); the web app diffs against it for the agent banner.</summary>
-    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        if (version is null) return TypedResults.Ok(NoteView.From(note));
+        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note, kinds, ct));
 
         // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
         var found = NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version)
             ?? throw ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
-        return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current));
+        return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current, await kinds.OfAsync(found.Writer, ct)));
     }
 
     private static async Task<Results<Created<NoteView>, Ok<NoteView>, Conflict<ConflictView>>> WriteAsync(
-        string vault, string? path, PutNoteRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
+        string vault, string? path, PutNoteRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await RequireVaultAsync(store, notePath, ct);
@@ -290,7 +292,7 @@ public static class NoteApi
             throw ApiErrors.BadRequest(result.Output);
         }
 
-        var view = NoteView.From(now!);
+        var view = await NoteView.FromAsync(now!, kinds, ct);
         return existing is null ? TypedResults.Created(ApiPaths.Url("notes", notePath), view) : TypedResults.Ok(view);
     }
 
@@ -379,13 +381,18 @@ public static class NoteApi
             .ToArray());
     }
 
-    private static async Task<Ok<HistoryEntryView[]>> HistoryAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<HistoryEntryView[]>> HistoryAsync(string vault, string? path, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        return TypedResults.Ok(NoteHistory.Versions(note)
-            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short))
-            .ToArray());
+        var entries = new List<HistoryEntryView>();
+        foreach (var v in NoteHistory.Versions(note))
+        {
+            entries.Add(new HistoryEntryView(
+                v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short, await kinds.OfAsync(v.Writer, ct)));
+        }
+
+        return TypedResults.Ok(entries.ToArray());
     }
 
     /// <summary>
@@ -471,21 +478,20 @@ public static class NoteApi
     }
 
     /// <summary>
-    /// The agent banner: notes in the caller's vaults whose last write is by one of the user's API keys (revoked
-    /// ones too: their writes stay theirs), after <paramref name="since"/>, newest first. A key's name is its writer
-    /// label and never equals a username, so the user's own writes can't count. The names are sealed under the user
-    /// key, hence sessions only.
+    /// The agent banner: notes in the caller's vaults whose last write is by one of the user's agents, API keys or
+    /// connections (revoked ones too: their writes stay theirs), after <paramref name="since"/>, newest first. A
+    /// device's writes are the user's own (spec §5a) and don't count. The names are sealed under the user key, hence
+    /// sessions only.
     /// </summary>
-    private static async Task<Ok<ChangeView[]>> ChangesAsync(DateTimeOffset since, RequestCaller caller, INoteStore store, ApiKeys keys, CancellationToken ct)
+    private static async Task<Ok<ChangeView[]>> ChangesAsync(DateTimeOffset since, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
-        var names = (await keys.ListAsync(caller.User!, caller.UserKey!, ct)).Select(k => k.Name).ToHashSet(StringComparer.Ordinal);
         var from = since.UtcDateTime;
         var changes = new List<ChangeView>();
         foreach (var path in await store.ListNotesUnderAsync(VaultPath.Root, ct))
         {
             if (await store.GetAsync(path, ct) is not { } note || note.LastWriteAt <= from) continue;
             var writer = Writers.Identity(note.LastWriter);
-            if (names.Contains(writer)) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
+            if (await kinds.OfAsync(writer, ct) == WriterKinds.Agent) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
         }
 
         return TypedResults.Ok(changes.OrderByDescending(c => c.LastWriteAt).ThenBy(c => c.Path, TextOrder.Default).ToArray());

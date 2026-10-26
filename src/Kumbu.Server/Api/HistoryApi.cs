@@ -14,8 +14,8 @@ namespace Kumbu.Server.Api;
 /// never goes on top of a newer write it hasn't seen (409 with the note as it is, as a write's).</summary>
 public sealed record RestoreRequest(string? Version = null, string? Expected = null);
 
-/// <summary>The open note's version and last write, without its content: what the web app polls.</summary>
-public sealed record NoteVersionView(string Path, string Version, string LastWriter, DateTime LastWriteAt);
+/// <summary>The open note's version and last write, without its content: what the web app polls. <c>lastWriterKind</c> as on a note.</summary>
+public sealed record NoteVersionView(string Path, string Version, string LastWriter, DateTime LastWriteAt, string? LastWriterKind = null);
 
 /// <summary>A removed note; <c>expiresAt</c>: when it leaves the trash for good, <c>size</c> in bytes (UTF-8).</summary>
 public sealed record TrashEntryView(string Path, string Version, DateTime DeletedAt, string DeletedBy, DateTime ExpiresAt, int Lines, int Size);
@@ -77,7 +77,7 @@ public static class HistoryApi
     /// version (the one it replaces stays in the history); a removed one comes back from the trash.
     /// </summary>
     private static async Task<Results<Ok<NoteView>, Conflict<ConflictView>>> RestoreAsync(
-        string vault, string? path, RestoreRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
+        string vault, string? path, RestoreRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await NoteApi.RequireVaultAsync(store, notePath, ct);
@@ -85,7 +85,7 @@ public static class HistoryApi
         var existing = await store.GetAsync(notePath, ct);
         if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return NoteApi.Conflict(existing, body.Expected);
         var result = await writer.RestoreAsync(notePath, body.Version, ct);
-        if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(NoteView.From(now));
+        if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(await NoteView.FromAsync(now, kinds, ct));
 
         // What was asked for exists (in the history, or in the trash with a note at its path now), so it is the
         // state of the vault that stood in the way.
@@ -100,11 +100,11 @@ public static class HistoryApi
     /// What the web app polls while a note is open and the page visible. It doesn't count as the session's use
     /// (<see cref="BackgroundMetadata"/>), but like any read it keeps the vault unlocked.
     /// </summary>
-    private static async Task<Ok<NoteVersionView>> VersionAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<NoteVersionView>> VersionAsync(string vault, string? path, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
-        return TypedResults.Ok(new NoteVersionView(notePath.Value, note.Version, note.LastWriter, note.LastWriteAt));
+        return TypedResults.Ok(new NoteVersionView(notePath.Value, note.Version, note.LastWriter, note.LastWriteAt, await kinds.OfAsync(note.LastWriter, ct)));
     }
 
     private static async Task<Ok<TrashView>> TrashAsync(string vault, INoteStore store, CancellationToken ct)

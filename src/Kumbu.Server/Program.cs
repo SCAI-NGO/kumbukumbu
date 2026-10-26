@@ -99,6 +99,7 @@ builder.Services.AddScoped(RequestCaller.Current);
 builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
 builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
+builder.Services.AddScoped<WriterKinds>();
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
