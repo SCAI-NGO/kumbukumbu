@@ -62,7 +62,7 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
             id={`${id}-name`}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. cor.energy"
+            placeholder="e.g. Work"
             autoComplete="off"
             autoCapitalize="none"
             autoCorrect="off"

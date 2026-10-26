@@ -23,7 +23,7 @@
 - Only accounts made through `POST /api/join` get it; nothing for existing users, nothing for users created directly through `UserCatalog` (tests, tools). Existing welcome vaults are never touched again.
 - Writer label of every welcome note: `Writers.Seed` (`seed`), so it reads as the server's in the history and in the writer kinds of the Obsidian design §5a.
 - Placeholder: `{{server}}` is replaced by `Kumbu:PublicUrl` without a trailing slash; without a public URL by `https://<your Kumbu² address>`. No other placeholder exists; a `{{` left in a written note is a bug.
-- Texts: English, British spelling, **AI-agnostic** ("your AI", "your agent") everywhere except the per-client sections of `Connect your AI.md`; prosumer level (no jargon left unexplained, no hand-holding); nothing about COR.energy or any deployer; every `[[link]]` resolves inside the vault.
+- Texts: English, British spelling, **AI-agnostic** ("your AI", "your agent") everywhere except the per-client sections of `Connect your AI.md`; prosumer level (no jargon left unexplained, no hand-holding); nothing about any organisation or deployer; every `[[link]]` resolves inside the vault.
 - A client is marked *tested* only when tested end to end: **Claude Code: tested.** claude.ai (web, Desktop, mobile): "should work, not tested yet" until the dry run on 2026-10-26 confirms it (Task 4). Any other MCP client: "should work, not tested yet".
 - Texts describe the v0.2.0 feature set. A feature cut from v0.2.0 (drop order: search in earlier versions, the deleted-ids list, Activity) is removed from the texts before the release (Task 4).
 - Creating the welcome vault never fails the join: the account exists and the recovery key must reach the user.
@@ -153,7 +153,7 @@ git commit -m "Give every new user a welcome vault"
 // the heading "## This is how you connect Claude (claude.ai, Desktop and mobile)" and "## … Claude Code".
 
 [Fact] public void No_text_names_a_deployer_or_leaves_a_placeholder_unknown()
-// no "COR", "cor.energy", "tidesson" (case-insensitive); every "{{" is exactly "{{server}}".
+// no "tidesson" (case-insensitive); every "{{" is exactly "{{server}}".
 
 [Fact] public void Tested_markers_are_as_released()
 // Connect your AI.md: the Claude Code section contains "*Tested.*"; the claude.ai section and the

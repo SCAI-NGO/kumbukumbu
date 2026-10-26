@@ -21,7 +21,7 @@ Don't run **Re-encrypt my vaults** right before the demo: it disconnects every a
 1. - [ ] **Before.** The deployed image is this PR's build (`/healthz`, `serverInfo.version`). `curl -si https://kumbu.tidesson.net/.well-known/oauth-authorization-server` shows the fields of Task 3 (issuer, endpoints, `S256`, `client_id_metadata_document_supported`). `curl -si -X POST https://kumbu.tidesson.net/mcp/c/<id>` answers 401 with `resource_metadata`. `curl -si -X POST https://kumbu.tidesson.net/mcp` answers 401 with a bare `Bearer`.
    Result:
 
-2. - [ ] **claude.ai web (work account).** Access → Connect an app "cor.energy", vault `cor.energy` read and write, 90 days; copy the URL. In claude.ai: Settings → Connectors → Add custom connector, URL only. Kumbu²'s consent shows "Claude (claude.ai)", `cor.energy`, "read and write". Allow: the connector shows *Connected*. In a chat: list the vault, read a note, edit a section, write a new note. In Kumbu² the history shows the writer `cor.energy`; the connection shows "Connected", "Claude · claude.ai", last used today.
+2. - [ ] **claude.ai web (work account).** Access → Connect an app "Work", vault `Work` read and write, 90 days; copy the URL. In claude.ai: Settings → Connectors → Add custom connector, URL only. Kumbu²'s consent shows "Claude (claude.ai)", `Work`, "read and write". Allow: the connector shows *Connected*. In a chat: list the vault, read a note, edit a section, write a new note. In Kumbu² the history shows the writer `Work`; the connection shows "Connected", "Claude · claude.ai", last used today.
    Result:
 
 3. - [ ] **Deny.** With a second connection, Deny at the consent: claude.ai reports the denial, nothing is connected, the Access page still shows the connection as "Waiting for the app".

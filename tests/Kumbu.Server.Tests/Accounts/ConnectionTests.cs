@@ -47,20 +47,20 @@ public sealed class ConnectionTests(MongoFixture fixture)
     [Fact]
     public async Task Creates_a_connection_with_rights_and_lists_it_as_waiting()
     {
-        var (user, userKey, vaults) = await UserWithVaultsAsync("cor.energy", "Diary");
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
 
-        var created = await Connections().CreateAsync(user, userKey, JustRead, "cor.energy", Grant(vaults["cor.energy"]), Ct);
+        var created = await Connections().CreateAsync(user, userKey, JustRead, "Work", Grant(vaults["Work"]), Ct);
 
         Assert.Equal(16, created.Id.Length);
         Assert.Matches("^[a-z2-7]{16}$", created.Id);
         var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
         Assert.Equal(created.Id, listed.Id);
-        Assert.Equal("cor.energy", listed.Name);
+        Assert.Equal("Work", listed.Name);
         Assert.Equal(ConnectionState.Waiting, listed.State);
         Assert.Null(listed.Reason);
         Assert.Null(listed.Client);
         Assert.Null(listed.ExpiresAt);
-        Assert.Equal(KeyRight.Write, Assert.Single(listed.Vaults, v => v.Key == vaults["cor.energy"]).Value);
+        Assert.Equal(KeyRight.Write, Assert.Single(listed.Vaults, v => v.Key == vaults["Work"]).Value);
         Assert.DoesNotContain(vaults["Diary"], listed.Vaults.Keys);
     }
 
@@ -83,13 +83,13 @@ public sealed class ConnectionTests(MongoFixture fixture)
         var taken = await Assert.ThrowsAsync<ConnectionNameTakenException>(() => Connections().CreateAsync(user, userKey, JustRead, "Laptop", grant, Ct));
         Assert.Equal("You already have an API key or connection named 'Laptop'.", taken.Message);
 
-        var connection = await Connections().CreateAsync(user, userKey, JustRead, "cor.energy", grant, Ct);
-        var keyTaken = await Assert.ThrowsAsync<ApiKeyNameTakenException>(() => Keys().CreateAsync(user, userKey, JustRead, "COR.ENERGY", grant, Ct));
-        Assert.Equal("You already have an API key or connection named 'COR.ENERGY'.", keyTaken.Message);
-        await Assert.ThrowsAsync<ConnectionNameTakenException>(() => Connections().CreateAsync(user, userKey, JustRead, " cor.energy ", grant, Ct));
+        var connection = await Connections().CreateAsync(user, userKey, JustRead, "Work", grant, Ct);
+        var keyTaken = await Assert.ThrowsAsync<ApiKeyNameTakenException>(() => Keys().CreateAsync(user, userKey, JustRead, "WORK", grant, Ct));
+        Assert.Equal("You already have an API key or connection named 'WORK'.", keyTaken.Message);
+        await Assert.ThrowsAsync<ConnectionNameTakenException>(() => Connections().CreateAsync(user, userKey, JustRead, " Work ", grant, Ct));
 
         Assert.True(await Connections().RevokeAsync(user, connection.Id, Ct));
-        await Keys().CreateAsync(user, userKey, JustRead, "COR.ENERGY", grant, Ct);
+        await Keys().CreateAsync(user, userKey, JustRead, "WORK", grant, Ct);
     }
 
     [Fact]
@@ -392,12 +392,12 @@ public sealed class ConnectionTests(MongoFixture fixture)
     public async Task Nothing_readable_about_a_connection_reaches_the_database()
     {
         var (user, userKey, vaults) = await UserWithVaultsAsync("Notes");
-        await Connections().CreateAsync(user, userKey, JustRead, "cor.energy laptop", Grant(vaults["Notes"]), Ct);
+        await Connections().CreateAsync(user, userKey, JustRead, "Work laptop", Grant(vaults["Notes"]), Ct);
 
         var dump = string.Concat((await _db.GetCollection<BsonDocument>("connections").Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(Ct)).Select(d => d.ToJson()));
 
         Assert.Contains(vaults["Notes"], dump, StringComparison.Ordinal);
-        Assert.DoesNotContain("cor.energy", dump, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Work", dump, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("laptop", dump, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("write", dump, StringComparison.OrdinalIgnoreCase);
     }
