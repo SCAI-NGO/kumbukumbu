@@ -19,13 +19,15 @@ type Props = {
   beforeLost: boolean;
   /** Which comparison shows first (search in earlier versions starts against now). */
   initial?: CompareMode;
+  /** What the version is called above its column: "After this change" in the activity, "This version" from search. */
+  versionLabel?: string;
 };
 
 /**
  * Two versions of a note side by side (stacked on a phone), switchable between "against the version before" and
  * "against now". Removed lines are marked on the left, added ones on the right, in the agent highlights' colours.
  */
-export default function CompareVersions({ path, version, before, trashed, beforeLost, initial = "before" }: Props) {
+export default function CompareVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
   const [mode, setMode] = useState<CompareMode>(initial);
   const againstNow = mode === "now";
   const left = useNoteVersion(path, againstNow ? version : before);
@@ -46,7 +48,7 @@ export default function CompareVersions({ path, version, before, trashed, before
 
   const tabClass = (on: boolean) =>
     `min-h-11 flex-1 rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
-  const labels = againstNow ? ["After this change", "Now"] : ["Before", "After this change"];
+  const labels = againstNow ? [versionLabel, "Now"] : ["Before", versionLabel];
 
   return (
     <>

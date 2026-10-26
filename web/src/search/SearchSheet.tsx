@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Search, X } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { crumbOf, noteUrl, titleOf } from "../api/paths";
 import { secondaryButtonClass } from "../components/form";
+import { Sheet, timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
+import CompareVersions from "../shell/CompareVersions";
 import ModeChips, { MODES } from "./ModeChips";
 import SearchResultCard from "./SearchResultCard";
-import { useSearch, type SearchResult } from "./useSearch";
+import { useEarlierSearch, useSearch, type EarlierResult, type SearchResult } from "./useSearch";
 
 /**
  * The search overlay (MOBILE_EDITOR §4): header and results above, the input and the mode chips at the bottom
- * where the thumb is. An empty query shows the notes opened last.
+ * where the thumb is. An empty query shows the notes opened last. A switch adds sections of earlier versions (off on
+ * every visit), each opening a comparison with today's text.
  */
 export default function SearchSheet() {
   const { searchQuery, searchMode, recentPaths, setSearchQuery, setSearchMode, setOverlay } = useEditor();
@@ -21,6 +25,9 @@ export default function SearchSheet() {
   const search = useSearch(searchQuery, searchMode);
   const results = search.data?.results;
   const hint = MODES.find((m) => m.mode === searchMode)!.hint;
+  const [withEarlier, setWithEarlier] = useState(false);
+  const earlier = useEarlierSearch(search.settled, withEarlier);
+  const [comparing, setComparing] = useState<EarlierResult | null>(null);
 
   const open = (path: string, line?: number) => {
     useEditor.getState().openNote(path);
@@ -102,6 +109,34 @@ export default function SearchSheet() {
             )}
           </div>
         )}
+        {withEarlier && !search.idle && (
+          <div className="mt-4 flex flex-col gap-2">
+            <h3 className="text-[15px] font-bold text-text">Earlier versions</h3>
+            {earlier.isError && <p role="alert" className="text-text-body">{errorText(earlier.error)}</p>}
+            {earlier.isPending && <p className="text-sm text-muted">Searching earlier versions …</p>}
+            {earlier.data && earlier.data.length === 0 && <p className="text-sm text-text-body">No earlier versions found.</p>}
+            {earlier.data && earlier.data.length > 0 && (
+              <ul aria-label="Earlier versions" className="flex flex-col gap-2">
+                {earlier.data.map((r) => (
+                  <li key={`${r.path}${r.version}${r.startLine}`}>
+                    <button
+                      type="button"
+                      onClick={() => setComparing(r)}
+                      className="flex min-h-11 w-full flex-col gap-1 rounded-[12px] border border-line bg-surface px-4 py-3 text-left focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      <span className="truncate font-medium text-text">{titleOf(r.path)}</span>
+                      <span className="truncate font-mono text-[12px] text-dim">{crumbOf(r.path)}</span>
+                      {r.snippet && <span className="line-clamp-2 text-[14px] text-text-body">{r.snippet}</span>}
+                      <span className="text-[12px] text-muted">
+                        <span>Earlier version · {timeText(r.writtenAt)}</span> · by {r.writer}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </section>
 
       <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-2.5 pb-[max(16px,env(safe-area-inset-bottom))]">
@@ -119,7 +154,27 @@ export default function SearchSheet() {
           />
         </label>
         <ModeChips mode={searchMode} onChange={setSearchMode} />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={withEarlier}
+          onClick={() => setWithEarlier((on) => !on)}
+          className="flex min-h-11 items-center gap-2.5 self-start rounded-[10px] px-1 text-sm text-text-body focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <span aria-hidden className={`relative h-6 w-10 flex-none rounded-full transition-colors ${withEarlier ? "bg-accent" : "bg-surface-2 ring-1 ring-line"}`}>
+            <span className={`absolute top-1 size-4 rounded-full bg-surface shadow transition-[left] ${withEarlier ? "left-5" : "left-1"}`} />
+          </span>
+          Include earlier versions
+        </button>
       </div>
+      {comparing && (
+        <Sheet title={comparing.path.slice(comparing.path.lastIndexOf("/") + 1)} onClose={() => setComparing(null)}>
+          <p className="text-sm text-muted">
+            Earlier version · {timeText(comparing.writtenAt)} · by {comparing.writer}
+          </p>
+          <CompareVersions path={comparing.path} version={comparing.version} before={comparing.before} trashed={false} beforeLost={comparing.beforeLost} initial="now" versionLabel="This version" />
+        </Sheet>
+      )}
     </div>
   );
 }

@@ -33,7 +33,7 @@ const hit = (path: string, over: Record<string, unknown> = {}) => ({
 
 type Searched = { q: string; mode: string; signal: AbortSignal };
 
-function api(results: (q: string, mode: string) => unknown, searched: Searched[] = []) {
+function api(results: (q: string, mode: string) => unknown, searched: Searched[] = [], extra: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }]),
@@ -56,6 +56,7 @@ function api(results: (q: string, mode: string) => unknown, searched: Searched[]
       searched.push({ q, mode, signal: r.signal });
       return json(200, results(q, mode));
     },
+    ...extra,
   });
 }
 
@@ -283,5 +284,44 @@ describe("the search sheet", () => {
     await openSheet();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
+  });
+
+});
+
+describe("search in earlier versions", () => {
+  const earlier = { path: "/Work/plan.md", version: "old1", writtenAt: "2026-10-20T09:00:00Z", writer: "liz", startLine: 0, endLine: 3, snippet: "Zebras first.", before: null, beforeLost: false };
+
+  it("the_switch_is_off_by_default", async () => {
+    const asked: string[] = [];
+    api(() => view([hit("/Work/plan.md")]), [], { "GET /api/search/earlier": (r) => (asked.push(r.url), json(200, [earlier])) });
+    await openSheet();
+    expect(within(sheet()).getByRole("switch", { name: "Include earlier versions" })).toHaveAttribute("aria-checked", "false");
+
+    await userEvent.type(input(), "zebras");
+    await within(sheet()).findByText("1 result", { exact: false });
+
+    expect(asked).toEqual([]);
+    expect(within(sheet()).queryByText(/Earlier version ·/)).not.toBeInTheDocument();
+  });
+
+  it("the_switch_adds_earlier_versions", async () => {
+    const asked: URL[] = [];
+    api(() => view([hit("/Work/plan.md")]), [], {
+      "GET /api/search/earlier": (r) => (asked.push(new URL(r.url)), json(200, [earlier])),
+    });
+    await openSheet();
+    await userEvent.type(input(), "zebras");
+    await userEvent.click(within(sheet()).getByRole("switch", { name: "Include earlier versions" }));
+
+    const list = await within(sheet()).findByRole("list", { name: "Earlier versions" });
+    expect(within(list).getByText(/^Earlier version · /)).toBeInTheDocument();
+    expect(list).toHaveTextContent("liz");
+    expect(asked.at(-1)!.searchParams.get("q")).toBe("zebras");
+
+    // A tap compares that version with today's text.
+    await userEvent.click(within(list).getByRole("button"));
+    const compare = await screen.findByRole("dialog", { name: "plan.md" });
+    expect(within(compare).getByRole("button", { name: "Against now" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(compare).getByText("This version")).toBeInTheDocument();
   });
 });
