@@ -180,4 +180,70 @@ public class RgTests
         Assert.Equal(ShellResult.Ok(""), result);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"took {watch.Elapsed}");
     }
+
+    private static readonly Shell NameSh = TestShell.Of(
+        ("/Test/Der große Meister.md".Normalize(System.Text.NormalizationForm.FormD), "Nothing about it here.\n"),
+        ("/Test/Meister Eckhart.md", "Sermons.\n"),
+        ("/Other/Der große Plan.md", "Plans.\n"));
+
+    private static async Task<string> NameOk(string line)
+    {
+        var result = await NameSh.RunAsync(line, CancellationToken.None);
+        Assert.False(result.IsError, result.Output);
+        return result.Output;
+    }
+
+    [Fact]
+    public async Task NoMatchInTheTextPointsToNoteNamesThatMatch() => Assert.Equal(
+        "no match in the text; 1 note name matches: /Test/Der große Meister.md (rg --files | rg -i 'große meister' lists them)",
+        await NameOk("rg -i 'große meister'"));
+
+    [Fact]
+    public async Task TheNameHintFollowsTheScopeAndTheCaseOptions()
+    {
+        Assert.Equal("", await NameOk("rg 'große meister' /Test"));
+        Assert.Equal("", await NameOk("rg -i 'große meister' /Other"));
+        Assert.StartsWith("no match in the text; 1 note name matches: /Other/Der große Plan.md", await NameOk("rg -iF 'große plan' /Other"));
+    }
+
+    [Fact]
+    public async Task TheNameHintListsFiveAndCountsTheRest()
+    {
+        var sh = TestShell.Of([.. Enumerable.Range(1, 7).Select(i => ($"/V/Meister {i}.md", "text\n"))]);
+        var output = (await sh.RunAsync("rg Meister", CancellationToken.None)).Output;
+
+        Assert.Equal(
+            "no match in the text; 7 note names match: /V/Meister 1.md, /V/Meister 2.md, /V/Meister 3.md, /V/Meister 4.md, /V/Meister 5.md and 2 more (rg --files | rg Meister lists them)",
+            output);
+    }
+
+    [Fact]
+    public async Task NoHintWhenNoNameMatchesOrTheTextMatches()
+    {
+        Assert.Equal("", await NameOk("rg -i zzz"));
+        Assert.Equal("/Test/Meister Eckhart.md:1:Sermons.", await NameOk("rg Sermons /Test"));
+    }
+
+    [Fact]
+    public async Task NoHintWhenThereAreHitsOrForInvertedSearchesAndPipes()
+    {
+        Assert.Equal("", await NameOk("rg -c Meister /Other/\"Der große Plan.md\""));
+        Assert.Equal("/Test/Meister Eckhart.md", await NameOk("rg -l Sermons"));
+        Assert.Equal("", await NameOk("rg -v Plans /Other"));
+        Assert.Equal("0", await NameOk("rg -i 'große meister' | wc -l"));
+        Assert.Equal("", await NameOk("rg Meister /Test | head"));
+    }
+
+    [Fact]
+    public async Task ListingAndCountingFindNothingWithTheHintToo() =>
+        Assert.StartsWith("no match in the text; 2 note names match:", await NameOk("rg -lc Meister"));
+
+    [Fact]
+    public async Task TheNameHintAlsoWorksOnACheckpoint()
+    {
+        var result = await NameSh.RunAsync("mkcp /Test cp", CancellationToken.None);
+        Assert.False(result.IsError, result.Output);
+
+        Assert.StartsWith("no match in the text; 2 note names match: /Test/Der große Meister.md", await NameOk("rg --checkpoint cp Meister /Test"));
+    }
 }

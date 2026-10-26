@@ -101,6 +101,7 @@ public sealed class Shell
             version ??= result.Version;
         }
 
+        if (result is { IsError: false, Output.Length: 0, NoMatchHint: { } noMatch } && stages.Count == 1) result = ShellResult.Ok(noMatch);
         return OutputLimit.Apply(result.IsError ? result : result with { Version = version });
     }
 
