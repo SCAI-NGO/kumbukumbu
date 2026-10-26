@@ -201,7 +201,7 @@ public sealed class Pairings : IDisposable
 
     public static string Format(string raw) => raw.Length == Length ? $"{raw[..4]}-{raw[4..]}" : raw;
 
-    /// <summary>1 to 32 characters after trimming, nothing invisible, no " (" (it would end the writer's name in the history).</summary>
+    /// <summary>1 to 32 characters after trimming, nothing invisible, no parentheses (" (" would end the writer's name in the history).</summary>
     private static string Device(string device)
     {
         var clean = device.Normalize(NormalizationForm.FormC).Trim();
@@ -211,7 +211,9 @@ public sealed class Pairings : IDisposable
             throw new ArgumentException("A device name can't contain control or invisible formatting characters.", nameof(device));
         }
 
-        if (clean.Contains(" (", StringComparison.Ordinal)) throw new ArgumentException("A device name can't contain \" (\".", nameof(device));
+        // No parentheses at all, as the plugin asks: a leading "(" would put " (" into the key's name, which would then
+        // be refused only for a code that exists.
+        if (clean.Contains('(') || clean.Contains(')')) throw new ArgumentException("A device name can't contain parentheses.", nameof(device));
         return clean;
     }
 

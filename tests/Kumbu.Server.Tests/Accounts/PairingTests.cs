@@ -120,6 +120,8 @@ public sealed class PairingTests(MongoFixture fixture)
     [InlineData("   ")]
     [InlineData("123456789012345678901234567890123")]
     [InlineData("a (b")]
+    [InlineData("(Laptop)")]
+    [InlineData("Lap)top")]
     [InlineData("x​y")]
     [InlineData("x\ny")]
     public async Task A_bad_device_name_keeps_the_code(string device)
@@ -273,6 +275,19 @@ public sealed class PairingTests(MongoFixture fixture)
         await Catalog().RekeyAsync(a.VaultId, a.User.Id, a.Key, Ct);
 
         Assert.NotNull(await Pairings().RedeemAsync(code.Code, "Laptop", Ct));
+    }
+
+    [Theory]
+    [InlineData("(Laptop)")]
+    [InlineData("Lap)top")]
+    public async Task A_device_name_with_parentheses_is_refused_whether_or_not_the_code_exists(string device)
+    {
+        var a = await AccountAsync();
+        var code = Code(a);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Pairings().RedeemAsync("ZZZZ-ZZZZ", device, Ct));
+        await Assert.ThrowsAsync<ArgumentException>(() => Pairings().RedeemAsync(code.Code, device, Ct));
+        Assert.True(Pairings().IsOpen(code.Code));
     }
 
     [Fact]
