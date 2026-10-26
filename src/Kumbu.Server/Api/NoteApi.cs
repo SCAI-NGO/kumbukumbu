@@ -259,8 +259,10 @@ public static class NoteApi
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
     /// (as <c>cat --version</c>); the web app diffs against it for the agent banner and the Activity sheet. A version
-    /// of a note at this path that is in the trash now is found there too (never <c>current</c>).</summary>
-    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    /// of a note at this path that is in the trash now is found there too (never <c>current</c>), for a session only: the
+    /// trash is the owner's, and keys never read a removed note's text.</summary>
+    private static async Task<Ok<NoteView>> ReadAsync(
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct);
@@ -268,7 +270,7 @@ public static class NoteApi
 
         // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
         var found = note is null ? null : NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version);
-        if (found is null)
+        if (found is null && caller.Kind == CallerKind.Session)
         {
             found = (await store.ListTrashAsync(notePath, ct))
                 .Where(t => t.Note.Path == notePath)

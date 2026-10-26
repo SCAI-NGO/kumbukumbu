@@ -57,6 +57,20 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_key_reads_no_version_of_a_removed_note()
+    {
+        var user = await UserAsync();
+        var (first, _, agent) = await TwoVersionsAsync(user);
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md"));
+        Assert.True(removed.IsSuccessStatusCode);
+
+        // The trash is the owner's: a key could never read a removed note's text, and still can't.
+        using var old = await user.GetAsync(user.Url("plan.md") + $"?version={first}", bearer: agent);
+
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
     public async Task The_history_lists_each_versions_writer_time_and_size()
     {
         var user = await UserAsync();
