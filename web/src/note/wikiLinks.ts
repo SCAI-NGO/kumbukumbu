@@ -34,9 +34,10 @@ export function linkLabel(raw: string) {
 /**
  * A remark plugin that finds the wiki links in the text (code is never text, so links in code stay as written)
  * and the Markdown links that aren't external (`[the plan](/Work/plan.md)`), and marks each with the index of its
- * entry in `links`, the API's answer for this note. Resolution is the server's alone (the same code path as the `links` command, never across vaults): a link is matched to the
- * answer by its line and its place among the same links on that line, never by its name. A link the answer
- * doesn't have stays plain text.
+ * entry in `links`, the API's answer for this note. Resolution is the server's
+ * alone (the same code path as the `links` command, never across vaults): a link is matched to the answer by
+ * its line and its place among the same links on that line, never by its name. A link the answer doesn't have
+ * stays plain text.
  */
 export function remarkWikiLinks({ links }: { links: LinkView[] }) {
   return (tree: MdNode, file: { value: unknown }) => {

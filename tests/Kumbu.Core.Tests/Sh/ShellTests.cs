@@ -148,6 +148,7 @@ public class ShellTests
     public void TheToolDescriptionRecommendsAbsoluteMarkdownLinks()
     {
         Assert.Contains("[text](/Folder/Note.md)", Manual.ToolDescription);
+        Assert.Contains("[plan](/projects/plan.md)", Manual.ToolDescription);
         Assert.Contains("%20", Manual.ToolDescription);
         Assert.Contains("[text](/Folder/Note.md)", Manual.WriteDescription);
     }

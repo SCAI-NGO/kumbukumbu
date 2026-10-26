@@ -84,7 +84,7 @@ public sealed partial record MarkdownLink(
         for (var start = 0; start < line.Length; start++)
         {
             if (line[start] != '[' || code.Concat(wikilinks).Any(s => start >= s.Start && start < s.End)) continue;
-            if (start > 0 && line[start - 1] == '!') continue;
+            if (start > 0 && line[start - 1] == '!' && !Escaped(line, start - 1)) continue;
             if (Escaped(line, start)) continue;
             if (TryParse(index, line, start) is not { } link) continue;
             // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the

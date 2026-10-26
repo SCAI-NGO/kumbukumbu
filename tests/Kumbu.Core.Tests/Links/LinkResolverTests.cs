@@ -60,6 +60,8 @@ public class LinkResolverTests
     [InlineData("/W/x/note.md", "Work/plan", "/W/x/Work/plan.md")]
     [InlineData("/W/sub/note.md", "Work/plan", "/W/Work/plan.md")]
     [InlineData("/W/sub/note.md", "sub/plan", "/W/sub/plan.md")]
+    // Follows Obsidian: no /W/x/Work/Work/plan.md, so the exact vault path wins over the suffix match /W/x/Work/plan.md.
+    [InlineData("/W/x/Work/inbox.md", "Work/plan", "/W/Work/plan.md")]
     public void FolderPathsResolveRelativeThenExactThenBySuffix(string source, string target, string expected)
     {
         var r = Folders.Resolve(P(source), target);

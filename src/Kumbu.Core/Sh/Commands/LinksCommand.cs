@@ -16,17 +16,19 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
     public string Help => """
         links <path>[#section]
-          List the [[wikilinks]], ![[embeds]] and Markdown links [text](target) of a note (or of one section), one per line: line, the
-          link as written, and where it leads: a note's path, 'not found', 'ambiguous' with the
+          List the [[wikilinks]], ![[embeds]] and Markdown links [text](target) of a note (or of one
+          section), one per line: line, the link as written, and where it leads: a note's path, 'not found', 'ambiguous' with the
           candidates, 'attachment' for files that are not notes, or 'this note' for [[#Heading]].
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.
           A link resolves within its vault, ignoring case: the note whose path ends with the link
           ([[kumbu]] or [[projects/kumbu]] → /Demo/projects/kumbu.md); if several match, the one in the
           linking note's folder; './' and '../' are relative to it.
-          A Markdown link target may be '/Folder/Note.md' (absolute in the vault), 'Folder/Note.md',
-          './note.md', '../note.md' or a bare name; spaces as %20 or the target in <...>. External
-          URLs are ignored. New links are best written absolute: [text](/Folder/Note.md).
+          A Markdown link target may be '/Folder/Note.md' (the path inside the vault, without the
+          vault's name: /Demo/projects/plan.md is '/projects/plan.md'), './note.md', '../note.md' or
+          a bare name; spaces as %20 or the target in <...>. A path without a leading '/' is matched
+          like a wikilink (relative to the note's folder, then from the vault root, then the end of
+          a path). External URLs are ignored. New links are best written as [text](/Folder/Note.md).
         links <directory>
           Check every note below a directory (or a whole vault) and list only the links that lead
           nowhere or are ambiguous, as path:line: link → problem.

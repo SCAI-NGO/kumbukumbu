@@ -52,6 +52,17 @@ public class MarkdownLinkTests
     [InlineData("\\[a](plan.md)")]
     public void NotNoteLinks(string text) => Assert.Empty(NoteLink.Parse(text));
 
+    // An escaped '!' is plain text, so a link follows it; an escaped backslash leaves the '!' live.
+    [Theory]
+    [InlineData("\\![a](x.md)", true)]
+    [InlineData("\\\\![a](x.md)", false)]
+    [InlineData("![a](x.md)", false)]
+    public void OnlyAnUnescapedBangMakesAnImage(string line, bool isLink)
+    {
+        var links = MarkdownLink.Parse(line);
+        Assert.Equal(isLink ? ["x.md"] : [], links.Select(l => l.Target));
+    }
+
     [Theory]
     [InlineData("[see [this]](x.md)")]
     [InlineData("[a \\] b](x.md)")]

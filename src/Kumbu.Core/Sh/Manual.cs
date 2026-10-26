@@ -40,7 +40,7 @@ public static class Manual
         All paths are absolute (e.g. /Work/projects/plan.md); there is no working directory.
         Quote paths with spaces: cat "/Work/Meeting Notes.md". Quote regexes with | ( ) or spaces.
         Sections: cat "/Work/plan.md#Architecture#Gates"; a unique heading works alone (#Gates); duplicates take [2].
-        Links: every form is read, [[wikilinks]] and Markdown links; follow one with 'links <path>'. Write new links as [text](/Folder/Note.md), absolute in the vault, %20 for spaces ([notes](/Work/Meeting%20Notes.md)): unambiguous, survives moving the note it stands in, standard Markdown every tool reads.
+        Links: every form is read, [[wikilinks]] and Markdown links; follow one with 'links <path>'. Write new links as [text](/Folder/Note.md): the path inside the vault, without the vault's name (/Work/projects/plan.md is linked as [plan](/projects/plan.md)), %20 for spaces: unambiguous, survives moving the note it stands in, standard Markdown every tool reads.
         Output is limited to about 8000 tokens per call. A whole note longer than that prints its outline.
         Long notes: 'wc -c' or 'outline' first, then cat "note.md#Section" or rg -n.
 
@@ -56,7 +56,7 @@ public static class Manual
         changed since, the write fails: cat it again and redo the change, so nobody's edit is lost.
         For small changes, appending or one section, use the edit tool instead; it doesn't resend the whole note.
 
-        Link to other notes as [text](/Folder/Note.md) (absolute in the vault, %20 for spaces).
+        Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
         """;
