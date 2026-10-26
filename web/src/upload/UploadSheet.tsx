@@ -52,7 +52,7 @@ const touched = (vault: string) => [["tree", vault], ["vaults"], ["search"], ["n
 
 const pickButtonClass = `${secondaryButtonClass} flex flex-1 cursor-pointer items-center justify-center gap-2 focus-within:outline-2 focus-within:outline-accent`;
 
-function SkippedList({ skipped }: { skipped: Skipped[] }) {
+export function SkippedList({ skipped }: { skipped: Skipped[] }) {
   if (skipped.length === 0) return null;
   return (
     <details className="rounded-[10px] border border-line bg-surface-2 px-3 py-2">
