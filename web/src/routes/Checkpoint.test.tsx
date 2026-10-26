@@ -161,6 +161,20 @@ describe("a checkpoint in the web app", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Copied. Paste it into your AI's chat.");
   });
 
+  it("does not carry the Copied status over to another note", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    api({ "GET /api/vaults/Work/checkpoints/before-cleanup/notes/ideas/xyz.md": () => json(200, { path: "/Work/ideas/xyz.md", content: "Other note\n", links: [] }) });
+    renderApp("/checkpoints/Work/before-cleanup/plan.md");
+    const article = await screen.findByRole("article");
+    await userEvent.click(screen.getByRole("button", { name: "Copy for your AI" }));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+
+    await userEvent.click(within(article).getAllByRole("link", { name: /xyz/ })[0]);
+
+    expect(await screen.findByText("Other note")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("says so when the clipboard refuses", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("denied"));
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });

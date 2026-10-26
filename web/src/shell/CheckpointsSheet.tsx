@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { checkpointUrl } from "../api/paths";
 import { errorText } from "../api/error-text";
 import { useCheckpoints, useCreateCheckpoint, usePreviewCheckpoint, useRemoveCheckpoint, useRestoreCheckpoint, type CheckpointEntry, type RestorePreview } from "../api/history";
-import { checkpointExportUrl, download } from "../data/exportUrl";
-import { useEditor } from "../state/editor";
+import { checkpointUrl } from "../api/paths";
 import { FormError, inputClass, labelClass, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
+import { checkpointExportUrl, download } from "../data/exportUrl";
 import { ago } from "../note/AgentBanner";
+import { useEditor } from "../state/editor";
 
 /** As the server's rule: letters, digits, '.', '-' and '_', starting with a letter or digit, at most 64. */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,63}$/u;

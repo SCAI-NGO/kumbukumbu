@@ -80,7 +80,7 @@ export default function Checkpoint() {
             </Link>
             <span className="min-w-0 truncate font-mono text-[12px] text-muted">{crumbOf(path)}</span>
           </div>
-          <CheckpointNote vault={vault} name={name} createdAt={tree.data.checkpoint.createdAt} path={path} />
+          <CheckpointNote key={`${name}/${path}`} vault={vault} name={name} createdAt={tree.data.checkpoint.createdAt} path={path} />
         </>
       )}
     </div>
