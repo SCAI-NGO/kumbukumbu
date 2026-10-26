@@ -212,14 +212,14 @@ public sealed class OAuthTokens(
     /// </summary>
     public async Task<TokenResult> ExchangeCodeAsync(CodeExchange exchange, CancellationToken ct)
     {
-        if (!Secrets.IsWellFormed(exchange.Code, CodePrefix)) return Refused(null, null, "invalid_grant", InvalidCode);
+        if (!Secrets.IsWellFormed(exchange.Code, CodePrefix)) return Refused("token", null, null, "invalid_grant", InvalidCode);
         await EnsureReadyAsync(ct);
         var lookup = Lookup(exchange.Code);
 
         // The code's slots are opened before the transaction: opening may create the slots' indexes once per process,
         // which would wait for a transaction that has written. Used only if the transaction finds the same record.
         var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
-        if (found is null || found.Kind != OAuthTokenKinds.Code) return Refused(null, null, "invalid_grant", InvalidCode);
+        if (found is null || found.Kind != OAuthTokenKinds.Code) return Refused("token", null, null, "invalid_grant", InvalidCode);
         var keys = found.UsedAt is null && found.RevokedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, exchange.Code, ct) : [];
 
         var access = Secrets.New(AccessPrefix);
@@ -324,8 +324,8 @@ public sealed class OAuthTokens(
         var clientHost = found.RedirectUri is { } redirect ? OAuthEndpoints.ClientHost(found.ClientId, redirect) : null;
         if (reused) log.LogWarning("OAuth code {TokenId} was presented again: the tokens of connection {ConnectionId} are revoked", found.Id, found.ConnectionId);
         return result.Pair is not null
-            ? Logged(result, found.ConnectionId, clientHost, "issued")
-            : Refused(found.ConnectionId, clientHost, result.Error!, result.Description!);
+            ? Logged(result, "token", found.ConnectionId, clientHost, "issued")
+            : Refused("token", found.ConnectionId, clientHost, result.Error!, result.Description!);
     }
 
     /// <summary>
@@ -347,13 +347,13 @@ public sealed class OAuthTokens(
 
     private async Task<TokenResult> RefreshAsync(string refreshToken, string clientId, string? resource, bool retry, CancellationToken ct)
     {
-        if (!Secrets.IsWellFormed(refreshToken, RefreshPrefix)) return Refused(null, null, "invalid_grant", InvalidRefresh);
+        if (!Secrets.IsWellFormed(refreshToken, RefreshPrefix)) return Refused("refresh", null, null, "invalid_grant", InvalidRefresh);
         await EnsureReadyAsync(ct);
         var lookup = Lookup(refreshToken);
 
         // Opened before the transaction, as for a code; used only if the transaction finds the record still unused.
         var found = await Docs.Find(d => d.Lookup == lookup).FirstOrDefaultAsync(ct);
-        if (found is null || found.Kind != OAuthTokenKinds.Refresh) return Refused(null, null, "invalid_grant", InvalidRefresh);
+        if (found is null || found.Kind != OAuthTokenKinds.Refresh) return Refused("refresh", null, null, "invalid_grant", InvalidRefresh);
         var keys = found.UsedAt is null && found.RevokedAt is null ? await catalog.OpenConnectionSlotsAsync(found.ConnectionId, found.Id, refreshToken, ct) : [];
 
         var access = Secrets.New(AccessPrefix);
@@ -467,13 +467,16 @@ public sealed class OAuthTokens(
         // still lost, and the next attempt sees the winner's pair. Once only: a second miss is refused, not looped on.
         if (result is null)
         {
-            return retry ? await RefreshAsync(refreshToken, clientId, resource, retry: false, ct) : Refused(found.ConnectionId, null, "invalid_grant", InvalidRefresh);
+            return retry
+                ? await RefreshAsync(refreshToken, clientId, resource, retry: false, ct)
+                : Refused("refresh", found.ConnectionId, await clients.HostAsync(found.ClientId, ct), "invalid_grant", InvalidRefresh);
         }
 
+        var clientHost = await clients.HostAsync(found.ClientId, ct);
         if (reused) log.LogWarning("OAuth refresh token {TokenId} was presented again: the tokens of connection {ConnectionId} are revoked", found.Id, found.ConnectionId);
         return result.Pair is not null
-            ? Logged(result, found.ConnectionId, null, retried ? "retried" : "refreshed")
-            : Refused(found.ConnectionId, null, result.Error!, result.Description!);
+            ? Logged(result, "refresh", found.ConnectionId, clientHost, retried ? "retried" : "issued")
+            : Refused("refresh", found.ConnectionId, clientHost, result.Error!, result.Description!);
     }
 
     /// <summary>A retry of a refresh within the grace period: the pair it was rotated into, while that pair's refresh
@@ -594,15 +597,21 @@ public sealed class OAuthTokens(
             },
             cancellationToken: ct);
 
-        if (revoked) OAuthEndpoints.LogStep(log, "revoke", kind == OAuthTokenKinds.Refresh ? ConnectionReasons.ClientRevoked : "access_revoked", found.ConnectionId, null, null);
+        if (revoked)
+        {
+            OAuthEndpoints.LogStep(
+                log, "revoke", kind == OAuthTokenKinds.Refresh ? ConnectionReasons.ClientRevoked : "access_revoked", found.ConnectionId,
+                await clients.HostAsync(found.ClientId, CancellationToken.None), null);
+        }
     }
 
-    private TokenResult Refused(string? connectionId, string? clientHost, string error, string description) =>
-        Logged(TokenResult.Failure(error, description), connectionId, clientHost, error);
+    /// <summary>A failure, logged as <paramref name="step"/> (<c>token</c> for a code exchange, <c>refresh</c>).</summary>
+    private TokenResult Refused(string step, string? connectionId, string? clientHost, string error, string description) =>
+        Logged(TokenResult.Failure(error, description), step, connectionId, clientHost, error);
 
-    private TokenResult Logged(TokenResult result, string? connectionId, string? clientHost, string outcome)
+    private TokenResult Logged(TokenResult result, string step, string? connectionId, string? clientHost, string outcome)
     {
-        OAuthEndpoints.LogStep(log, "token", outcome, connectionId, clientHost, null);
+        OAuthEndpoints.LogStep(log, step, outcome, connectionId, clientHost, null);
         return result;
     }
 

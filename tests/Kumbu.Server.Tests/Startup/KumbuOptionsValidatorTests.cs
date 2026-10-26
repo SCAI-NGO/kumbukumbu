@@ -66,6 +66,25 @@ public sealed class KumbuOptionsValidatorTests
         else Assert.Equal(["Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440"], result.Failures);
     }
 
+    [Theory]
+    [InlineData("Production", false)]
+    [InlineData("Development", true)]
+    [InlineData("Staging", true)]
+    public void Loopback_clients_are_refused_in_production(string environment, bool valid)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.OAuth.AllowLoopbackClients = true;
+        var host = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environment };
+
+        var result = new KumbuOptionsValidator(host).Validate(null, options);
+
+        if (valid) Assert.False(result.Failed);
+        else Assert.Equal([KumbuOptionsValidator.LoopbackClientsMessage], result.Failures);
+        // Off, it is fine anywhere.
+        options.OAuth.AllowLoopbackClients = false;
+        Assert.False(new KumbuOptionsValidator(host).Validate(null, options).Failed);
+    }
+
     [Fact]
     public void UnknownSearchModelFails()
     {

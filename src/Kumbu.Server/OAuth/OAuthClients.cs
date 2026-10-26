@@ -47,10 +47,11 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
     {
         if (body.ValueKind != JsonValueKind.Object) throw new RegistrationException("invalid_client_metadata", "The client metadata must be a JSON object.");
 
-        // Public clients only (PKCE protects the code); a secret would need storing and guarding for nothing.
-        if (body.TryGetProperty("token_endpoint_auth_method", out var method)
-            && !(method.ValueKind == JsonValueKind.String && method.GetString() == "none"))
-            throw new RegistrationException("invalid_client_metadata", "Only public clients are supported: token_endpoint_auth_method must be \"none\".");
+        // Public clients only (PKCE protects the code); a secret would need storing and guarding for nothing. A requested
+        // secret method is replaced by "none" in the answer (RFC 7591 §3.2.1) rather than refused: the MCP SDK asks for
+        // client_secret_post whatever the metadata advertises, and no secret is ever issued, so nothing is weakened.
+        if (body.TryGetProperty("token_endpoint_auth_method", out var method) && method.ValueKind != JsonValueKind.String)
+            throw new RegistrationException("invalid_client_metadata", "token_endpoint_auth_method must be a string.");
 
         var redirects = RedirectUris(body);
         var name = "";
@@ -82,6 +83,19 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
         };
         await Docs.InsertOneAsync(doc, cancellationToken: ct);
         return new OAuthClient(doc.Id, name, host, redirects, Verified: false);
+    }
+
+    /// <summary>
+    /// For the log: the host of a client id that is a URL (its metadata document is not fetched for this), else the
+    /// host of a registered client's first redirect URI, else null.
+    /// </summary>
+    public async Task<string?> HostAsync(string clientId, CancellationToken ct)
+    {
+        if (ClientMetadataFetcher.IsMetadataUrl(clientId)) return new Uri(clientId).IdnHost;
+        if (!IsRegisteredId(clientId)) return null;
+        await EnsureReadyAsync(ct);
+        var redirects = await Docs.Find(d => d.Id == clientId).Project(d => d.RedirectUris).FirstOrDefaultAsync(ct);
+        return redirects is [var first, ..] ? new Uri(first).IdnHost : null;
     }
 
     /// <summary>An authorisation succeeded: the client stays as long as the account does (Ruling 14).</summary>

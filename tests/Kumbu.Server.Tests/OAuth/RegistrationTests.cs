@@ -68,14 +68,21 @@ public sealed class RegistrationTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Absent_auth_method_is_registered_as_none_and_secrets_are_refused()
+    public async Task Every_client_is_registered_as_public_without_a_secret()
     {
         using var absent = await RegisterAsync(app.PublicApi, Metadata());
         Assert.Equal("none", (await JsonAsync(absent))["token_endpoint_auth_method"]!.GetValue<string>());
 
+        // RFC 7591 §3.2.1: a requested secret method is replaced, not refused; the MCP SDK always asks for one.
         using var secret = await RegisterAsync(app.PublicApi, Metadata("\"token_endpoint_auth_method\":\"client_secret_post\""));
-        Assert.Equal(HttpStatusCode.BadRequest, secret.StatusCode);
-        Assert.Equal("invalid_client_metadata", (await JsonAsync(secret))["error"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, secret.StatusCode);
+        var body = await JsonAsync(secret);
+        Assert.Equal("none", body["token_endpoint_auth_method"]!.GetValue<string>());
+        Assert.Null(body["client_secret"]);
+
+        using var malformed = await RegisterAsync(app.PublicApi, Metadata("\"token_endpoint_auth_method\":42"));
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Equal("invalid_client_metadata", (await JsonAsync(malformed))["error"]!.GetValue<string>());
     }
 
     [Theory]
