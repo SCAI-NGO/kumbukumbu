@@ -235,7 +235,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// <summary>Moves a note to the trash. Needs no version: it can be undone with <see cref="RestoreAsync"/>.</summary>
     /// <summary>
     /// With <paramref name="version"/>, only while the note is at that version (a sync client removing what it saw):
-    /// the check is on the very state <see cref="INoteStore.TryTrashAsync"/> then trashes at its revision, so a write in
+    /// the check is on the very state the store then trashes at its revision, so a write in
     /// between makes the trash fail rather than be lost.
     /// </summary>
     public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct, string? version = null)
@@ -266,7 +266,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
 
-        if (!await store.TryTrashAsync(existing, caller.Writer, Now, ct))
+        // A batch rather than a plain trash, so the trash record joins the writer's changeset.
+        var batch = new NoteBatch { Trashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
+        if ((await store.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
         {
             return ShellResult.Error($"rm: {path.Value} changed while removing it; try again");
         }

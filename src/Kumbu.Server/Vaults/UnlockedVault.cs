@@ -135,21 +135,21 @@ public sealed class UnlockedVault
         Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider == Search.EmbeddingProviders.Internal ? null : embeddingProvider));
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
-        Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt));
+        Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
 
     public TrashedNote OpenTrash(SealedDocument doc)
     {
         var p = Open<TrashPayload>($"trash:{Id}:{doc.Id}", doc.Blob);
-        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt);
+        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt, p.Changeset?.ToChangeset());
     }
 
     public byte[] SealMove(ObjectId docId, MoveRecord move) =>
-        Seal($"move:{Id}:{docId}", new MovePayload(move.From.Value, move.To.Value, move.MovedBy, move.MovedAt));
+        Seal($"move:{Id}:{docId}", new MovePayload(move.From.Value, move.To.Value, move.MovedBy, move.MovedAt, ChangesetPayload.From(move.Changeset)));
 
     public MoveRecord OpenMove(SealedDocument doc)
     {
         var p = Open<MovePayload>($"move:{Id}:{doc.Id}", doc.Blob);
-        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt);
+        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset());
     }
 
     /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
@@ -345,9 +345,15 @@ internal sealed record NotePayload(
         SeedContent, Changeset?.ToChangeset());
 }
 
-internal sealed record TrashPayload(NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt);
+/// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
+internal sealed record TrashPayload(
+    NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
 
-internal sealed record MovePayload(string From, string To, string MovedBy, DateTime MovedAt);
+/// <remarks>Changeset as in <see cref="TrashPayload"/>.</remarks>
+internal sealed record MovePayload(
+    string From, string To, string MovedBy, DateTime MovedAt,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
 
 /// <remarks>Embeddings: the vault's embedding provider; missing (vaults before the overnight round) or null is the internal model.</remarks>
 internal sealed record VaultMeta(
