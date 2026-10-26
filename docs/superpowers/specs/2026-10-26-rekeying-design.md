@@ -98,7 +98,7 @@ The rotation must commit in step 3's transaction. Otherwise a crash could leave 
 - `RecoveryReplacement` (`:228`) carries only `Used`. The new recovery slot comes from `PreparedRotation`, and so does the password slot. The second Argon2 at `:239` is skipped when a rotation is given.
 - The transaction of step 3 is `ApplyAsync` and nothing else. It runs under `WithTransactionAsync`, so transient errors are retried; the recovery slot's filter on `Used` keeps a lost race from passing. A refused old session's slot, which `Sessions.ResolveAsync` deletes (`Sessions.cs:106–109`), would otherwise turn a racing request into a failed recovery. If the filter on `Used` matches nothing, another recovery with this key won, and the answer is `null` (401, as today).
 - The answer is `PreparedRotation.RecoveryKey`. The `newKey` made at `:142` goes away.
-- A third `RotationConflictException` is answered as 409 "Something changed during the recovery; try again." Nothing was written but the stamp and the revocations, so the old recovery key still works.
+- A third `RotationConflictException` becomes `RecoveryConflictException`, answered as 409 "Something changed during the recovery; try again." Nothing was written but the stamp and the revocations, so the old recovery key still works.
 
 `RotateAsync(user, oldUserKey, password, keepSessionSecret, ct)` is for Settings. It checks the password (it must open `oldUserKey`, `UserCatalog.cs:190–196`), then prepares and applies in a transaction of its own under `WithTransactionAsync`. The `lastUsedAt` writes on API keys in use conflict with it. It does not stamp before preparing: the stamp inside Apply is enough, and a stamp before it would sign the user out if Apply then failed.
 
@@ -151,10 +151,10 @@ The measurement was on 7.0.14. Production runs `mongo:8` (`compose.yaml:3`), so 
 A re-key run holds **both locks from the mark to the finish**. Every write and every indexing checks under its lock:
 
 ```
-!vault.Deleted && !IsDeleted(id) && !IsRekeying(id) && vault.KeyId == CurrentKeyId(id)
+!vault.Pending && !vault.Deleted && !IsDeleted(id) && !IsRekeying(id) && vault.KeyId == CurrentKeyId(id)
 ```
 
-`CurrentKeyId` is recorded by `CreateAsync`, `CreateForUserAsync` and `LoadAsync`, and replaced at the finish. A vault never loaded in this process counts as current. The check is applied at these places:
+`CheckWritable` throws on it and `MayIndex` returns false on it. `CurrentKeyId` is recorded by `CreateAsync`, `CreateForUserAsync` and `LoadAsync` (never for a placeholder), and replaced at the finish. A vault never loaded in this process counts as current. The check is applied at these places:
 - `EncryptedNoteStore.WriteAsync` (`Vaults/EncryptedNoteStore.cs:458–461`);
 - `SearchIndex.IndexAsync` (`Search/SearchIndex.cs:127, 131, 160, 178`);
 - `SetEmbeddingProviderAsync` (`VaultCatalog.cs:727–741`);
@@ -162,8 +162,10 @@ A re-key run holds **both locks from the mark to the finish**. Every write and e
 
 Each of these also refuses *before* waiting when `IsRekeying(id)`, so no request queues behind a run. The answers are:
 - `VaultDeletedException` for a deleted vault;
-- `VaultUnavailableException("This vault is being re-encrypted; try again in a moment.")` during a run;
-- `VaultUnavailableException("This vault was just re-encrypted; try again.")` for an object with the old key.
+- `VaultBusyException("This vault is being re-encrypted; try again in a moment.")` during a run, and for a placeholder;
+- `VaultBusyException("This vault was just re-encrypted; try again.")` for an object with the old key.
+
+`VaultBusyException` is a new subclass of `VaultUnavailableException` (unsealed for it, `Vaults/Credentials.cs:86`), and it carries exactly these two texts. See §3, "Errors", for how it maps.
 
 This replaces the per-object `Retired` flag of the first version and its "check passed just before the mark" window: in this process no write of the vault overlaps a run.
 
@@ -177,7 +179,7 @@ A writer still holding K computes K's pid, which matches nothing once the docume
 
 1. **Mark.**
    - The id goes into `_rekeying`. A second run for the vault in this process is refused (`RekeyRunner` is single-flight, §4).
-   - The vault's interrupt token is cancelled, so an external embedding call under way stops instead of holding `IndexGate` for minutes. Today's `DeletionToken` (`VaultCatalog.cs:620–625`) becomes `InterruptToken`, cancelled by a deletion and by a mark, and already cancelled while either is in force.
+   - The vault's interrupt token is cancelled, so an external embedding call under way stops instead of holding `IndexGate` for minutes. Today's `DeletionToken` (`VaultCatalog.cs:620–625`) becomes `InterruptToken`, cancelled by a deletion and by a mark, and already cancelled while either is in force. The cancelled source is removed from `_deletions` at the mark, as a deletion does at `:476`. After a finish or an aborted run, the next `InterruptToken` call creates a fresh, uncancelled source, so indexing of the vault resumes.
    - The run takes `Gate`, then `IndexGate`, then `_loading` for the start transaction.
 2. **Start transaction.**
    - If the vault already has a `user-next` slot, this is a resume: steps 2–3 are skipped. A unique partial index on `slots.vault` where `kind == "user-next"` keeps it to one, and the start looks for it inside its transaction.
@@ -208,26 +210,44 @@ A writer still holding K computes K's pid, which matches nothing once the docume
    - the id is `$pull`ed from `rekeyPending`;
    - `vaultsRekeyed` is incremented, and so is the `wraps` of each connection that lists the vault.
 
-   The three writes to the user slot, the `user-next` slot and the vault document must each match exactly one document. Otherwise the run aborts, takes the id out of `_rekeying`, keeps it in `rekeyPending` and throws: `VaultDeletedException` if the vault document is gone, else `VaultUnavailableException("This vault is being re-encrypted; try again in a moment.")`. Whoever next holds the user key resumes it (§4). After the commit, `CurrentKeyId(id)` becomes K′'s, the id goes into `_rekeyed` (for the life of the process) and out of `_rekeying`, and the locks are released.
+   The three writes to the user slot, the `user-next` slot and the vault document must each match exactly one document. Otherwise the run aborts, takes the id out of `_rekeying`, keeps it in `rekeyPending` and throws: `VaultDeletedException` if the vault document is gone, else `VaultBusyException("This vault is being re-encrypted; try again in a moment.")`. Whoever next holds the user key resumes it (§4). After the commit, `CurrentKeyId(id)` becomes K′'s, the id goes into `_rekeyed` (for the life of the process) and out of `_rekeying`, and the locks are released.
 5. **Nothing is re-indexed.** The next request loads the vault with K′. `SearchIndex.CatchUp` finds the resealed embeddings current: their version is the content's hash (`src/Kumbu.Core/Notes/StoredNote.cs:60`), which doesn't change.
 
 The run returns `RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections)`. A resumed run returns empty lists, since the revocations were made by the start.
 
 ### While a vault waits or runs
 
-- **Loading.** `LoadAsync` (`VaultCatalog.cs:770–821`) loads no working set for a vault whose document has `rekeyStartedAt`. It returns a placeholder `UnlockedVault` with `Pending = true`, named from its meta: during the period the user slot and the meta still agree on K. The placeholder is never put in `_open`. `OpenForUserAsync` raises the new event `RekeyPendingFound(vaultId, userId, userKey)`, and `RekeyRunner` subscribes to it, as `SearchIndex` subscribes to `Unlocked` (§4).
-- **Requests on a pending vault.** `EncryptedNoteStore.VaultAsync` throws `VaultUnavailableException("This vault is being re-encrypted; try again in a moment.")` for a pending vault. `AllVaultsAsync` leaves it out of cross-vault work. The vault list marks it `pending` (Task 16).
-- **Errors over REST.** The REST API answers `VaultUnavailableException` with 503 and `Retry-After: 5` (`Api/ApiErrors.cs`, beside the `VaultDeletedException` case at `:60`). MCP already turns it into a tool error (`Mcp/ToolResult.cs:33`).
+- **Loading.** `LoadAsync` (`VaultCatalog.cs:770–821`) loads no working set for a vault whose document has `rekeyStartedAt`. Instead it returns a placeholder:
+  - an `UnlockedVault` with `Pending = true`;
+  - named, and given its embedding provider, from its meta. During the period the user slot and the meta still agree on K;
+  - with no notes, trash, moves, embeddings or checkpoints;
+  - never put in `_open`, never given a `CurrentKeyId`, and never raising `Unlocked`, so `SearchIndex.CatchUp` never sees it.
+
+  `OpenForUserAsync` raises the new event `RekeyPendingFound(vaultId, userId, userKey)`, and `RekeyRunner` subscribes to it, as `SearchIndex` subscribes to `Unlocked` (§4). Only a session meets placeholders: API key and connection slots on the vault are gone from the start on.
+- **Accessors.** Name lists keep a placeholder, so that the vault isn't reported missing or created again. Every other path refuses it.
+
+  | Accessor | With a placeholder |
+  |---|---|
+  | `EncryptedNoteStore.VaultsAsync` (`Vaults/EncryptedNoteStore.cs:556–561`), the per-request map | keeps it |
+  | `ListVaultsAsync` (`:21`); its users: `GET /api/vaults` (`Api/NoteApi.cs:132`), `RequireVaultAsync` (`NoteApi.cs:462`), the Seeder (`Notes/Seeder.cs:76`, dev token only, so never in practice) | lists the name |
+  | `GET /api/vaults` (`NoteApi.cs:128–138`) | a `VaultView` with `pending: true`, its provider and no note count; it does not call `ListNotesUnderAsync` (`:134`) for it (Task 16 adds the field) |
+  | `UnlockedVaultsAsync` (`EncryptedNoteStore.cs:271`); its users: `NoteApi.cs:130` (providers by name) and `:154` | keeps it; `PUT /api/vaults/{vault}/embeddings` (`:154`) reaches `SetEmbeddingProviderAsync`, whose `CheckWritable` throws `VaultBusyException` |
+  | `AccountApi.VaultNamesAsync` (`Api/AccountApi.cs:315–316`), for the key and connection lists and the consent page (`Api/ConnectionApi.cs:151, 173, 182, 191`) | names it |
+  | `VaultAsync` (`EncryptedNoteStore.cs:540–545`), the single-vault path of every read and write (`:35, 48, 59, 72, 91, 114, 184, 305, 341, 361, 425`, and the single-vault branches at `:39, 52, 205, 297, 415, 533`) | throws `VaultBusyException("This vault is being re-encrypted; try again in a moment.")` |
+  | `AllVaultsAsync` (`:548–552`), for every cross-vault operation (`:39, 205, 297, 415, 533`) | leaves it out |
+  | `CountDamagedAsync` over the root (`:52`, through `VaultsAsync` directly) | leaves it out |
+  | `CheckWritable`, `MayIndex` (writes, indexing, the provider switch) | refuse it |
+- **Errors.** `VaultBusyException` alone maps to 503 with `Retry-After: 5`, in `Api/ApiErrors.cs` beside the `VaultDeletedException` case at `:60`. The two `HistoryApi` catches that answer a `VaultUnavailableException` with 409 (`Api/HistoryApi.cs:160, 186`) get `when (e is not VaultBusyException)`. Every other `VaultUnavailableException` keeps its mapping today: the damaged checkpoint (`EncryptedNoteStore.cs:384`) and the standalone or plaintext MongoDB (`VaultCatalog.cs:886, 898`). MCP turns all of them into a tool error (`Mcp/ToolResult.cs:33`), as it does today.
 
 ### Old keys must not escape into new slots
 
 Two paths wrap vault keys opened from user slots: `ApiKeys.CreateAsync` (`ApiKeys.cs:96`) and `OAuthTokens.IssueCodeAsync` (`OAuthTokens.cs:145`). Two checks guard them:
-- `UserVaultKeysAsync` (`VaultCatalog.cs:270–301`) refuses a vault with `rekeyStartedAt` with "This vault is being re-encrypted; try again in a moment."
+- `UserVaultKeysAsync` (`VaultCatalog.cs:270–301`) refuses a vault with `rekeyStartedAt` with `VaultBusyException("This vault is being re-encrypted; try again in a moment.")`.
 - Both issuing transactions require, as read inside the transaction:
   - **`rekeyStartedAt` absent** on every vault they wrap. A key prepared before a start that commits after it would otherwise pass, because during the period the user slot still wraps K;
   - **the same keys**: the user slots, opened again, give the keys that were wrapped. A key prepared before a finish that commits after it would otherwise carry K.
 
-  Either failure answers `VaultUnavailableException("This vault was just re-encrypted; try again.")`.
+  Either failure answers `VaultBusyException("This vault was just re-encrypted; try again.")`.
 
 Both transactions also conflict with the start and the finish. The key's transaction writes the user document (`ApiKeys.cs:126–131`, against `vaultsRekeyed`), and the code's writes the connection (`OAuthTokens.cs:193`, against `wraps`). Retried, they see the change.
 
@@ -243,12 +263,26 @@ Single process only, as for the rest of the working set (security document §9, 
 
 ## 4. Triggers and the runner
 
-**`RekeyRunner`** (`Vaults/RekeyRunner.cs`) runs stage 2 in the background, never inline in a request's own flow:
-- It works on the app-stopping token (`IHostApplicationLifetime.ApplicationStopping`), not on a request's.
-- It runs one task per vault at most (single-flight). `RunAsync` returns the task already under way, if there is one.
-- A failing vault is retried after 1, 2, 4… minutes, up to 1 hour between tries. It stops when the vault is finished, gone, or no longer the user's.
-- It holds the user key it was given only while that vault's run lasts. A session request holds the key just as long.
-- `Start` is fire-and-forget. A crash or restart loses the runner, not the state: `rekeyPending` and `rekeyStartedAt` stay, and the next trigger starts it again.
+**`RekeyRunner`** (`Vaults/RekeyRunner.cs`) runs stage 2 in the background, never inline in a request's own flow.
+
+- **Concurrency.** **One vault at a time, process-wide**: a single worker serves one global first-in-first-out queue (coordinator's ruling). Each run's batches already sit near the cache budget of §3, and parallel runs would multiply it past the ceiling. The worker runs on the app-stopping token (`IHostApplicationLifetime.ApplicationStopping`), not on a request's.
+- **One entry per vault.** Each vault has at most one entry (single-flight), in one of three states: `Queued`, `Running` or `Backoff(until)`. The entry holds the user id, the user key, the failure count and the awaiters of its next attempt.
+- **`Start(vaultId, userId, userKey)`** is fire-and-forget. Sign-in, recovery, Settings and `RekeyPendingFound` all call it.
+  - No entry: one is created `Queued` at the tail.
+  - Entry `Queued` or in `Backoff`: the newer key is swapped in, for example U′ after a rotation. Nothing else changes: the place in the queue and the backoff stay. A trigger during backoff does **not** reset it.
+  - Entry `Running`: a no-op.
+- **`RunAsync(vaultId, userId, userKey)`** is the per-vault request's call.
+  - It does what `Start` does, with one difference: an entry in `Backoff` is moved to the queue's tail at once. An explicit request by the owner ends the wait; a background trigger doesn't.
+  - It then awaits the entry's next attempt and returns its `RekeySummary`.
+  - When that attempt fails, the exception is rethrown to every awaiter, and only then is the backoff scheduled. The request gets the error: a `VaultBusyException` answers 503, a wrong state its usual mapping.
+  - The awaiter may stop waiting (the request's token cancels only its wait). The attempt goes on.
+- **Backoff.** After the n-th consecutive failure the entry waits min(2ⁿ⁻¹ minutes, 1 hour), then goes back to the queue's tail. It **keeps the user key during backoff** (coordinator's ruling; Task 17 records it in the security document).
+
+  The entry ends, and the key is dropped, when:
+  - the run succeeds;
+  - the vault is gone (`VaultDeletedException`, or no vault document);
+  - the vault is no longer this user's: there is no `user` slot that opens with the key held, and no `user-next` slot. That happens, for example, after a recovery by someone else rotated the key and nobody swapped the new one in. The id then stays in `rekeyPending` for the next trigger with the right key.
+- **Restart.** A crash or restart loses the runner, not the state: `rekeyPending` and `rekeyStartedAt` stay, and the next trigger starts it again.
 
 The triggers:
 - **Recovery.** Stage 1 runs inside the recovery's transaction (§2). The rotation records every vault in `rekeyPending`. After the commit, the API (`AccountApi.RecoverAsync`, `Api/AccountApi.cs:176–182`) answers with the new recovery key **at once** and calls `Rekeying.ResumePending(user, newUserKey)`, which starts the runner. A recovery never waits for stage 2 and never fails because of it. Until each vault's start, the vault stays usable under its old key: its user slot is already wrapped under U′. API keys and connections are revoked by the recovery already (`UserCatalog.cs:250–251`).
@@ -257,13 +291,16 @@ The triggers:
 - **Settings, "Re-encrypt my vaults"** (`POST /api/account/reencrypt`, with the password):
   1. The password is checked first, under the password-check limit.
   2. Stage 1 runs (`RotateAsync`, keeping the current session). It records every vault in `rekeyPending`.
-  3. The request answers with the new recovery key, shown once through `RecoveryKeyReveal`.
-  4. The runner then re-keys each vault in the background with U′. Progress shows as each vault's `pending` state.
+  3. Right after stage 1 commits, and before answering, **all** the user's API keys are revoked whole (`ApiKeys.RevokeAllAsync`, `ApiKeys.cs:202–219`), and the tokens of all their connections are revoked (`Connections.RevokeAllTokensAsync(user, ConnectionReasons.Rekeyed, ct)`, `Connections.cs:256–273`), as a recovery does (coordinator's ruling). Access an attacker may hold must not outlive the request while stage 2 runs in the background.
+
+     A key or code whose creation raced the rotation either committed before it, and is found by the revocation, or is refused by the rotation's stamp (`ApiKeys.cs:126–131`, `OAuthTokens.cs:184–185`). If a crash falls between the commit and the revocation, the keys stay until stage 2 revokes each one with its vault: every key has at least one vault, and every vault is pending.
+  4. The request answers with the new recovery key, shown once through `RecoveryKeyReveal`.
+  5. The runner then re-keys each vault in the background with U′. Progress shows as each vault's `pending` state.
 
   This is the recovery's order, and it is the simplest one that keeps both properties. The recovery key is lost only if the answer to the one transaction that made it is lost; then the page says to make a new recovery key in Settings, as the forgot-password screen does. Sign-in only starts the runner. A crash during stage 2 leaves `rekeyPending`, which is resumed with U′ (§5). The first version put stage 2 before stage 1 so that the long part couldn't stand between the recovery key and its answer. Running stage 2 after the answer achieves that too.
 
   The page says: "New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new recovery key. If you think your password leaked, change it too."
-- **Per vault** (`POST /api/vaults/{vault}/rekey`, with the password). The action sits next to "Delete vault" (Ruling 19). The password is checked before the name is looked up (as `Deletion.cs:38`). The request then **waits** for `RekeyRunner.RunAsync`: it is one vault, and the UI shows progress. If the request is cancelled, the run goes on, since it runs on the app's token. Before the user confirms, the dialog lists what will lose access, from `GET /api/vaults/{vault}/access`: API keys with a slot on the vault, and connections that list it and aren't revoked.
+- **Per vault** (`POST /api/vaults/{vault}/rekey`, with the password). The action sits next to "Delete vault" (Ruling 19). The password is checked before the name is looked up (as `Deletion.cs:38`). The request then **waits** for `RekeyRunner.RunAsync`: it is one vault, and the UI shows progress. It may wait behind other vaults in the global queue. If the request is cancelled, the run goes on, since it runs on the app's token. A failed attempt answers its error, 503 for `VaultBusyException`. Before the user confirms, the dialog lists what will lose access, from `GET /api/vaults/{vault}/access`: API keys with a slot on the vault, and connections that list it and aren't revoked.
 
 ## 5. Crash points
 
@@ -324,7 +361,12 @@ If stage 1 runs during a two-key period, it wraps the `user-next` slot under U�
 - `A_large_document_goes_alone_in_its_batch`;
 - `Rekeys_2000_notes_in_batches_within_the_limits`: 2000 notes with 10 earlier versions of 2 KB each, and embeddings. It asserts the run takes under 50 s and that no batch exceeds the budget, and logs the time, the bytes and the number of batches;
 - `The_runner_runs_one_task_per_vault_and_backs_off`;
-- `A_pending_vault_answers_being_reencrypted`.
+- `A_pending_vault_answers_being_reencrypted`: every accessor in the table of §3 behaves as stated. Writes, deletes, the provider switch and indexing through a placeholder throw `VaultBusyException` or do nothing. The vault list and the key list still name the vault. `Unlocked` is never raised for it;
+- `The_runner_serves_one_vault_at_a_time_in_order`;
+- `Start_during_backoff_swaps_the_key_and_keeps_the_backoff`;
+- `RunAsync_rethrows_a_failure_then_backs_off`;
+- `Only_VaultBusyException_answers_503`;
+- `Indexing_resumes_after_a_finish`: a fresh interrupt token.
 
 The manual check, recorded in the task report: the 2000-note test against a mongod started with `--wiredTigerCacheSizeGB 0.25`, on 7.0.14 and on `mongo:8`.
 
@@ -339,6 +381,7 @@ The manual check, recorded in the task report: the 2000-note test against a mong
 - `A_recovery_answers_at_once_and_the_runner_rekeys_every_vault`;
 - `A_recovery_interrupted_between_vaults_resumes_after_sign_in`: sign-in answers without waiting, and the runner completes the rest and clears `rekeyPending`;
 - `Reencrypt_answers_the_recovery_key_after_stage_1`;
+- `Reencrypt_revokes_every_api_key_and_connection_before_answering`: also a key of a vault that no runner has reached yet;
 - `Rekeying_one_vault_waits_and_needs_the_password_first`;
 - `Access_lists_what_will_lose_access`.
 
@@ -356,13 +399,15 @@ The manual check, recorded in the task report: the 2000-note test against a mong
      - `Search/SearchIndex.cs`: the lock check, `InterruptToken` and the hand-over;
      - `Vaults/VaultCatalog.cs`: `SetEmbeddingProviderAsync`, `LoadAsync`, `OpenForUserAsync`, `UserVaultKeysAsync`, `DeleteVaultsAsync` (`InterruptToken`), the index on `user-next`, and `CurrentKeyId` and `Current`;
      - `Accounts/ApiKeys.cs` and `OAuth/OAuthTokens.cs`: the checks in their transactions;
-     - `Api/ApiErrors.cs`: 503 for `VaultUnavailableException`;
+     - `Vaults/Credentials.cs`: `VaultUnavailableException` unsealed, and the new `VaultBusyException`;
+     - `Api/ApiErrors.cs`: 503 with `Retry-After: 5` for `VaultBusyException` only; `Api/HistoryApi.cs:160, 186` exclude it from their 409;
+     - `Api/NoteApi.cs`: the pending `VaultView` (§3, "Accessors");
      - the new `Vaults/RekeyRunner.cs`, registered in `Program.cs`.
    - Error texts, exactly:
-     - "This vault is being re-encrypted; try again in a moment.";
-     - "This vault was just re-encrypted; try again.";
-     - "Something changed during the recovery; try again.";
-     - "Something changed while re-encrypting; try again." (`RotateAsync`'s third conflict, 409).
+     - `VaultBusyException`: "This vault is being re-encrypted; try again in a moment.";
+     - `VaultBusyException`: "This vault was just re-encrypted; try again.";
+     - `RecoveryConflictException`: "Something changed during the recovery; try again." (409);
+     - `RotationConflictException`: "Something changed while re-encrypting; try again." (`RotateAsync`'s third conflict, 409).
 3. **Task 15 brief, "mark the old `UnlockedVault` retired": replaced by the per-vault lock held for the whole run, the key-id check and the database fences** (§3). A stale writer could otherwise destroy a note after the run. `AtRevision` filters only on `{_id, rev}`, which resealing keeps, so a stale replace would leave a K′ pid with a K blob. A stale cached key returns `null` at `VaultCatalog.cs:778` and does not throw. A stale key whose meta doesn't open throws a `CryptographicException` at `:784`. For a re-keyed id, both answer "This vault was just re-encrypted; try again."
 4. **Task 14 interface** (§9): `PreparedRotation` carries:
    - the password and recovery slots, and `RecoveryUsed`;
@@ -374,7 +419,7 @@ The manual check, recorded in the task report: the 2000-note test against a mong
    `ApplyAsync` throws `RotationConflictException`. `RotateAsync` does **not** stamp before preparing, and it retries a conflict. The kept session's `createdAt` (in `user_slots`) is set just after the stamp. Apply's API key writes are conditional on the old `nameId`. Orphan slots are deleted if old and retried if young. A slot with a damaged meta loses its `nameId`. Task 14 also adds `UserDocument.RekeyPending`, since Apply writes it; Task 16's brief had it.
 5. **Task 14 files:** `CreateForUserAsync(name, userId, userKey, ct, DateTime? credentialReadAt = null)`. The production caller `Api/NoteApi.cs:178` passes the session's read time. Test callers compile unchanged: `tests/Kumbu.Server.Tests/Mcp/McpClientTests.cs:409–410`, `Vaults/UserVaultTests.cs` (lines 21–164), and `AccountApiTests`, `CallerTests`, `SeederTests`, `ApiKeyTests`, `DeletionTests`, `ConnectionTests`, `UserCatalogTests`, `AdminTests` and `EncryptedNoteStoreTests`. Without the check, a vault created with the old user key during a rotation would be lost.
 6. **Task 16, recovery** is wired as §2 states. Stage 2 runs in the background: the recovery records `rekeyPending` and answers with the new recovery key at once. `UserCatalog` gains `RecoverWithKeyAsync`, which returns the user and U′ for that; `RecoverAsync` stays as a wrapper, so existing tests are unchanged.
-7. **Task 16, Settings:** stage 1, then the answer, then the runner in the background (§4). The first version of this document said stage 2 first. Per vault, the request waits for the runner.
+7. **Task 16, Settings:** stage 1, then the revocation of every API key and connection token of the user (`rekeyed`, coordinator's ruling), then the answer, then the runner in the background (§4). The first version of this document said stage 2 first. Per vault, the request waits for the runner, which serves one vault at a time process-wide.
 8. **Task 16, sign-in:** `ResumePending` runs *after* the session started and is not awaited. The brief said "the answer waits", and the first version of this document said "before the session starts". Sign-in must never be blocked (coordinator's ruling). `ResumePendingAsync` becomes `void ResumePending`. A request that meets a pending vault starts the runner too.
 9. **Brief line numbers** refer to an older commit:
    - `VaultCatalog.cs:112, 207, 618` are now `:116, 211, 784`;
@@ -384,7 +429,7 @@ The manual check, recorded in the task report: the 2000-note test against a mong
 
 ## 9. Implementation split
 
-Each task gets this document and its brief. Where they differ, this document wins. Interfaces are given exactly. "Internal" members are visible to the tests (`InternalsVisibleTo`).
+Each task gets this document and its brief. Where they differ, this document wins. Interfaces are given exactly. "Internal" members are visible to the tests (`InternalsVisibleTo`). The order is 14, 15a, 15b, 16.
 
 ### Task 14 — stage 1 (`Rotate a user's key with every slot and keyed hash that hangs on it`)
 
@@ -401,6 +446,7 @@ public sealed record PreparedRotation(
     IReadOnlyList<MetaReseal> ApiKeys, IReadOnlyList<MetaReseal> Connections,
     IReadOnlyList<string> VaultIds);
 public sealed class RotationConflictException() : Exception("Something changed while re-encrypting; try again.");
+public sealed class RecoveryConflictException() : Exception("Something changed during the recovery; try again.");  // 409, in ApiErrors
 public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvider time, ILogger<UserKeyRotation> log)
 {
     public Task<PreparedRotation> PrepareAsync(User user, byte[] oldUserKey, string password, string? keepSessionSecret, byte[]? recoveryUsed, CancellationToken ct);
@@ -415,6 +461,8 @@ Plus:
 - `UserCatalog.RecoverWithKeyAsync(username, recoveryKey, newPassword, ct)`, returning `(string RecoveryKey, User User, byte[] UserKey)?`, with `RecoverAsync` as a wrapper. `RecoverWithKeyAsync` throws `RecoveryConflictException` (409) on a third conflict;
 - `VaultCatalog.CreateForUserAsync(…, DateTime? credentialReadAt = null)`.
 
+Task 14 comes before 15a, which defines `SlotDocument.UserNext`. So Task 14 matches vault slots **by lookup, whatever their kind**, and wraps each one under the AAD of its own kind, `slot:{vaultId}:{slot.Kind}`. Only a `user` slot gets a name hash. A `user-next` slot, once 15a creates them, is then covered without a change to Task 14; its test is added in 15a.
+
 Helpers stay internal to their classes and are called only by `UserKeyRotation`: `VaultCatalog.PrepareUserSlotsAsync`, `ApiKeys.PrepareResealAsync`, `Connections.PrepareResealAsync` and `Sessions.PrepareKeep`. The constructor drops the brief's `VaultCatalog` parameter and works on the collections directly, as `ConnectionRevocation` does, to avoid a dependency cycle. If the cycle doesn't arise, keeping the parameter is fine.
 
 ### Task 15a — the run (`Re-key a vault in batches, revoking the access that can't be re-wrapped`)
@@ -422,15 +470,19 @@ Helpers stay internal to their classes and are called only by `UserKeyRotation`:
 ```csharp
 public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections);
 public sealed class VaultLocks { public SemaphoreSlim Gate { get; } = new(1, 1); public SemaphoreSlim IndexGate { get; } = new(1, 1); }
-// UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks? locks = null); Gate/IndexGate come from locks.
+public sealed class VaultBusyException(string message) : VaultUnavailableException(message);  // only the two texts of §8.2; 503 + Retry-After: 5
+// UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks); required; Gate/IndexGate come from locks.
+// The one test that constructs it directly (tests/Kumbu.Server.Tests/Search/SearchIndexTests.cs:198) passes new VaultLocks().
 // UnlockedVault.Pending { get; init; }   (placeholder of a vault in its two-key period; no working set)
 partial class VaultCatalog
 {
     internal Task<RekeySummary> RekeyAsync(string vaultId, string userId, byte[] userKey, CancellationToken ct); // starts or resumes
     internal Task<(IReadOnlyList<string> ApiKeyIds, IReadOnlyList<string> ConnectionIds)> AccessAsync(string vaultId, CancellationToken ct);
+    internal VaultLocks LocksFor(string vaultId);         // one per id, for the life of the process; every UnlockedVault of the id gets it
     internal bool IsRekeying(string vaultId);
-    internal void CheckWritable(UnlockedVault vault);      // throws VaultDeletedException / VaultUnavailableException (texts in §8.2)
-    internal bool MayIndex(UnlockedVault vault);
+    internal Task<IReadOnlyList<string>> PendingVaultIdsAsync(string userId, byte[] userKey, CancellationToken ct); // the user's vaults (by user slot) whose document has rekeyStartedAt; for ResumePending
+    internal void CheckWritable(UnlockedVault vault);      // !Pending && !Deleted && !IsDeleted && !IsRekeying && current key id; throws VaultDeletedException / VaultBusyException
+    internal bool MayIndex(UnlockedVault vault);           // the same condition, as a bool
     internal CancellationToken InterruptToken(string vaultId);   // replaces DeletionToken
     public event Action<string, string, byte[]>? RekeyPendingFound;   // vaultId, userId, userKey
     internal Func<string, Task>? RekeyFaultAt { get; set; }    // "after-start", "after-batch", "inside-finish", "after-finish"
@@ -439,11 +491,18 @@ partial class VaultCatalog
 }
 public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime life, TimeProvider time, ILogger<RekeyRunner> log)
 {
-    public Task<RekeySummary> RunAsync(string vaultId, string userId, byte[] userKey);  // single-flight; awaits the vault's run
-    public void Start(string vaultId, string userId, byte[] userKey);                  // fire and forget, backoff 1 min doubling to 1 h
+    public Task<RekeySummary> RunAsync(string vaultId, string userId, byte[] userKey);  // as Start, but ends a backoff; awaits the next attempt and rethrows its failure
+    public void Start(string vaultId, string userId, byte[] userKey);                  // fire and forget; swaps in the newer key if queued or backing off; no-op if running
     public bool IsRunning(string vaultId);
 }
 ```
+
+`RekeyRunner`, in three sentences:
+- **Global concurrency:** a single worker takes vaults one at a time from one process-wide FIFO queue, so batches of two runs never share the cache.
+- **Backoff with the key held:** after the n-th consecutive failure an entry keeps its user key and waits min(2ⁿ⁻¹ min, 1 h) before going back to the queue's tail.
+- **Start during backoff:** `Start` on a queued or backing-off entry only swaps in the newer key and never resets the backoff, while `RunAsync` also moves a backing-off entry to the queue at once.
+
+§4 has the full rules.
 
 Plus:
 - `SlotDocument.UserNext = "user-next"`;
@@ -451,7 +510,9 @@ Plus:
 - `UserDocument.VaultsRekeyed` (`[BsonElement("vaultsRekeyed")] long`);
 - the unique partial index on `slots.vault` for `kind == "user-next"`;
 - `AtRevision(id, revision, pathId)` and the fenced deletes;
-- 503 with `Retry-After: 5` for `VaultUnavailableException` in `ApiErrors`.
+- 503 with `Retry-After: 5` for `VaultBusyException` in `ApiErrors`, and `HistoryApi`'s two catches excluding it;
+- the placeholder accessors of §3, "Accessors" (`EncryptedNoteStore`), and `GET /api/vaults` not counting a placeholder's notes;
+- `PendingVaultIdsAsync`, built here and used by Task 16's `ResumePending`.
 
 The runner subscribes to `RekeyPendingFound`.
 
@@ -476,11 +537,11 @@ Plus:
 ### Task 16 — triggers (`Re-encrypt after a recovery, on request and per vault`)
 
 ```csharp
-public sealed class Rekeying(UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, RekeyRunner runner, IMongoDatabase db, ILogger<Rekeying> log)
+public sealed class Rekeying(UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, ApiKeys keys, Connections connections, RekeyRunner runner, IMongoDatabase db, ILogger<Rekeying> log)
 {
-    public Task<string?> ReencryptAccountAsync(User user, byte[] userKey, string password, string sessionSecret, CancellationToken ct); // null: wrong password; stage 1, then runner.Start per vault; returns the recovery key
+    public Task<string?> ReencryptAccountAsync(User user, byte[] userKey, string password, string sessionSecret, CancellationToken ct); // null: wrong password; stage 1, then keys.RevokeAllAsync and connections.RevokeAllTokensAsync(rekeyed), then runner.Start per vault; returns the recovery key
     public Task<RekeySummary?> RekeyVaultAsync(User user, byte[] userKey, string vaultName, string password, CancellationToken ct);   // null: no such vault; ArgumentException: wrong password, checked first
-    public void ResumePending(User user, byte[] userKey);  // starts the runner for rekeyPending and vaults with rekeyStartedAt; never waits
+    public void ResumePending(User user, byte[] userKey);  // runner.Start for each id in rekeyPending and in catalog.PendingVaultIdsAsync; never waits
 }
 ```
 
