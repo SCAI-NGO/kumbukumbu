@@ -37,6 +37,11 @@ describe("readImport", () => {
     expect(shape(vaults)).toEqual([{ name: "Bücher", paths: ["Ü²/ö.md"], skipped: [] }]);
   });
 
+  it("UTF-8 names without the ZIP's UTF-8 flag (macOS's Compress) come through as they are", async () => {
+    const vaults = await readImport(withoutUtf8Flag(zip({ "Bücher/Ü².md": "x", "Bücher/plain.md": "y" })), "export.zip");
+    expect(shape(vaults)).toEqual([{ name: "Bücher", paths: ["Ü².md", "plain.md"], skipped: [] }]);
+  });
+
   it("a zipped vault without a top folder is one vault named after the ZIP", async () => {
     const vaults = await readImport(zip({ "a.md": "A", "p/b.md": "B", ".obsidian/app.json": "{}" }), "My notes.zip");
     expect(shape(vaults)).toEqual([
@@ -143,4 +148,17 @@ function corrupt(archive: Uint8Array, name: string): Uint8Array {
     return copy;
   }
   throw new Error(`no entry ${name}`);
+}
+
+/** The archive with the UTF-8 flag (bit 11) cleared on every entry, as tools that write UTF-8 names unflagged do. */
+function withoutUtf8Flag(archive: Uint8Array): Uint8Array {
+  const copy = archive.slice();
+  const view = new DataView(copy.buffer);
+  for (let i = 0; i + 4 <= copy.length; i++) {
+    const signature = view.getUint32(i, true);
+    // Local header: flags at +6; central directory header: flags at +8.
+    const at = signature === 0x04034b50 ? i + 6 : signature === 0x02014b50 ? i + 8 : -1;
+    if (at >= 0) view.setUint16(at, view.getUint16(at, true) & ~0x0800, true);
+  }
+  return copy;
 }

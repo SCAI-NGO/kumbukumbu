@@ -53,6 +53,21 @@ function reasonAgainst(relative: string): string | null {
   return null;
 }
 
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * The entry's name as its tool meant it. Without the ZIP's UTF-8 flag, the name is read as Latin-1, but macOS's Compress
+ * and others write UTF-8 there unflagged: a name whose bytes are valid UTF-8 is read as UTF-8.
+ */
+function entryName(name: string): string {
+  if (!/[\x80-\xff]/.test(name) || /[^\x00-\xff]/.test(name)) return name;
+  try {
+    return strictUtf8.decode(Uint8Array.from(name, (c) => c.charCodeAt(0)));
+  } catch {
+    return name;
+  }
+}
+
 /** Entries no one made on purpose: macOS's resource forks, and a dot folder (`.obsidian/`) at the top. */
 const isSystem = (name: string) => /^__MACOSX(\/|$)/.test(name) || name.startsWith(".");
 
@@ -74,7 +89,7 @@ export async function readImport(zip: Uint8Array, zipName: string): Promise<Impo
 
   const isFile = (e: UnzipFileInfo) => !e.name.endsWith("/");
   // One vault when an entry at the root is a note: a folder per vault has nothing but folders there.
-  const single = entries.some((e) => isFile(e) && !e.name.includes("/") && reasonAgainst(e.name) === null);
+  const single = entries.some((e) => isFile(e) && !entryName(e.name).includes("/") && reasonAgainst(entryName(e.name)) === null);
   const vaults = new Map<string, { vault: ImportVault; paths: Set<string> }>();
   const vaultOf = (name: string) => {
     let entry = vaults.get(name);
@@ -86,16 +101,18 @@ export async function readImport(zip: Uint8Array, zipName: string): Promise<Impo
   // Where each entry goes: its vault and path below it, and why it is skipped, if it is.
   const wanted = new Map<string, { vault: string; path: string; target: string }>();
   for (const entry of entries) {
-    if (/^__MACOSX(\/|$)/.test(entry.name)) continue;
+    // `entry.name` stays the key the second pass knows the entry by.
+    const name = entryName(entry.name);
+    if (/^__MACOSX(\/|$)/.test(name)) continue;
     let vault: string;
     let relative: string;
     if (single) {
-      [vault, relative] = [whole, entry.name];
+      [vault, relative] = [whole, name];
     } else {
-      const slash = entry.name.indexOf("/");
+      const slash = name.indexOf("/");
       // A file at the root, an absolute path or a dot folder belongs to no vault.
-      if (slash <= 0 || isSystem(entry.name)) continue;
-      [vault, relative] = [entry.name.slice(0, slash), entry.name.slice(slash + 1)];
+      if (slash <= 0 || isSystem(name)) continue;
+      [vault, relative] = [name.slice(0, slash), name.slice(slash + 1)];
     }
     const { vault: target, paths } = vaultOf(vault);
     if (!isFile(entry)) continue;
@@ -118,12 +135,11 @@ export async function readImport(zip: Uint8Array, zipName: string): Promise<Impo
 
   // Only the notes are unpacked.
   const unpacked = unzipSync(zip, { filter: (entry) => wanted.has(entry.name) });
-  const decoder = new TextDecoder("utf-8", { fatal: true });
   for (const [name, { vault, path, target }] of wanted) {
     const { vault: into } = vaults.get(vault)!;
     let content: string;
     try {
-      content = decoder.decode(unpacked[name]);
+      content = strictUtf8.decode(unpacked[name]);
     } catch {
       into.skipped.push({ path: target, reason: NOT_UTF8 });
       continue;
