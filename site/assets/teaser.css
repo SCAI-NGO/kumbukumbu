@@ -18,7 +18,7 @@
   --b: #f8d5c2; --b-deep: #eaa98a;   /* peach */
   --c: #dcd3f0; --c-deep: #b2a3dc;   /* lavender */
   --d: #f6e3b4; --d-deep: #e2c27a;   /* butter */
-  --stem: #8fae86;
+  --stem: #8fae86; --tick: #5b8a52;   /* the roadmap's check mark; 3.9:1 on white */
 }
 * { box-sizing: border-box; }
 body {
@@ -161,4 +161,61 @@ html.sheet-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .veil, .moment, .plant use { transition: none; }
   .moment:hover { transform: none; }
+}
+
+/* ---- The roadmap: a vine that draws itself once in view, a blossom or bud per release ---- */
+.roadmap { max-width: 900px; margin: 72px auto 0; text-align: center; }
+.roadmap h2 { font: 600 33px/1.2 Fraunces, Georgia, serif; margin: 0; }
+.roadmap .hand { font: 700 27px/1.25 Caveat, cursive; color: var(--soft); margin: 4px 0 22px; }
+.road { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); }
+.road li { position: relative; }
+/* Each piece of vine is stretched only along its length, so its stroke keeps its width; the pieces meet at the
+   cell edges. --i is the stop's place in the row: the pieces draw one after another, then the stop opens. */
+.vine { position: absolute; display: block; overflow: visible; pointer-events: none; }
+.vine path { fill: none; stroke: var(--stem); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.roadmap.grown .vine path { animation: draw .45s calc(var(--i) * .45s) linear forwards; }
+.vine-h { left: 0; top: 36px; width: 100%; height: 20px; }
+.vine-v { display: none; }
+.stop { position: relative; display: flex; flex-direction: column; align-items: center; padding: 0 6px 8px;
+  cursor: pointer; border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+.stop:hover { transform: translateY(-3px) rotate(-.4deg); }
+.stop:focus-visible { outline: 2px dashed var(--graphite); outline-offset: -2px; }
+.stop-art { display: block; flex: none; width: 92px; height: 92px; overflow: visible; }
+.stop b { font: 700 27px/1.1 Caveat, cursive; margin-top: 4px; }
+.stop > span { font-size: 16px; line-height: 1.4; color: var(--graphite); }
+.stop b, .stop > span { opacity: 0; }
+.roadmap.grown .stop b, .roadmap.grown .stop > span { animation: settle .5s calc(var(--i) * .45s + .35s) ease-out forwards; }
+.stop .more { display: none; }
+.stop .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0); }
+.roadmap.grown .stop .bloom { animation: pop .9s calc(var(--i) * .45s + .2s) cubic-bezier(.3,1.6,.5,1) forwards; }
+.stop .sway { transform-box: fill-box; transform-origin: bottom center; }
+.roadmap.grown .stop .sway { animation: sway 6s ease-in-out infinite; }
+.stop use { transition: transform .6s cubic-bezier(.3,1.5,.5,1); transform-box: view-box; }
+.stop:hover use { transform: scale(1.12); }
+.stop .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--heart); }
+.stop .sprig, .stop .sepal { fill: var(--a); stroke: var(--graphite); stroke-width: 1.2; }
+.stop .bud-shut { fill: var(--petal); stroke: var(--graphite); stroke-width: 1.2; }
+.stop .bud-fold { fill: none; stroke: var(--graphite); stroke-width: 1; }
+.stop .badge { fill: #fff; stroke: var(--graphite); stroke-width: 1.2; }
+.stop .tick { fill: none; stroke: var(--tick); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.moment.pop .stop-art { display: none; }
+.moment.pop .aside { font: 700 26px/1.2 Caveat, cursive; color: var(--soft); margin: 6px 0 0; }
+
+/* Six in a row need about 140 px each; below that the vine turns and runs down the left. */
+@media (max-width: 879px) {
+  .road { grid-template-columns: 1fr; max-width: 460px; margin: 0 auto; }
+  .vine-h { display: none; }
+  .vine-v { display: block; left: 36px; top: 0; width: 20px; height: 100%; }
+  .road li:first-child .vine-v { top: 46px; height: calc(100% - 46px); }
+  .road li:last-child .vine-v { height: 76px; }
+  .stop { display: grid; grid-template-columns: 92px 1fr; column-gap: 12px; align-items: start;
+    text-align: left; padding: 0 8px 18px 0; }
+  .stop-art { grid-row: 1 / span 2; }
+  .stop b { margin-top: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stop, .stop use { transition: none; }
+  .stop:hover { transform: none; }
+  .roadmap.grown .stop .sway { animation: none; }
 }
