@@ -72,7 +72,16 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
     private UserCatalog Users() => new(_db, _kdf, Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance, Rotation());
 
-    private RekeyRunner Runner() => new(Catalog(), _life, _time, Logs.CreateLogger<RekeyRunner>());
+    private readonly List<RekeyRunner> _runners = [];
+
+    /// <summary>A runner, started as the host starts it; stopped with the test.</summary>
+    private async Task<RekeyRunner> RunnerAsync()
+    {
+        var runner = new RekeyRunner(Catalog(), _life, _time, Logs.CreateLogger<RekeyRunner>());
+        await runner.StartAsync(Ct);
+        _runners.Add(runner);
+        return runner;
+    }
 
     private IMongoCollection<SlotDocument> Slots => _db.GetCollection<SlotDocument>("slots");
 
@@ -88,6 +97,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             _index.Dispose();
         }
 
+        foreach (var runner in _runners) await runner.StopAsync(CancellationToken.None);
         _life.Stop();
     }
 
@@ -229,6 +239,22 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         }
 
         return string.Join('\n', all);
+    }
+
+    /// <summary>Per document of the vault's notes and embeddings: its pid and the size of its blob, as MongoDB holds them.</summary>
+    private async Task<Dictionary<string, (string Pid, long Size)>> PidsAsync(string vaultId)
+    {
+        var result = new Dictionary<string, (string, long)>();
+        foreach (var c in new[] { "notes", "embeddings" })
+        {
+            var docs = await Raw(c).Aggregate()
+                .Match(new BsonDocument("vault", vaultId))
+                .Project(new BsonDocument { ["pid"] = 1, ["size"] = new BsonDocument("$binarySize", "$blob") })
+                .ToListAsync(Ct);
+            foreach (var d in docs) result[c + ":" + d["_id"]] = (Convert.ToBase64String(d["pid"].AsByteArray), d["size"].ToInt64());
+        }
+
+        return result;
     }
 
     private async Task<BsonDocument> UserDocAsync(Account a) => await Raw("users").Find(new BsonDocument("_id", a.User.Id)).SingleAsync(Ct);
@@ -659,6 +685,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         Assert.Equal(1, batches);
         Assert.Equal(0, batchesAfterDeletion);
+        Assert.DoesNotContain(id, (await UserDocAsync(a)).GetValue("rekeyPending", new BsonArray()).AsBsonArray.Select(v => v.AsString));
         Assert.Empty(await DocumentsAsync(id));
         Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == id, cancellationToken: Ct));
         Assert.Empty(await Store(a).ListVaultsAsync(Ct));
@@ -714,18 +741,36 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         var batches = new List<(int Documents, long Bytes)>();
         Catalog().RekeyBatchCommitted = (_, n, bytes) => batches.Add((n, bytes));
+        // Independently of the run's own count: after each batch, the documents whose pid changed since the last one,
+        // and the sizes of their blobs as MongoDB stores them. Time spent here doesn't count.
+        var measured = new List<(int Documents, long Bytes)>();
+        var pids = await PidsAsync(id);
+        var measuring = new Stopwatch();
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-batch") return;
+            measuring.Start();
+            var now = await PidsAsync(id);
+            var moved = now.Where(d => !pids.TryGetValue(d.Key, out var before) || before.Pid != d.Value.Pid).ToList();
+            measured.Add((moved.Count, moved.Sum(d => d.Value.Size)));
+            pids = now;
+            measuring.Stop();
+        };
         var clock = Stopwatch.StartNew();
 
         var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
 
         clock.Stop();
+        var elapsed = clock.Elapsed - measuring.Elapsed;
         TestContext.Current.TestOutputHelper?.WriteLine(
-            $"Re-keyed 2000 notes with embeddings in {clock.Elapsed.TotalSeconds:0.0} s: {batches.Sum(b => b.Bytes) / 1024.0 / 1024.0:0.0} MiB sealed, "
-            + $"{batches.Count} batches, largest {batches.Max(b => b.Bytes) / 1024.0 / 1024.0:0.00} MiB / {batches.Max(b => b.Documents)} documents");
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(50), $"took {clock.Elapsed}");
+            $"Re-keyed 2000 notes with embeddings in {elapsed.TotalSeconds:0.0} s: {measured.Sum(b => b.Bytes) / 1024.0 / 1024.0:0.0} MiB stored, "
+            + $"{measured.Count} batches, largest {measured.Max(b => b.Bytes) / 1024.0 / 1024.0:0.00} MiB, at most {measured.Max(b => b.Documents)} documents");
+        Assert.True(elapsed < TimeSpan.FromSeconds(50), $"took {elapsed}");
         Assert.Equal(4000, summary.Documents);
-        Assert.Equal(4000, batches.Sum(b => b.Documents));
-        Assert.All(batches, b => Assert.True(b.Bytes <= Catalog().BatchBytes && b.Documents <= Catalog().BatchDocuments, $"{b.Documents} documents, {b.Bytes} bytes"));
+        // The run's own count and the measured one agree, batch by batch, and every batch keeps to the budget.
+        Assert.Equal(batches, measured);
+        Assert.Equal(4000, measured.Sum(b => b.Documents));
+        Assert.All(measured, b => Assert.True(b.Bytes <= Catalog().BatchBytes && b.Documents <= Catalog().BatchDocuments, $"{b.Documents} documents, {b.Bytes} bytes"));
         var store = Store(a);
         Assert.Equal(2000, (await store.ListNotesUnderAsync(P("/Arbeit"), Ct)).Count);
         Assert.Equal(10, (await store.GetAsync(P("/Arbeit/notes/1234.md"), Ct))!.History.Count);
@@ -755,6 +800,9 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(a.Key, found[0].Item3);
         Assert.Contains((await Catalog().OpenForUserAsync(a.User.Id, a.Key, Ct)).Select(v => (v.Name, v.Pending)), v => v == ("Arbeit", true));
         Assert.Equal([id], await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
+        // The key and connection lists and the consent page name it too.
+        var caller = Kumbu.Server.Auth.RequestCaller.ForSession(a.User, a.Key, a.ReadAt, Catalog());
+        Assert.Equal("Arbeit", (await Kumbu.Server.Api.AccountApi.VaultNamesAsync(caller, Ct))[id]);
 
         // Every single-vault path refuses it.
         var reads = new Func<Task>[]
@@ -867,7 +915,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
                 throw new InvalidOperationException("transient");
             }
         };
-        var runner = Runner();
+        var runner = await RunnerAsync();
 
         for (var i = 0; i < 5; i++) runner.Start(id, a.User.Id, a.Key);
         await WaitUntilAsync(() => runner.IsRunning(id));
@@ -913,7 +961,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             lock (order) order.Add(running.Single());
             if (order.Count == 1) await hold.Task;
         };
-        var runner = Runner();
+        var runner = await RunnerAsync();
 
         var runs = ids.Select(id => runner.RunAsync(id, a.User.Id, a.Key)).ToList();
         await WaitUntilAsync(() => order.Count == 1);
@@ -941,7 +989,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             if (p == "after-start") Interlocked.Increment(ref attempts);
             return crash(p);
         };
-        var runner = Runner();
+        var runner = await RunnerAsync();
         runner.Start(id, a.User.Id, a.Key);
         await WaitUntilAsync(() => attempts == 1);
         await WaitUntilAsync(() => !runner.IsRunning(id));
@@ -973,7 +1021,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             if (p == "after-start" && Interlocked.Increment(ref attempts) == 1) throw new InvalidOperationException("transient");
             return Task.CompletedTask;
         };
-        var runner = Runner();
+        var runner = await RunnerAsync();
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(id, a.User.Id, a.Key));
         Assert.Equal("transient", failure.Message);
@@ -1000,10 +1048,130 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
         Assert.Equal(new[] { gone, a.Id("Privat") }.Order(StringComparer.Ordinal), (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString).Order(StringComparer.Ordinal));
         await Catalog().DeleteVaultsAsync([gone], (_, _) => Task.CompletedTask, Ct);
+        // The deletion takes it out of the pending vaults itself; one deleted by another process before that, say, isn't.
+        Assert.Equal([a.Id("Privat")], (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString));
+        await Raw("users").UpdateOneAsync(new BsonDocument("_id", a.User.Id), new BsonDocument("$addToSet", new BsonDocument("rekeyPending", gone)), cancellationToken: Ct);
 
-        await Assert.ThrowsAsync<VaultDeletedException>(() => Runner().RunAsync(gone, a.User.Id, rotation.NewUserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct));
+        await Assert.ThrowsAsync<VaultDeletedException>(async () => await (await RunnerAsync()).RunAsync(gone, a.User.Id, rotation.NewUserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct));
 
         Assert.Equal([a.Id("Privat")], (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString));
+    }
+
+    [Theory]
+    [InlineData("after-start")]
+    [InlineData("after-batch")]
+    public async Task After_a_run_stops_in_its_two_key_period_an_old_object_writes_nothing(string point)
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        // A request that opened the vault before the run.
+        var stale = Store(a);
+        var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single();
+        Catalog().BatchDocuments = 3;
+        CrashOnceAt(point);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        Assert.False(Catalog().IsRekeying(id));
+        var before = await RawAsync(id);
+        var embedded = RemoteNotes;
+
+        foreach (var write in new Func<Task>[]
+        {
+            () => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct),
+            () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct),
+            () => stale.TryAddCheckpointAsync(Cp("drei", "/Arbeit/plan.md", plan), [new Note(plan.Path, plan.Content)], Ct),
+            () => Catalog().SetEmbeddingProviderAsync(staleVault, EmbeddingProviders.Internal, Ct),
+        })
+        {
+            Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(write)).Message);
+        }
+
+        await Index().IndexAsync(staleVault, P("/Arbeit/plan.md"), Ct);
+        await Index().IndexAsync(staleVault, P("/Arbeit/gone.md"), Ct);
+        Assert.Equal(before, await RawAsync(id));
+        Assert.Equal(embedded, RemoteNotes);
+        // A new request meets the placeholder, not the working set made with the old key.
+        await Assert.ThrowsAsync<VaultBusyException>(() => Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+
+        // Once a resumed run finishes, the old object is one of an old key.
+        Catalog().RekeyFaultAt = null;
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+        Assert.Equal(VaultBusyException.JustReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct))).Message);
+    }
+
+    [Fact]
+    public async Task A_start_that_is_refused_leaves_the_vault_writable()
+    {
+        var a = await AccountAsync("Arbeit");
+        var store = Store(a);
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/a.md", "a"), Ct));
+
+        await Assert.ThrowsAsync<VaultNotRekeyableException>(() => Catalog().RekeyAsync(a.Id("Arbeit"), a.User.Id, VaultCrypto.NewKey(), Ct));
+
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/b.md", "b"), Ct));
+        Assert.True(await store.TryCreateAsync(New("/Arbeit/c.md", "c"), Ct));
+    }
+
+    [Fact]
+    public async Task A_damaged_holder_of_the_new_pid_never_pushes_out_a_readable_note()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        Assert.True(await Store(a).TryCreateAsync(New("/Arbeit/plan.md", "the real one"), Ct));
+        var original = (await Docs("notes").Find(d => d.Vault == id).SingleAsync(Ct)).Id;
+        var forged = ObjectId.GenerateNewId();
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            // Written by someone who knows the new pid but not the key, with a revision that would win.
+            var next = new UnlockedVault(id, "", await VaultKeyAsync(a.Key, id, SlotDocument.UserNext), Now, new VaultLocks());
+            await Docs("notes").InsertOneAsync(
+                new SealedDocument { Id = forged, Vault = id, PathId = next.PathId(P("/Arbeit/plan.md")), Revision = 99, Blob = RandomNumberGenerator.GetBytes(80) }, cancellationToken: Ct);
+        };
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        Assert.Equal(original, (await Docs("notes").Find(d => d.Vault == id).SingleAsync(Ct)).Id);
+        Assert.Equal("the real one", await Store(a, NewCatalog()).ReadAsync(P("/Arbeit/plan.md"), Ct));
+        Assert.Contains(_log.Lines, l => l.Contains($"Document {forged} of vault {id}", StringComparison.Ordinal) && l.Contains("opens under neither key", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_hung_run_times_out_and_the_queue_goes_on()
+    {
+        var a = await AccountAsync("Eins", "Zwei");
+        var (hung, next) = (a.Id("Eins"), a.Id("Zwei"));
+        var hang = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hanging = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start" || Catalog().IsRekeying(next)) return;
+            // Never returns while the test runs, and watches no token.
+            hanging.TrySetResult();
+            await hang.Task;
+        };
+        var runner = await RunnerAsync();
+        runner.AttemptTimeout = TimeSpan.FromMinutes(1);
+        try
+        {
+            var first = runner.RunAsync(hung, a.User.Id, a.Key);
+            var second = runner.RunAsync(next, a.User.Id, a.Key);
+            await hanging.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+            await Task.Delay(200, Ct);
+            Assert.False(second.IsCompleted);
+
+            _time.Advance(TimeSpan.FromMinutes(1));
+
+            var failure = await Assert.ThrowsAsync<TimeoutException>(() => first.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+            Assert.Contains(hung, failure.Message, StringComparison.Ordinal);
+            await second.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            Assert.DoesNotContain(next, await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
+            Assert.False(runner.IsRunning(hung));
+        }
+        finally
+        {
+            hang.TrySetResult();
+        }
     }
 
     private sealed class TestLifetime : IHostApplicationLifetime
@@ -1103,7 +1271,22 @@ public sealed class RekeyApiTests(KumbuAppFactory app)
         var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
         await owner.CreateAsync("plan.md", "# Plan\n");
         var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
-        Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        var runner = Api.Services.GetRequiredService<RekeyRunner>();
+        // The first run stops after its start, as a crash would. Every later one (the runner's, which the requests
+        // below start) waits after its start until the test lets it go: the vault is in its two-key period throughout.
+        var first = true;
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog.RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            if (first)
+            {
+                first = false;
+                throw new InvalidOperationException("crash after the start");
+            }
+
+            await hold.Task;
+        };
         try
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
@@ -1125,25 +1308,17 @@ public sealed class RekeyApiTests(KumbuAppFactory app)
 
             using var write = await owner.SendAsync(HttpMethod.Put, owner.Url("new.md"), new { content = "new" });
             Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, write.StatusCode);
+
+            // The requests started the runner; its run waits after the start. The owner's request waits for that run.
+            var run = runner.RunAsync(vaultId, owner.User.Id, owner.UserKey);
+            Assert.False(run.IsCompleted);
+            hold.SetResult();
+            await run.WaitAsync(TimeSpan.FromSeconds(30), Ct);
         }
         finally
         {
+            hold.TrySetResult();
             Catalog.RekeyFaultAt = null;
-        }
-
-        // The requests above started the runner, which backs off after the crash; the owner's run ends the wait.
-        var runner = Api.Services.GetRequiredService<RekeyRunner>();
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                await runner.RunAsync(vaultId, owner.User.Id, owner.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
-                break;
-            }
-            catch (InvalidOperationException) when (attempt < 3)
-            {
-                // An attempt that was already under way with the crash still set.
-            }
         }
 
         Assert.Equal("# Plan\n", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());

@@ -63,7 +63,9 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     private volatile bool _ready;
 
-    private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>("api_keys");
+    internal const string CollectionName = "api_keys";
+
+    private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>(CollectionName);
 
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -317,7 +319,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     internal static Task<bool> NameTakenAsync(IClientSessionHandle session, IMongoDatabase db, string userId, byte[]? nameId, DateTime now, CancellationToken ct)
     {
         var f = Builders<ApiKeyDocument>.Filter;
-        return db.GetCollection<ApiKeyDocument>("api_keys")
+        return db.GetCollection<ApiKeyDocument>(CollectionName)
             .Find(session, f.Eq(k => k.User, userId) & f.Eq(k => k.NameId, nameId) & f.Eq(k => k.RevokedAt, null) & (f.Eq(k => k.ExpiresAt, null) | f.Gt(k => k.ExpiresAt, now)))
             .AnyAsync(ct);
     }
@@ -383,7 +385,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     {
         var (oldKey, newKey) = (MetaKey(oldUserKey, userId), MetaKey(newUserKey, userId));
         var result = new List<MetaReseal>();
-        foreach (var doc in await db.GetCollection<ApiKeyDocument>("api_keys").Find(k => k.User == userId).ToListAsync(ct))
+        foreach (var doc in await db.GetCollection<ApiKeyDocument>(CollectionName).Find(k => k.User == userId).ToListAsync(ct))
         {
             try
             {

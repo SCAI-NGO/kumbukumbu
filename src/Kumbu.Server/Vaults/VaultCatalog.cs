@@ -574,9 +574,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>
-    /// Inside a deletion: a real write to the user document of each owner of the vaults (<c>vaultsDeleted</c>), so
-    /// that an API key or connection created, or a connection given new rights, at the same time, which writes that
-    /// document too, conflicts with the deletion and, retried, finds the vault gone (<see cref="RequireVaultsAsync"/>).
+    /// Inside a deletion: a real write to the user document of each owner of the vaults (<c>vaultsDeleted</c>, and the
+    /// vaults out of <c>rekeyPending</c>), so that an API key or connection created, or a connection given new rights,
+    /// at the same time, which writes that document too, conflicts with the deletion and, retried, finds the vault gone
+    /// (<see cref="RequireVaultsAsync"/>).
     /// </summary>
     private async Task MarkOwnersAsync(IClientSessionHandle session, IReadOnlyList<string> ids, CancellationToken ct)
     {
@@ -586,7 +587,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             .ToListAsync(ct);
         if (owners.Count == 0) return;
         await db.GetCollection<Accounts.UserDocument>("users").UpdateManyAsync(
-            session, Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsDeleted, 1), cancellationToken: ct);
+            session,
+            Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners),
+            // A vault that is gone has nothing left to re-key.
+            Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsDeleted, 1).PullAll(u => u.RekeyPending, ids),
+            cancellationToken: ct);
     }
 
     /// <summary>
@@ -612,7 +617,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var left = (await (await Slots.DistinctAsync(session, sl => sl.KeyId, slot.In(sl => sl.KeyId, keyIds), cancellationToken: ct)).ToListAsync(ct)).ToHashSet();
         var orphans = keyIds.Where(k => k is not null && !left.Contains(k)).Select(k => k!).ToList();
         if (orphans.Count == 0) return [];
-        var keys = db.GetCollection<Accounts.ApiKeyDocument>("api_keys");
+        var keys = db.GetCollection<Accounts.ApiKeyDocument>(Accounts.ApiKeys.CollectionName);
         var unrevoked = await keys.Find(session, k => orphans.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
         if (unrevoked.Count == 0) return [];
         await keys.UpdateManyAsync(
@@ -811,6 +816,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.
             if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider };
+            // Outside its period (under _loading, as every start and finish): a start whose commit went unanswered didn't
+            // commit after all.
+            _pending.TryRemove(id, out _);
 
             var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider };
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();

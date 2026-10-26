@@ -547,8 +547,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     /// <summary>The vault of a path, marked as used now: only vaults a request actually touches count for
-    /// the idle timeout and the least-recently-used order, not every vault its token can open.</summary>
-    /// <summary>A vault in its two-key period is named but not served: <see cref="VaultBusyException"/>.</summary>
+    /// the idle timeout and the least-recently-used order, not every vault its token can open. A vault in its
+    /// two-key period is named but not served: <see cref="VaultBusyException"/>.</summary>
     private async Task<UnlockedVault?> VaultAsync(VaultPath path, CancellationToken ct)
     {
         if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var vault)) return null;

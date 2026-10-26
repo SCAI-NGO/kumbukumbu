@@ -155,10 +155,10 @@ The measurement was on 7.0.14. Production runs `mongo:8` (`compose.yaml:3`), so 
 A re-key run holds **both locks from the mark to the finish**. Every write and every indexing checks under its lock:
 
 ```
-!vault.Pending && !vault.Deleted && !IsDeleted(id) && !IsRekeying(id) && vault.KeyId == CurrentKeyId(id)
+!vault.Pending && !vault.Deleted && !IsDeleted(id) && !IsRekeying(id) && !IsPendingHere(id) && vault.KeyId == CurrentKeyId(id)
 ```
 
-`CheckWritable` throws on it and `MayIndex` returns false on it. `CurrentKeyId` is recorded by `CreateAsync`, `CreateForUserAsync` and `LoadAsync` (never for a placeholder), and replaced at the finish. A vault never loaded in this process counts as current. The check is applied at these places:
+`CheckWritable` throws on it and `MayIndex` returns false on it. `CurrentKeyId` is recorded by `CreateAsync`, `CreateForUserAsync` and `LoadAsync` (never for a placeholder), and replaced at the finish. A vault never loaded in this process counts as current. `IsPendingHere(id)` (the `_pending` set, fix round 1 of Task 15a) is set under `_loading` just before the start transaction, whatever its outcome. It is cleared by the finish, by a start known to have failed (refused inside its transaction), or by a load that finds the vault without `rekeyStartedAt`. So an object made with K stays refused ("being re-encrypted") after a run stops in its two-key period: crash, finish mismatch, timeout, deletion or backoff. It is refused even when the answer to the start's commit is lost. The check is applied at these places:
 - `EncryptedNoteStore.WriteAsync` (`Vaults/EncryptedNoteStore.cs:458–461`);
 - `SearchIndex.IndexAsync` (`Search/SearchIndex.cs:127, 131, 160, 178`);
 - `SetEmbeddingProviderAsync` (`VaultCatalog.cs:727–741`);
@@ -184,7 +184,7 @@ A writer still holding K computes K's pid, which matches nothing once the docume
 1. **Mark.**
    - The id goes into `_rekeying`. A second run for the vault in this process is refused (`RekeyRunner` is single-flight, §4).
    - The vault's interrupt token is cancelled, so an external embedding call under way stops instead of holding `IndexGate` for minutes. Today's `DeletionToken` (`VaultCatalog.cs:620–625`) becomes `InterruptToken`, cancelled by a deletion and by a mark, and already cancelled while either is in force. The cancelled source is removed from `_deletions` at the mark, as a deletion does at `:476`. After a finish or an aborted run, the next `InterruptToken` call creates a fresh, uncancelled source, so indexing of the vault resumes.
-   - The run takes `Gate`, then `IndexGate`, then `_loading` for the start transaction.
+   - The run takes `Gate`, then `IndexGate`, then `_loading` for the start transaction. Under `_loading`, before the transaction, the vault is dropped from `_open` and marked in `_pending`. Neither waits for the commit's answer.
 2. **Start transaction.**
    - If the vault already has a `user-next` slot, this is a resume: steps 2–3 are skipped. A unique partial index on `slots.vault` where `kind == "user-next"` keeps it to one, and the start looks for it inside its transaction.
    - Otherwise a new vault key K′ is made. It goes into a `user-next` slot, a new kind in `Documents.cs`. The slot is wrapped as the user slot is, with the AAD `slot:{vaultId}:user-next`, under the owner's lookup and without a name hash.
@@ -192,7 +192,7 @@ A writer still holding K computes K's pid, which matches nothing once the docume
    - Every API key with a slot on the vault is revoked **whole**: `revokedAt` is set, `nameId` unset and all its slots deleted, as `ApiKeys.RevokeAsync` does (`ApiKeys.cs:179–200`). The server can't wrap a slot again without the key (Ruling 20, spec §10).
    - Every connection that lists the vault and isn't revoked goes through `ConnectionRevocation.RevokeTokensAsync(…, ConnectionReasons.Rekeyed, …)` and gets `$inc wraps`. Its tokens become tombstones, so a revoked token stays recognised (Ruling 12), and the connection needs a reconnect.
    - The owner's `rekeyPending` gets the id (`$addToSet`), and `vaultsRekeyed` is incremented. That is a real write to the user document, so concurrent creations conflict with it.
-   - After the commit the vault is dropped from `_open` and `_loading` is released.
+   - Then `_loading` is released. A start refused inside its transaction (vault gone, not this user's) takes the `_pending` mark back.
 3. **Passes.** Each collection of the vault is streamed from MongoDB: `notes`, `trash`, `moves`, `embeddings`, `checkpoints`, `checkpoint_texts`. They are read from the database, not from the working set, which misses damaged documents and holds no checkpoint texts. Each document is classified by its seal first and its `pid` second:
    - **Opens under K′** with the AAD its clear fields give: its `pid` is recomputed from the sealed path, name or content under K′, and corrected if it differs.
    - **Opens under K**: it is sealed again under K′, and its `pid` is recomputed from what is sealed inside, whatever the stored `pid` says. A stored `pid` that doesn't match is logged.
@@ -204,9 +204,9 @@ A writer still holding K computes K's pid, which matches nothing once the docume
 
    Each batch writes with the filter `{_id, blob: old blob}`. If any write in a batch matches nothing, the batch is aborted and that collection is read again.
 
-   A write that hits **DuplicateKey** on `(vault, pid)` means two documents now claim one path, name or text. The run keeps the document with the higher `rev` (for checkpoints the later `at`, for texts either one) and deletes the other, after logging its id.
+   A write that hits **DuplicateKey** on `(vault, pid)` means two documents now claim one path, name or text. The run keeps the document with the higher `rev` (for checkpoints the later `at`, for texts either one) and deletes the other, after logging its id. A holder that opens under neither key never wins over the document being resealed, which did open. It may be a forgery carrying K′'s pid, made to push a note out. It is deleted and logged as damaged.
 
-   Between batches the run checks `IsDeleted(id)`. If the vault is being deleted, the run stops, releases its locks and throws `VaultDeletedException`, so a deletion waits at most one batch. Passes repeat until one finds nothing to change. Without interruptions that is the first pass plus one confirming pass, so the vault is read twice.
+   Before every batch and every read of a chunk (so also in a pass that changes nothing) the run checks `IsDeleted(id)`. If the vault is being deleted, the run stops, releases its locks and throws `VaultDeletedException`, so a deletion waits at most one batch. Passes repeat until one finds nothing to change. Without interruptions that is the first pass plus one confirming pass, so the vault is read twice. A document already under K′ is only opened and its pid computed; it is not sealed again just to be compared.
 4. **Finish transaction** (under `_loading`):
    - the user slot's `wrapped` is replaced by K′, with a filter on the old `wrapped`;
    - the `user-next` slot is deleted;
@@ -261,7 +261,7 @@ A stale cached key returns `null` at `VaultCatalog.cs:778` and does not throw. A
 
 **Index hand-over.** The queue key is `(provider, vault id, path)` (`SearchIndex.cs:52, 99`). An item queued for the old object would make the new object's catch-up skip that path. So `IndexAsync`, on meeting an object with an old key, puts the path in the queue again for `VaultCatalog.Current(id)` when that is loaded.
 
-**Deletion.** `DeleteVaultsAsync` deletes every slot of the vault, `user-next` included. It sets the tombstone (`VaultCatalog.cs:473`) before waiting for the locks, and the run yields at its next batch. `RekeyRunner` drops ids from `rekeyPending` whose vault is gone.
+**Deletion.** `DeleteVaultsAsync` deletes every slot of the vault, `user-next` included. It sets the tombstone (`VaultCatalog.cs:473`) before waiting for the locks, and the run yields at its next batch. The deletion's transaction also `$pullAll`s the ids from the owners' `rekeyPending`. `RekeyRunner` drops an id whose vault is gone (deleted elsewhere, say) when its run meets `VaultDeletedException`.
 
 Single process only, as for the rest of the working set (security document §9, last known gap). The fences make a writer in another process fail instead of destroying a document. A stale *insert* from another process stays sealed under K and shows as damaged.
 
@@ -269,7 +269,8 @@ Single process only, as for the rest of the working set (security document §9, 
 
 **`RekeyRunner`** (`Vaults/RekeyRunner.cs`) runs stage 2 in the background, never inline in a request's own flow.
 
-- **Concurrency.** **One vault at a time, process-wide**: a single worker serves one global first-in-first-out queue (coordinator's ruling). Each run's batches already sit near the cache budget of §3, and parallel runs would multiply it past the ceiling. The worker runs on the app-stopping token (`IHostApplicationLifetime.ApplicationStopping`), not on a request's.
+- **Concurrency.** **One vault at a time, process-wide**: a single worker serves one global first-in-first-out queue (coordinator's ruling). Each run's batches already sit near the cache budget of §3, and parallel runs would multiply it past the ceiling. The worker runs on the app-stopping token (`IHostApplicationLifetime.ApplicationStopping`), not on a request's. It starts in `StartAsync`, which also subscribes to `RekeyPendingFound`. `StopAsync` unsubscribes and stops it.
+- **Attempt timeout.** Each attempt runs on a token linked to the stopping token and cancelled after `AttemptTimeout` (30 minutes; internal and settable for tests). The worker stops waiting for it then, even if the run doesn't watch its token. A timeout counts as a failure (a `TimeoutException` to the awaiters) and backs off, so one hung run never holds up the queue. The abandoned run keeps the vault until it notices, and an attempt meeting it gets `VaultBusyException` and backs off.
 - **One entry per vault.** Each vault has at most one entry (single-flight), in one of three states: `Queued`, `Running` or `Backoff(until)`. The entry holds the user id, the user key, the failure count and the awaiters of its next attempt.
 - **`Start(vaultId, userId, userKey)`** is fire-and-forget. Sign-in, recovery, Settings and `RekeyPendingFound` all call it.
   - No entry: one is created `Queued` at the tail.
@@ -278,7 +279,7 @@ Single process only, as for the rest of the working set (security document §9, 
 - **`RunAsync(vaultId, userId, userKey)`** is the per-vault request's call.
   - It does what `Start` does, with one difference: an entry in `Backoff` is moved to the queue's tail at once. An explicit request by the owner ends the wait; a background trigger doesn't.
   - It then awaits the entry's next attempt and returns its `RekeySummary`.
-  - When that attempt fails, the exception is rethrown to every awaiter, and only then is the backoff scheduled. The request gets the error: a `VaultBusyException` answers 503, a wrong state its usual mapping.
+  - When that attempt fails, the exception is rethrown to every awaiter, and only then is the backoff scheduled. A `RunAsync` that arrived while the attempt ran then sends the entry back to the queue at once instead. The request gets the error: a `VaultBusyException` answers 503, a wrong state its usual mapping.
   - The awaiter may stop waiting (the request's token cancels only its wait). The attempt goes on.
 - **Backoff.** After the n-th consecutive failure the entry waits min(2ⁿ⁻¹ minutes, 1 hour), then goes back to the queue's tail. It **keeps the user key during backoff** (coordinator's ruling; Task 17 records it in the security document).
 

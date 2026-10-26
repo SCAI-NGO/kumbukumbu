@@ -221,7 +221,7 @@ public sealed class UnlockedVault
     /// <paramref name="to"/>'s gets its text ids through <paramref name="textIds"/> (base64 of the old id → new id);
     /// one not found there stays as it is, and is named in <c>Unmapped</c>. Null if the document doesn't open.
     /// </summary>
-    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, IReadOnlyDictionary<string, byte[]> textIds)
+    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, IReadOnlyDictionary<string, byte[]> textIds, bool seal = true)
     {
         var context = collection switch
         {
@@ -257,14 +257,14 @@ public sealed class UnlockedVault
                 {
                     var path = Payload.Path(Parse<EmbeddingsPayload>(plain).Path);
                     var pid = to.PathId(path);
-                    return new Resealed(pid, PathId(path), VaultCrypto.Seal(to._contentKey, plain, $"embeddings:{Id}:{Convert.ToBase64String(pid)}"), null, []);
+                    return new Resealed(pid, PathId(path), SealPlain($"embeddings:{Id}:{Convert.ToBase64String(pid)}"), null, []);
                 }
 
                 case "checkpoints":
                 {
                     var p = Parse<CheckpointPayload>(plain);
                     var (pid, from) = (to.NameId(p.Name), NameId(p.Name));
-                    if (ReferenceEquals(this, to)) return new Resealed(pid, from, VaultCrypto.Seal(to._contentKey, plain, context), null, []);
+                    if (ReferenceEquals(this, to)) return new Resealed(pid, from, SealPlain(context), null, []);
                     var unmapped = new List<string>();
                     var notes = p.Notes.Select(n =>
                     {
@@ -272,14 +272,14 @@ public sealed class UnlockedVault
                         unmapped.Add(n.TextId);
                         return n;
                     }).ToList();
-                    return new Resealed(pid, from, to.Seal(context, p with { Notes = notes }), null, unmapped);
+                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes }) : [], null, unmapped);
                 }
 
                 default:
                 {
                     var content = Parse<TextPayload>(plain).Content;
                     var pid = to.TextId(content);
-                    return new Resealed(pid, TextId(content), VaultCrypto.Seal(to._contentKey, plain, $"cptext:{Id}:{Convert.ToBase64String(pid)}"), content, []);
+                    return new Resealed(pid, TextId(content), SealPlain($"cptext:{Id}:{Convert.ToBase64String(pid)}"), content, []);
                 }
             }
         }
@@ -289,7 +289,10 @@ public sealed class UnlockedVault
             return null;
         }
 
-        Resealed Same(VaultPath path) => new(to.PathId(path), PathId(path), VaultCrypto.Seal(to._contentKey, plain, context), null, []);
+        Resealed Same(VaultPath path) => new(to.PathId(path), PathId(path), SealPlain(context), null, []);
+
+        // Without seal (only the pids are wanted), the blob stays empty.
+        byte[] SealPlain(string newContext) => seal ? VaultCrypto.Seal(to._contentKey, plain, newContext) : [];
     }
 
     /// <summary>What <see cref="Reseal"/> made of a document: its pid and blob under the new key, the pid it should have

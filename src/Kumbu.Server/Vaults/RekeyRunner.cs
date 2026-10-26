@@ -17,26 +17,22 @@ namespace Kumbu.Server.Vaults;
 /// </list>
 /// An entry ends, and its key is dropped, when its run succeeds, when the vault is gone, and when the key held isn't
 /// one the vault's owner slots open with (<see cref="VaultNotRekeyableException"/>): the vault then stays pending for
-/// the next trigger with the right key. A restart loses the queue, not the state: the vault stays pending in MongoDB.
+/// the next trigger with the right key. An attempt that takes longer than <see cref="AttemptTimeout"/> counts as a
+/// failure, so that one hung run doesn't hold up the queue. A restart loses the queue, not the state: the vault stays
+/// pending in MongoDB.
 /// </summary>
-public sealed class RekeyRunner : IHostedService
+public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime life, TimeProvider time, ILogger<RekeyRunner> log) : IHostedService
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromHours(1);
 
-    private readonly VaultCatalog _catalog;
-    private readonly TimeProvider _time;
-    private readonly ILogger<RekeyRunner> _log;
-    private readonly CancellationToken _stopping;
     private readonly Channel<string> _queue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Lock _lock = new();
+    private readonly CancellationTokenSource _stop = CancellationTokenSource.CreateLinkedTokenSource(life.ApplicationStopping);
+    private Task? _worker;
 
-    public RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime life, TimeProvider time, ILogger<RekeyRunner> log)
-    {
-        (_catalog, _time, _log, _stopping) = (catalog, time, log, life.ApplicationStopping);
-        catalog.RekeyPendingFound += Start;
-        _ = Task.Run(() => WorkAsync(_stopping));
-    }
+    /// <summary>How long one attempt may take before it counts as failed (tests set it lower).</summary>
+    internal TimeSpan AttemptTimeout { get; set; } = TimeSpan.FromMinutes(30);
 
     private enum State
     {
@@ -57,10 +53,29 @@ public sealed class RekeyRunner : IHostedService
 
         public int Failures { get; set; }
 
+        /// <summary>A <see cref="RunAsync"/> came while it ran: should the attempt fail, the next one follows at once.</summary>
+        public bool RunRequested { get; set; }
+
         /// <summary>Changes whenever a backoff begins or ends early, so that a timer of an earlier one does nothing.</summary>
         public int Generation { get; set; }
 
         public TaskCompletionSource<RekeySummary> Next { get; set; } = NewAttempt();
+    }
+
+    /// <summary>Starts the worker and listens for pending vaults that requests meet.</summary>
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        catalog.RekeyPendingFound += Start;
+        _worker = Task.Run(() => WorkAsync(_stop.Token), CancellationToken.None);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Stops listening and stops the worker; a run under way is cancelled and its vault stays pending.</summary>
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        catalog.RekeyPendingFound -= Start;
+        await _stop.CancelAsync();
+        if (_worker is not null) await _worker.WaitAsync(cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
     /// <summary>Queues the vault, fire and forget: a queued or backing-off entry gets the newer key and keeps its place
@@ -83,10 +98,6 @@ public sealed class RekeyRunner : IHostedService
         lock (_lock) return _entries.TryGetValue(vaultId, out var entry) && entry.State == State.Running;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
     private Entry Upsert(string vaultId, string userId, byte[] userKey, bool endBackoff)
     {
         if (!_entries.TryGetValue(vaultId, out var entry))
@@ -97,7 +108,12 @@ public sealed class RekeyRunner : IHostedService
             return entry;
         }
 
-        if (entry.State == State.Running) return entry;
+        if (entry.State == State.Running)
+        {
+            if (endBackoff) entry.RunRequested = true;
+            return entry;
+        }
+
         (entry.UserId, entry.UserKey) = (userId, userKey);
         if (entry.State == State.Backoff && endBackoff)
         {
@@ -121,6 +137,7 @@ public sealed class RekeyRunner : IHostedService
                     // A stale queue item: the entry ended, or went back to backoff, since.
                     if (!_entries.TryGetValue(vaultId, out entry) || entry.State != State.Queued) continue;
                     entry.State = State.Running;
+                    entry.RunRequested = false;
                 }
 
                 await AttemptAsync(entry, stopping);
@@ -136,15 +153,19 @@ public sealed class RekeyRunner : IHostedService
         string userId;
         byte[] userKey;
         lock (_lock) (userId, userKey) = (entry.UserId, entry.UserKey);
+        using var timeout = new CancellationTokenSource(AttemptTimeout, time);
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stopping, timeout.Token);
         try
         {
-            var summary = await _catalog.RekeyAsync(entry.VaultId, userId, userKey, stopping);
+            // WaitAsync too: a run stuck somewhere that doesn't watch the token still lets the queue go on. It keeps the
+            // vault (a later attempt meets it busy, and backs off) until it notices.
+            var summary = await catalog.RekeyAsync(entry.VaultId, userId, userKey, attempt.Token).WaitAsync(attempt.Token);
             End(entry);
             entry.Next.TrySetResult(summary);
         }
         catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException)
         {
-            _log.LogInformation("Re-keying vault {VaultId} ends: {Reason}", entry.VaultId, e.Message);
+            log.LogInformation("Re-keying vault {VaultId} ends: {Reason}", entry.VaultId, e.Message);
             End(entry);
             if (e is VaultDeletedException) await ForgetAsync(entry.VaultId, userId, stopping);
             entry.Next.TrySetException(e);
@@ -157,25 +178,43 @@ public sealed class RekeyRunner : IHostedService
         }
         catch (Exception e)
         {
-            TaskCompletionSource<RekeySummary> failed;
-            TimeSpan wait;
-            int generation;
-            Task backoff;
-            lock (_lock)
+            var failure = e is OperationCanceledException && timeout.IsCancellationRequested
+                ? new TimeoutException($"Re-keying vault {entry.VaultId} took longer than {AttemptTimeout.TotalMinutes} min.", e)
+                : e;
+            Fail(entry, failure, stopping);
+        }
+    }
+
+    /// <summary>The awaiters of the attempt get its failure first; only then does the backoff begin, unless a
+    /// <see cref="RunAsync"/> came meanwhile, which ends it at once.</summary>
+    private void Fail(Entry entry, Exception e, CancellationToken stopping)
+    {
+        TaskCompletionSource<RekeySummary> failed;
+        lock (_lock)
+        {
+            failed = entry.Next;
+            entry.Next = NewAttempt();
+            entry.Failures++;
+        }
+
+        log.LogWarning("Re-keying vault {VaultId} failed ({Failures} in a row): {Message}", entry.VaultId, entry.Failures, e.Message);
+        failed.TrySetException(e);
+
+        lock (_lock)
+        {
+            if (entry.RunRequested)
             {
-                failed = entry.Next;
-                entry.Failures++;
-                wait = TimeSpan.FromMinutes(Math.Min(Math.Pow(2, entry.Failures - 1), MaxBackoff.TotalMinutes));
-                entry.State = State.Backoff;
-                // The awaiters of this attempt get its failure; a later RunAsync waits for the next one.
-                entry.Next = NewAttempt();
-                generation = ++entry.Generation;
-                // The wait counts from now, before anyone hears of the failure.
-                backoff = Task.Delay(wait, _time, stopping);
+                entry.RunRequested = false;
+                entry.State = State.Queued;
+                _queue.Writer.TryWrite(entry.VaultId);
+                return;
             }
 
-            _log.LogWarning("Re-keying vault {VaultId} failed ({Failures} in a row), trying again in {Minutes} min: {Message}", entry.VaultId, entry.Failures, wait.TotalMinutes, e.Message);
-            failed.TrySetException(e);
+            var wait = TimeSpan.FromMinutes(Math.Min(Math.Pow(2, entry.Failures - 1), MaxBackoff.TotalMinutes));
+            var generation = ++entry.Generation;
+            // The timer exists before the entry shows as backing off (IsRunning false).
+            var backoff = Task.Delay(wait, time, stopping);
+            entry.State = State.Backoff;
             _ = RequeueAfterAsync(entry, generation, backoff);
         }
     }
@@ -185,11 +224,11 @@ public sealed class RekeyRunner : IHostedService
     {
         try
         {
-            await _catalog.ForgetPendingAsync(vaultId, userId, stopping);
+            await catalog.ForgetPendingAsync(vaultId, userId, stopping);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            _log.LogWarning("Vault {VaultId} is gone but stays pending for user {UserId}: {Message}", vaultId, userId, e.Message);
+            log.LogWarning("Vault {VaultId} is gone but stays pending for user {UserId}: {Message}", vaultId, userId, e.Message);
         }
     }
 
