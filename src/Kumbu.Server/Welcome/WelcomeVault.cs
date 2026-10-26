@@ -28,8 +28,15 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
 
     private static readonly Lazy<IReadOnlyList<(string Name, string Content)>> Embedded = new(Load);
 
-    /// <summary>For tests: runs after the vault is created and before its notes are written.</summary>
-    internal Func<string, Task>? AfterVaultCreated { get; set; }
+    /// <summary>How long creating the vault may hold up the join, whose answer carries the recovery key: past it, the
+    /// creation counts as failed. Ten writes on a healthy MongoDB take well under a second.</summary>
+    internal TimeSpan Limit { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long removing a half-written vault may take on top of <see cref="Limit"/>.</summary>
+    internal TimeSpan CleanupLimit { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>For tests: runs after the vault is created and before its notes are written, with the bounded token.</summary>
+    internal Func<string, CancellationToken, Task>? AfterVaultCreated { get; set; }
 
     /// <summary>The embedded notes in text order: file name with <c>.md</c>, content with LF line ends.</summary>
     public static IReadOnlyList<(string Name, string Content)> Texts() => Embedded.Value;
@@ -37,22 +44,25 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
     public static string Fill(string content, string? publicUrl) =>
         content.Replace(Placeholder, string.IsNullOrEmpty(publicUrl) ? NoAddress : publicUrl.TrimEnd('/'), StringComparison.Ordinal);
 
-    /// <summary>Creates the vault and writes every note. Never throws, except when <paramref name="ct"/> is cancelled: it
-    /// logs, and removes a vault whose notes were not all written.</summary>
+    /// <summary>Creates the vault and writes every note, within <see cref="Limit"/>. Never throws, except when
+    /// <paramref name="ct"/> is cancelled: it logs, and removes a vault whose notes were not all written.</summary>
     public async Task CreateAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
     {
         UnlockedVault? vault = null;
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bounded.CancelAfter(Limit);
+        var token = bounded.Token;
         try
         {
-            vault = await catalog.CreateForUserAsync(Name, user.Id, userKey, ct, credentialReadAt);
-            if (AfterVaultCreated is { } hook) await hook(vault.Id);
+            vault = await catalog.CreateForUserAsync(Name, user.Id, userKey, token, credentialReadAt);
+            if (AfterVaultCreated is { } hook) await hook(vault.Id, token);
             var store = new EncryptedNoteStore(catalog, new UserCredential(user.Id, userKey), index);
             var now = time.GetUtcNow().UtcDateTime;
             var publicUrl = options.Value.PublicUrl;
             foreach (var (name, content) in Texts())
             {
                 var filled = Fill(content, publicUrl);
-                if (!await store.TryCreateAsync(new StoredNote(VaultPath.Root.Child(Name).Child(name), filled, 1, Writers.Seed, now, [], filled), ct))
+                if (!await store.TryCreateAsync(new StoredNote(VaultPath.Root.Child(Name).Child(name), filled, 1, Writers.Seed, now, [], filled), token))
                 {
                     throw new InvalidOperationException("A welcome note exists already.");
                 }
@@ -63,7 +73,7 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
             // Deliberately broad: the account exists by now, and an exception here would keep the recovery key from the user.
             // Only a cancellation the caller asked for goes on, and even then no half-written vault stays.
             var cancelled = e is OperationCanceledException && ct.IsCancellationRequested;
-            // The type, not the message, which may name the vault.
+            // The type, not the message, which may name the vault; a time-out reads as the cancellation it causes.
             if (!cancelled) log.LogWarning("Could not create the welcome vault for user {UserId}: {Reason}", user.Id, e.GetType().Name);
             if (vault is not null) await RemoveAsync(vault.Id, user.Id);
             if (cancelled) throw;
@@ -74,11 +84,13 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
     {
         try
         {
-            await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, CancellationToken.None);
+            using var limit = new CancellationTokenSource(CleanupLimit);
+            await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, limit.Token);
         }
         catch (Exception e)
         {
-            log.LogWarning("Could not remove the half-written welcome vault {VaultId} of user {UserId}: {Reason}", vaultId, userId, e.GetType().Name);
+            // Left over, it is an empty or partial vault "Welcome" the user can delete; the join must not wait longer.
+            log.LogWarning("Could not remove the half-written welcome vault of user {UserId}: {Reason}", userId, e.GetType().Name);
         }
     }
 

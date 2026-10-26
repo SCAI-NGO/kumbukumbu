@@ -21,7 +21,7 @@ An API key or a connection opens exactly the vaults, with exactly the rights, th
 
 - The running server works with your notes in memory; that is how search works. So whoever operates your Kumbu² server is trusted: choose who runs it.
 - Your AI's provider sees what your AI reads and writes, under the provider's own terms. This is not end-to-end encryption.
-- Search by meaning runs on the server itself, unless you choose an external provider for a vault (the vault's ⋯ menu → **Search by meaning…**). That provider then receives the vault's text.
+- Search by meaning runs on the server itself, unless your server offers an external provider and you choose it for a vault (then the vault's ⋯ menu → **Search by meaning…**). That provider then receives the vault's text.
 
 ## Deleting is for good
 

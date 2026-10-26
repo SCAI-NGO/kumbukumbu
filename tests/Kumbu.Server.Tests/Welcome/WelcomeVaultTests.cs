@@ -169,7 +169,7 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_failing_welcome_vault_never_fails_the_join()
+    public async Task A_user_deactivated_before_the_creation_gets_a_warning_and_no_vault()
     {
         var log = new CapturedLog();
         await using var logged = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
@@ -193,8 +193,8 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
     [Fact]
     public async Task A_vault_whose_notes_fail_is_removed_again()
     {
-        // A note that can't be written (here: the vault is deleted under it, as a MongoDB fault would leave it)
-        // must not leave a "Welcome" that later looks complete.
+        // A note that can't be written (here: one exists already, so TryCreateAsync refuses it) must not leave a
+        // "Welcome" that later looks complete; the vault itself is still there when the write fails.
         var log = new CapturedLog();
         await using var logged = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
         var username = NewUsername();
@@ -202,13 +202,49 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
         await users.CreateAsync(username, Password, Roles.User, Ct);
         var (user, userKey, readAt) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
         var welcome = logged.Services.GetRequiredService<WelcomeVault>();
-        welcome.AfterVaultCreated = id => logged.Services.GetRequiredService<VaultCatalog>().DeleteVaultsAsync([id], (_, _) => Task.CompletedTask, CancellationToken.None);
+        var catalog = logged.Services.GetRequiredService<VaultCatalog>();
+        var firstName = WelcomeVault.Texts()[0].Name;
+        welcome.AfterVaultCreated = async (_, token) =>
+        {
+            var store = new EncryptedNoteStore(catalog, new UserCredential(user.Id, userKey));
+            var path = Kumbu.Core.Paths.VaultPath.Root.Child(WelcomeVault.Name).Child(firstName);
+            Assert.True(await store.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "in the way", 1, "test", DateTime.UtcNow, []), token));
+        };
 
         await welcome.CreateAsync(user, userKey, readAt, Ct);
 
-        Assert.Single(log.Lines, l => l.Contains($"Could not create the welcome vault for user {user.Id}: ", StringComparison.Ordinal));
+        Assert.Single(log.Lines, l => l.Contains($"Could not create the welcome vault for user {user.Id}: InvalidOperationException", StringComparison.Ordinal));
+        Assert.DoesNotContain(await catalog.OpenForUserAsync(user.Id, userKey, Ct), v => v.Name == WelcomeVault.Name);
         Assert.Equal(0, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Owner == user.Id, cancellationToken: Ct));
     }
+
+    [Fact]
+    public async Task A_failing_welcome_vault_never_fails_the_join()
+    {
+        // MongoDB hangs while the vault is filled: the join still answers in time, with the recovery key and the
+        // cookie, and the half-written vault is gone.
+        var log = new CapturedLog();
+        await using var logged = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var welcome = logged.Services.GetRequiredService<WelcomeVault>();
+        welcome.Limit = TimeSpan.FromSeconds(1);
+        welcome.AfterVaultCreated = (_, token) => Task.Delay(Timeout.Infinite, token);
+
+        var adminName = NewUsername();
+        await logged.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+        var admin = await SignInAsync(logged, adminName);
+        using var invitation = await SendAsync(logged, HttpMethod.Post, "/api/admin/invitations", new { role = "user" }, admin);
+        var code = (await JsonAsync(invitation))["code"]!.GetValue<string>();
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        using var join = await SendAsync(logged, HttpMethod.Post, "/api/join", new { code, username = NewUsername(), password = Password });
+        started.Stop();
+
+        Assert.Equal(HttpStatusCode.OK, join.StatusCode);
+        Assert.False(string.IsNullOrEmpty((await JsonAsync(join))["recoveryKey"]!.GetValue<string>()));
+        Assert.True(started.Elapsed < welcome.Limit + welcome.CleanupLimit, $"The join took {started.Elapsed}");
+        Assert.Contains(log.Lines, l => l.Contains("Could not create the welcome vault for user ", StringComparison.Ordinal));
+        Assert.DoesNotContain(WelcomeVault.Name, await VaultNamesAsync(logged, SessionOf(join)));
+    }
+
     [Fact]
     public async Task A_cancellation_the_join_did_not_ask_for_never_fails_it()
     {
@@ -221,7 +257,7 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
         await users.CreateAsync(username, Password, Roles.User, Ct);
         var (user, userKey, readAt) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
         var welcome = logged.Services.GetRequiredService<WelcomeVault>();
-        welcome.AfterVaultCreated = _ => throw new OperationCanceledException();
+        welcome.AfterVaultCreated = (_, _) => throw new OperationCanceledException();
 
         await welcome.CreateAsync(user, userKey, readAt, CancellationToken.None);
 

@@ -7,7 +7,7 @@ Any AI client that speaks MCP can use Kumbu². There are two ways in, both on th
 
 Give each AI its own connection or key, named after it, with only the vaults it needs. What your AI can do once it is in: [[Your AI in Kumbu²]].
 
-Your Kumbu² address is the one in your browser's address bar right now. In the steps below it is written as {{server}}.
+Your Kumbu² address is {{server}}: the address you open Kumbu² at (in a browser, the one in the address bar).
 
 ## This is how you connect Claude (claude.ai, Desktop and mobile)
 

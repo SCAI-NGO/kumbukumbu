@@ -31,4 +31,4 @@ Once your AI is connected, say to it:
 
 ## This vault is yours
 
-Edit these notes, rename the vault or delete it (Settings → Vaults). It won't come back.
+Edit these notes as you like, or delete the whole vault (Settings → Vaults). It won't come back.

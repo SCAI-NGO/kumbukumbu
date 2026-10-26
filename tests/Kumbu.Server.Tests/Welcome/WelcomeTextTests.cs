@@ -86,7 +86,7 @@ public sealed partial class WelcomeTextTests
     [Fact]
     public void The_texts_are_ai_agnostic_outside_the_client_sections()
     {
-        string[] vendors = ["Claude", "ChatGPT", "Anthropic", "OpenAI"];
+        string[] vendors = ["Claude", "ChatGPT", "GPT", "Anthropic", "OpenAI", "Gemini", "Google", "Copilot", "Microsoft", "Mistral", "Cursor", "Llama"];
         foreach (var (name, content) in WelcomeVault.Texts())
         {
             var outside = content;
@@ -111,6 +111,16 @@ public sealed partial class WelcomeTextTests
             Assert.Equal(
                 content.Split("{{").Length - 1,
                 content.Split(WelcomeVault.Placeholder).Length - 1);
+        }
+    }
+
+    [Fact]
+    public void No_text_promises_renaming_a_vault()
+    {
+        // Kumbu² renames notes and folders, never a vault.
+        foreach (var (name, content) in WelcomeVault.Texts())
+        {
+            Assert.False(VaultRenameRegex().IsMatch(content), $"{name} promises renaming a vault");
         }
     }
 
@@ -144,6 +154,9 @@ public sealed partial class WelcomeTextTests
 
     [GeneratedRegex(@"\]\(([^)\s]+)\)")]
     private static partial Regex MarkdownLinkRegex();
+
+    [GeneratedRegex(@"renam\w* (the|this|your|a) (whole )?vault|vault\w* can be renamed", RegexOptions.IgnoreCase)]
+    private static partial Regex VaultRenameRegex();
 
     [GeneratedRegex(@"\bCOR\b", RegexOptions.IgnoreCase)]
     private static partial Regex CorRegex();

@@ -2,7 +2,7 @@
 
 ## Finding your way
 
-The drawer (the button at the top left) lists your vaults and their folders and notes. Make a new vault from the drawer with **New vault**, and a new note with the menu there.
+The drawer (the button at the top left) lists your vaults and their folders and notes. Make a new vault from the drawer with **New vault**, and a new note with **New note here** in the drawer's menu.
 
 ## Reading and writing
 
@@ -32,7 +32,7 @@ A checkpoint is a named state of a note, a folder or a whole vault that never ex
 
 ## Bringing notes in
 
-Upload Markdown files or whole folders from the drawer's menu with **Upload**.
+Upload Markdown files or whole folders with **Upload here** in the drawer's menu (or **Upload** at the bottom of the screen).
 
 ## Settings
 
