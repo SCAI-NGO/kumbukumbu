@@ -102,6 +102,104 @@
   <p class="visually-hidden" id="announcer" aria-live="polite"></p>
   <main class="panel" id="section" aria-label="The flower you picked"></main>
 
+  <!-- One vine, cut into a piece per release like the ground under the garden: side by side on wide screens,
+       one under the other on a phone. Opened blossoms are out, closed buds are still growing. -->
+  <section class="roadmap" id="roadmap" aria-labelledby="roadmap-title">
+    <h2 id="roadmap-title">What’s growing next</h2>
+    <p class="hand">dates are on the cautious side — we’d rather be early than late</p>
+    <ol class="road">
+      <li style="--i:0">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M50 10 C 64 6, 84 14, 100 10"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 6 30, 14 64, 10 100"/></svg>
+        <div class="stop p1" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M-8 20 C -18 34, -34 36, -42 30 C -34 18, -18 14, -8 20 Z"/>
+            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
+            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
+          </g></g></svg>
+          <b>v1 · 0.1.0</b><span>internally released · October ’26</span>
+          <div class="more">
+            <p>The base everything else grows from: your notes live in vaults, and any AI that speaks MCP (the common plug between AI apps and tools) can read, search and edit them.</p>
+            <p>Everything is stored encrypted, every change lands in the history, and checkpoints take you back to a good moment. We tried it out among ourselves first.</p>
+          </div></div>
+      </li>
+      <li style="--i:1">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 30 4, 66 16, 100 10"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 15 34, 5 66, 10 100"/></svg>
+        <div class="stop p2" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M8 20 C 18 34, 34 36, 42 30 C 34 18, 18 14, 8 20 Z"/>
+            <g transform="scale(.62)"><use href="#petals"/></g><circle class="heart" r="8"/>
+            <circle class="badge" cx="25" cy="25" r="10"/><path class="tick" d="M20 25 l4 4 l7 -8"/>
+          </g></g></svg>
+          <b>v2 · 0.2.0</b><span>first public release · October ’26</span>
+          <div class="more">
+            <p>The first release for everyone. Obsidian syncs after a short pairing code, Kumbu² installs as an app and keeps itself up to date, vaults go out and come back in as a ZIP, and a welcome vault shows you around.</p>
+            <p>You can see what your AI changed, and look into a checkpoint to take a thought back with you.</p>
+          </div></div>
+      </li>
+      <li style="--i:2">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 34 16, 70 4, 100 10"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 5 30, 15 70, 10 100"/></svg>
+        <div class="stop p3" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M-6 14 C -16 28, -32 30, -40 24 C -32 12, -16 8, -6 14 Z"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C 5 -10, 5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
+          </g></g></svg>
+          <b>v2.5 · 0.2.5</b><span>Boards &amp; attachments · coming late October / early November ’26</span>
+          <div class="more">
+            <p>A vault can become a Kanban board, a wall of columns where every card is simply a note. Markdown links count just as much as wiki links.</p>
+            <p>And attachments your AI can actually look at: pictures and PDFs arrive as what they are, not as a pile of text.</p>
+          </div></div>
+      </li>
+      <li style="--i:3">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 30 5, 64 15, 100 10"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 14 30, 6 64, 10 100"/></svg>
+        <div class="stop p4" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M6 14 C 16 28, 32 30, 40 24 C 32 12, 16 8, 6 14 Z"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
+          </g></g></svg>
+          <b>v3 · 0.3.0</b><span>Sign in your way · coming late November ’26</span>
+          <div class="more">
+            <p>More ways to sign in, and to keep your account safe: optional two-factor sign-in with your phone, passkeys instead of a password, and signing in with the account your team already uses (single sign-on).</p>
+            <p>And support for the Open Knowledge Format, optional for a vault or a single folder, for notes that like a firmer structure.</p>
+          </div></div>
+      </li>
+      <li style="--i:4">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 36 15, 68 5, 100 10"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 6 34, 14 66, 10 100"/></svg>
+        <div class="stop p1" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M-6 14 C -16 28, -32 30, -40 24 C -32 12, -16 8, -6 14 Z"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C 5 -10, 5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
+          </g></g></svg>
+          <b>v4 · 0.4.0</b><span>Think together · coming December ’26</span>
+          <div class="more">
+            <p>Share a vault with people you trust and work in it together.</p>
+            <p>Sharing reaches deep into how your notes are encrypted, so it gets its own security review before it ships.</p>
+          </div></div>
+      </li>
+      <li style="--i:5">
+        <svg class="vine vine-h pencil" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0 10 C 18 6, 38 14, 50 10 C 62 6, 72 3, 76 8 C 79 13, 73 15, 71 11"/></svg>
+        <svg class="vine vine-v pencil" viewBox="0 0 20 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M10 0 C 14 30, 6 60, 10 76 C 12 86, 16 92, 12 96 C 8 99, 6 94, 9 92"/></svg>
+        <div class="stop p2" role="button" tabindex="0" aria-haspopup="dialog">
+          <svg class="stop-art" viewBox="-46 -46 92 92" aria-hidden="true"><g class="sway"><g class="bloom pencil">
+            <path class="sprig" d="M6 14 C 16 28, 32 30, 40 24 C 32 12, 16 8, 6 14 Z"/>
+            <path class="bud-shut" d="M0 -26 C 13 -14, 14 2, 0 14 C -14 2, -13 -14, 0 -26 Z"/><path class="bud-fold" d="M0 -22 C -5 -10, -5 2, 0 12"/>
+            <path class="sepal" d="M0 16 C -11 14, -18 5, -17 -3 C -9 0, -3 6, 0 16 Z"/><path class="sepal" d="M0 16 C 11 14, 18 5, 17 -3 C 9 0, 3 6, 0 16 Z"/>
+          </g></g></svg>
+          <b>v5 · 1.0</b><span>Time Machine · coming January ’27</span>
+          <div class="more">
+            <p>Your vault as it was on any day you pick, without having made a checkpoint beforehand.</p>
+          </div></div>
+      </li>
+    </ol>
+  </section>
+
   <p class="closing">Kumbu² runs on servers people host for their friends, teams and communities — ask yours, or <a href="https://scai.world" target="_blank" rel="noopener">ask us</a>.</p>
 
   <footer class="links">

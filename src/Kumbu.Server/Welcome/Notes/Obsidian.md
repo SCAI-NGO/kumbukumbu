@@ -26,6 +26,6 @@ While you are online, changes arrive within seconds; otherwise on the next start
 
 ## Each device has its own key
 
-Every device gets a key of its own, named `<vault> – Obsidian <device>`, listed on the Access page (drawer → Access). Revoking it stops that device. By default it doesn't expire; the Connect Obsidian… dialog lets you choose 30, 90 or 365 days instead.
+Every device gets a key of its own, named `<vault> – Obsidian <device>`, listed on the Access page (drawer → Access). Revoking it stops that device. By default it doesn't expire; the Connect Obsidian… dialog lets you choose 30 days, 90 days or 1 year instead.
 
 Back to [[Start here]].

@@ -42,4 +42,10 @@ Upload Markdown files or whole folders with **Upload here** in the drawer's menu
 
 Choose a colour scheme, dark or light, and whether Read mode refreshes by itself.
 
+To give Kumbu² an icon of its own on your phone or laptop, see Settings → **Install as an app**.
+
+## Updates
+
+Kumbu² updates itself. When a new version is out, the app reloads by itself as you move to another page or come back to it, and you stay where you were. It never reloads while that would lose something you typed: while you write, a bar offers **Update**, which saves first. Settings → **About** shows the version you run.
+
 Back to [[Start here]].
