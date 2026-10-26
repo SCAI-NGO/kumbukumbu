@@ -40,7 +40,7 @@ With the Obsidian sync, export is for keeping a copy of one's own notes and for 
 
 ### Export one vault
 
-- Vault menu → **"Export as ZIP…"** (next to "Connect Obsidian…").
+- Vault menu → **"Export as ZIP"** (next to "Connect Obsidian…").
 - `Work 2026-10-26.zip`, holding one folder `Work/` with the vault's notes as `.md` files in their folders. Unpacked, it opens directly in Obsidian as a vault ("Open folder as vault"; Obsidian creates `.obsidian/` itself).
 - Only the current notes, as stored: no history, no trash, no checkpoints, no settings (decided by Chris).
 - Each file's modification time is the note's last write in Kumbu², so Obsidian's "modified" sort is right at once (*Claude's call*).
