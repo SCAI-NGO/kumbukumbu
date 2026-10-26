@@ -164,9 +164,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// Creates a vault owned by a user: its key wrapped by <paramref name="userKey"/> and nothing else, so the
     /// user's recovery key reaches it through the user key. Throws <see cref="VaultNameTakenException"/> if the
     /// user has a vault of that name (compared case-insensitively), also when another create won a race, and
-    /// <see cref="Accounts.CredentialsChangedException"/> if the user no longer exists or is inactive.
+    /// <see cref="Accounts.CredentialsChangedException"/> if the user no longer exists or is inactive, or, with
+    /// <paramref name="credentialReadAt"/> (when the session's password was read), if the user's credentials changed at
+    /// or after it: a rotation of the user key (<see cref="Accounts.UserKeyRotation"/>) may have made
+    /// <paramref name="userKey"/> one that no slot uses any more, and a vault under it would be lost.
     /// </summary>
-    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct)
+    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct, DateTime? credentialReadAt = null)
     {
         await EnsureReadyAsync(ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
@@ -215,9 +218,11 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 async (s, token) =>
                 {
                     // A real write to the owner's document, in the vault's transaction: it conflicts with a deletion of
-                    // the account running at the same time (retried, then refused), so no vault outlives its owner.
+                    // the account running at the same time (retried, then refused), so no vault outlives its owner, and
+                    // with a rotation of the user key, whose slot check then sees this vault's slot, or whose stamp
+                    // refuses it here.
                     var owner = await Users.UpdateOneAsync(
-                        s, u => u.Id == userId && u.Active, Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
+                        s, OwnerFilter(userId, credentialReadAt), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
                     if (owner.MatchedCount == 0) throw new Accounts.CredentialsChangedException();
                     await Vaults.InsertOneAsync(s, doc, cancellationToken: token);
                     return true;
@@ -955,6 +960,80 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             ],
             ct);
         _ready = true;
+    }
+
+    private static FilterDefinition<Accounts.UserDocument> OwnerFilter(string userId, DateTime? credentialReadAt)
+    {
+        var f = Builders<Accounts.UserDocument>.Filter;
+        var owner = f.Eq(u => u.Id, userId) & f.Eq(u => u.Active, true);
+        return credentialReadAt is { } readAt ? owner & (f.Eq(u => u.CredentialsChangedAt, null) | f.Lt(u => u.CredentialsChangedAt, readAt)) : owner;
+    }
+
+    /// <summary>The lookup of a user's slots under <paramref name="userKey"/>.</summary>
+    internal static byte[] UserSlotLookup(byte[] userKey, string userId) => UserLookup(userKey, userId);
+
+    /// <summary>What a rotation of the user key does to the vault slots (<see cref="Accounts.UserKeyRotation"/>).</summary>
+    internal sealed record PreparedUserSlots(
+        IReadOnlyList<Accounts.SlotRewrap> Rewraps, IReadOnlyList<MongoDB.Bson.ObjectId> Skipped, IReadOnlyList<MongoDB.Bson.ObjectId> Orphans, IReadOnlyList<string> VaultIds);
+
+    /// <summary>
+    /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
+    /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
+    /// under the new key, from the name in the vault's meta. Writes nothing. A slot that doesn't open is skipped and
+    /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
+    /// logged; one without a vault document is an orphan of a creation that failed half way, to be deleted if older
+    /// than <see cref="OrphanGrace"/>, else <see cref="Accounts.RotationConflictException"/>: it may belong to a
+    /// creation still under way. <c>VaultIds</c> are the vaults of the user's <c>user</c> slots, for stage 2.
+    /// Static, on the collections, so that the rotation needs no <see cref="VaultCatalog"/> (rekeying design §9).
+    /// </summary>
+    internal static async Task<PreparedUserSlots> PrepareUserSlotsAsync(
+        IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, DateTime now, ILogger log, CancellationToken ct)
+    {
+        var slots = await db.GetCollection<SlotDocument>("slots").Find(Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(oldUserKey, userId))).ToListAsync(ct);
+        var ids = slots.Select(s => s.Vault).Distinct().ToList();
+        var vaults = (await db.GetCollection<VaultDocument>("vaults").Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).ToListAsync(ct)).ToDictionary(v => v.Id);
+        var nameKey = VaultCrypto.Derive(newUserKey, VaultNameLabel, []);
+        var (rewraps, skipped, orphans, vaultIds) = (new List<Accounts.SlotRewrap>(), new List<MongoDB.Bson.ObjectId>(), new List<MongoDB.Bson.ObjectId>(), new List<string>());
+        foreach (var slot in slots)
+        {
+            byte[] vaultKey;
+            try
+            {
+                vaultKey = VaultCrypto.Open(UserKek(oldUserKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("A slot of vault {VaultId} matched the user key of user {UserId} but did not open; it is left as it is", slot.Vault, userId);
+                skipped.Add(slot.Id);
+                continue;
+            }
+
+            if (!vaults.TryGetValue(slot.Vault, out var vault))
+            {
+                if (now - slot.CreatedAt < OrphanGrace) throw new Accounts.RotationConflictException();
+                orphans.Add(slot.Id);
+                continue;
+            }
+
+            byte[]? nameId = null;
+            if (slot.Kind == SlotDocument.User)
+            {
+                vaultIds.Add(slot.Vault);
+                try
+                {
+                    var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), vault.Meta, $"vault:{vault.Id}"))!;
+                    nameId = VaultCrypto.Mac(nameKey, NormaliseVaultName(meta.Name));
+                }
+                catch (Exception e) when (e is CryptographicException or JsonException)
+                {
+                    log.LogWarning("The meta of vault {VaultId} of user {UserId} does not open; its slot is wrapped again without its name", slot.Vault, userId);
+                }
+            }
+
+            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind)), nameId));
+        }
+
+        return new PreparedUserSlots(rewraps, skipped, orphans, [.. vaultIds.Distinct()]);
     }
 }
 

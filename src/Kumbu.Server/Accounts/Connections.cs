@@ -431,6 +431,35 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         _ready = true;
     }
 
+    /// <summary>
+    /// For a rotation of the user key (<see cref="UserKeyRotation"/>), as <see cref="ApiKeys.PrepareResealAsync"/>: every
+    /// connection of the user, revoked and expired ones included, its meta sealed again under <paramref name="newUserKey"/>
+    /// and its name id recomputed where it is set; one whose meta doesn't open is logged and kept as it is. Writes nothing.
+    /// </summary>
+    internal static async Task<IReadOnlyList<MetaReseal>> PrepareResealAsync(
+        IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, ILogger log, CancellationToken ct)
+    {
+        var (oldKey, newKey) = (MetaKey(oldUserKey, userId), MetaKey(newUserKey, userId));
+        var result = new List<MetaReseal>();
+        foreach (var doc in await db.GetCollection<ConnectionDocument>(CollectionName).Find(c => c.User == userId).ToListAsync(ct))
+        {
+            try
+            {
+                var plain = VaultCrypto.Open(oldKey, doc.Meta, MetaContext(doc.Id));
+                var name = JsonSerializer.Deserialize<ConnectionMeta>(plain)!.Name;
+                result.Add(new MetaReseal(
+                    doc.Id, doc.Meta, doc.NameId, VaultCrypto.Seal(newKey, plain, MetaContext(doc.Id)), doc.NameId is null ? null : WriterNames.NameId(newUserKey, userId, name)));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("Connection {ConnectionId} of user {UserId} does not open with the user key; it is left as it is", doc.Id, userId);
+                result.Add(new MetaReseal(doc.Id, doc.Meta, doc.NameId, doc.Meta, doc.NameId));
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>) and,
     /// once authorised, the client.</summary>
     internal sealed record ConnectionMeta(

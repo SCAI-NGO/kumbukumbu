@@ -61,6 +61,7 @@ builder.Services.AddHostedService<VaultSweeper>();
 
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
+builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
 builder.Services.AddSingleton<Connections>();

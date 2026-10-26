@@ -175,7 +175,7 @@ public static class NoteApi
         // A vault is the top folder of its notes, so its name follows the rules of every other path segment.
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
-        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct);
+        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
         return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal));
     }
 

@@ -11,8 +11,13 @@ namespace Kumbu.Server.Accounts;
 /// the keys of their vaults; it is itself wrapped by the password (Argon2id) and by the recovery key. MongoDB
 /// holds the user key only wrapped, and never a password or recovery key.
 /// </summary>
-public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, Connections connections, TimeProvider time, ILogger<UserCatalog> log)
+public sealed class UserCatalog(
+    IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, Connections connections, TimeProvider time, ILogger<UserCatalog> log, UserKeyRotation? rotation = null)
 {
+    /// <summary>A recovery rotates the user key (rekeying design §2). Optional only so that tests can build a catalog
+    /// without one; the server registers it.</summary>
+    private readonly UserKeyRotation _rotation = rotation ?? new UserKeyRotation(db, kdf, time, Microsoft.Extensions.Logging.Abstractions.NullLogger<UserKeyRotation>.Instance);
+
     private const string KeyIdLabel = "kumbu/v1/user-key-id";
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
     private const int MaxUsernameLength = 64;
@@ -55,7 +60,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
 
         // Slots first, under a fresh id: if the username turns out to be taken they are removed again, and a
         // crash in between leaves only slots of no user, never a user without a way in.
-        await Slots.InsertManyAsync([await PasswordSlotAsync(id, userKey, password, ct), RecoverySlot(id, userKey, recoveryKey)], cancellationToken: ct);
+        await Slots.InsertManyAsync([await PasswordSlotAsync(kdf, id, userKey, password, Now, ct), RecoverySlot(id, userKey, recoveryKey, Now)], cancellationToken: ct);
         var user = new UserDocument
         {
             Id = id,
@@ -113,13 +118,20 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         return (user.ToUser(), userKey, readAt);
     }
 
+    /// <summary>As <see cref="RecoverWithKeyAsync"/>, for callers that need only the new recovery key.</summary>
+    public async Task<string?> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct) =>
+        (await RecoverWithKeyAsync(username, recoveryKey, newPassword, ct))?.RecoveryKey;
+
     /// <summary>
     /// Forgot password: with the recovery key, sets a new password, ends every session of the user, revokes every
-    /// API key and the tokens of every connection (<see cref="ConnectionReasons.Recovery"/>) and replaces the
-    /// recovery key, so the used one opens nothing any more. Returns the new recovery key, formatted for humans;
-    /// null if the user or key is unknown or wrong; <see cref="ArgumentException"/> if the new password is refused.
+    /// API key and the tokens of every connection (<see cref="ConnectionReasons.Recovery"/>), rotates the user key
+    /// (<see cref="UserKeyRotation"/>: the vaults are wrapped under a new one, and each is recorded for re-keying)
+    /// and replaces the recovery key, so the used one opens nothing any more. Returns the new recovery key, formatted
+    /// for humans, the user and the new user key; null if the user or key is unknown or wrong;
+    /// <see cref="ArgumentException"/> if the new password is refused; <see cref="RecoveryConflictException"/> if
+    /// something kept changing under the rotation, in which case the recovery key still works.
     /// </summary>
-    public async Task<string?> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
+    public async Task<(string RecoveryKey, User User, byte[] UserKey)?> RecoverWithKeyAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
     {
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
@@ -139,11 +151,10 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
 
         // The new recovery slot replaces exactly the one just opened, together with the new password: of two
         // recoveries racing with the same key only one gets through, and nobody is shown a key that doesn't work.
-        var newKey = RecoveryKey.New();
-        var replacement = new RecoveryReplacement(slot.Wrapped, RecoverySlot(user.Id, userKey, newKey));
-        if (!await SetPasswordAsync(user.ToUser(), userKey, newPassword, revokeApiKeys: true, ct, replacement)) return null;
-        log.LogInformation("User {Username} set a new password with their recovery key; the API keys and apps are revoked and the recovery key replaced", user.Username);
-        return RecoveryKey.Format(newKey);
+        if (await SetPasswordAsync(user.ToUser(), userKey, newPassword, revokeApiKeys: true, null, ct, new RecoveryReplacement(slot.Wrapped)) is not (true, { } rotated)) return null;
+        log.LogInformation(
+            "User {Username} set a new password with their recovery key; the API keys and apps are revoked, the user key rotated and the recovery key replaced", user.Username);
+        return (rotated.RecoveryKey, user.ToUser(), rotated.NewUserKey);
     }
 
     /// <summary>
@@ -163,8 +174,9 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
             return false;
         }
 
-        await SetPasswordAsync(user, userKey, newPassword, revokeApiKeys, ct);
-        return true;
+        // Only if the slot is still the one just opened: a rotation of the user key in between would otherwise be
+        // undone for the password, which would then open the old user key, which no vault slot uses any more.
+        return (await SetPasswordAsync(user, userKey, newPassword, revokeApiKeys, slot.Wrapped, ct)).Set;
     }
 
     /// <summary>
@@ -178,9 +190,13 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         var user = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
         // The password must open this very user key: a wrong key would leave a recovery slot that opens to
         // nothing, and the user would lose recovery unnoticed.
-        if (user is null || !await CheckPasswordAsync(userId, userKey, currentPassword, ct)) return null;
+        if (user is null || await FindSlotAsync(userId, UserSlotDocument.Password, ct) is not { Salt: not null } slot
+            || await OpenPasswordSlotAsync(slot, currentPassword, ct) is not { } opened || !CryptographicOperations.FixedTimeEquals(opened, userKey))
+        {
+            return null;
+        }
 
-        var recoveryKey = await ReplaceRecoveryKeyAsync(userId, userKey, ct);
+        if (await ReplaceRecoveryKeyAsync(userId, userKey, slot.Wrapped, ct) is not { } recoveryKey) return null;
         log.LogInformation("User {Username} has a new recovery key", user.Username);
         return recoveryKey;
     }
@@ -196,20 +212,31 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
     }
 
     /// <summary>
-    /// A new recovery key for <paramref name="userKey"/>, which the caller has checked is the user's. The slot is
-    /// replaced in one write, so there is always exactly one recovery slot: the old one until the write, the new
-    /// one after it.
+    /// A new recovery key for <paramref name="userKey"/>, which the caller has checked is the user's with the password
+    /// slot <paramref name="passwordUsed"/>. The slot is replaced in one write, so there is always exactly one recovery
+    /// slot: the old one until the write, the new one after it. Null, and nothing written, if the password slot has
+    /// changed since: a rotation of the user key may have committed, and the new recovery key would open the old one.
+    /// A rotation committing later writes the recovery slot too, so the two conflict.
     /// </summary>
-    private async Task<string> ReplaceRecoveryKeyAsync(string userId, byte[] userKey, CancellationToken ct)
+    private async Task<string?> ReplaceRecoveryKeyAsync(string userId, byte[] userKey, byte[] passwordUsed, CancellationToken ct)
     {
         var recoveryKey = RecoveryKey.New();
-        var slot = RecoverySlot(userId, userKey, recoveryKey);
-        await Slots.UpdateOneAsync(
-            s => s.User == userId && s.Kind == UserSlotDocument.Recovery,
-            Builders<UserSlotDocument>.Update.Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
-            new UpdateOptions { IsUpsert = true },
-            ct);
-        return RecoveryKey.Format(recoveryKey);
+        var slot = RecoverySlot(userId, userKey, recoveryKey, Now);
+        using var session = await db.Client.StartSessionAsync(cancellationToken: ct);
+        var replaced = await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                if (await Slots.Find(s, x => x.User == userId && x.Kind == UserSlotDocument.Password && x.Wrapped == passwordUsed).AnyAsync(token) is false) return false;
+                await Slots.UpdateOneAsync(
+                    s,
+                    x => x.User == userId && x.Kind == UserSlotDocument.Recovery,
+                    Builders<UserSlotDocument>.Update.Set(x => x.Wrapped, slot.Wrapped).Set(x => x.CreatedAt, slot.CreatedAt),
+                    new UpdateOptions { IsUpsert = true },
+                    token);
+                return true;
+            },
+            cancellationToken: ct);
+        return replaced ? RecoveryKey.Format(recoveryKey) : null;
     }
 
     /// <summary>
@@ -224,19 +251,23 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
             : null;
     }
 
-    /// <summary>The recovery slot that was opened (its sealed value) and the one to put in its place.</summary>
-    private sealed record RecoveryReplacement(byte[] Used, UserSlotDocument Slot);
+    /// <summary>The recovery slot that was opened (its sealed value): the rotation replaces it only if it is still that one.</summary>
+    private sealed record RecoveryReplacement(byte[] Used);
 
     /// <summary>
-    /// Sets the password, ends every session and, if asked, revokes every API key and connection token. With <paramref name="recovery"/>
-    /// the recovery slot is replaced in the same transaction as the password slot, only if it is still the one
-    /// that was opened; false (and no new password) if it isn't, or if a concurrent write got in the way.
+    /// Sets the password, ends every session and, if asked, revokes every API key and connection token. Without
+    /// <paramref name="recovery"/>, the password slot is replaced only if it is still <paramref name="passwordUsed"/>,
+    /// the one that was opened. With it, the user key is rotated (<see cref="UserKeyRotation"/>) in the one transaction that writes
+    /// the new password slot and the new recovery slot, the latter only if the recovery slot is still the one that was
+    /// opened. <c>Set</c> is false (and there is no new password) if a slot isn't as expected; <c>Rotation</c> is the
+    /// rotation of a recovery.
     /// </summary>
-    private async Task<bool> SetPasswordAsync(
-        User user, byte[] userKey, string password, bool revokeApiKeys, CancellationToken ct, RecoveryReplacement? recovery = null)
+    private async Task<(bool Set, PreparedRotation? Rotation)> SetPasswordAsync(
+        User user, byte[] userKey, string password, bool revokeApiKeys, byte[]? passwordUsed, CancellationToken ct, RecoveryReplacement? recovery = null)
     {
         var userId = user.Id;
-        var slot = await PasswordSlotAsync(userId, userKey, password, ct);
+        // Argon2 before the stamp only for a password change: a recovery's runs in the rotation's preparation, below.
+        var slot = recovery is null ? await PasswordSlotAsync(kdf, userId, userKey, password, Now, ct) : null;
         // Stamped before the new slot, so sessions of the old password are refused even if a crash leaves their
         // slots behind (a crash before the slot write only leaves the old password in place, signed out) ...
         await StampCredentialsChangedAsync(userId, ct);
@@ -251,38 +282,18 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
             await connections.RevokeAllTokensAsync(user, reason, ct);
         }
 
-        var passwordFilter = Builders<UserSlotDocument>.Filter.Where(s => s.User == userId && s.Kind == UserSlotDocument.Password);
-        var passwordUpdate = Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt);
-        if (recovery is null)
+        PreparedRotation? rotation = null;
+        if (slot is not null)
         {
-            await Slots.UpdateOneAsync(passwordFilter, passwordUpdate, new UpdateOptions { IsUpsert = true }, ct);
+            var replaced = await Slots.UpdateOneAsync(
+                s => s.User == userId && s.Kind == UserSlotDocument.Password && s.Wrapped == passwordUsed,
+                Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt),
+                cancellationToken: ct);
+            if (replaced.MatchedCount == 0) return (false, null);
         }
-        else
+        else if ((rotation = await RotateForRecoveryAsync(user, userKey, password, recovery!.Used, ct)) is null)
         {
-            using var session = await db.Client.StartSessionAsync(cancellationToken: ct);
-            session.StartTransaction();
-            try
-            {
-                await Slots.UpdateOneAsync(session, passwordFilter, passwordUpdate, new UpdateOptions { IsUpsert = true }, ct);
-                var filter = Builders<UserSlotDocument>.Filter;
-                var replaced = await Slots.UpdateOneAsync(
-                    session,
-                    filter.Eq(s => s.User, userId) & filter.Eq(s => s.Kind, UserSlotDocument.Recovery) & filter.Eq(s => s.Wrapped, recovery.Used),
-                    Builders<UserSlotDocument>.Update.Set(s => s.Wrapped, recovery.Slot.Wrapped).Set(s => s.CreatedAt, recovery.Slot.CreatedAt),
-                    cancellationToken: ct);
-                if (replaced.MatchedCount == 0)
-                {
-                    await session.AbortTransactionAsync(CancellationToken.None);
-                    return false;
-                }
-
-                await session.CommitTransactionAsync(CancellationToken.None);
-            }
-            catch (MongoException e) when (e.HasErrorLabel("TransientTransactionError"))
-            {
-                // A concurrent recovery wrote the same slots first. Not retried: the key it used is gone.
-                return false;
-            }
+            return (false, null);
         }
 
         // ... and again after it: a sign-in may have read the old slot between the first stamp and the write,
@@ -298,7 +309,32 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         }
 
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);
-        return true;
+        return (true, rotation);
+    }
+
+    /// <summary>
+    /// Step 3 of a recovery (rekeying design §2): the rotation, prepared after the first revocation and applied in its
+    /// own transaction, which is the only one that writes the new password and recovery slots. A conflict is prepared
+    /// again, up to <see cref="UserKeyRotation.Attempts"/> times; null if the recovery slot is no longer the one opened
+    /// (another recovery with this key won), <see cref="RecoveryConflictException"/> after the last conflict.
+    /// </summary>
+    private async Task<PreparedRotation?> RotateForRecoveryAsync(User user, byte[] userKey, string password, byte[] used, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var prepared = await _rotation.PrepareAsync(user, userKey, password, null, used, ct);
+                await _rotation.CommitAsync(prepared, ct);
+                return prepared;
+            }
+            catch (RotationConflictException)
+            {
+                if (!await Slots.Find(s => s.User == user.Id && s.Kind == UserSlotDocument.Recovery && s.Wrapped == used).AnyAsync(ct)) return null;
+                log.LogInformation("The recovery of user {Username} met a concurrent change (attempt {Attempt} of {Attempts})", user.Username, attempt, UserKeyRotation.Attempts);
+                if (attempt == UserKeyRotation.Attempts) throw new RecoveryConflictException();
+            }
+        }
     }
 
     private Task StampCredentialsChangedAsync(string userId, CancellationToken ct) =>
@@ -307,7 +343,10 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
     private Task<UserSlotDocument?> FindSlotAsync(string userId, string kind, CancellationToken ct) =>
         Slots.Find(s => s.User == userId && s.Kind == kind).FirstOrDefaultAsync(ct)!;
 
-    private async Task<byte[]?> OpenPasswordSlotAsync(UserSlotDocument slot, string password, CancellationToken ct)
+    private Task<byte[]?> OpenPasswordSlotAsync(UserSlotDocument slot, string password, CancellationToken ct) => OpenPasswordSlotAsync(kdf, slot, password, ct);
+
+    /// <summary>The user key in the password slot, or null if <paramref name="password"/> doesn't open it.</summary>
+    internal static async Task<byte[]?> OpenPasswordSlotAsync(Argon2Kdf kdf, UserSlotDocument slot, string password, CancellationToken ct)
     {
         // Argon2 refuses an empty password, and no stored password is empty.
         if (password.Length == 0) return null;
@@ -322,7 +361,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         }
     }
 
-    private async Task<UserSlotDocument> PasswordSlotAsync(string userId, byte[] userKey, string password, CancellationToken ct)
+    internal static async Task<UserSlotDocument> PasswordSlotAsync(Argon2Kdf kdf, string userId, byte[] userKey, string password, DateTime now, CancellationToken ct)
     {
         var salt = RandomNumberGenerator.GetBytes(Argon2Kdf.SaltBytes);
         return new UserSlotDocument
@@ -331,22 +370,22 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
             Kind = UserSlotDocument.Password,
             Salt = salt,
             Wrapped = VaultCrypto.Seal(await kdf.DeriveAsync(password, salt, ct), userKey, SlotContext(userId, UserSlotDocument.Password)),
-            CreatedAt = Now,
+            CreatedAt = now,
         };
     }
 
-    private UserSlotDocument RecoverySlot(string userId, byte[] userKey, byte[] recoveryKey) => new()
+    internal static UserSlotDocument RecoverySlot(string userId, byte[] userKey, byte[] recoveryKey, DateTime now) => new()
     {
         User = userId,
         Kind = UserSlotDocument.Recovery,
         Wrapped = VaultCrypto.Seal(RecoveryKek(recoveryKey, userId), userKey, SlotContext(userId, UserSlotDocument.Recovery)),
-        CreatedAt = Now,
+        CreatedAt = now,
     };
 
     private static byte[] RecoveryKek(byte[] recoveryKey, string userId) =>
         VaultCrypto.Derive(recoveryKey, RecoveryKekLabel, Encoding.UTF8.GetBytes(userId));
 
-    private static byte[] KeyId(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, KeyIdLabel, Encoding.UTF8.GetBytes(userId));
+    internal static byte[] KeyId(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, KeyIdLabel, Encoding.UTF8.GetBytes(userId));
 
     /// <summary>The associated data of a slot: it opens only for this user and this kind of credential.</summary>
     private static string SlotContext(string userId, string kind) => $"user:{userId}:{kind}";

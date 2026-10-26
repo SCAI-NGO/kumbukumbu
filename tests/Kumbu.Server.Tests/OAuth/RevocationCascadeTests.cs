@@ -85,13 +85,14 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         return response.StatusCode;
     }
 
-    /// <summary>The connection as its owner's list has it, read with the user key (a password change ends the sessions, not the key).</summary>
-    private async Task<ConnectionInfo> InfoAsync(OAuthFlow flow) =>
-        (await Service<Connections>().ListAsync(flow.Owner.User, flow.Owner.UserKey, Ct)).Single(c => c.Id == flow.ConnectionId);
+    /// <summary>The connection as its owner's list has it, read with the user key (a password change ends the sessions, not the key;
+    /// a recovery rotates the key, so it passes the new one).</summary>
+    private async Task<ConnectionInfo> InfoAsync(OAuthFlow flow, byte[]? userKey = null) =>
+        (await Service<Connections>().ListAsync(flow.Owner.User, userKey ?? flow.Owner.UserKey, Ct)).Single(c => c.Id == flow.ConnectionId);
 
-    private async Task<(ConnectionState, string?)> StateAsync(OAuthFlow flow)
+    private async Task<(ConnectionState, string?)> StateAsync(OAuthFlow flow, byte[]? userKey = null)
     {
-        var info = await InfoAsync(flow);
+        var info = await InfoAsync(flow, userKey);
         return (info.State, info.Reason);
     }
 
@@ -150,10 +151,11 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         var users = Service<UserCatalog>();
         var recoveryKey = (await users.RegenerateRecoveryKeyAsync(flow.Owner.User.Id, flow.Owner.UserKey, RestClient.Password, Ct))!;
 
-        Assert.NotNull(await users.RecoverAsync(flow.Owner.Username, recoveryKey, NewPassword, Ct));
+        var recovered = await users.RecoverWithKeyAsync(flow.Owner.Username, recoveryKey, NewPassword, Ct);
 
+        Assert.NotNull(recovered);
         await AssertDisconnectedAsync(flow, pair);
-        Assert.Equal((ConnectionState.NeedsReconnect, ConnectionReasons.Recovery), await StateAsync(flow));
+        Assert.Equal((ConnectionState.NeedsReconnect, ConnectionReasons.Recovery), await StateAsync(flow, recovered.Value.UserKey));
     }
 
     [Fact]

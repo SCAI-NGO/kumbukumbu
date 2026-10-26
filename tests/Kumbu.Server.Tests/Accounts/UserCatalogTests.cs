@@ -129,10 +129,14 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         await slots.InsertOneAsync(new UserSlotDocument { User = user.Id, Kind = UserSlotDocument.Session, Wrapped = [1, 2, 3] }, cancellationToken: Ct);
 
         // Typed by hand: lower case, spaces instead of dashes.
-        Assert.NotNull(await users.RecoverAsync("Chris", recoveryKey.ToLowerInvariant().Replace('-', ' '), NewPassword, Ct));
+        var recovered = await users.RecoverWithKeyAsync("Chris", recoveryKey.ToLowerInvariant().Replace('-', ' '), NewPassword, Ct);
 
+        Assert.NotNull(recovered);
         Assert.Null(await users.TrySignInAsync("chris", Password, Ct));
-        Assert.Equal(key, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);
+        // A recovery rotates the user key (rekeying design §2): the new password opens the new one.
+        var signedIn = (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey;
+        Assert.Equal(recovered.Value.UserKey, signedIn);
+        Assert.NotEqual(key, signedIn);
         Assert.False(await slots.Find(s => s.User == user.Id && s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
         Assert.Equal(1, await slots.CountDocumentsAsync(s => s.User == user.Id && s.Kind == UserSlotDocument.Password, cancellationToken: Ct));
     }
@@ -149,20 +153,22 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var (laptop, _) = await keys.CreateAsync(user, userKey, readAt, "laptop", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Write }, Ct);
         var (phone, _) = await keys.CreateAsync(user, userKey, readAt, "phone", new Dictionary<string, KeyRight> { [vault.Id] = KeyRight.Read }, Ct);
 
-        var newRecoveryKey = await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct);
+        var (newRecoveryKey, _, newUserKey) = (await users.RecoverWithKeyAsync("chris", oldRecoveryKey, NewPassword, Ct))!.Value;
 
-        Assert.NotNull(newRecoveryKey);
         Assert.NotEqual(oldRecoveryKey, newRecoveryKey);
         Assert.True(RecoveryKey.TryParse(newRecoveryKey, out _));
         Assert.Null(await keys.ResolveAsync(laptop, Ct));
         Assert.Null(await keys.ResolveAsync(phone, Ct));
-        Assert.All(await keys.ListAsync(user, userKey, Ct), k => Assert.NotNull(k.RevokedAt));
+        var listed = await keys.ListAsync(user, newUserKey, Ct);
+        Assert.Equal(2, listed.Count);
+        Assert.All(listed, k => Assert.NotNull(k.RevokedAt));
         Assert.Equal(1, await db.GetCollection<UserSlotDocument>("user_slots").CountDocumentsAsync(s => s.User == user.Id && s.Kind == UserSlotDocument.Recovery, cancellationToken: Ct));
 
-        // The used key opens nothing any more; the new one does, to the same user key.
+        // The used key opens nothing any more; the new one does, to a user key that opens the vault.
         Assert.Null(await users.RecoverAsync("chris", oldRecoveryKey, Password, Ct));
         Assert.NotNull(await users.RecoverAsync("chris", newRecoveryKey, Password, Ct));
-        Assert.Equal(userKey, (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey);
+        var signedIn = (await users.TrySignInAsync("chris", Password, Ct))!.Value.UserKey;
+        Assert.Equal([vault.Id], (await Vaults(db, TimeProvider.System).OpenForUserAsync(user.Id, signedIn, Ct)).Select(v => v.Id));
     }
 
     [Fact]
@@ -344,8 +350,9 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         Assert.NotNull(newRecoveryKey);
         Assert.NotEqual(oldRecoveryKey, newRecoveryKey);
         Assert.Null(await users.RecoverAsync("chris", oldRecoveryKey, NewPassword, Ct));
-        Assert.NotNull(await users.RecoverAsync("chris", newRecoveryKey, NewPassword, Ct));
-        Assert.Equal(key, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);
+        var recovered = await users.RecoverWithKeyAsync("chris", newRecoveryKey, NewPassword, Ct);
+        Assert.NotNull(recovered);
+        Assert.Equal(recovered.Value.UserKey, (await users.TrySignInAsync("chris", NewPassword, Ct))!.Value.UserKey);
     }
 
     [Fact]

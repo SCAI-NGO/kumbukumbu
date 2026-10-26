@@ -98,7 +98,7 @@ public static class AccountApi
         // POST with the code in the body, never in the path: request lines end up in logs.
         open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404);
         open.MapPost("/join", JoinAsync).Errors(400, 403, 409, 429);
-        open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 429);
+        open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 409, 429);
 
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/session", Session).Errors(401, 403);

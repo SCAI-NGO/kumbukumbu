@@ -369,6 +369,37 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         _ready = true;
     }
 
+    /// <summary>
+    /// For a rotation of the user key (<see cref="UserKeyRotation"/>): every key of the user, revoked and expired ones
+    /// included, with its meta sealed again under <paramref name="newUserKey"/> and its name id recomputed where it is
+    /// set. A meta that doesn't open is logged and kept as it is (new values equal to the old). Writes nothing.
+    /// Static, on the collection, so that <see cref="UserKeyRotation"/> needs neither this class nor its <see cref="VaultCatalog"/>,
+    /// as <see cref="ConnectionRevocation"/> does.
+    /// </summary>
+    internal static async Task<IReadOnlyList<MetaReseal>> PrepareResealAsync(
+        IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, ILogger log, CancellationToken ct)
+    {
+        var (oldKey, newKey) = (MetaKey(oldUserKey, userId), MetaKey(newUserKey, userId));
+        var result = new List<MetaReseal>();
+        foreach (var doc in await db.GetCollection<ApiKeyDocument>("api_keys").Find(k => k.User == userId).ToListAsync(ct))
+        {
+            try
+            {
+                var plain = VaultCrypto.Open(oldKey, doc.Meta, MetaContext(doc.Id));
+                var name = JsonSerializer.Deserialize<ApiKeyMeta>(plain)!.Name;
+                result.Add(new MetaReseal(
+                    doc.Id, doc.Meta, doc.NameId, VaultCrypto.Seal(newKey, plain, MetaContext(doc.Id)), doc.NameId is null ? null : WriterNames.NameId(newUserKey, userId, name)));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("API key {KeyId} of user {UserId} does not open with the user key; it is left as it is", doc.Id, userId);
+                result.Add(new MetaReseal(doc.Id, doc.Meta, doc.NameId, doc.Meta, doc.NameId));
+            }
+        }
+
+        return result;
+    }
+
     private sealed record ApiKeyMeta(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults);

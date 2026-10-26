@@ -104,6 +104,8 @@ The rotation must commit in step 3's transaction. Otherwise a crash could leave 
 
 A vault created with U while a rotation runs would get a slot under U's lookup, and would be lost. `CreateForUserAsync` (`VaultCatalog.cs:169–237`) inserts its slot before its transaction. It therefore takes the session's `credentialReadAt`, and its transaction requires `credentialsChangedAt < credentialReadAt`, as an API key's does. That transaction writes the user document (`:219–221`), and so does Apply, so the two conflict: either Apply's slot check sees the new slot, or the creation is refused.
 
+A password change or a new recovery key made with U while a rotation runs would wrap U again after Apply, and the password or recovery key would then open a key no vault slot uses. So `ChangePasswordAsync` replaces the password slot only if it is still the one it opened, and `RegenerateRecoveryKeyAsync` writes the recovery slot in a transaction that first checks the password slot is still the one it opened. Apply replaces the password slot (conditional on the one it read, `PasswordUsed`) and writes the recovery slot, so a change committed first fails Apply's condition, and one committed after fails its own; concurrent ones conflict on the slot. `RotateAsync` checks the password against the very slot it then replaces, on every attempt, so a retry never brings back a password changed meanwhile.
+
 ## 3. Stage 2 — re-key a vault
 
 `Vaults/VaultCatalog.Rekey.cs`. Only a vault with a `user` slot of this user that opens with the given user key can be re-keyed. That excludes dev-token vaults, which have no owner session (Ruling 20).
@@ -410,7 +412,7 @@ The manual check, recorded in the task report: the 2000-note test against a mong
      - `RotationConflictException`: "Something changed while re-encrypting; try again." (`RotateAsync`'s third conflict, 409).
 3. **Task 15 brief, "mark the old `UnlockedVault` retired": replaced by the per-vault lock held for the whole run, the key-id check and the database fences** (§3). A stale writer could otherwise destroy a note after the run. `AtRevision` filters only on `{_id, rev}`, which resealing keeps, so a stale replace would leave a K′ pid with a K blob. A stale cached key returns `null` at `VaultCatalog.cs:778` and does not throw. A stale key whose meta doesn't open throws a `CryptographicException` at `:784`. For a re-keyed id, both answer "This vault was just re-encrypted; try again."
 4. **Task 14 interface** (§9): `PreparedRotation` carries:
-   - the password and recovery slots, and `RecoveryUsed`;
+   - the password and recovery slots, `RecoveryUsed`, and `PasswordUsed` (added by Task 14: "a slot on its old `wrapped`" needs the password slot's, and the first version of §9 had no field for it, so a concurrent password change could not be detected);
    - the kept session slot;
    - the expected ids of the vault slots, API keys and connections;
    - the skipped and orphan slot ids;
@@ -444,7 +446,8 @@ public sealed record PreparedRotation(
     byte[] OldLookup, byte[] NewLookup, byte[] UserKeyId,
     IReadOnlyList<SlotRewrap> VaultSlots, IReadOnlyList<ObjectId> SkippedSlotIds, IReadOnlyList<ObjectId> OrphanSlotIds,
     IReadOnlyList<MetaReseal> ApiKeys, IReadOnlyList<MetaReseal> Connections,
-    IReadOnlyList<string> VaultIds);
+    IReadOnlyList<string> VaultIds,
+    byte[]? PasswordUsed);   // the password slot that was read (null: none); Apply's password write is conditional on it
 public sealed class RotationConflictException() : Exception("Something changed while re-encrypting; try again.");
 public sealed class RecoveryConflictException() : Exception("Something changed during the recovery; try again.");  // 409, in ApiErrors
 public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvider time, ILogger<UserKeyRotation> log)
@@ -463,7 +466,7 @@ Plus:
 
 Task 14 comes before 15a, which defines `SlotDocument.UserNext`. So Task 14 matches vault slots **by lookup, whatever their kind**, and wraps each one under the AAD of its own kind, `slot:{vaultId}:{slot.Kind}`. Only a `user` slot gets a name hash. A `user-next` slot, once 15a creates them, is then covered without a change to Task 14; its test is added in 15a.
 
-Helpers stay internal to their classes and are called only by `UserKeyRotation`: `VaultCatalog.PrepareUserSlotsAsync`, `ApiKeys.PrepareResealAsync`, `Connections.PrepareResealAsync` and `Sessions.PrepareKeep`. The constructor drops the brief's `VaultCatalog` parameter and works on the collections directly, as `ConnectionRevocation` does, to avoid a dependency cycle. If the cycle doesn't arise, keeping the parameter is fine.
+Helpers stay internal to their classes and are called only by `UserKeyRotation`: `VaultCatalog.PrepareUserSlotsAsync`, `ApiKeys.PrepareResealAsync`, `Connections.PrepareResealAsync` and `Sessions.PrepareKeepAsync` (static, on the collections). A meta that doesn't open comes as a `MetaReseal` whose new values are its old ones, so its id still counts in Apply's check of the user's ids. `UserCatalog` takes the rotation as an optional last constructor parameter (`UserKeyRotation? rotation = null`, built from its own `db`, `kdf` and `time` when absent), so existing test callers compile unchanged; `Program.cs` registers it. The constructor drops the brief's `VaultCatalog` parameter and works on the collections directly, as `ConnectionRevocation` does, to avoid a dependency cycle. If the cycle doesn't arise, keeping the parameter is fine.
 
 ### Task 15a — the run (`Re-key a vault in batches, revoking the access that can't be re-wrapped`)
 

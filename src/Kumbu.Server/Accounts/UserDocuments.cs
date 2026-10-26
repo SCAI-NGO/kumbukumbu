@@ -87,6 +87,11 @@ public sealed class UserDocument
     [BsonElement("sessionsStarted")]
     public long SessionsStarted { get; set; }
 
+    /// <summary>The ids of the user's vaults still to be re-keyed (stage 2) after their user key was rotated
+    /// (<see cref="UserKeyRotation"/>), which records every vault of the user here.</summary>
+    [BsonElement("rekeyPending"), BsonIgnoreIfNull]
+    public List<string>? RekeyPending { get; set; }
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 
