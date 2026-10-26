@@ -1,0 +1,71 @@
+@font-face { font-family: Caveat; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(fonts/caveat-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: Caveat; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(fonts/caveat-latin-700-normal.woff2) format("woff2"); }
+@font-face { font-family: Fraunces; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/fraunces-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: Fraunces; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/fraunces-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: Nunito; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/nunito-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: Nunito; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/nunito-latin-600-normal.woff2) format("woff2"); }
+
+/* The latin subset covers "²" and "—"; the drawn footer flower and the arrows are SVG, not glyphs. */
+:root {
+  --paper: #fbf8f2; --ink: #4a4553; --graphite: #6d6676; --soft: #8a8394;
+  --a: #cfe3c9; --a-deep: #9cc293;   /* sage */
+  --b: #f8d5c2; --b-deep: #eaa98a;   /* peach */
+  --c: #dcd3f0; --c-deep: #b2a3dc;   /* lavender */
+  --stem: #8fae86;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 400 19.5px/1.65 Nunito, system-ui, sans-serif;
+  background-image: radial-gradient(rgba(0,0,0,.025) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+
+header { text-align: center; margin-top: 28px; }
+h1 {
+  font: 600 clamp(48px, 9vw, 84px)/1 Fraunces, Georgia, serif; margin: 0; letter-spacing: -.02em;
+  opacity: 0; animation: rise 1s .1s ease-out forwards;
+}
+h1 sup { font-size: .45em; color: var(--c-deep); }
+.tag {
+  font-size: clamp(20px, 3vw, 26px); color: var(--graphite); max-width: 620px; margin: 14px auto 0;
+  opacity: 0; animation: rise 1s .5s ease-out forwards;
+}
+
+svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin: 8px auto 0; overflow: visible; }
+.pencil { filter: url(#pencil); }
+.ground { fill: none; stroke: var(--graphite); stroke-width: 1.6; stroke-linecap: round;
+  stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s .6s ease-out forwards; }
+.stem { fill: none; stroke: var(--stem); stroke-width: 3; stroke-linecap: round;
+  stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.6s ease-in-out forwards; }
+.leaf { stroke: var(--graphite); stroke-width: 1.2; fill: var(--a);
+  transform-box: fill-box; transform: scale(0); animation: pop .7s ease-out forwards; }
+.bud .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
+  animation: pop .9s cubic-bezier(.3,1.6,.5,1) forwards; }
+.bud .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+.petal { stroke: var(--graphite); stroke-width: 1.2; fill: var(--c); }
+.bud .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--c-deep); }
+.soon { font: 700 38px Caveat, cursive; fill: var(--ink); text-anchor: start;
+  opacity: 0; animation: rise 1s 3.4s ease-out forwards; }
+
+.links { text-align: center; margin-top: 56px; font: 700 28px Caveat, cursive;
+  opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
+.links a { white-space: nowrap; color: var(--ink); text-decoration: none; padding: 2px 6px;
+  background: linear-gradient(transparent 62%, var(--b) 62%, var(--b) 90%, transparent 90%); }
+.links a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
+.links a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.links .dot { display: inline-block; width: 24px; height: 24px; margin: 0 14px; vertical-align: -3px; }
+
+@media (max-width: 480px) { .links { font-size: 24px; } .links .dot { display: none; } .links a { display: block; width: max-content; margin: 8px auto; } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes pop { to { transform: scale(1); } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; } }
