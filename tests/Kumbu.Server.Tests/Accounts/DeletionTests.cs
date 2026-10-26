@@ -40,7 +40,14 @@ public sealed class DeletionTests(MongoFixture fixture)
 
     private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private string? _listPath;
+
+    private DeletionList List() =>
+        new(Options.Create(new KumbuOptions { Deletions = new DeletionsOptions { Path = _listPath } }), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<DeletionList>());
+
+    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+
+    private string TempListPath() => _listPath = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
@@ -495,6 +502,65 @@ public sealed class DeletionTests(MongoFixture fixture)
         await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
         await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Spät", lea.Id, key, Ct));
         await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task Both_deletions_list_the_id()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, _, _) = await SignedInAsync("lea");
+            var (bob, bobKey, _) = await SignedInAsync("bob");
+
+            var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+            Assert.True(await Deletion().DeleteOwnAccountAsync(bob, bobKey, Password, "bob", Ct));
+
+            Assert.True(deleted!.Listed);
+            Assert.Equal(new HashSet<string> { lea.Id, bob.Id }, await List().ReadAsync(Ct));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task An_unwritable_list_never_blocks_a_deletion()
+    {
+        // The path is a file, not a directory: nothing can be written below it.
+        var file = Path.GetTempFileName();
+        _listPath = file;
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, key, _) = await SignedInAsync("lea");
+            var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+
+            var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+            Assert.NotNull(deleted);
+            Assert.False(deleted.Listed);
+            Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+            await AssertGoneAsync(diary.Id);
+            Assert.Contains(_log.Lines, l => l.StartsWith("Error", StringComparison.Ordinal) && l.Contains(lea.Id, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public async Task Without_a_list_the_receipt_says_it_is_not_listed()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, _, _) = await SignedInAsync("lea");
+
+        var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.False(deleted!.Listed);
     }
 
     [Fact]

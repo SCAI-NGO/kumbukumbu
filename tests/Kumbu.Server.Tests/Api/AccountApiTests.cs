@@ -621,6 +621,32 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_receipt_says_listed_when_the_deletion_list_is_configured()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var configured = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Deletions:Path", dir));
+            using var http = Client(configured);
+            var target = await RestClient.NewAsync(configured);
+            var adminName = NewUsername();
+            await configured.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+            using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = adminName, password = Password }, ip: NewIp(), http: http);
+
+            using var deleted = await SendAsync(
+                HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: SessionOf(signIn), http: http);
+
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            Assert.True((await JsonAsync(deleted))["listed"]!.GetValue<bool>());
+            Assert.Contains(target.User.Id, await File.ReadAllTextAsync(Path.Combine(dir, "deleted-users"), Ct), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task The_receipt_carries_the_privacy_contact_when_configured()
     {
         await using var configured = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Privacy:Contact", "privacy@example.org"));

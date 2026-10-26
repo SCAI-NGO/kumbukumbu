@@ -10,8 +10,8 @@ namespace Kumbu.Server.Accounts;
 public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0);
 
 /// <summary>A user an admin deleted, for the receipt: ids, the usernames, the time and the counts; no content and no
-/// vault or note name.</summary>
-public sealed record DeletedUser(string Id, string Username, string Display, string DeletedBy, DateTime DeletedAt, DeletionSummary Summary);
+/// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>.</summary>
+public sealed record DeletedUser(string Id, string Username, string Display, string DeletedBy, DateTime DeletedAt, DeletionSummary Summary, bool Listed);
 
 /// <summary>
 /// Deleting for good: one vault (its owner), one's own account, or any other user's account (an admin, for a privacy
@@ -24,7 +24,7 @@ public sealed record DeletedUser(string Id, string Username, string Display, str
 /// their own), and the remaining admins see and can revoke an open one, as after a deactivation.
 /// </para>
 /// </summary>
-public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalog users, TimeProvider time, ILogger<Deletion> log)
+public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, TimeProvider time, ILogger<Deletion> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -65,6 +65,8 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
         var summary = await DeleteAccountAsync(user.Id, Builders<UserDocument>.Filter.Where(u => u.Id == user.Id && u.Role != Roles.PrimaryAdmin), ct)
             ?? throw new NotPermittedException("Your account changed meanwhile; nothing was deleted.");
+        // After the commit, and whatever happens to the request now: the deletion is done either way.
+        await list.AddAsync(user.Id, CancellationToken.None);
         log.LogInformation(
             "User {Username} deleted their account: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
             user.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
@@ -92,10 +94,11 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
         // Checked again in the transaction: the target can't have become primary admin meanwhile.
         var summary = await DeleteAccountAsync(userId, Builders<UserDocument>.Filter.Where(u => u.Id == userId && u.Role != Roles.PrimaryAdmin), ct)
             ?? throw new NotPermittedException("The user changed meanwhile; nothing was deleted.");
+        var listed = await list.AddAsync(userId, CancellationToken.None);
         log.LogInformation(
             "{Admin} deleted user {Username} ({UserId}): {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Documents} documents",
             acting.Username, target.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Documents);
-        return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary);
+        return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed);
     }
 
     private static bool ConfirmsUsername(string typed, string username) => string.Equals(typed.Trim(), username, StringComparison.OrdinalIgnoreCase);
