@@ -35,6 +35,7 @@ const MoveDialog = lazy(loadMoveDialog);
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 const TrashSheet = lazy(() => import("./TrashSheet"));
 const CheckpointsSheet = lazy(() => import("./CheckpointsSheet"));
+const ActivitySheet = lazy(() => import("./ActivitySheet"));
 const loadSearch = () => import("../search/SearchSheet");
 const SearchSheet = lazy(loadSearch);
 
@@ -104,7 +105,7 @@ export default function MobileShell() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
-  const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "checkpoints"; vault: string } | null>(null);
+  const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "activity" | "checkpoints"; vault: string } | null>(null);
   // The drawer opens over the note only, never over a sheet or dialog; a swipe closes it only while it is on top.
   const swipe = useEdgeSwipe(
     overlay === "tree",
@@ -209,6 +210,8 @@ export default function MobileShell() {
           <Suspense>
             {vaultSheet.kind === "trash" ? (
               <TrashSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
+            ) : vaultSheet.kind === "activity" ? (
+              <ActivitySheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} onOpenTrash={() => setVaultSheet({ kind: "trash", vault: vaultSheet.vault })} />
             ) : (
               <CheckpointsSheet vault={vaultSheet.vault} onClose={() => setVaultSheet(null)} />
             )}

@@ -253,16 +253,29 @@ public static class NoteApi
     }
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
-    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner.</summary>
+    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner and the Activity sheet. A version
+    /// of a note at this path that is in the trash now is found there too (never <c>current</c>).</summary>
     private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
-        var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note, kinds, ct));
+        var note = await store.GetAsync(notePath, ct);
+        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note ?? throw await MissingAsync(store, notePath, ct), kinds, ct));
 
         // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
-        var found = NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version)
-            ?? throw ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        var found = note is null ? null : NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version);
+        if (found is null)
+        {
+            found = (await store.ListTrashAsync(notePath, ct))
+                .Where(t => t.Note.Path == notePath)
+                .SelectMany(t => NoteHistory.Versions(t.Note))
+                .FirstOrDefault(v => v.Version == version) is { } trashed ? trashed with { Current = false } : null;
+        }
+
+        if (found is null)
+        {
+            throw note is null ? await MissingAsync(store, notePath, ct) : ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        }
+
         return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current, await kinds.OfAsync(found.Writer, ct)));
     }
 
