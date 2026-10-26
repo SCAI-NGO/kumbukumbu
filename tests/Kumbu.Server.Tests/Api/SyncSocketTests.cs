@@ -172,6 +172,20 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_ticket_of_a_key_revoked_since_opens_nothing()
+    {
+        var user = await NewAsync(Api);
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        var ticket = await TicketAsync(user, key);
+        var keys = Api.Services.GetRequiredService<ApiKeys>();
+        Assert.True(await keys.RevokeAsync(user.User, Assert.Single(await keys.ListAsync(user.User, user.UserKey, Ct)).Id, Ct));
+
+        var refused = await Assert.ThrowsAnyAsync<Exception>(() => ConnectAsync(ticket));
+
+        Assert.Contains("401", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_request_without_an_upgrade_is_400()
     {
         var user = await NewAsync(Api);

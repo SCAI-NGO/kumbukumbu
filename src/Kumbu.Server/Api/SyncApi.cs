@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
@@ -59,10 +60,15 @@ public static class SyncApi
     }
 
     /// <summary>The upgrade; 401 for an unknown, used or expired ticket. Hints go out until the socket closes.</summary>
-    private static async Task<IResult> SocketAsync(HttpContext http, string? ticket, SyncTickets tickets, SyncHub hub)
+    private static async Task<IResult> SocketAsync(HttpContext http, string? ticket, SyncTickets tickets, SyncHub hub, ApiKeys keys)
     {
         if (!http.WebSockets.IsWebSocketRequest) return ApiErrors.Result(StatusCodes.Status400BadRequest, "This is a WebSocket; connect with an upgrade and a ticket from POST /api/ws-ticket.");
-        if (ticket is null || tickets.Take(ticket) is not { } grant) return ApiErrors.Result(StatusCodes.Status401Unauthorized, "This ticket is not valid (any more); ask for a new one.");
+        // The key is asked again: revoked or expired in the seconds since the ticket was made, it gets no socket.
+        if (ticket is null || tickets.Take(ticket) is not { } grant || !await keys.IsActiveAsync(grant.KeyId, http.RequestAborted))
+        {
+            return ApiErrors.Result(StatusCodes.Status401Unauthorized, "This ticket is not valid (any more); ask for a new one.");
+        }
+
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         await hub.RunAsync(socket, grant, http.RequestAborted);
         return Results.Empty;
