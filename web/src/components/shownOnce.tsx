@@ -74,7 +74,20 @@ export function LeaveDialog({
  * Copies `value`, then says so for two seconds: the button reads "Copied" with a check, and a polite status
  * announces it (the button keeps its name, so it is not announced twice). The announcement never holds the value. A failed copy is the caller's to explain.
  */
-export function CopyButton({ value, label, className, onResult }: { value: string; label: string; className: string; onResult(copied: boolean): void }) {
+export function CopyButton({
+  value,
+  label,
+  name = label,
+  className,
+  onResult,
+}: {
+  value: string;
+  label: string;
+  /** What a screen reader hears when `label` alone would not say what is copied; it should start with the label. */
+  name?: string;
+  className: string;
+  onResult(copied: boolean): void;
+}) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -95,7 +108,7 @@ export function CopyButton({ value, label, className, onResult }: { value: strin
 
   return (
     <>
-      <button type="button" onClick={() => void copy()} aria-label={label} className={className}>
+      <button type="button" onClick={() => void copy()} aria-label={name} className={className}>
         {copied ? (
           <span aria-hidden className="inline-flex items-center justify-center gap-1.5">
             <Check size={16} strokeWidth={2.5} aria-hidden />

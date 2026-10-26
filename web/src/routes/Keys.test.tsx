@@ -28,6 +28,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, vaults),
     "GET /api/keys": () => json(200, [revoked, listed]),
+    "GET /api/connections": () => json(200, []),
     ...overrides,
   });
 }

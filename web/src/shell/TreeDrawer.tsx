@@ -85,7 +85,7 @@ function AccountRow() {
     <nav aria-label="Account" className="flex flex-wrap items-center gap-x-1">
       <Link to="/keys" onClick={close} className={link}>
         <KeyRound size={16} aria-hidden className="text-muted" />
-        Keys
+        Access
       </Link>
       <Link to="/settings" onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />

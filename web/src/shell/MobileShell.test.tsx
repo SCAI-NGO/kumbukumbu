@@ -301,17 +301,17 @@ describe("the shell", () => {
     expect(within(switcher).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("links to keys and settings, and to admin only for admins", async () => {
+  it("links to access and settings, and to admin only for admins", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
-    expect(within(account).getByRole("link", { name: "Keys" })).toHaveAttribute("href", "/keys");
+    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/keys");
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
   it.each([
-    ["Keys", "API keys"],
+    ["Access", "Access"],
     ["Settings", "Settings"],
     ["Admin", "Users"],
   ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
@@ -409,7 +409,7 @@ describe("the shell", () => {
   });
 
   it.each([
-    ["/keys", "API keys"],
+    ["/keys", "Access"],
     ["/settings", "Settings"],
     ["/admin/users", "Users"],
     ["/admin/invitations", "Invitations"],

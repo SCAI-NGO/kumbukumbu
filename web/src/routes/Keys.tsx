@@ -6,6 +6,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AccountScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
 
@@ -22,31 +23,41 @@ export default function Keys() {
   // The new key lives here, in component state only, until the reveal is done.
   const [created, setCreated] = useState<{ name: string; key: string } | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
+  // While a connector URL is shown, it has the page to itself, as a new key has.
+  const [revealing, setRevealing] = useState(false);
 
   if (created) {
     return (
-      <AccountScreen title="API keys">
+      <AccountScreen title="Access">
         <KeyReveal name={created.name} value={created.key} onDone={() => setCreated(null)} />
       </AccountScreen>
     );
   }
 
   return (
-    <AccountScreen title="API keys">
-      <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
-      <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
-        New key
-      </button>
+    <AccountScreen title="Access">
+      {!revealing && (
+        <section aria-labelledby="keys-title" className="flex min-w-0 flex-col gap-6">
+          <h2 id="keys-title" className="text-[22px] font-bold text-text">
+            API keys
+          </h2>
+          <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
+          <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
+            New key
+          </button>
 
-      {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
-      {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
-      {keys.data && keys.data.length > 0 && (
-        <ul className="flex flex-col gap-3">
-          {keys.data.map((key) => (
-            <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
-          ))}
-        </ul>
+          {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
+          {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
+          {keys.data && keys.data.length > 0 && (
+            <ul className="flex flex-col gap-3">
+              {keys.data.map((key) => (
+                <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
+              ))}
+            </ul>
+          )}
+        </section>
       )}
+      <Connections onRevealChange={setRevealing} />
 
       {creating && (
         <NewKeyDialog
