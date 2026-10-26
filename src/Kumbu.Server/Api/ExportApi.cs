@@ -74,7 +74,9 @@ public static class ExportApi
                 foreach (var note in notes)
                 {
                     var entry = zip.CreateEntry(vault + "/" + string.Join('/', note.Path.Segments.Skip(1)), CompressionLevel.Optimal);
-                    entry.LastWriteTime = new DateTimeOffset(DateTime.SpecifyKind(note.LastWriteAt, DateTimeKind.Utc));
+                    // A ZIP entry's time has no zone: unpackers read it as local time, as zip tools write it. So the
+                    // server's local clock, which on a server in UTC is UTC.
+                    entry.LastWriteTime = new DateTimeOffset(DateTime.SpecifyKind(note.LastWriteAt, DateTimeKind.Utc)).ToLocalTime();
                     await using (var stream = await entry.OpenAsync(ct)) await stream.WriteAsync(Encoding.UTF8.GetBytes(note.Content), ct);
                     await chunks.DrainAsync(body, ct);
                 }
