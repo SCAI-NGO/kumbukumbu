@@ -18,6 +18,8 @@ Write `[[Note name]]` to link to another note, as in Obsidian; links are looked 
 
 Search finds notes by their words, and also by their meaning, so a search for "holiday plans" finds a note about "summer trip to Crete" too, even in another language.
 
+What did a note say before? Switch on **Include earlier versions** below the search field: it also finds words that are only in an earlier version, and opens that version next to today's text.
+
 ## History
 
 Every note keeps its last 10 earlier versions: the note's ⋯ menu → **History**. Look at any of them and restore it.

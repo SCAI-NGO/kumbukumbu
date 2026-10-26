@@ -14,8 +14,9 @@ public static class Writers
 }
 
 /// <summary>
-/// Writes by one writer close together in time (concept §4): each note gets one version per changeset,
-/// whichever tool wrote it. A state without a changeset (a restore, a seed) never joins one.
+/// Writes by one writer close together in time (concept §4): each note usually gets one version per changeset,
+/// whichever tool wrote it (a write that keeps the current state, such as an upload's, can leave two). A state without
+/// a changeset (a restore, a seed) never joins one.
 /// </summary>
 public sealed record Changeset(string Id, DateTime Started)
 {
@@ -36,6 +37,20 @@ public sealed record Changeset(string Id, DateTime Started)
         && now - latest.LastWrite < Idle && now - latest.Changeset.Started < MaxLength
             ? latest.Changeset
             : New(now);
+
+    /// <summary>
+    /// For <see cref="INoteStore.LatestChangesetAsync"/>: the newest changeset of <paramref name="writer"/> among a
+    /// vault's current note states, moves and trash records, with its time. Moves and removals count, so removing two
+    /// notes in a row is one changeset even without another write.
+    /// </summary>
+    public static (Changeset Changeset, DateTime LastWrite)? Latest(
+        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer) =>
+        notes.Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer).Select(n => (n.Changeset!, n.LastWriteAt))
+            .Concat(trash.Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
+            .Concat(moves.Where(m => m.Changeset is not null && Writers.Identity(m.MovedBy) == writer).Select(m => (m.Changeset!, m.MovedAt)))
+            .OrderByDescending(x => x.Item2)
+            .Select(x => ((Changeset, DateTime)?)x)
+            .FirstOrDefault();
 }
 
 /// <summary>An earlier state of a note: its content, who wrote it when, and in which changeset.</summary>
@@ -60,4 +75,6 @@ public sealed record StoredNote(
     public string Version => VersionToken.Of(Content);
 }
 
-public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt);
+/// <param name="Changeset">The writer's changeset the removal belongs to; null for a restore, or a removal recorded
+/// before trash records carried one.</param>
+public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null);

@@ -35,6 +35,42 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_version_of_a_removed_note_is_still_readable_from_the_trash()
+    {
+        var user = await UserAsync();
+        var (first, second, _) = await TwoVersionsAsync(user);
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md"));
+        Assert.True(removed.IsSuccessStatusCode);
+
+        using var old = await user.GetAsync(user.Url("plan.md") + $"?version={first}");
+        using var last = await user.GetAsync(user.Url("plan.md") + $"?version={second}");
+        using var current = await user.GetAsync(user.Url("plan.md"));
+        using var unknown = await user.GetAsync(user.Url("plan.md") + "?version=nope");
+
+        Assert.Equal(HttpStatusCode.OK, old.StatusCode);
+        Assert.Equal("# Plan\n\nZebras first.\n", Text(await JsonAsync(old), "content"));
+        Assert.Equal("# Plan\n\nLions now.\n", Text(await JsonAsync(last), "content"));
+        Assert.False((await JsonAsync(last))["current"]!.GetValue<bool>());
+        // The note itself stays gone, and so does a version the trash doesn't have.
+        Assert.Equal(HttpStatusCode.NotFound, current.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_key_reads_no_version_of_a_removed_note()
+    {
+        var user = await UserAsync();
+        var (first, _, agent) = await TwoVersionsAsync(user);
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("plan.md"));
+        Assert.True(removed.IsSuccessStatusCode);
+
+        // The trash is the owner's: a key could never read a removed note's text, and still can't.
+        using var old = await user.GetAsync(user.Url("plan.md") + $"?version={first}", bearer: agent);
+
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
     public async Task The_history_lists_each_versions_writer_time_and_size()
     {
         var user = await UserAsync();

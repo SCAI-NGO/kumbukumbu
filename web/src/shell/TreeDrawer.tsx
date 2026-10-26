@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -124,13 +124,13 @@ function AccountRow() {
 
 /**
  * The drawer from the left: the active vault's tree, then the vault switcher and the account row at the bottom. The
- * vault's menu also opens its trash and its checkpoints (`onVaultSheet`), as sheets over the drawer.
+ * vault's menu also opens its trash, its activity and its checkpoints (`onVaultSheet`), as sheets over the drawer.
  */
 export default function TreeDrawer(props: {
   onNewNote(folder: string): void;
   onNewVault(): void;
   onMove(subject: MoveSubject): void;
-  onVaultSheet(sheet: { kind: "trash" | "checkpoints"; vault: string }): void;
+  onVaultSheet(sheet: { kind: "trash" | "activity" | "checkpoints"; vault: string }): void;
 }) {
   const { onNewNote, onNewVault, onMove, onVaultSheet } = props;
   const { activeVault, currentPath, expandedFolders, toggleFolder, setOverlay } = useEditor();
@@ -148,6 +148,7 @@ export default function TreeDrawer(props: {
     ...(activeVault
       ? [
           { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
+          { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
           { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
           // Downloads at once, so no ellipsis: that would promise a dialog.

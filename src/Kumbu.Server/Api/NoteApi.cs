@@ -100,6 +100,12 @@ public sealed record SearchResultView(string Path, string Address, int StartLine
 /// all with <c>mode=meaning</c>). <c>notice</c>: a sentence when the ranking isn't what was asked for.</summary>
 public sealed record SearchView(IReadOnlyList<SearchResultView> Results, int NotIndexed, string? Notice);
 
+/// <summary>A section of an earlier version: <c>version</c> opens with <c>?version=</c> on the note; lines as a search
+/// result's. <c>before</c>: the version before it, null when there was none or it is no longer kept (<c>beforeLost</c>).
+/// <c>writer</c> without the tool ("liz", not "liz (mv)"), <c>writerKind</c> as on a note.</summary>
+public sealed record EarlierResultView(
+    string Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before, bool BeforeLost, string? WriterKind);
+
 /// <summary>A note whose last write is by one of the user's agents (<c>writer</c>, the API key's or connection's name).</summary>
 public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version);
 
@@ -138,6 +144,7 @@ public static class NoteApi
         api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
         api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
@@ -253,16 +260,31 @@ public static class NoteApi
     }
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
-    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner.</summary>
-    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner and the Activity sheet. A version
+    /// of a note at this path that is in the trash now is found there too (never <c>current</c>), for a session only: the
+    /// trash is the owner's, and keys never read a removed note's text.</summary>
+    private static async Task<Ok<NoteView>> ReadAsync(
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
-        var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note, kinds, ct));
+        var note = await store.GetAsync(notePath, ct);
+        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note ?? throw await MissingAsync(store, notePath, ct), kinds, ct));
 
         // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
-        var found = NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version)
-            ?? throw ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        var found = note is null ? null : NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version);
+        if (found is null && caller.Kind == CallerKind.Session)
+        {
+            found = (await store.ListTrashAsync(notePath, ct))
+                .Where(t => t.Note.Path == notePath)
+                .SelectMany(t => NoteHistory.Versions(t.Note))
+                .FirstOrDefault(v => v.Version == version) is { } trashed ? trashed with { Current = false } : null;
+        }
+
+        if (found is null)
+        {
+            throw note is null ? await MissingAsync(store, notePath, ct) : ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        }
+
         return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current, await kinds.OfAsync(found.Writer, ct)));
     }
 
@@ -412,6 +434,43 @@ public static class NoteApi
     /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
     /// <c>path</c> narrows the search to a vault, folder or note; <c>n</c> results, 1 to 50, default 10.
     /// </summary>
+    /// <summary>
+    /// Search in earlier versions: the sections of the notes' history (not their current text) that hold every word of
+    /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
+    /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
+    /// </summary>
+    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    {
+        var query = q?.Trim() ?? "";
+        if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
+        var max = n ?? DefaultResults;
+        if (max is < 1 or > MaxResults) throw ApiErrors.BadRequest($"n is 1 to {MaxResults}.");
+        var scope = VaultPath.Root;
+        if (path is not null && (!VaultPath.TryParse(path, out scope) || path.Contains('\\')))
+        {
+            throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
+        }
+
+        var notes = new List<StoredNote>();
+        if (!scope.IsRoot && await store.GetAsync(scope, ct) is { } single) notes.Add(single);
+        else
+        {
+            if (!scope.IsRoot) await RequireVaultAsync(store, scope, ct);
+            foreach (var p in await store.ListNotesUnderAsync(scope, ct))
+            {
+                if (await store.GetAsync(p, ct) is { } note) notes.Add(note);
+            }
+        }
+
+        var views = new List<EarlierResultView>();
+        foreach (var h in EarlierSearch.Find(notes, query, max, ct))
+        {
+            views.Add(new EarlierResultView(h.Path.Value, h.Version, h.WrittenAt, h.Writer, h.StartLine, h.EndLine, h.Snippet, h.Before, h.BeforeLost, await kinds.OfAsync(h.Writer, ct)));
+        }
+
+        return TypedResults.Ok(views.ToArray());
+    }
+
     private static async Task<Ok<SearchView>> SearchAsync(string? q, string? mode, string? path, int? n, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";

@@ -23,7 +23,7 @@ Every write names the version your AI read. If the note changed in the meantime,
 - Its writes carry the name of its key or connection, so you see which of your agents wrote what.
 - When you open a note, a banner shows what your agents changed since your last visit, with the changes highlighted.
 - While a note is open, a bar tells you that it was changed elsewhere.
-- The vault's ⋯ menu → **Activity** lists the changes in a vault, grouped by session, each with a side-by-side comparison.
+- The vault's ⋯ menu → **Activity** lists every change by you, your devices and your agents, a session at a time, and compares each note side by side with the version before or with today's text.
 
 What you change in Obsidian counts as yours, not as an agent's.
 

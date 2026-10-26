@@ -57,12 +57,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
         await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
-            ? v.Notes.Values
-                .Select(n => n.Note)
-                .Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer)
-                .OrderByDescending(n => n.LastWriteAt)
-                .Select(n => ((Changeset, DateTime)?)(n.Changeset!, n.LastWriteAt))
-                .FirstOrDefault()
+            ? Changeset.Latest(v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, writer)
             : null;
 
     /// <summary>A path marked damaged is read from MongoDB again first, so a repair or removal in the database
@@ -133,7 +128,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
             foreach (var current in batch.Trashes)
             {
-                if (await TrashInAsync(session, vault, current, by, at, ct) is not { } trashed) return Refuse(current.Path);
+                if (await TrashInAsync(session, vault, current, by, at, batch.Changeset, ct) is not { } trashed) return Refuse(current.Path);
                 apply.Add(trashed);
             }
 
@@ -157,7 +152,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 var id = ObjectId.GenerateNewId();
                 if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
 
-                var move = new MoveRecord(current.Path, target.Path, by, at);
+                var move = new MoveRecord(current.Path, target.Path, by, at, batch.Changeset);
                 var moveId = ObjectId.GenerateNewId();
                 await catalog.Moves.InsertOneAsync(
                     session,
@@ -185,7 +180,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
         if (await VaultAsync(current.Path, ct) is not { } vault) return false;
-        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, ct), ct);
+        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, null, ct), ct);
     }
 
     /// <summary>
@@ -395,13 +390,13 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// <summary>Within a transaction: deletes the note if it is still at <c>current.Revision</c> and keeps it in
     /// the trash. Returns the change to the working set, or null if the note changed.</summary>
     private async Task<Action?> TrashInAsync(
-        IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
+        IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, DateTime deletedAt, Changeset? changeset, CancellationToken ct)
     {
         if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
         var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
         if (deleted.DeletedCount == 0) return null;
 
-        var trashed = new TrashedNote(current, deletedBy, deletedAt);
+        var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset);
         var trashId = ObjectId.GenerateNewId();
         await catalog.Trash.InsertOneAsync(
             session,

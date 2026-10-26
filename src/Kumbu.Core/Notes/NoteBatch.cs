@@ -17,6 +17,9 @@ public sealed class NoteBatch
     /// <summary>A new note, where none exists.</summary>
     public List<StoredNote> Creates { get; } = [];
 
+    /// <summary>The writer's changeset, recorded with every move and trashed note of the batch; null for a restore.</summary>
+    public Changeset? Changeset { get; init; }
+
     public bool IsEmpty => Replaces.Count == 0 && Moves.Count == 0 && Trashes.Count == 0 && Creates.Count == 0;
 
     /// <summary>Every path the batch writes.</summary>
