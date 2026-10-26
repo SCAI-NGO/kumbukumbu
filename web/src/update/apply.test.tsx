@@ -173,6 +173,21 @@ describe("applying an update", () => {
     expect(sessionStorage.getItem("kumbu.update.restore")).toBeNull();
   });
 
+  it("restores the editor's scroll position once, not on the next time in Write mode", async () => {
+    v.app = NEWER;
+    sessionStorage.setItem("kumbu.update.reloadedFor", NEWER);
+    sessionStorage.setItem("kumbu.update.restore", JSON.stringify({ mode: "write", scrollTop: 240 }));
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    expect((await screen.findByLabelText("Markdown source")).scrollTop).toBe(240);
+
+    await act(() => useEditor.getState().endWrite());
+    await screen.findByRole("article");
+    act(() => useEditor.getState().setMode("write"));
+
+    expect((await screen.findByLabelText("Markdown source")).scrollTop).toBe(0);
+  });
+
   it("lets the notice go after 4 seconds", async () => {
     vi.useFakeTimers();
     try {

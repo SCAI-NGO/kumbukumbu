@@ -135,7 +135,13 @@ export default function NoteView({ path }: { path: string }) {
   );
   // A reload into a new release (update/apply.ts) asks where the reader is, and finds them there again afterwards:
   // the mode, and how far down the note (Read mode's page, or Write mode's source). Once, when the note is shown.
-  const [editorScroll, setEditorScroll] = useState<number | undefined>(undefined);
+  // For the editor once, when it next mounts: back in Write mode later, it starts at the top as usual.
+  const editorScroll = useRef<number | undefined>(undefined);
+  const takeEditorScroll = useCallback(() => {
+    const top = editorScroll.current;
+    editorScroll.current = undefined;
+    return top;
+  }, []);
   useEffect(() => {
     registerScrollTop(() => (useEditor.getState().mode === "write" ? document.getElementById("markdown-source") : scroller.current)?.scrollTop ?? 0);
     return () => registerScrollTop(null);
@@ -147,7 +153,7 @@ export default function NoteView({ path }: { path: string }) {
     const restore = takeRestore();
     if (!restore) return;
     if (restore.mode === "write") {
-      setEditorScroll(restore.scrollTop);
+      editorScroll.current = restore.scrollTop;
       useEditor.getState().setMode("write");
     } else if (scroller.current) {
       scroller.current.scrollTop = restore.scrollTop;
@@ -236,10 +242,10 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <LoadBoundary fallback={<EditorLoadFailed />}>
           {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} scrollTop={editorScroll} />
+            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
           ) : (
             <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} scrollTop={editorScroll} />
+              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
             </Suspense>
           )}
         </LoadBoundary>

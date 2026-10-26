@@ -52,3 +52,12 @@ test("checkVersion swallows a network error", async () => {
   await expect(checkVersion()).resolves.toBeUndefined();
   expect(useUpdate.getState().available).toBeNull();
 });
+
+test("the same header again changes nothing, so nothing re-renders", () => {
+  useUpdate.getState().report("0.2.0+a6362ec");
+  const before = useUpdate.getState();
+
+  useUpdate.getState().report("0.2.0+a6362ec");
+
+  expect(useUpdate.getState()).toBe(before);
+});

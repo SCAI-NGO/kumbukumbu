@@ -18,13 +18,14 @@ interface UpdateState {
   markUpdated(semver: string | null): void;
 }
 
-export const useUpdate = create<UpdateState>()((set) => ({
+export const useUpdate = create<UpdateState>()((set, get) => ({
   server: null,
   available: null,
   failed: null,
   updated: null,
+  // Every API response reports: the same version again changes nothing, so nothing re-renders.
   report: (server) => {
-    if (!server) return;
+    if (!server || server === get().server) return;
     set({ server, available: newerOnServer(appVersion, server) });
   },
   fail: (v) => set({ failed: v }),

@@ -23,13 +23,13 @@ export default function MarkdownEditor({
   path,
   note,
   elsewhere,
-  scrollTop,
+  takeScrollTop,
 }: {
   path: string;
   note: NoteView;
   elsewhere?: ReturnType<typeof useChangedElsewhere>;
-  /** Where the source starts scrolled to: after a reload into a new release, where the writer was. */
-  scrollTop?: number;
+  /** Where the source starts scrolled to, asked once on mount: after a reload into a new release, where the writer was. */
+  takeScrollTop?: () => number | undefined;
 }) {
   const save = useSaveNote(path);
   const queryClient = useQueryClient();
@@ -47,10 +47,10 @@ export default function MarkdownEditor({
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
   const navigate = useNavigate();
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const initialScroll = useRef(scrollTop);
+  const [initialScroll] = useState(() => takeScrollTop?.());
   useLayoutEffect(() => {
-    if (initialScroll.current && textarea.current) textarea.current.scrollTop = initialScroll.current;
-  }, []);
+    if (initialScroll && textarea.current) textarea.current.scrollTop = initialScroll;
+  }, [initialScroll]);
   const [diff, setDiff] = useState(false);
   // A version written elsewhere is shown, never put in place of the user's text; "Keep writing" hides it.
   const [dismissed, setDismissed] = useState<string | null>(null);
