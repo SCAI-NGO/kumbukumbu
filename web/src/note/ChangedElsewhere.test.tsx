@@ -103,6 +103,7 @@ describe("deviceOf", () => {
   it("is the part of the key name after Obsidian, or the whole label", () => {
     expect(deviceOf("Work – Obsidian Android-7Q")).toBe("Android-7Q");
     expect(deviceOf("liz")).toBe("liz");
+    expect(deviceOf("Work – Obsidian My Obsidian Phone")).toBe("My Obsidian Phone");
   });
 });
 
@@ -270,6 +271,7 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
 
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated: you changed this note in Obsidian (Laptop)");
+    expect(document.querySelector("[data-changed]")?.getAttribute("data-writer")).toBe("you, in Obsidian (Laptop)");
   });
 
   it("tries each new version once when reading it fails, rather than asking again and again", async () => {

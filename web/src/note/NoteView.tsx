@@ -129,7 +129,8 @@ export default function NoteView({ path }: { path: string }) {
       setRefreshFailed(null);
       if (fresh.data.version === note.data.version) return;
       keepScroll.current = top;
-      setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
+      // The tint names who wrote, as the bar does: the user's own device is "you", not the key's name.
+      setRefreshed({ lines: changedLines(before, fresh.data.content), writer: device ? `you, in Obsidian (${deviceOf(writer)})` : writer, version: fresh.data.version });
       setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : writer) : null);
     },
     [note, links.data, path, queryClient],

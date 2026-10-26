@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation } from "@tanstack/react-query";
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -22,7 +21,9 @@ function left(ms: number) {
 /**
  * Pairing a vault with Obsidian (sync spec §3): the plugin and the server to type in, how long the device's key
  * lasts, and a code valid once for ten minutes, which the plugin exchanges for that key. The code lives in this
- * component only; a new one is asked for on opening, on "New code" and when the expiry changes.
+ * component only; a new one is asked for on opening, on "New code" and when the expiry changes. Requests go one at a
+ * time, and only the newest answer is shown: each code replaces the one before, so an older answer is dead already.
+ * The countdown runs from when the answer came, by the seconds the server gave, not by this browser's clock.
  */
 export default function ConnectObsidianDialog({ vault, onClose }: { vault: string; onClose(): void }) {
   const id = useId();
@@ -30,11 +31,32 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
   const server = window.location.origin;
   const [expiresInDays, setExpiresInDays] = useState(0);
   const [now, setNow] = useState(() => Date.now());
-  const pairing = useMutation({
-    mutationFn: (days: number) =>
-      call(api.POST("/api/vaults/{vault}/pairing", { params: { path: { vault } }, body: { expiresInDays: days === 0 ? null : days } })),
-  });
-  const { mutate } = pairing;
+  const [code, setCode] = useState<{ code: string; deadline: number } | null>(null);
+  const [pending, setPending] = useState(0);
+  const [error, setError] = useState<unknown>(null);
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const latest = useRef(0);
+
+  const mutate = useCallback(
+    (days: number) => {
+      const n = ++latest.current;
+      setPending((p) => p + 1);
+      queue.current = queue.current.then(async () => {
+        try {
+          const answer = await call(api.POST("/api/vaults/{vault}/pairing", { params: { path: { vault } }, body: { expiresInDays: days === 0 ? null : days } }));
+          if (n !== latest.current) return;
+          setError(null);
+          setCode({ code: answer.code, deadline: Date.now() + Number(answer.expiresIn) * 1000 });
+          setNow(Date.now());
+        } catch (e) {
+          if (n === latest.current) setError(e);
+        } finally {
+          setPending((p) => p - 1);
+        }
+      });
+    },
+    [vault],
+  );
 
   useEffect(() => mutate(expiresInDays), [mutate, expiresInDays]);
   useEffect(() => {
@@ -42,9 +64,9 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
     return () => clearInterval(timer);
   }, []);
 
-  const code = pairing.data && !pairing.isPending ? pairing.data : null;
-  const remaining = code ? Date.parse(code.expiresAt) - now : 0;
-  const valid = code !== null && remaining > 0;
+  const isPending = pending > 0;
+  const remaining = code ? code.deadline - now : 0;
+  const valid = code !== null && !isPending && remaining > 0;
 
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
@@ -93,10 +115,10 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
                   <p className="text-sm text-muted">valid for {left(remaining)} · single use</p>
                 </>
               ) : (
-                pairing.isPending && <p className="text-sm text-muted">Asking for a code…</p>
+                isPending && <p className="text-sm text-muted">Asking for a code…</p>
               )}
-              {pairing.isError && <FormError>{errorText(pairing.error)}</FormError>}
-              <button type="button" onClick={() => mutate(expiresInDays)} disabled={pairing.isPending} className={`${secondaryButtonClass} mt-1`}>
+              {error !== null && !isPending && <FormError>{errorText(error)}</FormError>}
+              <button type="button" onClick={() => mutate(expiresInDays)} disabled={isPending} className={`${secondaryButtonClass} mt-1`}>
                 New code
               </button>
             </div>
@@ -107,7 +129,10 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
           The device's key. A new choice makes a new code.
         </ExpiryPicker>
 
-        <p className="text-sm text-muted">Each device gets its own key, named "{vault} – Obsidian &lt;device&gt;". You can revoke it under API keys.</p>
+        <p className="text-sm text-muted">
+          Each device gets its own key, named "{vault} – Obsidian &lt;device&gt;". You can revoke it under API keys. Re-encrypting this vault disconnects
+          its Obsidian devices; connect them again afterwards.
+        </p>
 
         <button type="button" onClick={onClose} className={primaryButtonClass}>
           Done

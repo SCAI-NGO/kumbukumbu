@@ -60,6 +60,7 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
 
         Assert.Matches("^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$", code["code"]!.GetValue<string>());
         Assert.NotNull(code["expiresAt"]);
+        Assert.Equal(600, code["expiresIn"]!.GetValue<int>());
     }
 
     [Fact]

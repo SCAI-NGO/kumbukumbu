@@ -10,10 +10,20 @@ const workTree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [],
 
 let codes = 0;
 let bodies: unknown[] = [];
+let inFlight = 0;
+let maxInFlight = 0;
+/** While set, each code request waits for it: a slow server. */
+let gate: Promise<void> | null = null;
+/** The server's clock against the browser's, in ms. */
+let skew = 0;
 
 function api() {
   codes = 0;
   bodies = [];
+  inFlight = 0;
+  maxInFlight = 0;
+  gate = null;
+  skew = 0;
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: true }]),
@@ -26,8 +36,11 @@ function api() {
     "GET /api/changes": () => json(200, []),
     "POST /api/vaults/Work/pairing": async (r) => {
       bodies.push(await r.json());
-      codes++;
-      return json(201, { code: codes === 1 ? "K7QM-4XDA" : `N3WC-0D${codes}0`, expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+      const n = ++codes;
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      if (gate) await gate;
+      inFlight--;
+      return json(201, { code: n === 1 ? "K7QM-4XDA" : `N3WC-0D${n}0`, expiresAt: new Date(Date.now() + skew + 10 * 60_000).toISOString(), expiresIn: 600 });
     },
   });
 }
@@ -65,6 +78,7 @@ describe("Connect Obsidian", () => {
     expect(await within(dialog).findByText("K7QM-4XDA")).toBeInTheDocument();
     expect(dialog).toHaveTextContent(/valid for (10:00|9:59) · single use/);
     expect(dialog).toHaveTextContent('Each device gets its own key, named "Work – Obsidian <device>". You can revoke it under API keys.');
+    expect(dialog).toHaveTextContent("Re-encrypting this vault disconnects its Obsidian devices; connect them again afterwards.");
     expect(bodies).toEqual([{ expiresInDays: null }]);
   });
 
@@ -95,5 +109,32 @@ describe("Connect Obsidian", () => {
     await u.click(within(dialog).getByRole("button", { name: "New code" }));
 
     await waitFor(() => expect(bodies).toEqual([{ expiresInDays: null }, { expiresInDays: 90 }, { expiresInDays: 90 }]));
+  });
+
+  it("asks for one code at a time and shows the newest, never one already replaced", async () => {
+    api();
+    const { u, dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+    let open!: () => void;
+    gate = new Promise((r) => (open = r));
+
+    await u.click(within(dialog).getByRole("radio", { name: "90 days" }));
+    await u.click(within(dialog).getByRole("radio", { name: "30 days" }));
+    await waitFor(() => expect(codes).toBe(2));
+    act(() => open());
+
+    await waitFor(() => expect(codes).toBe(3));
+    expect(await within(dialog).findByText("N3WC-0D30")).toBeInTheDocument();
+    expect(maxInFlight).toBe(1);
+    expect(bodies.at(-1)).toEqual({ expiresInDays: 30 });
+  });
+
+  it("counts down from when the code arrived, whatever the browser's clock says", async () => {
+    api();
+    skew = -20 * 60_000;
+    const { dialog } = await openDialog();
+
+    expect(await within(dialog).findByText("K7QM-4XDA")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(/valid for (10:00|9:59) · single use/);
   });
 });

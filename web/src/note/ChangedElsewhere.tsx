@@ -55,10 +55,15 @@ export function GoneText({ movedTo }: { movedTo: string | null }) {
 
 const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
 
-/** The device of a key paired from Obsidian: what follows the last "Obsidian " in its name ("Work – Obsidian Laptop" is "Laptop"). */
+const pairedInfix = " – Obsidian ";
+
+/**
+ * The device of a key paired from Obsidian, named "<vault> – Obsidian <device>" ("Work – Obsidian Laptop" is
+ * "Laptop", "Work – Obsidian My Obsidian Phone" is "My Obsidian Phone"); the whole label for any other name.
+ */
 export function deviceOf(writer: string): string {
-  const at = writer.lastIndexOf("Obsidian ");
-  return at < 0 ? writer : writer.slice(at + "Obsidian ".length);
+  const at = writer.indexOf(pairedInfix);
+  return at < 0 ? writer : writer.slice(at + pairedInfix.length);
 }
 
 /**

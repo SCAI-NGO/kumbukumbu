@@ -4451,6 +4451,8 @@ export interface components {
             code: string;
             /** Format: date-time */
             expiresAt: string;
+            /** Format: int32 */
+            expiresIn: number | string;
         };
         PasswordChangedView: {
             signedOut: boolean;

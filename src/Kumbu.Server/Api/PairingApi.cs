@@ -9,8 +9,9 @@ namespace Kumbu.Server.Api;
 /// <summary><c>expiresInDays</c> of the key the code makes: 30, 90 or 365; null or left out, it doesn't expire.</summary>
 public sealed record CreatePairingRequest(int? ExpiresInDays = null);
 
-/// <summary>The code to show, <c>XXXX-XXXX</c>, valid once until <c>expiresAt</c> (ten minutes).</summary>
-public sealed record PairingCodeView(string Code, DateTime ExpiresAt);
+/// <summary>The code to show, <c>XXXX-XXXX</c>, valid once until <c>expiresAt</c>, in <c>expiresIn</c> seconds (ten minutes):
+/// the web app counts down from when the answer came, not by its own clock against the server's.</summary>
+public sealed record PairingCodeView(string Code, DateTime ExpiresAt, int ExpiresIn);
 
 /// <summary><c>code</c> as the user typed it (case, spaces and dashes don't matter); <c>device</c>: 1 to 32 characters.</summary>
 public sealed record RedeemPairingRequest(string Code, string Device);
@@ -38,7 +39,7 @@ public static class PairingApi
         var found = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == vault) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         if (found.Pending) throw VaultBusyException.Being();
         var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, found.Id, found.Name, body.ExpiresInDays);
-        return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt));
+        return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt, (int)Pairings.Lifetime.TotalSeconds));
     }
 
     private static async Task<Created<RedeemedKeyView>> RedeemAsync(
