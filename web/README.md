@@ -12,6 +12,7 @@ pnpm dev        # Vite on http://localhost:5173, proxy for /api and /mcp to http
 pnpm test       # Vitest (jsdom)
 pnpm build      # tsc --noEmit, then vite build into dist/
 pnpm gen:api    # types from a running server's /api/openapi.json (KUMBU_OPENAPI_URL to override)
+pnpm icons      # every icon under public/ from icons/k2.svg (the placeholder K² logo)
 ```
 
 From the repository root, use `pnpm -C web <script>`. See the main README for the `KUMBU_PUBLIC_URL` pitfall in development: the server checks the `Origin` of every write, so leave it empty or set it to `http://localhost:5173`.
@@ -28,6 +29,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - `state/`: zustand stores for session and editor
 - `theme/`: colour schemes, applying them, contrast test
 - `upload/`: collecting files and folders, planning the upload, conflict choices
+- `update/`: the build version, noticing a newer server (`X-Kumbu-Version`), reloading into it on the same page, the install hint
 - `test/`: shared test setup helpers
 
 ## Where the look comes from
