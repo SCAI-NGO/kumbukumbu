@@ -49,6 +49,23 @@ public class LinkResolverTests
     [InlineData("/W/inbox.md", "", "Self")]
     public void Resolves(string source, string target, string expected) => Assert.Equal(expected, Resolve(source, target));
 
+    private static readonly LinkResolver Folders = new("W",
+        [P("/W/Work/plan.md"), P("/W/x/Work/plan.md"), P("/W/x/sub/plan.md"), P("/W/sub/plan.md")]);
+
+    // Ruling 1: a path with a folder is tried relative to the source's folder, then as an exact vault path,
+    // then as a path suffix.
+    [Theory]
+    [InlineData("/W/inbox.md", "Work/plan", "/W/Work/plan.md")]
+    [InlineData("/W/x/note.md", "sub/plan.md", "/W/x/sub/plan.md")]
+    [InlineData("/W/x/note.md", "Work/plan", "/W/x/Work/plan.md")]
+    [InlineData("/W/sub/note.md", "Work/plan", "/W/Work/plan.md")]
+    [InlineData("/W/sub/note.md", "sub/plan", "/W/sub/plan.md")]
+    public void FolderPathsResolveRelativeThenExactThenBySuffix(string source, string target, string expected)
+    {
+        var r = Folders.Resolve(P(source), target);
+        Assert.Equal((LinkKind.Note, expected), (r.Kind, r.Target?.Value));
+    }
+
     [Fact]
     public void StaysInsideTheVault() => Assert.Equal("/W/inbox.md", Resolve("/W/projects/kumbu.md", "inbox"));
 

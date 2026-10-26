@@ -38,8 +38,9 @@ public class NoteWriterTests
 
         var result = await Write("/Work/other/sub/deep.md", "x\n", null);
 
+        // [[sub/deep]] stays unique: a path with a folder prefers the one at that path from the vault's root.
         Assert.Equal(
-            "created /Work/other/sub/deep.md (1 line); note: now ambiguous: [[deep]] in /Work/links.md (2 notes), [[sub/deep]] in /Work/links.md (2 notes) ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)",
+            "created /Work/other/sub/deep.md (1 line); note: now ambiguous: [[deep]] in /Work/links.md (2 notes) ('links <note>' shows the candidates; a longer path in the link, or mv, makes it unique again)",
             result.Output);
     }
 
