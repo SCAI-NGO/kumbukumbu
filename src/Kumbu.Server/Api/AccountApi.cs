@@ -109,7 +109,7 @@ public static class AccountApi
         account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
-        account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409);
+        account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);

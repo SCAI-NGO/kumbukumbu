@@ -105,24 +105,24 @@ public static class NoteApi
     public static void MapNoteApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/vaults", ListVaultsAsync).Errors(401);
+        api.MapGet("/vaults", ListVaultsAsync).Errors(401, 503);
         api.MapPost("/vaults", CreateVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 409);
         api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429);
-        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404);
-        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
-        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401);
+        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
-        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413);
-        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409);
-        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409);
+        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503);
+        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
 
-        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404);
-        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404);
-        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404);
+        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
-        api.MapGet("/search", SearchAsync).Errors(400, 401, 404);
-        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403);
+        api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
     private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)

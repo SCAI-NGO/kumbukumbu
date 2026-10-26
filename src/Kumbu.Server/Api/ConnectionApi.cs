@@ -2,6 +2,7 @@
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.OAuth;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 using ConnectionInfo = Kumbu.Server.Accounts.ConnectionInfo;
@@ -59,15 +60,15 @@ public static class ConnectionApi
     {
         var group = app.MapGroup("/api/connections").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         group.MapGet("", ListAsync).Errors(401, 403);
-        group.MapPost("", CreateAsync).Errors(400, 401, 403, 409);
-        group.MapPut("/{id}/vaults", SetVaultsAsync).Errors(400, 401, 403, 404);
+        group.MapPost("", CreateAsync).Errors(400, 401, 403, 409, 503);
+        group.MapPut("/{id}/vaults", SetVaultsAsync).Errors(400, 401, 403, 404, 503);
         group.MapDelete("/{id}", RevokeAsync).Errors(401, 403, 404);
 
         // The consent page's calls (Ruling 8): session-only too, so the decision, a POST, also passes the Origin check
         // (Security.UseCallerRules), which is its CSRF guard.
         var consent = app.MapGroup("/api/oauth/requests").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         consent.MapGet("/{id}", ConsentAsync).Errors(401, 403, 404);
-        consent.MapPost("/{id}/decision", DecideAsync).Errors(400, 401, 403, 404, 409);
+        consent.MapPost("/{id}/decision", DecideAsync).Errors(400, 401, 403, 404, 409, 503);
     }
 
     private const string RequestExpired = "This request has expired; start the connection again in the app.";
@@ -89,7 +90,7 @@ public static class ConnectionApi
     /// </summary>
     private static async Task<Ok<ConsentDecisionView>> DecideAsync(
         string id, ConsentDecisionRequest body, HttpContext http, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, OAuthTokens tokens,
-        Connections connections, IOptions<KumbuOptions> options, TimeProvider time, ILoggerFactory logs, CancellationToken ct)
+        Connections connections, VaultCatalog catalog, IOptions<KumbuOptions> options, TimeProvider time, ILoggerFactory logs, CancellationToken ct)
     {
         var log = logs.CreateLogger(OAuthEndpoints.LogCategory);
         var pending = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
@@ -102,6 +103,9 @@ public static class ConnectionApi
                 OAuthEndpoints.LogStep(log, "consent", "conflict", pending.ConnectionId, clientHost, pending.Id);
                 throw new ApiException(StatusCodes.Status409Conflict, ProblemText(problem));
             }
+
+            // A vault being re-encrypted: 503 while the request stays, so that Allow works again once it is done.
+            if (await connections.FindAsync(pending.ConnectionId!, ct) is { } doc) await catalog.RequireNoneRekeyingAsync(doc.Vaults, ct);
         }
 
         // Taken only now: of two decisions at once, one gets it and the other a 404.
@@ -125,6 +129,14 @@ public static class ConnectionApi
             // Revoked, expired or changed between the check above and the transaction: the request is spent.
             OAuthEndpoints.LogStep(log, "consent", "conflict", request.ConnectionId, clientHost, request.Id);
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
+        }
+        catch (VaultBusyException)
+        {
+            // A re-keying started or finished between the check above and the transaction, which issued nothing:
+            // the request goes back, so "try again" means this request.
+            await requests.PutBackAsync(request, CancellationToken.None);
+            OAuthEndpoints.LogStep(log, "consent", "busy", request.ConnectionId, clientHost, request.Id);
+            throw;
         }
 
         // After the commit: should this fail, the code is never seen and expires harmlessly within 60 s.

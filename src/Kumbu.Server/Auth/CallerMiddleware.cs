@@ -75,6 +75,13 @@ public sealed class CallerMiddleware(
             {
                 caller = await ResolveBearerAsync(header[Scheme.Length..], context.RequestAborted);
             }
+            catch (VaultBusyException e)
+            {
+                // A known key whose vault can't be opened just now: not a wrong key, and not a fault.
+                wrongKeys.Release(ip);
+                await BusyAsync(context, e);
+                return;
+            }
             catch
             {
                 // MongoDB unreachable or the request aborted: not a wrong key.
@@ -153,6 +160,12 @@ public sealed class CallerMiddleware(
                 resolution = await tokens.ResolveAccessAsync(bearer, id, OAuthUrls.Resource(origin, id), context.RequestAborted);
                 if (resolution.Connection is { } connection) caller = await RequestCaller.ForConnectionAsync(connection, bearer, catalog, context.RequestAborted);
             }
+            catch (VaultBusyException e)
+            {
+                wrongKeys.Release(ip);
+                await BusyAsync(context, e);
+                return;
+            }
             catch
             {
                 // MongoDB unreachable or the request aborted: not a wrong key.
@@ -226,6 +239,15 @@ public sealed class CallerMiddleware(
         if (IsUnder(context, "/api")) return context.Response.WriteAsJsonAsync(new { error = "Sign in, or send an API key." });
         context.Response.Headers.WWWAuthenticate = "Bearer";
         return Task.CompletedTask;
+    }
+
+    /// <summary>A vault of the caller is being or was just re-encrypted (<see cref="VaultBusyException"/>): 503 with
+    /// <c>Retry-After</c>, as <see cref="Api.ApiErrors"/> answers it behind the endpoints.</summary>
+    private static Task BusyAsync(HttpContext context, VaultBusyException e)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.Headers.RetryAfter = ((int)Api.ApiErrors.BusyRetryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return IsUnder(context, "/api") ? context.Response.WriteAsJsonAsync(new Api.ApiError(e.Message)) : Task.CompletedTask;
     }
 
     private static Task TooManyAsync(HttpContext context, TimeSpan retryAfter)

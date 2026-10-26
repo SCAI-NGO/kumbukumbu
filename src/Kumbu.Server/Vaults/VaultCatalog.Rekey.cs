@@ -162,6 +162,22 @@ public sealed partial class VaultCatalog
         }
     }
 
+    /// <summary>
+    /// <see cref="VaultBusyException"/> ("being re-encrypted") if a run holds one of the vaults or one is in its two-key
+    /// period: checked before something single-use is spent on them (a consent's request), which the slots' own check
+    /// (<see cref="UserVaultKeysAsync"/>) would refuse only afterwards.
+    /// </summary>
+    internal async Task RequireNoneRekeyingAsync(IReadOnlyCollection<string> vaultIds, CancellationToken ct)
+    {
+        if (vaultIds.Count == 0) return;
+        if (vaultIds.Any(IsBusy)) throw VaultBusyException.Being();
+        await EnsureReadyAsync(ct);
+        if (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, vaultIds) & Builders<VaultDocument>.Filter.Ne(v => v.RekeyStartedAt, null)).AnyAsync(ct))
+        {
+            throw VaultBusyException.Being();
+        }
+    }
+
     /// <summary>The user's vaults (by their user slots under <paramref name="userKey"/>) in their two-key period.</summary>
     internal async Task<IReadOnlyList<string>> PendingVaultIdsAsync(string userId, byte[] userKey, CancellationToken ct)
     {

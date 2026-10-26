@@ -64,6 +64,23 @@ public sealed class AuthorizationRequests(IMongoDatabase db, TimeProvider time)
         return doc is not null && doc.ExpiresAt > Now ? doc.ToRecord() : null;
     }
 
+    /// <summary>
+    /// Puts back a request that <see cref="TakeAsync"/> took for a decision that issued nothing (a vault being
+    /// re-encrypted), so that the user can decide again; one that expired meanwhile stays gone.
+    /// </summary>
+    public async Task PutBackAsync(PendingAuthorisation request, CancellationToken ct)
+    {
+        if (request.ExpiresAt <= Now) return;
+        await EnsureReadyAsync(ct);
+        try
+        {
+            await Docs.InsertOneAsync(PendingDocument.From(request), cancellationToken: ct);
+        }
+        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+        }
+    }
+
     /// <summary>Creates the TTL index once per process; lazy, so the server starts before MongoDB is reachable.</summary>
     private async Task EnsureReadyAsync(CancellationToken ct)
     {

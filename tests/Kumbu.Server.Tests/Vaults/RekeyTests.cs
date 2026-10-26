@@ -1520,6 +1520,130 @@ public sealed class RekeyApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_consent_refused_for_a_vault_being_reencrypted_keeps_its_request()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        var connectionId = await ConnectionAsync(owner);
+        var runner = Api.Services.GetRequiredService<RekeyRunner>();
+        // The first run stops after its start; the runner's resume, which the decision starts, waits there until let go.
+        var first = true;
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog.RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            if (first)
+            {
+                first = false;
+                throw new InvalidOperationException("crash after the start");
+            }
+
+            await hold.Task;
+        };
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+            var flow = await OAuth.OAuthFlow.StartAsync(Api, owner, connectionId, await OAuth.OAuthFlow.RegisterAsync(Api, Callback), Callback);
+
+            using (var busy = await flow.DecideAsync(allow: true))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, busy.StatusCode);
+                Assert.Equal("5", busy.Headers.GetValues("Retry-After").Single());
+                Assert.Equal(VaultBusyException.BeingReencrypted, await Kumbu.Server.Tests.Api.RestClient.ErrorAsync(busy));
+            }
+
+            using (var still = await flow.GetConsentAsync()) Assert.Equal(System.Net.HttpStatusCode.OK, still.StatusCode);
+            Assert.Equal(0, await SlotsOnAsync(vaultId, SlotDocument.Connection));
+            hold.SetResult();
+            await runner.RunAsync(vaultId, owner.User.Id, owner.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+            Catalog.RekeyFaultAt = null;
+
+            // The same request, allowed once the vault is done.
+            await flow.AllowAsync();
+            using (var tokens = await flow.TokenAsync()) Assert.Equal(System.Net.HttpStatusCode.OK, tokens.StatusCode);
+
+            // Refused inside the transaction (a whole run between the wrapping and the commit): the request goes back too.
+            var again = await OAuth.OAuthFlow.StartAsync(Api, owner, connectionId, await OAuth.OAuthFlow.RegisterAsync(Api, Callback), Callback);
+            OnceAt("after-wrap", () => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+            using (var busy = await again.DecideAsync(allow: true))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, busy.StatusCode);
+                Assert.Equal(VaultBusyException.JustReencrypted, await Kumbu.Server.Tests.Api.RestClient.ErrorAsync(busy));
+            }
+
+            await again.AllowAsync();
+            using (var tokens = await again.TokenAsync()) Assert.Equal(System.Net.HttpStatusCode.OK, tokens.StatusCode);
+        }
+        finally
+        {
+            hold.TrySetResult();
+            Catalog.RekeyFaultAt = null;
+            Catalog.IssueFaultAt = null;
+        }
+    }
+
+    [Fact]
+    public async Task A_stale_vault_key_of_a_bearer_answers_503()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        var connectionId = await ConnectionAsync(owner);
+        var access = await AccessAsync(owner, connectionId);
+        var key = await owner.KeyAsync("agent", KeyRight.Read);
+        // A backup of the key's and the token's records and slots, restored after the re-keying: they still wrap the old key.
+        var db = app.Database;
+        var saved = new List<(string Collection, BsonDocument Doc)>();
+        foreach (var (collection, filter) in new (string, BsonDocument)[]
+        {
+            (ApiKeys.CollectionName, new BsonDocument("user", owner.User.Id)),
+            (Kumbu.Server.Accounts.Connections.CollectionName, new BsonDocument("_id", connectionId)),
+            (ConnectionRevocation.TokensCollection, new BsonDocument("connection", connectionId)),
+            ("slots", new BsonDocument { ["vault"] = vaultId, ["kind"] = new BsonDocument("$ne", SlotDocument.User) }),
+        })
+        {
+            saved.AddRange((await db.GetCollection<BsonDocument>(collection).Find(filter).ToListAsync(Ct)).Select(d => (collection, d)));
+        }
+
+        Assert.Contains(saved, d => d.Collection == "slots" && d.Doc["kind"] == SlotDocument.ApiKey);
+        Assert.Contains(saved, d => d.Collection == "slots" && d.Doc["kind"] == SlotDocument.Connection);
+        await Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct);
+        foreach (var (collection, doc) in saved)
+        {
+            await db.GetCollection<BsonDocument>(collection).ReplaceOneAsync(new BsonDocument("_id", doc["_id"]), doc, new ReplaceOptions { IsUpsert = true }, Ct);
+        }
+
+        using (var api = await owner.GetAsync(owner.Url("plan.md"), bearer: key))
+        {
+            Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, api.StatusCode);
+            Assert.Equal("5", api.Headers.GetValues("Retry-After").Single());
+            Assert.Equal(VaultBusyException.JustReencrypted, await Kumbu.Server.Tests.Api.RestClient.ErrorAsync(api));
+        }
+
+        using var client = Api.CreateClient();
+        using (var mcp = new HttpRequestMessage(HttpMethod.Post, "/mcp"))
+        {
+            mcp.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", key);
+            mcp.Headers.Add("X-Forwarded-For", Address());
+            mcp.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var answer = await client.SendAsync(mcp, Ct);
+            Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, answer.StatusCode);
+            Assert.Equal("5", answer.Headers.GetValues("Retry-After").Single());
+        }
+
+        using (var mcp = new HttpRequestMessage(HttpMethod.Post, new Uri(OAuth.OAuthFlow.ResourceOf(connectionId)).AbsolutePath))
+        {
+            mcp.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", access);
+            mcp.Headers.Add("X-Forwarded-For", Address());
+            mcp.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var answer = await client.SendAsync(mcp, Ct);
+            Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, answer.StatusCode);
+            Assert.Equal("5", answer.Headers.GetValues("Retry-After").Single());
+        }
+    }
+
+    [Fact]
     public async Task A_reconnect_after_a_rekey_opens_the_vault_with_the_new_key()
     {
         var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
