@@ -770,7 +770,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// Runs once a minute (<see cref="VaultSweeper"/>). Locks vaults idle for longer than the timeout, then the
     /// least recently used ones while the working sets exceed the memory cap; a vault used within
-    /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired.
+    /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired, and change
+    /// times older than any cursor the version list answers.
     /// Keys go with the vault, not zeroed: a request still holding it must not see its key change.
     /// </summary>
     public void Sweep()
@@ -796,6 +797,20 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         {
             vault.Trash = vault.Trash.RemoveAll(t => now - t.Trashed.DeletedAt > NoteWriter.TrashRetention);
             vault.Moves = vault.Moves.RemoveAll(m => now - m.MovedAt > Kumbu.Core.Notes.Moves.Retention);
+            // No cursor reaches back further than this (older ones get the full list): the change record needn't either.
+            var forgotten = now - (Api.SyncApi.MaxCursorAge + Api.SyncApi.Overlap);
+            // Under the gate, which writes record under, so no new time is lost; if a write holds it, next minute.
+            if (vault.ChangedAt.Values.Any(t => t < forgotten) && vault.Gate.Wait(0))
+            {
+                try
+                {
+                    vault.ChangedAt = vault.ChangedAt.RemoveRange(vault.ChangedAt.Where(c => c.Value < forgotten).Select(c => c.Key));
+                }
+                finally
+                {
+                    vault.Gate.Release();
+                }
+            }
         }
     }
 

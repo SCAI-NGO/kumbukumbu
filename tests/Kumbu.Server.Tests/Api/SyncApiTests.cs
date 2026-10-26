@@ -193,6 +193,64 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Since_never_lists_a_damaged_note_as_deleted()
+    {
+        var user = await NewAsync(Api);
+        var version = await user.CreateAsync("a.md", "a\n");
+        var cursor = Cursor(await VersionsAsync(user));
+        using var edit = await user.SendAsync(HttpMethod.Put, user.Url("a.md"), new { content = "b\n", version });
+        Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
+        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var notes = app.Database.GetCollection<BsonDocument>("notes");
+        await notes.UpdateOneAsync(new BsonDocument("vault", vault.Id), Builders<BsonDocument>.Update.Set("blob", new BsonBinaryData(new byte[64])), cancellationToken: Ct);
+        await Catalog.RefreshAsync(vault, Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("a.md"), Ct);
+
+        var answer = await VersionsAsync(user, cursor);
+
+        Assert.False(answer["full"]!.GetValue<bool>());
+        Assert.Equal(1, answer["damaged"]!.GetValue<int>());
+        Assert.Empty(answer["deleted"]!.AsArray());
+        Assert.Empty(answer["notes"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Change_times_older_than_any_cursor_it_answers_are_dropped()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        Assert.NotEmpty(vault.ChangedAt);
+
+        _time.Advance(Kumbu.Server.Api.SyncApi.MaxCursorAge + Kumbu.Server.Api.SyncApi.Overlap + TimeSpan.FromMinutes(1));
+        vault.Touch(_time.GetUtcNow().UtcDateTime);
+        Catalog.Sweep();
+
+        Assert.Same(vault, (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault));
+        Assert.Empty(vault.ChangedAt);
+    }
+
+    [Fact]
+    public async Task A_write_through_an_older_object_reaches_the_current_one()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        // A request that opened the vault, and holds it while the vault is locked and opened again by another.
+        var stale = new EncryptedNoteStore(Catalog, new UserCredential(user.User.Id, user.UserKey));
+        Assert.Contains(user.Vault, await stale.ListVaultsAsync(Ct));
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog.Sweep();
+        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var path = Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("late.md");
+
+        Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+
+        Assert.True(current.Notes.ContainsKey(path));
+        Assert.True(current.ChangedAt.ContainsKey(path));
+        var answer = await VersionsAsync(await user.SignInAgainAsync(), _time.GetUtcNow().UtcDateTime.ToString("O"));
+        Assert.Contains("/Arbeit/late.md", Paths(answer));
+    }
+
+    [Fact]
     public async Task A_pending_vault_answers_503_not_404()
     {
         var user = await NewAsync(Api);

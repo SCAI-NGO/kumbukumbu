@@ -21,7 +21,7 @@ public sealed record VersionEntry(string Path, string Version);
 /// version in <c>notes</c> or, when there is no note at the path now, in <c>deleted</c>. <c>cursor</c>: the server's
 /// time before the answer was read, to send back as <c>since</c>. <c>state</c>: a hash over the whole vault's paths,
 /// versions and damaged count, also the <c>ETag</c>. <c>damaged</c>: stored notes that don't open (their paths are
-/// sealed with them, so they can't be listed). Both lists in path order.
+/// sealed with them, so they can't be listed; a touched path whose note doesn't open is in neither list). Both lists in path order.
 /// </summary>
 public sealed record VersionsView(bool Full, string Cursor, string State, int Damaged, IReadOnlyList<VersionEntry> Notes, IReadOnlyList<string> Deleted);
 
@@ -108,7 +108,8 @@ public static class SyncApi
         foreach (var path in touched)
         {
             if (notes.TryGetValue(path, out var entry)) listed.Add(new VersionEntry(path.Value, entry.Note.Version));
-            else deleted.Add(path.Value);
+            // A note that doesn't open isn't gone: the client mustn't trash its copy. It is counted in damaged.
+            else if (!unlocked.IsDamaged(path)) deleted.Add(path.Value);
         }
 
         return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted));
