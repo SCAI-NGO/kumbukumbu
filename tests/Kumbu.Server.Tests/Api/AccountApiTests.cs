@@ -549,8 +549,6 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         var username = await NewUserAsync();
         var id = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value.User.Id;
 
-        using var active = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
-        Assert.Equal(HttpStatusCode.Forbidden, active.StatusCode);
         using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { active = false }, session: admin);
         Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
         using var mistyped = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = "someone" }, session: admin);

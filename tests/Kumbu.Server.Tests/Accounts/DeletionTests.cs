@@ -12,7 +12,7 @@ using static Kumbu.Server.Tests.Vaults.VaultWorld;
 
 namespace Kumbu.Server.Tests.Accounts;
 
-/// <summary>Deleting a vault, one's own account, or a deactivated user: everything of it, nothing else, in one go.</summary>
+/// <summary>Deleting a vault, one's own account, or any user by an admin: everything of it, nothing else, in one go.</summary>
 [Collection("mongo")]
 public sealed class DeletionTests(MongoFixture fixture)
 {
@@ -40,7 +40,7 @@ public sealed class DeletionTests(MongoFixture fixture)
 
     private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private Deletion Deletion() => new(_db, Catalog(), Users(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
@@ -403,7 +403,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task An_admin_deletes_only_a_deactivated_user_with_the_username_typed()
+    public async Task An_admin_deletes_a_user_only_with_their_password_and_the_username_typed()
     {
         var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
         var (bob, bobKey, _) = await SignedInAsync("bob");
@@ -411,8 +411,6 @@ public sealed class DeletionTests(MongoFixture fixture)
         var (lea, key, _) = await SignedInAsync("lea");
         var diary = await FilledVaultAsync(lea, key, "Tagebuch");
 
-        await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
-        Assert.True(await Admin().SetActiveAsync(anna, lea.Id, false, Ct));
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(bob, bobKey, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "le", Ct));
         var wrong = await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, "not anna's password at all", lea.Id, "lea", Ct));
@@ -420,15 +418,83 @@ public sealed class DeletionTests(MongoFixture fixture)
         // Anna's password, but the target's user key: it must open the admin's own.
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, key, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, chris.Id, "chris", Ct));
-        Assert.False(await Deletion().DeleteUserAsync(anna, annaKey, Password, "no-such-user", "x", Ct));
+        Assert.Null(await Deletion().DeleteUserAsync(anna, annaKey, Password, "no-such-user", "x", Ct));
         await AssertIntactAsync(diary.Id);
 
-        Assert.True(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "LEA", Ct));
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "LEA", Ct));
 
         Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
         Assert.Equal(0, await CountAsync("user_slots", "user", lea.Id));
         await AssertGoneAsync(diary.Id);
-        Assert.False(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+        Assert.Null(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+    }
+
+    [Fact]
+    public async Task A_deactivated_user_can_still_be_deleted()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        Assert.True(await Admin().SetActiveAsync(anna, lea.Id, false, Ct));
+
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+
+        Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task An_admin_deletes_an_active_user_in_one_step()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea", Roles.Admin);
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        await Keys().CreateAsync(lea, key, Now, "agent", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Write }, Ct);
+
+        var result = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.NotNull(result);
+        Assert.Equal(lea.Id, result.Id);
+        Assert.Equal("lea", result.Username);
+        Assert.Equal(lea.Display, result.Display);
+        Assert.Equal("anna", result.DeletedBy);
+        Assert.Equal(Now, result.DeletedAt);
+        Assert.Equal(1, result.Summary.Vaults);
+        Assert.Equal(1, result.Summary.Notes);
+        Assert.Equal(1, result.Summary.ApiKeys);
+        Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task An_admin_cant_delete_themselves_here()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var diary = await FilledVaultAsync(anna, annaKey, "Tagebuch");
+
+        var refused = await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, anna.Id, "anna", Ct));
+
+        Assert.Equal("Delete your own account in Settings.", refused.Message);
+        Assert.Equal(1, await CountAsync("users", "_id", anna.Id));
+        await AssertIntactAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task Deleting_an_active_user_ends_their_session_and_writes()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, session) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        // A request of lea's that opened her vault before the deletion and writes after it.
+        var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
+        Assert.Contains("Tagebuch", await store.ListVaultsAsync(Ct));
+
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+
+        Assert.Null(await Sessions().ResolveAsync(session, Ct));
+        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Spät", lea.Id, key, Ct));
+        await AssertGoneAsync(diary.Id);
     }
 
     [Fact]
@@ -443,7 +509,6 @@ public sealed class DeletionTests(MongoFixture fixture)
 
         await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
         await Deletion().DeleteOwnAccountAsync(bob, bobKey, Password, "bob", Ct);
-        await Admin().SetActiveAsync(anna, lea.Id, false, Ct);
         await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
 
         var log = string.Join("\n", _log.Lines);

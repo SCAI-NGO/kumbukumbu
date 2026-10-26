@@ -299,7 +299,7 @@ public static class AccountApi
         string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        return await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
+        return await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct) is not null
             ? TypedResults.NoContent()
             : throw ApiErrors.NotFound("There is no such user.");
     }
