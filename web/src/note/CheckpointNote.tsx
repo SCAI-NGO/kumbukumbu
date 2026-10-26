@@ -9,6 +9,7 @@ import { splitFrontmatter } from "./properties";
 
 const noop = () => {};
 
+// `createdAt` is for the copy-for-your-AI action of a later task.
 /**
  * One note of a checkpoint, as it was. It is rendered by the same viewer as today's notes but cannot write: no
  * editor, no autosave, no ticking of tasks. Outline, find and backlinks are left out on purpose, as they would
@@ -21,10 +22,10 @@ export default function CheckpointNote({ vault, name, path }: { vault: string; n
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
-      {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
+      {!(note.data && !note.isError && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
       {note.isPending && <p className="mt-4 text-sm text-muted">Loading …</p>}
       {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
-      {note.data && (
+      {note.data && !note.isError && (
         <article className="mt-4">
           {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={null} />}
           <MarkdownView

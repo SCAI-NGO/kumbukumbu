@@ -47,7 +47,7 @@ export default function Checkpoint() {
 
       {tree.isError && <p className="p-4 text-text">{errorText(tree.error)}</p>}
       {tree.isPending && <p className="p-4 text-sm text-muted">Loading …</p>}
-      {tree.data && path === null && (
+      {tree.data && !tree.isError && path === null && (
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {rows(tree.data.root, Object.fromEntries(allFolders(tree.data.root).map((p) => [p, !closed[p]]))).map((row) => (
             <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
@@ -72,7 +72,7 @@ export default function Checkpoint() {
           ))}
         </ul>
       )}
-      {tree.data && path !== null && (
+      {tree.data && !tree.isError && path !== null && (
         <>
           <div className="flex min-h-11 items-center gap-2 border-b border-line px-4 text-sm">
             <Link to={checkpointUrl(vault, name)} className="flex-none text-accent-text underline underline-offset-[3px]">

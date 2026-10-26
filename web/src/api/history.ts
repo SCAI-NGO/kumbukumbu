@@ -116,6 +116,8 @@ export const useCheckpointTree = (vault: string, name: string) =>
     queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/tree", { params: { path: { vault, name } } })),
     refetchOnWindowFocus: false,
     retry: false,
+    // Kept only while shown: a checkpoint removed and made again under the name must not show the old notes.
+    gcTime: 0,
   });
 
 /** One note of a checkpoint, `path` from the root of the tree; its links are resolved inside the checkpoint. */
@@ -125,4 +127,6 @@ export const useCheckpointNote = (vault: string, name: string, path: string) =>
     queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/notes/{path}", { params: { path: { vault, name, path: inVault(path) } } })),
     refetchOnWindowFocus: false,
     retry: false,
+    // Kept only while shown: a checkpoint removed and made again under the name must not show the old notes.
+    gcTime: 0,
   });

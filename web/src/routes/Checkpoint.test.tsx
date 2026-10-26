@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -65,11 +66,15 @@ describe("a checkpoint in the web app", () => {
     expect(screen.queryByRole("button", { name: "Note actions" })).toBeNull();
   });
 
-  it("opens a note read-only and keeps links inside the checkpoint", async () => {
+  /** The plan note, open. */
+  async function openPlan() {
     const fetch = api();
     renderApp("/checkpoints/Work/before-cleanup/plan.md");
+    return { fetch, article: await screen.findByRole("article") };
+  }
 
-    const article = await screen.findByRole("article");
+  it("opens a note read-only and keeps links inside the checkpoint", async () => {
+    const { article } = await openPlan();
     const inside = "/checkpoints/Work/before-cleanup/ideas/xyz.md";
     const xyz = within(article).getAllByRole("link", { name: /xyz/ });
     expect(xyz).toHaveLength(2);
@@ -87,8 +92,14 @@ describe("a checkpoint in the web app", () => {
 
     expect(within(article).getByRole("checkbox")).toBeDisabled();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
 
-    // Review focus 2: nothing of today's vault is asked for or written.
+  it("never asks for today's notes or links", async () => {
+    const { fetch, article } = await openPlan();
+    await userEvent.click(within(article).getByRole("button", { name: /two/ }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+
+    // Nothing of today's vault is asked for or written.
     const calls = fetch.mock.calls.map(([r]) => ({ method: (r as Request).method, path: new URL((r as Request).url).pathname }));
     expect(calls.every((c) => c.method === "GET")).toBe(true);
     for (const c of calls) expect(c.path).not.toMatch(/^\/api\/(notes|links|backlinks|version)\/|^\/api\/vaults\/Work\/tree$/);
@@ -113,6 +124,17 @@ describe("a checkpoint in the web app", () => {
     renderApp("/checkpoints/Work/before-cleanup");
 
     expect(await screen.findByText("There is no checkpoint 'before-cleanup' in Work.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to today" })).toBeInTheDocument();
+  });
+
+  it("shows no cached tree of a checkpoint that was removed meanwhile", async () => {
+    api({ "GET /api/vaults/Work/checkpoints/before-cleanup/tree": () => json(404, { error: "There is no checkpoint 'before-cleanup' in Work." }) });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["checkpoint-tree", "Work", "before-cleanup"], tree);
+    renderApp("/checkpoints/Work/before-cleanup", queryClient);
+
+    expect(await screen.findByText("There is no checkpoint 'before-cleanup' in Work.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "plan" })).toBeNull();
     expect(screen.getByRole("button", { name: "Back to today" })).toBeInTheDocument();
   });
 
