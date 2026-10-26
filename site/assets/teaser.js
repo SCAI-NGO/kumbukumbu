@@ -18,19 +18,21 @@ function openSection(name) {
   section.removeAttribute('aria-label');
   section.setAttribute('aria-labelledby', 'section-title');
   announcer.textContent = 'Showing: ' + heading.textContent;
-  for (const card of section.querySelectorAll('.moment')) {
-    card.addEventListener('click', () => popOut(card));
-    // Enter opens on keydown, Space on keyup, as native buttons do. Opening on Space's keydown would move
-    // focus to "close" before the keyup, and browsers that click a button on keyup (Firefox) would close it.
-    card.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); popOut(card); }
-      else if (e.key === ' ') e.preventDefault();
-    });
-    card.addEventListener('keyup', e => { if (e.key === ' ') { e.preventDefault(); popOut(card); } });
-  }
+  for (const card of section.querySelectorAll('.moment')) opensSheet(card);
   // On a phone the section starts below the fold; bring its top into view.
   if (section.getBoundingClientRect().top > innerHeight * 0.75)
     section.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+}
+
+function opensSheet(card) {
+  card.addEventListener('click', () => popOut(card));
+  // Enter opens on keydown, Space on keyup, as native buttons do. Opening on Space's keydown would move
+  // focus to "close" before the keyup, and browsers that click a button on keyup (Firefox) would close it.
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); popOut(card); }
+    else if (e.key === ' ') e.preventDefault();
+  });
+  card.addEventListener('keyup', e => { if (e.key === ' ') { e.preventDefault(); popOut(card); } });
 }
 
 for (const plant of plants) plant.addEventListener('click', () => openSection(plant.dataset.section));
@@ -49,6 +51,8 @@ function popOut(card) {
   const veil = document.createElement('div');
   veil.className = 'veil';
   const sheet = card.cloneNode(true);
+  // A roadmap stop opens as a card like the others.
+  sheet.classList.replace('stop', 'moment');
   sheet.classList.add('pop');
   sheet.removeAttribute('tabindex');
   sheet.removeAttribute('aria-haspopup');
@@ -129,9 +133,27 @@ function popOut(card) {
   addEventListener('keydown', onKey, true);
 }
 
-// For review screenshots: #open=helps opens a section, #open=helps/2 also pops its second card.
+// The roadmap's vine draws itself once, the first time it comes into view; with reduced motion it is simply there.
+const roadmap = document.getElementById('roadmap');
+const stops = [...roadmap.querySelectorAll('.stop')];
+for (const stop of stops) opensSheet(stop);
+if (reducedMotion.matches) roadmap.classList.add('grown');
+else {
+  const watcher = new IntersectionObserver(entries => {
+    if (!entries.some(e => e.isIntersecting)) return;
+    roadmap.classList.add('grown');
+    watcher.disconnect();
+  }, { threshold: .25 });
+  watcher.observe(roadmap.querySelector('.road'));
+}
+
+// For review screenshots: #open=helps opens a section, #open=helps/2 also pops its second card,
+// #open=road/3 pops the roadmap's third stop.
 const debug = location.hash.match(/^#open=(\w+)(?:\/(\d+))?$/);
-if (debug) {
+if (debug && debug[1] === 'road') {
+  const stop = stops[debug[2] - 1];
+  if (stop) { roadmap.classList.add('grown'); setTimeout(() => popOut(stop), 800); }
+} else if (debug) {
   openSection(debug[1]);
   const card = debug[2] && section.querySelectorAll('.moment')[debug[2] - 1];
   if (card) setTimeout(() => popOut(card), 800);
