@@ -573,6 +573,8 @@ public sealed class DeletionTests(MongoFixture fixture)
             Assert.True(await List().AddAsync(anna.Id, Ct));
 
             Assert.Equal(["anna", "lea"], (await Restored().FindAsync(Ct)).Select(u => u.Username).Order());
+            // Anna doesn't see herself: she can't delete herself here, so she isn't offered it.
+            Assert.Equal(["lea"], (await Restored().ListAsync(anna, Ct)).Select(u => u.Username));
             await Assert.ThrowsAsync<ArgumentException>(() => Deletion().RepeatAsync(anna, annaKey, "not anna's password at all", Ct));
             var again = await Deletion().RepeatAsync(anna, annaKey, Password, Ct);
 
@@ -584,9 +586,10 @@ public sealed class DeletionTests(MongoFixture fixture)
             Assert.Equal(1, await CountAsync("users", "_id", anna.Id));
             Assert.Equal(1, await CountAsync("users", "_id", bob.Id));
             Assert.Equal(["anna"], (await Restored().FindAsync(Ct)).Select(u => u.Username));
+            Assert.Empty(await Restored().ListAsync(anna, Ct));
             // Nothing new on the list: lea's id is there once, as before.
             Assert.Single(await File.ReadAllLinesAsync(Path.Combine(dir, "deleted-users"), Ct), l => l == lea.Id);
-            Assert.Contains(_log.Lines, l => l.Contains($"anna deleted user lea ({lea.Id}) again after a restore", StringComparison.Ordinal));
+            Assert.Contains(_log.Lines, l => l.Contains($"anna deleted user {lea.Id} again after a restore", StringComparison.Ordinal));
         }
         finally
         {
@@ -640,6 +643,44 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Deleting_a_user_erases_the_note_and_link_of_the_invitation_they_joined_with()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+        var (code, joinedWith) = await invitations.CreateAsync(anna, Roles.User, "Lea Müller, lea@example.org", null, Ct);
+        var (_, other) = await invitations.CreateAsync(anna, Roles.User, "for Max", null, Ct);
+        var (lea, _) = await invitations.RedeemAsync(code, "lea", Password, Ct);
+
+        var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.Equal(1, deleted!.Summary.Invitations);
+        var record = (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == joinedWith.Id);
+        Assert.Null(record.Note);
+        Assert.Null(record.UsedBy);
+        Assert.NotNull(record.UsedAt);
+        Assert.Equal(InvitationState.Used, record.State);
+        Assert.Equal(0, await CountAsync("invitations", "usedBy", lea.Id));
+        // Another invitation, not theirs, keeps its note.
+        Assert.Equal("for Max", (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == other.Id).Note);
+    }
+
+    [Fact]
+    public async Task The_own_deletion_erases_the_invitation_they_joined_with_too()
+    {
+        var (anna, _, _) = await SignedInAsync("anna", Roles.Admin);
+        var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+        var (code, joinedWith) = await invitations.CreateAsync(anna, Roles.User, "Lea Müller", null, Ct);
+        await invitations.RedeemAsync(code, "lea", Password, Ct);
+        var (signedIn, key, _) = (await Users().TrySignInAsync("lea", Password, Ct))!.Value;
+
+        Assert.True(await Deletion().DeleteOwnAccountAsync(signedIn, key, Password, "lea", Ct));
+
+        var record = (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == joinedWith.Id);
+        Assert.Null(record.Note);
+        Assert.Null(record.UsedBy);
+    }
+
+    [Fact]
     public async Task The_log_names_ids_and_counts_never_a_vault_name_or_content()
     {
         var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
@@ -656,7 +697,10 @@ public sealed class DeletionTests(MongoFixture fixture)
         var log = string.Join("\n", _log.Lines);
         Assert.Contains(diary.Id, log, StringComparison.Ordinal);
         Assert.Contains("deleted their account", log, StringComparison.Ordinal);
-        Assert.Contains("anna deleted user lea", log, StringComparison.Ordinal);
+        Assert.Contains($"anna deleted user {lea.Id}", log, StringComparison.Ordinal);
+        // The lines of the account deletions name the erased people by id only, not by their usernames.
+        Assert.All(_log.Lines.Where(l => l.Contains("deleted user", StringComparison.Ordinal) || l.Contains("deleted their account", StringComparison.Ordinal)),
+            l => Assert.DoesNotMatch(@"\b(lea|bob)\b", l));
         foreach (var secret in new[] { "Tagebuch", "Arbeit", "Projekte", "Acme", "plan.md", Password })
         {
             Assert.DoesNotContain(secret, log, StringComparison.Ordinal);

@@ -23,11 +23,12 @@ public sealed class RestoredDeletions(IMongoDatabase db, DeletionList list)
         return found.Select(u => u.ToUser()).ToList();
     }
 
-    /// <summary><see cref="FindAsync"/>, for an admin only.</summary>
+    /// <summary><see cref="FindAsync"/>, for an admin only, and without the admin: they can't delete themselves
+    /// here (another admin can, or they use Settings), so they aren't offered it.</summary>
     public async Task<IReadOnlyList<User>> ListAsync(User actor, CancellationToken ct)
     {
-        await AdminRules.RequireAdminAsync(Users, actor, ct);
-        return await FindAsync(ct);
+        var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        return (await FindAsync(ct)).Where(u => u.Id != acting.Id).ToList();
     }
 }
 

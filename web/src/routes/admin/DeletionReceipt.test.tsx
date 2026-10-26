@@ -13,6 +13,7 @@ const receipt: Receipt = {
   notes: 41,
   apiKeys: 1,
   connections: 1,
+  invitations: 1,
   externalProviders: ["OpenAI"],
   privacyContact: null,
   listed: true,
@@ -34,8 +35,9 @@ describe("receiptText", () => {
     expect(t).toContain("Deleted by: chris");
     expect(t).toContain("Vaults: 2");
     expect(t).toContain("Notes: 41");
-    expect(t).toContain("API keys: 1");
-    expect(t).toContain("App connections: 1");
+    expect(t).toContain("API keys (incl. revoked): 1");
+    expect(t).toContain("App connections (incl. revoked): 1");
+    expect(t).toContain("Invitation they joined with: kept as used, its note and link to them erased (1)");
     expect(t).toContain("OpenAI: may have received text from vaults that used it; no copy was deleted there");
     expect(t).toContain("Backups are not reached by this deletion.");
     expect(t).not.toContain("Not recorded in the deletion list");
@@ -43,6 +45,10 @@ describe("receiptText", () => {
 
   it("says 'none configured' without external providers", () => {
     expect(receiptText({ ...receipt, externalProviders: [] })).toContain("External embedding providers: none configured");
+  });
+
+  it("leaves out the invitation line when there was none", () => {
+    expect(receiptText({ ...receipt, invitations: 0 })).not.toContain("Invitation they joined with");
   });
 
   it("says when the id isn't in the deletion list", () => {
@@ -69,6 +75,12 @@ In future, if you still have access, you can export your notes first and delete 
 Kind regards
 [your privacy contact]
 `);
+  });
+
+  it("promises no deletion after a restore when the id isn't on the deletion list", () => {
+    const reply = replyText({ ...receipt, listed: false });
+    expect(reply).not.toContain("If a backup is ever restored");
+    expect(reply).toContain("Our backups are not changed by a deletion; they are kept as described in our privacy notice.\n");
   });
 
   it("signs with the configured privacy contact", () => {
@@ -98,6 +110,20 @@ describe("DeletionReceipt", () => {
     expect(await blob!.text()).toBe(receiptText(receipt));
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("warns next to Copy reply when the id isn't on the deletion list", () => {
+    render(<DeletionReceipt receipt={{ ...receipt, listed: false }} onClose={() => {}} />);
+    expect(
+      screen.getByText(
+        "This deletion isn't on the deletion list, so a restore that brings the account back won't be noticed. The reply leaves out the promise to delete it again; keep the user id and check for it after any restore.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("gives no such warning when the id is listed", () => {
+    render(<DeletionReceipt receipt={receipt} onClose={() => {}} />);
+    expect(screen.queryByText(/isn't on the deletion list/)).not.toBeInTheDocument();
   });
 
   it("says when copying didn't work", async () => {

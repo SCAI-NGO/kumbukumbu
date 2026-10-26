@@ -6,8 +6,9 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Accounts;
 
 /// <summary>What a deletion removed, for the log and the caller: counts only, never a name. <c>Notes</c> counts the
-/// documents in the <c>notes</c> collection of the deleted vaults (by vault id, so no key is needed).</summary>
-public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0);
+/// documents in the <c>notes</c> collection of the deleted vaults (by vault id, so no key is needed); <c>Invitations</c>
+/// the invitations the user joined with whose note and link to them were erased.</summary>
+public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0, int Invitations = 0);
 
 /// <summary>A user an admin deleted, for the receipt: ids, the usernames, the time and the counts; no content and no
 /// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>.</summary>
@@ -20,8 +21,10 @@ public sealed record DeletedUser(string Id, string Username, string Display, str
 /// in the web app, so no single careless request deletes anything; deleting one's own account also needs the
 /// password, so a stolen session alone can't. The log names ids, usernames and counts, never a vault name or content.
 /// <para>
-/// A user's invitations stay: they are the instance's record of who invited whom (the accounts they made exist on
-/// their own), and the remaining admins see and can revoke an open one, as after a deactivation.
+/// The invitations a user created stay: they are the instance's record of who invited whom (the accounts they made
+/// exist on their own), and the remaining admins see and can revoke an open one, as after a deactivation. The one the
+/// user joined with stays as a used invitation, but without its note (which often names the invitee) and without
+/// the link to the user, so nothing in the database still names or points to the person.
 /// </para>
 /// </summary>
 public sealed class Deletion(
@@ -34,6 +37,8 @@ public sealed class Deletion(
     private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>("api_keys");
 
     private IMongoCollection<BsonDocument> Notes { get; } = db.GetCollection<BsonDocument>("notes");
+
+    private IMongoCollection<InvitationDocument> InvitationDocs { get; } = db.GetCollection<InvitationDocument>("invitations");
 
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
@@ -69,8 +74,8 @@ public sealed class Deletion(
         // After the commit, and whatever happens to the request now: the deletion is done either way.
         await list.AddAsync(user.Id, CancellationToken.None);
         log.LogInformation(
-            "User {Username} deleted their account: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
-            user.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
+            "User {UserId} deleted their account: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+            user.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
         return true;
     }
 
@@ -97,8 +102,8 @@ public sealed class Deletion(
             ?? throw new NotPermittedException("The user changed meanwhile; nothing was deleted.");
         var listed = await list.AddAsync(userId, CancellationToken.None);
         log.LogInformation(
-            "{Admin} deleted user {Username} ({UserId}): {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Documents} documents",
-            acting.Username, target.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Documents);
+            "{Admin} deleted user {UserId}: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+            acting.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
         return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed);
     }
 
@@ -123,16 +128,17 @@ public sealed class Deletion(
             {
                 summary = await DeleteAccountAsync(target.Id, Builders<UserDocument>.Filter.Where(u => u.Id == target.Id && u.Role != Roles.PrimaryAdmin), ct);
             }
-            catch (Exception e) when (e is MongoException or TimeoutException)
+            catch (Exception e) when (e is not OperationCanceledException)
             {
+                // One user that fails doesn't cost the others their deletion, or the admin the receipts of those done.
                 log.LogError("{Admin} could not delete user {UserId} again after a restore ({Error})", acting.Username, target.Id, e.Message);
                 continue;
             }
 
             if (summary is null) continue;
             log.LogInformation(
-                "{Admin} deleted user {Username} ({UserId}) again after a restore: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Documents} documents",
-                acting.Username, target.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Documents);
+                "{Admin} deleted user {UserId} again after a restore: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Invitations} invitations erased, {Documents} documents",
+                acting.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Invitations, summary.Documents);
             done.Add(new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, Listed: true));
         }
 
@@ -153,6 +159,7 @@ public sealed class Deletion(
         var notes = await CountNotesAsync(vaults, ct);
         var keyCount = 0;
         var connectionCount = 0;
+        var invitationCount = 0;
         long documents;
         try
         {
@@ -168,6 +175,13 @@ public sealed class Deletion(
                 // The user document is deleted above, in this transaction: a connection being created or a token being
                 // issued writes it or the connection's document, and conflicts.
                 connectionCount = await ConnectionRevocation.DeleteAllAsync(db, s, userId, token);
+                // The invitation they joined with stays a used one, but its note (often the invitee's name) and its
+                // link to them go: nothing left names or points to the person.
+                invitationCount = (int)(await InvitationDocs.UpdateManyAsync(
+                    s,
+                    i => i.UsedBy == userId,
+                    Builders<InvitationDocument>.Update.Unset(i => i.Note).Unset(i => i.UsedBy),
+                    cancellationToken: token)).ModifiedCount;
             }, ct);
         }
         catch (UserChangedException)
@@ -184,7 +198,7 @@ public sealed class Deletion(
             documents += await catalog.DeleteVaultsAsync(late, (_, _) => Task.CompletedTask, ct);
         }
 
-        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount, notes);
+        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount, notes, invitationCount);
     }
 
     /// <summary>The notes in these vaults, counted by vault id: the receipt's count, read without any key.</summary>

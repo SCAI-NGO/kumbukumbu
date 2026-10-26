@@ -30,14 +30,18 @@ export function receiptText(r: Receipt): string {
     `Deleted by: ${r.deletedBy}`,
     `Vaults: ${r.vaults}`,
     `Notes: ${r.notes}`,
-    `API keys: ${r.apiKeys}`,
-    `App connections: ${r.connections}`,
+    `API keys (incl. revoked): ${r.apiKeys}`,
+    `App connections (incl. revoked): ${r.connections}`,
+    ...(Number(r.invitations) > 0 ? [`Invitation they joined with: kept as used, its note and link to them erased (${r.invitations})`] : []),
     ...providers,
     "Backups are not reached by this deletion.",
     ...(r.listed ? [] : ["Not recorded in the deletion list (it isn't configured or couldn't be written)."]),
     "",
   ].join("\n");
 }
+
+/** Only when the id is on the deletion list can the server notice a restore: otherwise the reply promises nothing about it. */
+const listedPromise = " If a backup is ever restored, we delete your account again.";
 
 /** The reply the admin sends from the privacy contact: neutral, English, and signed with the configured contact. */
 export function replyText(r: Receipt): string {
@@ -49,7 +53,7 @@ as you requested, we deleted your Kumbu² account "${r.username}" and all notes 
 
 Copies that AI tools or other apps read from your notes are outside Kumbu². Please delete them there, for example in your chat history.
 
-Our backups are not changed by a deletion; they are kept as described in our privacy notice. If a backup is ever restored, we delete your account again.
+Our backups are not changed by a deletion; they are kept as described in our privacy notice.${r.listed ? listedPromise : ""}
 
 In future, if you still have access, you can export your notes first and delete your account yourself in Settings.
 
@@ -97,6 +101,12 @@ export default function DeletionReceipt({ receipt, onClose }: { receipt: Receipt
           </button>
           <CopyButton value={replyText(receipt)} label="Copy reply" className={`${secondaryButtonClass} flex-1`} onResult={(ok) => setCopyFailed(!ok)} />
         </div>
+        {!receipt.listed && (
+          <p className="text-sm text-text">
+            This deletion isn't on the deletion list, so a restore that brings the account back won't be noticed. The reply leaves out the promise to
+            delete it again; keep the user id and check for it after any restore.
+          </p>
+        )}
         {copyFailed && (
           <p aria-live="polite" className="text-sm text-text">
             Copying didn't work. Download the receipt and write the reply by hand.

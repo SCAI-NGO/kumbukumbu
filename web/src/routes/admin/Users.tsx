@@ -42,8 +42,14 @@ export default function Users() {
 
   return (
     <AdminOnly title="Users">
+      {deletions.isError && <FormError>{errorText(deletions.error)}</FormError>}
+      {deletions.data?.configured === false && (
+        <p className="mb-4 text-sm text-text-body">
+          Deleted users aren't listed outside the database (Kumbu:Deletions:Path isn't set), so a backup restore that brings one back won't be noticed.
+        </p>
+      )}
       {restored.length > 0 && (
-        <div role="alert" className="mb-4 flex flex-col gap-3 rounded-[12px] border border-line bg-surface p-4 text-text">
+        <div role="status" className="mb-4 flex flex-col gap-3 rounded-[12px] border border-line bg-surface p-4 text-text">
           <p>
             A backup restore brought back {restored.length} deleted user(s): {restored.map((u) => u.username).join(", ")}. Delete them again?
           </p>

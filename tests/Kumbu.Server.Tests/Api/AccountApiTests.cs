@@ -568,6 +568,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(1, json["notes"]!.GetValue<long>());
         Assert.Equal(0, json["apiKeys"]!.GetValue<int>());
         Assert.Equal(0, json["connections"]!.GetValue<int>());
+        Assert.Equal(0, json["invitations"]!.GetValue<int>());
         Assert.Empty(json["externalProviders"]!.AsArray());
         Assert.Null(json["privacyContact"]);
         Assert.False(json["listed"]!.GetValue<bool>());
@@ -612,7 +613,8 @@ public sealed class AccountApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
         var body = await deleted.Content.ReadAsStringAsync(Ct);
-        Assert.Contains(log.Lines, l => l.Contains($"deleted user {target.Username}", StringComparison.Ordinal));
+        Assert.Contains(log.Lines, l => l.Contains($"deleted user {target.User.Id}", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("deleted user", StringComparison.Ordinal) && l.Contains(target.Username, StringComparison.Ordinal));
         foreach (var secret in new[] { "Geheimprojekt", "Plan X", "Geheim" })
         {
             Assert.DoesNotContain(secret, body, StringComparison.Ordinal);

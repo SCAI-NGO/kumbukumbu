@@ -4151,6 +4151,8 @@ export interface components {
             apiKeys: number | string;
             /** Format: int32 */
             connections: number | string;
+            /** Format: int32 */
+            invitations: number | string;
             externalProviders: string[];
             privacyContact: null | string;
             listed: boolean;

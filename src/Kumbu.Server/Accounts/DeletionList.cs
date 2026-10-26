@@ -44,8 +44,9 @@ public sealed class DeletionList(IOptions<KumbuOptions> options, ILogger<Deletio
             stream.Flush(flushToDisk: true);
             return true;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
+            // Any failure, an odd path value included: the deletion has committed, so nothing may throw from here.
             log.LogError("Deleted user {UserId} could not be added to the list of deleted users in {Dir} ({Error})", userId, dir, e.Message);
             return false;
         }
@@ -68,7 +69,7 @@ public sealed class DeletionList(IOptions<KumbuOptions> options, ILogger<Deletio
             var lines = await File.ReadAllLinesAsync(file, ct);
             return lines.Select(l => l.Trim()).Where(IsUserId).ToHashSet(StringComparer.Ordinal);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
             log.LogError("The list of deleted users in {Dir} could not be read ({Error})", dir, e.Message);
             return new HashSet<string>();

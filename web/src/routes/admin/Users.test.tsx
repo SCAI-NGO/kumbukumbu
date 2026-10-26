@@ -136,6 +136,7 @@ describe("Admin users", () => {
           notes: 41,
           apiKeys: 1,
           connections: 0,
+          invitations: 1,
           externalProviders: [],
           privacyContact: null,
           listed: true,
@@ -160,7 +161,7 @@ describe("Admin users", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(receipt).toHaveTextContent("Vaults: 2");
     expect(receipt).toHaveTextContent("Notes: 41");
-    expect(receipt).toHaveTextContent("API keys: 1");
+    expect(receipt).toHaveTextContent("API keys (incl. revoked): 1");
     expect(within(receipt).getByRole("button", { name: "Download receipt" })).toBeInTheDocument();
     expect(within(receipt).getByRole("button", { name: "Copy reply" })).toBeInTheDocument();
     await userEvent.click(within(receipt).getByRole("button", { name: "Close" }));
@@ -180,11 +181,31 @@ describe("Admin users", () => {
   });
 
   it("shows no restore warning when no deleted user is back", async () => {
-    api();
+    const fetch = api();
     renderApp("/admin/users");
     await screen.findByRole("listitem", { name: "Bob" });
+    // Only once the check has answered does its absence mean anything.
+    await vi.waitFor(() => expect(fetch.mock.calls.some(([r]) => new URL(r.url).pathname === "/api/admin/deletions")).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(/A backup restore brought back/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/won't be noticed/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delete again…" })).not.toBeInTheDocument();
+  });
+
+  it("says on the users page when deletions aren't listed, so a restore won't be noticed", async () => {
+    api(admin, { "GET /api/admin/deletions": () => json(200, { configured: false, restored: [] }) });
+    renderApp("/admin/users");
+    expect(
+      await screen.findByText(
+        "Deleted users aren't listed outside the database (Kumbu:Deletions:Path isn't set), so a backup restore that brings one back won't be noticed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the server's sentence when the restore check fails", async () => {
+    api(admin, { "GET /api/admin/deletions": () => json(403, { error: "The check failed." }) });
+    renderApp("/admin/users");
+    expect(await screen.findByText("The check failed.")).toBeInTheDocument();
   });
 
   it("the users page shows the restore warning and 'Delete again…' when restored users exist", async () => {
@@ -202,6 +223,7 @@ describe("Admin users", () => {
       notes: 3,
       apiKeys: 0,
       connections: 0,
+      invitations: 0,
       externalProviders: [],
       privacyContact: null,
       listed: true,
@@ -215,7 +237,10 @@ describe("Admin users", () => {
       },
     });
     renderApp("/admin/users");
-    expect(await screen.findByText("A backup restore brought back 2 deleted user(s): anna, max. Delete them again?")).toBeInTheDocument();
+    const warning = await screen.findByText("A backup restore brought back 2 deleted user(s): anna, max. Delete them again?");
+    // A standing note, not an alert announced on every visit.
+    expect(warning.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Delete again…" }));
     const dialog = screen.getByRole("alertdialog");
     const confirm = within(dialog).getByRole("button", { name: "Delete again" });

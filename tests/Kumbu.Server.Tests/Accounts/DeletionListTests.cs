@@ -79,6 +79,15 @@ public sealed class DeletionListTests : IDisposable
     }
 
     [Fact]
+    public async Task A_path_the_system_refuses_answers_false_instead_of_throwing()
+    {
+        // A NUL character: not an IOException, and still no exception may reach a deletion that has committed.
+        Assert.False(await List(_root + "\0bad").AddAsync(A, Ct));
+
+        Assert.Contains(_log.Lines, l => l.StartsWith("Error", StringComparison.Ordinal) && l.Contains(A, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_missing_file_reads_as_empty()
     {
         Assert.Empty(await List(Path.Combine(_root, "never-written")).ReadAsync(Ct));
