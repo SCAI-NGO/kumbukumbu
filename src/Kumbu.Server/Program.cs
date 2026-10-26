@@ -195,6 +195,7 @@ app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
 app.MapUploadApi();
+app.MapExportApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
