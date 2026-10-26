@@ -80,7 +80,8 @@ public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More
 /// A note's restore, the vault's trash and its checkpoints for the web app: the code paths of <c>restore</c>,
 /// <c>trash</c>, <c>mkcp</c>, <c>lscp</c> and <c>rmcp</c>, with their rights. Every caller lists what its
 /// credential opens; a restore, making and removing a checkpoint need write rights to the vault, and so does a
-/// checkpoint restore's preview, as in the shell. Removing a checkpoint is for good.
+/// checkpoint restore's preview, as in the shell. Removing a checkpoint is for good. Opening and reading a checkpoint needs only the right to read
+/// the vault.
 /// </summary>
 public static class HistoryApi
 {
@@ -241,6 +242,7 @@ public static class HistoryApi
         VaultPath root, string name, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
     {
         await NoteApi.RequireVaultAsync(store, root, ct);
+        // "cat" only names the command in an error text that is discarded: the API words its own 404.
         var (view, _) = await checkpoints.OpenAsync("cat", root.Segments[0], name, ct);
         return view ?? throw ApiErrors.NotFound($"There is no checkpoint '{name}' in {root.Segments[0]}.");
     }
