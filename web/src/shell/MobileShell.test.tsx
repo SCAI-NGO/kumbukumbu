@@ -319,7 +319,8 @@ describe("the shell", () => {
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
     await userEvent.click(within(account).getByRole("link", { name: link }));
-    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+    // The page's first lazy import: slow on a busy machine.
+    expect(await screen.findByRole("heading", { name: title }, { timeout: 5_000 })).toBeInTheDocument();
     expect(useEditor.getState().overlay).toBe("none");
 
     await userEvent.click(screen.getByRole("link", { name: "Back to the notes" }));

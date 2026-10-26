@@ -23,6 +23,7 @@ import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
+import { registerScrollTop, takeRestore } from "../update/apply";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -132,6 +133,33 @@ export default function NoteView({ path }: { path: string }) {
     },
     [note, links.data, path, queryClient],
   );
+  // A reload into a new release (update/apply.ts) asks where the reader is, and finds them there again afterwards:
+  // the mode, and how far down the note (Read mode's page, or Write mode's source). Once, when the note is shown.
+  // For the editor once, when it next mounts: back in Write mode later, it starts at the top as usual.
+  const editorScroll = useRef<number | undefined>(undefined);
+  const takeEditorScroll = useCallback(() => {
+    const top = editorScroll.current;
+    editorScroll.current = undefined;
+    return top;
+  }, []);
+  useEffect(() => {
+    registerScrollTop(() => (useEditor.getState().mode === "write" ? document.getElementById("markdown-source") : scroller.current)?.scrollTop ?? 0);
+    return () => registerScrollTop(null);
+  }, []);
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (restored.current || !note.data) return;
+    restored.current = true;
+    const restore = takeRestore();
+    if (!restore) return;
+    if (restore.mode === "write") {
+      editorScroll.current = restore.scrollTop;
+      useEditor.getState().setMode("write");
+    } else if (scroller.current) {
+      scroller.current.scrollTop = restore.scrollTop;
+    }
+  }, [note.data]);
+
   useLayoutEffect(() => {
     if (keepScroll.current === null || !scroller.current) return;
     scroller.current.scrollTop = keepScroll.current;
@@ -214,10 +242,10 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <LoadBoundary fallback={<EditorLoadFailed />}>
           {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} />
+            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
           ) : (
             <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} />
+              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
             </Suspense>
           )}
         </LoadBoundary>

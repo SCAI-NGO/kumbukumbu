@@ -8,7 +8,10 @@ import { RouteError } from "./components/AppError";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
+import { useEditor } from "./state/editor";
 import { useSession } from "./state/session";
+import { useApplyUpdates } from "./update/apply";
+import UpdateBar from "./update/UpdateBar";
 
 /** Opts into the v7 behaviour now, which also keeps React Router's warnings out of the console. */
 export const routerFuture = {
@@ -19,19 +22,33 @@ export const routerFuture = {
   v7_skipActionErrorRevalidation: true,
 };
 
-/** Sends to sign-in, with the way back, as soon as any request found the session gone. */
+/**
+ * Sends to sign-in, with the way back, as soon as any request found the session gone; and reloads into a new
+ * release, signed in or not.
+ */
 function Root() {
   const ended = useSession((s) => s.ended);
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
+  useApplyUpdates();
 
   useEffect(() => {
     if (!ended) return;
     useSession.setState({ ended: false });
+    // Write mode ends with the session: the editor keeps its unsaved text as a draft, and the note opens again
+    // after signing in (in Write mode, with the draft). Left on, Write mode would outlive the editor.
+    useEditor.setState({ mode: "read", currentPath: null });
     if (pathname !== "/signin") navigate(`/signin?next=${encodeURIComponent(pathname + search)}`, { replace: true });
   }, [ended, pathname, search, navigate]);
 
-  return <Outlet />;
+  // The shell shows the update bar under its own top bar; every other page has it above.
+  const inShell = pathname === "/" || pathname.startsWith("/notes/");
+  return (
+    <>
+      {!inShell && <UpdateBar />}
+      <Outlet />
+    </>
+  );
 }
 
 /** The signed-in part of the app. */
