@@ -89,6 +89,9 @@ interface Props {
   path?: string;
   /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
   nested?: boolean;
+  /** Inside a checkpoint: where a note it holds is opened. Its links stay in it, an embed stays a link, and a
+   * note it lacks cannot be created. Without it, the note is today's. */
+  checkpointLink?: (path: string) => string;
 }
 
 // The components below must keep their identity across renders: a new one would remount every block of that
@@ -160,11 +163,11 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
 }
 
 function WikiLink({ index, embed, children }: { index: number; embed: unknown; children: ReactNode }) {
-  const { links, onCreateMissing, path } = useContext(NoteContext);
+  const { links, onCreateMissing, path, checkpointLink } = useContext(NoteContext);
   const link = links?.[index];
   const [choosing, setChoosing] = useState(false);
   // Only a note, never this one, and only from the note shown (not from inside an embedded one).
-  if (embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
+  if (!checkpointLink && embed === "block" && link?.kind === "note" && path && link.path && link.path !== path) {
     return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
   }
   switch (link?.kind) {
@@ -172,11 +175,20 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
       return <span>{children}</span>;
     case "note":
       return (
-        <Link to={noteUrl(link.path!)} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
+        <Link to={checkpointLink ? checkpointLink(link.path!) : noteUrl(link.path!)} className="text-accent-text underline decoration-accent/45 underline-offset-[3px]">
           {children}
         </Link>
       );
     case "not_found":
+      // A checkpoint is read-only, and the note may well exist today: only say it isn't in this one.
+      if (checkpointLink) {
+        return (
+          <span className="text-muted">
+            {children}
+            <span className="ml-1 rounded-[4px] bg-surface-2 px-1 font-mono text-[11px] text-muted">not in this checkpoint</span>
+          </span>
+        );
+      }
       return (
         <button
           type="button"
@@ -199,7 +211,7 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
             {children}
             <span className="ml-1 rounded-[4px] bg-surface-2 px-1 font-mono text-[11px] text-muted no-underline">{link.candidates.length} notes</span>
           </button>
-          {choosing && <AmbiguousLinkDialog target={link.target} candidates={link.candidates} onClose={() => setChoosing(false)} />}
+          {choosing && <AmbiguousLinkDialog target={link.target} candidates={link.candidates} hrefOf={checkpointLink} onClose={() => setChoosing(false)} />}
         </>
       );
     default:
@@ -344,7 +356,7 @@ const components: Components = {
   },
 };
 
-function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false }: Props) {
+function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreateMissing, highlight = null, find = null, path, nested = false, checkpointLink }: Props) {
   const query = find?.query ?? "";
   const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
@@ -353,8 +365,8 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
     [links, highlight, query, current],
   );
   const context = useMemo(
-    () => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path, nested }),
-    [links, tasksDisabled, onToggleTask, onCreateMissing, path, nested],
+    () => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink }),
+    [links, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink],
   );
 
   return (

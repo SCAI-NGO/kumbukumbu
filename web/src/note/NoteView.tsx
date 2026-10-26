@@ -55,7 +55,7 @@ const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap ag
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
  * are empty in it; leading blank lines go, but not indentation: four spaces make a code block, not a heading.
  */
-const startsWithH1 = (body: string) => {
+export const startsWithH1 = (body: string) => {
   const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
   return /^ {0,3}#(?:[ \t]|$)/.test(first.split("\n", 1)[0]) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
@@ -348,7 +348,7 @@ export default function NoteView({ path }: { path: string }) {
  * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
  * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
  */
-function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
+export function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
   const props = useMemo(() => parseProperties(yaml), [yaml]);
   const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
   if (!props) {
