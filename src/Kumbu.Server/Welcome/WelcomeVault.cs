@@ -37,8 +37,8 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
     public static string Fill(string content, string? publicUrl) =>
         content.Replace(Placeholder, string.IsNullOrEmpty(publicUrl) ? NoAddress : publicUrl.TrimEnd('/'), StringComparison.Ordinal);
 
-    /// <summary>Creates the vault and writes every note. Never throws, except for cancellation: it logs, and removes
-    /// a vault whose notes were not all written.</summary>
+    /// <summary>Creates the vault and writes every note. Never throws, except when <paramref name="ct"/> is cancelled: it
+    /// logs, and removes a vault whose notes were not all written.</summary>
     public async Task CreateAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
     {
         UnlockedVault? vault = null;
@@ -58,12 +58,15 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
                 }
             }
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e)
         {
             // Deliberately broad: the account exists by now, and an exception here would keep the recovery key from the user.
+            // Only a cancellation the caller asked for goes on, and even then no half-written vault stays.
+            var cancelled = e is OperationCanceledException && ct.IsCancellationRequested;
             // The type, not the message, which may name the vault.
-            log.LogWarning("Could not create the welcome vault for user {UserId}: {Reason}", user.Id, e.GetType().Name);
+            if (!cancelled) log.LogWarning("Could not create the welcome vault for user {UserId}: {Reason}", user.Id, e.GetType().Name);
             if (vault is not null) await RemoveAsync(vault.Id, user.Id);
+            if (cancelled) throw;
         }
     }
 

@@ -209,4 +209,23 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
         Assert.Single(log.Lines, l => l.Contains($"Could not create the welcome vault for user {user.Id}: ", StringComparison.Ordinal));
         Assert.Equal(0, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Owner == user.Id, cancellationToken: Ct));
     }
+    [Fact]
+    public async Task A_cancellation_the_join_did_not_ask_for_never_fails_it()
+    {
+        // The join passes CancellationToken.None: an OperationCanceledException from below (a driver timeout, say) is a
+        // failure like any other, not a cancellation, and must not hide the recovery key.
+        var log = new CapturedLog();
+        await using var logged = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var username = NewUsername();
+        var users = logged.Services.GetRequiredService<UserCatalog>();
+        await users.CreateAsync(username, Password, Roles.User, Ct);
+        var (user, userKey, readAt) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
+        var welcome = logged.Services.GetRequiredService<WelcomeVault>();
+        welcome.AfterVaultCreated = _ => throw new OperationCanceledException();
+
+        await welcome.CreateAsync(user, userKey, readAt, CancellationToken.None);
+
+        Assert.Single(log.Lines, l => l.Contains($"Could not create the welcome vault for user {user.Id}: OperationCanceledException", StringComparison.Ordinal));
+        Assert.Equal(0, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Owner == user.Id, cancellationToken: Ct));
+    }
 }
