@@ -37,6 +37,16 @@ public sealed partial class WelcomeTextTests
     }
 
     [Fact]
+    public void The_checkpoints_section_names_open_export_and_the_ai()
+    {
+        var section = Section(Text("Working by hand.md"), "## Checkpoints");
+        Assert.Contains("**Open**", section, StringComparison.Ordinal);
+        Assert.Contains("**Export as ZIP**", section, StringComparison.Ordinal);
+        Assert.Contains("**Copy for your AI**", section, StringComparison.Ordinal);
+        Assert.Contains("--checkpoint", section, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Every_text_starts_with_its_title_and_links_back_to_start_here()
     {
         foreach (var (name, content) in WelcomeVault.Texts())

@@ -18,14 +18,14 @@ import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
-type Row =
+export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
   | { kind: "note"; path: string; depth: number };
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
 /** The visible rows, in the server's order (as `ls`: folders first, then notes, each in text order). */
-function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0): Row[] {
+export function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0): Row[] {
   return [
     ...folder.folders.flatMap((f): Row[] => {
       const open = !!expanded[f.path];

@@ -112,6 +112,7 @@ export const routes: RouteObject[] = [
               { path: "/notes/:vault/*", element: null },
             ],
           },
+          { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },

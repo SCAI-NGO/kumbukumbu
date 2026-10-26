@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { browserZone, download, exportUrl } from "./exportUrl";
+import { browserZone, checkpointExportUrl, download, exportUrl } from "./exportUrl";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -18,6 +18,12 @@ describe("exportUrl", () => {
     vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({ timeZone: "America/New_York" } as Intl.ResolvedDateTimeFormatOptions);
     expect(browserZone()).toBe("America/New_York");
     expect(exportUrl(["Work"])).toBe("/api/vaults/Work/export?tz=America%2FNew_York");
+  });
+});
+
+describe("checkpointExportUrl", () => {
+  it("is the checkpoint's own route with the reader's time zone", () => {
+    expect(checkpointExportUrl("My Diary", "before-cleanup", "Europe/Vienna")).toBe("/api/vaults/My%20Diary/checkpoints/before-cleanup/export?tz=Europe%2FVienna");
   });
 });
 
