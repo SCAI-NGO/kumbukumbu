@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useBlocker } from "react-router-dom";
 import { useDialog } from "../hooks/useDialog";
 import { primaryButtonClass, secondaryButtonClass } from "./form";
+import { useHoldUpdates } from "../update/apply";
 
 /**
  * For a secret shown once: until it was saved (downloaded or copied), reloading or closing the page asks the
@@ -12,6 +13,8 @@ import { primaryButtonClass, secondaryButtonClass } from "./form";
  */
 export function useLeaveGuard(saved: boolean) {
   const blocker = useBlocker(!saved);
+  // A new release waits too: its reload would drop the secret as surely as leaving.
+  useHoldUpdates(!saved);
 
   useEffect(() => {
     if (saved) return;

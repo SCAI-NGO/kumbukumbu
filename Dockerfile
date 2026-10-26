@@ -7,7 +7,11 @@ COPY web/package.json web/pnpm-lock.yaml web/
 # Corepack reads packageManager from the working directory, which has no package.json, so pin the version here too.
 RUN corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm -C web install --frozen-lockfile
 COPY web web
-RUN pnpm -C web build
+# One version for the app and the server (set by the release workflow, .github/workflows/docker.yml): the web app
+# compares its own with the server's X-Kumbu-Version and reloads into a newer one. 0.0.0-dev turns that off.
+ARG VERSION=0.0.0-dev
+ARG GIT_SHA=""
+RUN KUMBU_VERSION="$VERSION" KUMBU_GIT_SHA="$GIT_SHA" pnpm -C web build
 
 # mcr.microsoft.com/dotnet/sdk:10.0
 FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:afd0ccff9d306812a69ef0f47458376b6acb544ae866cfc4b8d28ff0eef35ea7 AS build
@@ -15,8 +19,13 @@ WORKDIR /src
 COPY . .
 # The web app is served from the server's wwwroot.
 COPY --from=web /src/web/dist src/Kumbu.Server/wwwroot
+# The same version as the web stage's, so app and server agree: the SDK makes the informational version
+# "$VERSION+$GIT_SHA" (BuildVersion.cs), just "$VERSION" without a commit (no .git in the build context).
+ARG VERSION=0.0.0-dev
+ARG GIT_SHA=""
 # Locked: exactly the packages in packages.lock.json, or the build fails.
-RUN dotnet restore src/Kumbu.Server --locked-mode && dotnet publish src/Kumbu.Server -c Release -o /app --no-restore
+RUN dotnet restore src/Kumbu.Server --locked-mode && \
+    dotnet publish src/Kumbu.Server -c Release -o /app --no-restore -p:Version="$VERSION" -p:SourceRevisionId="$GIT_SHA"
 
 # mcr.microsoft.com/dotnet/aspnet:10.0
 FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:d247d17dd429d96580eeb96cfce220c1089d860dbbf9f94d599ca64cf3604fe4

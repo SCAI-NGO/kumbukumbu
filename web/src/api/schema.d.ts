@@ -4,6 +4,41 @@
  */
 
 export interface paths {
+    "/api/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VersionView"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ws": {
         parameters: {
             query?: never;
@@ -4978,6 +5013,9 @@ export interface components {
             damaged: number | string;
             notes: components["schemas"]["VersionEntry"][];
             deleted: string[];
+        };
+        VersionView: {
+            version: string;
         };
         WsTicketView: {
             ticket: string;
