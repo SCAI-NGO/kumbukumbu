@@ -11,6 +11,7 @@ import { topDialog } from "../hooks/useDialog";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
+import InstallHint from "../update/InstallHint";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
@@ -143,6 +144,7 @@ export default function MobileShell() {
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
       <TopBar path={path} />
+      <InstallHint />
       <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
       {createUntitled.isError && (
         <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">

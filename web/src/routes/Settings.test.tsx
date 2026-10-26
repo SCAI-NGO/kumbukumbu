@@ -6,6 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
+import { useUpdate } from "../update/store";
+
+const version = vi.hoisted(() => ({ app: "0.2.0+a6362ec" }));
+vi.mock("../update/version", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../update/version")>();
+  return {
+    ...actual,
+    get appVersion() {
+      return version.app;
+    },
+  };
+});
 
 const recoveryKey = "WXYZ-2345-6789-ABCD";
 
@@ -37,6 +49,58 @@ afterEach(() => {
 });
 
 describe("Settings", () => {
+  it("shows the app's version, and the server's when it differs", async () => {
+    api();
+    renderApp("/settings");
+    const about = await screen.findByRole("region", { name: "About" });
+    expect(about).toHaveTextContent("Kumbu² 0.2.0 (a6362ec)");
+    expect(about).not.toHaveTextContent("Server:");
+
+    act(() => useUpdate.getState().report("0.2.1+b0b0b0b"));
+    expect(about).toHaveTextContent("Server: 0.2.1 (b0b0b0b)");
+    act(() => useUpdate.setState({ server: null, available: null }));
+  });
+
+  it("calls a local build a development build", async () => {
+    version.app = "0.0.0-dev";
+    try {
+      api();
+      renderApp("/settings");
+      const about = await screen.findByRole("region", { name: "About" });
+      expect(about).toHaveTextContent("Kumbu² development build");
+      expect(about).not.toHaveTextContent("0.0.0");
+    } finally {
+      version.app = "0.2.0+a6362ec";
+    }
+  });
+
+  it("explains installing on Android, iPhone and the desktop", async () => {
+    api();
+    renderApp("/settings");
+    const install = await screen.findByRole("region", { name: "Install as an app" });
+    expect(install).toHaveAttribute("id", "install");
+    const lists = within(install).getAllByRole("list");
+    expect(lists).toHaveLength(3);
+    expect(install).toHaveTextContent("Android");
+    expect(lists[0]).toHaveTextContent("⋮");
+    expect(lists[0]).toHaveTextContent("Install app");
+    expect(lists[0]).toHaveTextContent("Add to Home screen");
+    expect(install).toHaveTextContent("iPhone");
+    expect(lists[1]).toHaveTextContent("Share");
+    expect(lists[1]).toHaveTextContent("Add to Home Screen");
+    expect(install).toHaveTextContent("desktop");
+    expect(lists[2]).toHaveTextContent("Install Kumbu²");
+  });
+
+  it("says so when it already runs as an installed app", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q === "(display-mode: standalone)", addEventListener() {}, removeEventListener() {} }));
+    api();
+    renderApp("/settings");
+    const install = await screen.findByRole("region", { name: "Install as an app" });
+    expect(install).toHaveTextContent("Kumbu² is installed as an app on this device.");
+    expect(within(install).queryAllByRole("list")).toHaveLength(0);
+  });
+
   it("follows the system by default and remembers only the scheme's name", async () => {
     mockSystem(true);
     api();

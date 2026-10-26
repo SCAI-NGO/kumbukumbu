@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
@@ -14,6 +15,9 @@ import { useSession } from "../state/session";
 import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
 import { applyScheme, storedScheme } from "../theme/apply";
 import { schemes, type Scheme, type Tokens } from "../theme/schemes";
+import { isStandalone } from "../update/InstallHint";
+import { useUpdate } from "../update/store";
+import { appVersion, parseVersion } from "../update/version";
 
 export default function Settings() {
   return (
@@ -26,14 +30,16 @@ export default function Settings() {
       <SessionsSection />
       <VaultsSection />
       <DeleteAccountSection />
+      <InstallSection />
+      <AboutSection />
     </AccountScreen>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, id: anchor, children }: { title: string; id?: string; children: ReactNode }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-4">
+    <section id={anchor} aria-labelledby={id} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-4">
       <h2 id={id} className="text-lg font-bold text-text">
         {title}
       </h2>
@@ -539,6 +545,72 @@ function SessionsSection() {
       <button type="button" disabled={endOthers.isPending} onClick={() => endOthers.mutate()} className={secondaryButtonClass}>
         Sign out other sessions
       </button>
+    </Section>
+  );
+}
+
+/** Without a service worker there is no install banner: the browser's own menu installs it (spec §1). */
+function InstallSection() {
+  const { hash } = useLocation();
+  const section = useRef<HTMLDivElement>(null);
+  // The phone's hint links here (`/settings#install`); a navigation within the app doesn't scroll to it by itself.
+  useEffect(() => {
+    if (hash === "#install") section.current?.scrollIntoView?.({ block: "start" });
+  }, [hash]);
+
+  return (
+    <div ref={section}>
+      <Section title="Install as an app" id="install">
+        {isStandalone() ? (
+          <p className="text-text-body">Kumbu² is installed as an app on this device.</p>
+        ) : (
+          <>
+            <p className="text-text-body">Kumbu² gets an icon of its own and opens in its own window. Updates still arrive by themselves.</p>
+            <InstallSteps title="Android (Chrome)">
+              <li>Open the menu ⋮.</li>
+              <li>
+                Tap <b>Install app</b> (or <b>Add to Home screen</b>).
+              </li>
+            </InstallSteps>
+            <InstallSteps title="iPhone and iPad (Safari)">
+              <li>
+                Tap <b>Share</b>.
+              </li>
+              <li>
+                Tap <b>Add to Home Screen</b>.
+              </li>
+            </InstallSteps>
+            <InstallSteps title="On the desktop (Chrome or Edge)">
+              <li>Click the install icon at the right of the address bar,</li>
+              <li>
+                or open the menu and choose <b>Install Kumbu²</b>.
+              </li>
+            </InstallSteps>
+          </>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function InstallSteps({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="font-medium text-text">{title}</h3>
+      <ol className="list-decimal pl-5 text-text-body">{children}</ol>
+    </div>
+  );
+}
+
+/** This app's build, and the server's when it differs (an update not taken yet). */
+function AboutSection() {
+  const app = parseVersion(appVersion);
+  const server = parseVersion(useUpdate((s) => s.server));
+  const differs = app && server && (app.semver !== server.semver || app.sha !== server.sha);
+  return (
+    <Section title="About">
+      <p className="text-text-body">{app ? `Kumbu² ${app.semver} (${app.sha})` : "Kumbu² development build"}</p>
+      {differs && <p className="text-text-body">{`Server: ${server.semver} (${server.sha})`}</p>}
     </Section>
   );
 }
