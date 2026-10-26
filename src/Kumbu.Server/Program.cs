@@ -58,6 +58,9 @@ builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
+// Re-keys vaults in the background, one at a time; a hosted service so that it is there to hear of pending vaults.
+builder.Services.AddSingleton<RekeyRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();

@@ -119,6 +119,13 @@ public sealed partial class VaultCatalog
             .Project(v => v.Id).ToListAsync(ct);
     }
 
+    /// <summary>Takes a vault that no longer exists out of the user's pending vaults; one that exists stays.</summary>
+    internal async Task ForgetPendingAsync(string vaultId, string userId, CancellationToken ct)
+    {
+        if (await Vaults.Find(v => v.Id == vaultId).AnyAsync(ct)) return;
+        await Users.UpdateOneAsync(u => u.Id == userId, Builders<Accounts.UserDocument>.Update.Pull(u => u.RekeyPending, vaultId), cancellationToken: ct);
+    }
+
     /// <summary>What a run of the vault would take access from: the API keys with a slot on it, and the connections
     /// that list it and aren't revoked.</summary>
     internal async Task<(IReadOnlyList<string> ApiKeyIds, IReadOnlyList<string> ConnectionIds)> AccessAsync(string vaultId, CancellationToken ct)

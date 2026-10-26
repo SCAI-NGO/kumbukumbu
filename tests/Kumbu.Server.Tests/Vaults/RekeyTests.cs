@@ -10,6 +10,8 @@ using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -37,6 +39,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     private readonly Argon2Kdf _kdf = new(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1));
     private readonly CapturedLog _log = new();
     private readonly FakeEmbedder _remote = new(model: "remote-1", dimensions: 8);
+    private readonly TestLifetime _life = new();
     private VaultCatalog? _catalog;
     private SearchIndex? _index;
 
@@ -69,6 +72,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
     private UserCatalog Users() => new(_db, _kdf, Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance, Rotation());
 
+    private RekeyRunner Runner() => new(Catalog(), _life, _time, Logs.CreateLogger<RekeyRunner>());
+
     private IMongoCollection<SlotDocument> Slots => _db.GetCollection<SlotDocument>("slots");
 
     private IMongoCollection<SealedDocument> Docs(string collection) => _db.GetCollection<SealedDocument>(collection);
@@ -82,6 +87,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             await _index.StopAsync(CancellationToken.None);
             _index.Dispose();
         }
+
+        _life.Stop();
     }
 
     private sealed record Account(User User, byte[] Key, DateTime ReadAt, Dictionary<string, string> Vaults)
@@ -843,5 +850,302 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Same(other, await Assert.ThrowsAsync<VaultUnavailableException>(() => AnswerAsync(other)));
         Assert.Throws<ArgumentException>(() => new VaultBusyException("Something else."));
     }
+
+    [Fact]
+    public async Task The_runner_runs_one_task_per_vault_and_backs_off()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var attempts = 0;
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            if (Interlocked.Increment(ref attempts) <= 2)
+            {
+                await hold.Task;
+                throw new InvalidOperationException("transient");
+            }
+        };
+        var runner = Runner();
+
+        for (var i = 0; i < 5; i++) runner.Start(id, a.User.Id, a.Key);
+        await WaitUntilAsync(() => runner.IsRunning(id));
+        for (var i = 0; i < 5; i++) runner.Start(id, a.User.Id, a.Key);
+        hold.SetResult();
+
+        // First failure: a minute's wait.
+        await WaitUntilAsync(() => !runner.IsRunning(id));
+        await Task.Delay(200, Ct);
+        Assert.Equal(1, attempts);
+        _time.Advance(TimeSpan.FromSeconds(59));
+        await Task.Delay(200, Ct);
+        Assert.Equal(1, attempts);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => attempts == 2);
+
+        // Second failure: two minutes.
+        await WaitUntilAsync(() => !runner.IsRunning(id));
+        _time.Advance(TimeSpan.FromSeconds(119));
+        await Task.Delay(200, Ct);
+        Assert.Equal(2, attempts);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => attempts == 3);
+        await WaitUntilAsync(() => !runner.IsRunning(id));
+        await WaitUntilAsync(async () => (await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct)).Count == 0);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
+        Assert.Equal(3, attempts);
+    }
+
+    [Fact]
+    public async Task The_runner_serves_one_vault_at_a_time_in_order()
+    {
+        var a = await AccountAsync("Eins", "Zwei", "Drei");
+        var ids = new[] { a.Id("Eins"), a.Id("Zwei"), a.Id("Drei") };
+        var order = new List<string>();
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var most = 0;
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-start") return;
+            var running = ids.Where(Catalog().IsRekeying).ToList();
+            most = Math.Max(most, running.Count);
+            lock (order) order.Add(running.Single());
+            if (order.Count == 1) await hold.Task;
+        };
+        var runner = Runner();
+
+        var runs = ids.Select(id => runner.RunAsync(id, a.User.Id, a.Key)).ToList();
+        await WaitUntilAsync(() => order.Count == 1);
+        await Task.Delay(200, Ct);
+        Assert.Single(order);
+        Assert.True(runner.IsRunning(ids[0]));
+        Assert.False(runner.IsRunning(ids[1]));
+        hold.SetResult();
+        await Task.WhenAll(runs).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        Assert.Equal(ids, order);
+        Assert.Equal(1, most);
+    }
+
+    [Fact]
+    public async Task Start_during_backoff_swaps_the_key_and_keeps_the_backoff()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        CrashOnceAt("after-start");
+        var crash = Catalog().RekeyFaultAt!;
+        var attempts = 0;
+        Catalog().RekeyFaultAt = p =>
+        {
+            if (p == "after-start") Interlocked.Increment(ref attempts);
+            return crash(p);
+        };
+        var runner = Runner();
+        runner.Start(id, a.User.Id, a.Key);
+        await WaitUntilAsync(() => attempts == 1);
+        await WaitUntilAsync(() => !runner.IsRunning(id));
+
+        // Meanwhile the user key is rotated (a recovery, say): only the new key opens the vault's slots now.
+        var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
+        _time.Advance(TimeSpan.FromSeconds(30));
+        runner.Start(id, a.User.Id, rotation.NewUserKey);
+        await Task.Delay(200, Ct);
+        Assert.Equal(1, attempts);
+        _time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(200, Ct);
+        Assert.Equal(1, attempts);
+
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => attempts == 2);
+        await WaitUntilAsync(async () => (await Catalog().PendingVaultIdsAsync(a.User.Id, rotation.NewUserKey, Ct)).Count == 0);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a, key: rotation.NewUserKey).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task RunAsync_rethrows_a_failure_then_backs_off()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var attempts = 0;
+        Catalog().RekeyFaultAt = p =>
+        {
+            if (p == "after-start" && Interlocked.Increment(ref attempts) == 1) throw new InvalidOperationException("transient");
+            return Task.CompletedTask;
+        };
+        var runner = Runner();
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(id, a.User.Id, a.Key));
+        Assert.Equal("transient", failure.Message);
+
+        // Backing off: a background trigger doesn't end the wait.
+        runner.Start(id, a.User.Id, a.Key);
+        await Task.Delay(300, Ct);
+        Assert.Equal(1, attempts);
+        Assert.False(runner.IsRunning(id));
+
+        // The owner's request does, and waits for the run.
+        var summary = await runner.RunAsync(id, a.User.Id, a.Key).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        Assert.Equal(2, attempts);
+        Assert.Equal(13, summary.Documents);
+        // A vault that isn't the user's ends the entry, and the wait, at once.
+        await Assert.ThrowsAsync<VaultNotRekeyableException>(() => runner.RunAsync(id, a.User.Id, VaultCrypto.NewKey()).WaitAsync(TimeSpan.FromSeconds(30), Ct));
+    }
+
+    [Fact]
+    public async Task The_runner_drops_a_vault_that_is_gone_from_the_pending_ones()
+    {
+        var a = await AccountAsync("Arbeit", "Privat");
+        var gone = a.Id("Arbeit");
+        var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
+        Assert.Equal(new[] { gone, a.Id("Privat") }.Order(StringComparer.Ordinal), (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString).Order(StringComparer.Ordinal));
+        await Catalog().DeleteVaultsAsync([gone], (_, _) => Task.CompletedTask, Ct);
+
+        await Assert.ThrowsAsync<VaultDeletedException>(() => Runner().RunAsync(gone, a.User.Id, rotation.NewUserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct));
+
+        Assert.Equal([a.Id("Privat")], (await UserDocAsync(a))["rekeyPending"].AsBsonArray.Select(v => v.AsString));
+    }
+
+    private sealed class TestLifetime : IHostApplicationLifetime
+    {
+        private readonly CancellationTokenSource _stopping = new();
+
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => _stopping.Token;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication() => _stopping.Cancel();
+
+        public void Stop() => _stopping.Cancel();
+    }
 }
 
+/// <summary>Re-keying as the server's clients meet it: the vault answers 503 while it waits, and an app that loses its
+/// tokens reconnects and opens the vault under its new key.</summary>
+[Collection("app")]
+public sealed class RekeyApiTests(KumbuAppFactory app)
+{
+    private const string Callback = "https://claude.test/cb";
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> Api => app.PublicApi;
+
+    private VaultCatalog Catalog => Api.Services.GetRequiredService<VaultCatalog>();
+
+    private static string Address() => $"198.51.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}";
+
+    private async Task<ModelContextProtocol.Client.McpClient> McpAsync(string connectionId, string access)
+    {
+        var transport = new ModelContextProtocol.Client.HttpClientTransport(
+            new ModelContextProtocol.Client.HttpClientTransportOptions
+            {
+                Endpoint = new Uri(OAuth.OAuthFlow.ResourceOf(connectionId)),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {access}", ["X-Forwarded-For"] = Address() },
+            },
+            Api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        return await ModelContextProtocol.Client.McpClient.CreateAsync(transport, cancellationToken: Ct);
+    }
+
+    private static async Task<string> CatAsync(ModelContextProtocol.Client.McpClient client, string path)
+    {
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = $"cat {path}" }, cancellationToken: Ct);
+        return Assert.IsType<ModelContextProtocol.Protocol.TextContentBlock>(result.Content[0]).Text;
+    }
+
+    private async Task<string> AccessAsync(Kumbu.Server.Tests.Api.RestClient owner, string connectionId)
+    {
+        var flow = await OAuth.OAuthFlow.StartAsync(Api, owner, connectionId, await OAuth.OAuthFlow.RegisterAsync(Api, Callback), Callback);
+        await flow.AllowAsync();
+        using var response = await flow.TokenAsync();
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+        return (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(response))["access_token"]!.GetValue<string>();
+    }
+
+    [Fact]
+    public async Task A_reconnect_after_a_rekey_opens_the_vault_with_the_new_key()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n\nbefore\n");
+        using var created = await owner.SendAsync(HttpMethod.Post, "/api/connections", new { name = "claude", vaults = new Dictionary<string, string> { ["Arbeit"] = "write" } });
+        var connectionId = (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(created))["id"]!.GetValue<string>();
+        var access = await AccessAsync(owner, connectionId);
+        await using (var client = await McpAsync(connectionId, access)) Assert.Contains("before", await CatAsync(client, "/Arbeit/plan.md"), StringComparison.Ordinal);
+        var key = await owner.KeyAsync("agent", KeyRight.Read);
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+
+        var summary = await Api.Services.GetRequiredService<RekeyRunner>().RunAsync(vaultId, owner.User.Id, owner.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        Assert.Equal([connectionId], summary.DisconnectedConnections);
+        Assert.Single(summary.RevokedApiKeys);
+        using (var listed = await owner.GetAsync("/api/connections"))
+        {
+            var connection = (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(listed)).AsArray().Single(c => c!["id"]!.GetValue<string>() == connectionId)!;
+            Assert.Equal(("needs_reconnect", ConnectionReasons.Rekeyed), (connection["state"]!.GetValue<string>(), connection["reason"]!.GetValue<string>()));
+        }
+
+        await Assert.ThrowsAnyAsync<Exception>(() => McpAsync(connectionId, access));
+        using (var withKey = await owner.GetAsync(owner.Url("plan.md"), bearer: key)) Assert.Equal(System.Net.HttpStatusCode.Unauthorized, withKey.StatusCode);
+
+        // The reconnect wraps the new vault key for the app's new tokens.
+        var again = await AccessAsync(owner, connectionId);
+        await using (var client = await McpAsync(connectionId, again)) Assert.Contains("before", await CatAsync(client, "/Arbeit/plan.md"), StringComparison.Ordinal);
+        Assert.Equal("# Plan\n\nbefore\n", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_vault_being_reencrypted_answers_503_and_stays_listed()
+    {
+        var owner = await Kumbu.Server.Tests.Api.RestClient.NewAsync(Api);
+        await owner.CreateAsync("plan.md", "# Plan\n");
+        var vaultId = (await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct))!;
+        Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, Ct));
+
+            using (var vaults = await owner.GetAsync("/api/vaults"))
+            {
+                Assert.Equal(System.Net.HttpStatusCode.OK, vaults.StatusCode);
+                var arbeit = (await Kumbu.Server.Tests.Api.RestClient.JsonAsync(vaults)).AsArray().Single(v => v!["name"]!.GetValue<string>() == "Arbeit")!;
+                Assert.Equal(0, arbeit["notes"]!.GetValue<int>());
+            }
+
+            foreach (var path in new[] { owner.Url("plan.md"), $"/api/vaults/Arbeit/tree", $"/api/vaults/Arbeit/checkpoints", owner.Url("plan.md", "history") })
+            {
+                using var busy = await owner.GetAsync(path);
+                Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, busy.StatusCode);
+                Assert.Equal("5", busy.Headers.GetValues("Retry-After").Single());
+                Assert.Equal(VaultBusyException.BeingReencrypted, await Kumbu.Server.Tests.Api.RestClient.ErrorAsync(busy));
+            }
+
+            using var write = await owner.SendAsync(HttpMethod.Put, owner.Url("new.md"), new { content = "new" });
+            Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, write.StatusCode);
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+
+        // The requests above started the runner, which backs off after the crash; the owner's run ends the wait.
+        var runner = Api.Services.GetRequiredService<RekeyRunner>();
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await runner.RunAsync(vaultId, owner.User.Id, owner.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+                break;
+            }
+            catch (InvalidOperationException) when (attempt < 3)
+            {
+                // An attempt that was already under way with the crash still set.
+            }
+        }
+
+        Assert.Equal("# Plan\n", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>());
+    }
+}
