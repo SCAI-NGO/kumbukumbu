@@ -74,7 +74,7 @@ describe("Settings", () => {
     renderApp("/settings");
     const yourData = await screen.findByRole("region", { name: "Your data" });
     expect(within(yourData).getByRole("button", { name: "Export my vaults…" })).toBeInTheDocument();
-    expect(yourData).toHaveTextContent(/opens in Obsidian as a vault, without history, trash or checkpoints/);
+    expect(yourData).toHaveTextContent(/each folder opens in Obsidian as a vault \(no history, trash or checkpoints\)/);
     const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
     expect(titles.indexOf("Your data")).toBe(titles.indexOf("Vaults") + 1);
   });

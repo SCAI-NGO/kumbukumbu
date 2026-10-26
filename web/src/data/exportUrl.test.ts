@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { download, exportUrl } from "./exportUrl";
+import { browserZone, download, exportUrl } from "./exportUrl";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("exportUrl", () => {
   it("is the vault's own route for one vault", () => {
-    expect(exportUrl(["Work"])).toBe("/api/vaults/Work/export");
-    expect(exportUrl(["A b/c"])).toBe("/api/vaults/A%20b%2Fc/export");
+    expect(exportUrl(["Work"], "Europe/Vienna")).toBe("/api/vaults/Work/export?tz=Europe%2FVienna");
+    expect(exportUrl(["A b/c"], "UTC")).toBe("/api/vaults/A%20b%2Fc/export?tz=UTC");
   });
 
   it("names each vault once in the query for several", () => {
-    expect(exportUrl(["A b", "Ü"])).toBe("/api/export?vault=A%20b&vault=%C3%9C");
+    expect(exportUrl(["A b", "Ü"], "Europe/Vienna")).toBe("/api/export?vault=A%20b&vault=%C3%9C&tz=Europe%2FVienna");
+  });
+
+  it("sends the browser's time zone by default", () => {
+    vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({ timeZone: "America/New_York" } as Intl.ResolvedDateTimeFormatOptions);
+    expect(browserZone()).toBe("America/New_York");
+    expect(exportUrl(["Work"])).toBe("/api/vaults/Work/export?tz=America%2FNew_York");
   });
 });
 

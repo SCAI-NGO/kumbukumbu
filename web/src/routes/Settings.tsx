@@ -357,7 +357,7 @@ export function YourDataSection() {
   return (
     <Section title="Your data">
       <p className="text-text-body">
-        The export is a ZIP with one folder of Markdown notes per vault, each of which opens in Obsidian as a vault, without history, trash or checkpoints.
+        The export is a ZIP with a folder of Markdown notes for each vault; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
       </p>
       <div className="flex flex-wrap gap-3">
         <button type="button" onClick={() => setExporting(true)} className={secondaryButtonClass}>

@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
+import { browserZone } from "./exportUrl";
+
+const tz = `tz=${encodeURIComponent(browserZone())}`;
 
 const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [{ name: "inbox.md", path: "/Work/inbox.md", size: 10 }] } };
 
@@ -52,7 +55,7 @@ describe("Export as ZIP in the vault menu", () => {
 
     await userEvent.click(screen.getByRole("menuitem", { name: "Export as ZIP" }));
 
-    expect(downloads).toEqual(["/api/vaults/Work/export"]);
+    expect(downloads).toEqual([`/api/vaults/Work/export?${tz}`]);
   });
 });
 
@@ -61,7 +64,7 @@ describe("Export my vaults… in Settings", () => {
     api();
     renderApp("/settings");
     const section = await screen.findByRole("region", { name: "Your data" });
-    expect(section).toHaveTextContent(/one folder of Markdown notes per vault/);
+    expect(section).toHaveTextContent(/a folder of Markdown notes for each vault/);
     await userEvent.click(within(section).getByRole("button", { name: "Export my vaults…" }));
     return screen.findByRole("dialog", { name: "Export my vaults" });
   }
@@ -78,7 +81,7 @@ describe("Export my vaults… in Settings", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Export" }));
 
-    expect(downloads).toEqual(["/api/export?vault=Work&vault=My%20Diary&vault=Ideen"]);
+    expect(downloads).toEqual([`/api/export?vault=Work&vault=My%20Diary&vault=Ideen&${tz}`]);
     expect(screen.queryByRole("dialog", { name: "Export my vaults" })).not.toBeInTheDocument();
   });
 
@@ -86,13 +89,13 @@ describe("Export my vaults… in Settings", () => {
     const dialog = await openDialog();
     await userEvent.click(await within(dialog).findByRole("checkbox", { name: /My Diary/ }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Export" }));
-    expect(downloads).toEqual(["/api/export?vault=Work&vault=Ideen"]);
+    expect(downloads).toEqual([`/api/export?vault=Work&vault=Ideen&${tz}`]);
 
     const again = await openDialogAgain();
     await userEvent.click(await within(again).findByRole("checkbox", { name: /Work/ }));
     await userEvent.click(within(again).getByRole("checkbox", { name: /Ideen/ }));
     await userEvent.click(within(again).getByRole("button", { name: "Export" }));
-    expect(downloads.at(-1)).toBe("/api/vaults/My%20Diary/export");
+    expect(downloads.at(-1)).toBe(`/api/vaults/My%20Diary/export?${tz}`);
   });
 
   it("can't export with nothing ticked", async () => {

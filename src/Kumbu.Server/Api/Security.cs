@@ -87,7 +87,7 @@ public static class Security
             var caller = context.Features.Get<RequestCaller>();
             if (context.GetEndpoint()?.Metadata.GetMetadata<SessionOnlyMetadata>() is not null && caller?.Kind != CallerKind.Session)
             {
-                await RefuseAsync(context, "This needs a signed-in session; API keys can't manage accounts, keys or users.");
+                await RefuseAsync(context, "This needs a signed-in session: API keys, connected apps and the dev token can't do it.");
                 return;
             }
 

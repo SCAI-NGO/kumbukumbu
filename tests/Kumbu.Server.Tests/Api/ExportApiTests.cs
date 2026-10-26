@@ -16,7 +16,13 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
     private WebApplicationFactory<Program> Api => app.PublicApi;
 
-    private static string Today => DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Date(DateTime at) => at.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>The file name as the server's UTC date gives it, before or after the request (a run across midnight).</summary>
+    private static void AssertDated(string expected, string? actual, DateTime before)
+    {
+        Assert.Contains(actual, new[] { expected.Replace("{date}", Date(before)), expected.Replace("{date}", Date(DateTime.UtcNow)) });
+    }
 
     private static async Task<ZipArchive> ZipAsync(HttpResponseMessage response)
     {
@@ -39,6 +45,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await user.CreateAsync("a.md", "# A\n\nü and ²\n");
         await user.CreateAsync("p/b.md", "b\n");
 
+        var before = DateTime.UtcNow;
         using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
 
         using var zip = await ZipAsync(response);
@@ -47,8 +54,8 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Equal("b\n", Read(zip.GetEntry("Arbeit/p/b.md")!));
         var disposition = response.Content.Headers.ContentDisposition!;
         Assert.Equal("attachment", disposition.DispositionType);
-        Assert.Equal($"Arbeit {Today}.zip", disposition.FileNameStar);
-        Assert.Equal($"Arbeit {Today}.zip", disposition.FileName!.Trim('"'));
+        AssertDated("Arbeit {date}.zip", disposition.FileNameStar, before);
+        AssertDated("Arbeit {date}.zip", disposition.FileName!.Trim('"'), before);
     }
 
     [Fact]
@@ -58,15 +65,59 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await user.CreateAsync("a.md", "a\n");
         await user.CreateAsync("p/b.md", "b\n");
 
+        // Without a time zone the entries carry UTC (ZIP time has 2-second precision).
         using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
 
-        using var zip = await ZipAsync(response);
+        var bytes = await BytesAsync(response);
         foreach (var path in new[] { "a.md", "p/b.md" })
         {
             var written = (await user.ReadAsync(path))["lastWriteAt"]!.GetValue<DateTime>().ToUniversalTime();
-            var entry = zip.GetEntry($"Arbeit/{path}")!;
-            Assert.InRange((entry.LastWriteTime.UtcDateTime - written).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+            Assert.InRange((DosTime(bytes, $"Arbeit/{path}") - written).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
         }
+    }
+
+    [Fact]
+    public async Task Entry_times_are_the_readers_clock_in_its_time_zone()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        var written = (await user.ReadAsync("a.md"))["lastWriteAt"]!.GetValue<DateTime>().ToUniversalTime();
+        var vienna = TimeZoneInfo.FindSystemTimeZoneById("Europe/Vienna");
+
+        using var inVienna = await user.GetAsync($"/api/vaults/{user.Vault}/export?tz=Europe%2FVienna");
+        using var unknown = await user.GetAsync($"/api/vaults/{user.Vault}/export?tz=Mars%2FOlympus");
+        using var several = await user.GetAsync($"/api/export?vault={user.Vault}&tz=Europe%2FVienna");
+
+        // Read from the header bytes, not through ZipArchive, which would apply the test process's own zone.
+        var expected = TimeZoneInfo.ConvertTimeFromUtc(written, vienna);
+        Assert.InRange((DosTime(await BytesAsync(inVienna), "Arbeit/a.md") - expected).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        Assert.InRange((DosTime(await BytesAsync(several), "Arbeit/a.md") - expected).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        Assert.InRange((DosTime(await BytesAsync(unknown), "Arbeit/a.md") - written).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public void A_missing_or_unknown_zone_is_utc()
+    {
+        Assert.Same(TimeZoneInfo.Utc, ExportApi.Zone(null));
+        Assert.Same(TimeZoneInfo.Utc, ExportApi.Zone(""));
+        Assert.Same(TimeZoneInfo.Utc, ExportApi.Zone("Mars/Olympus"));
+        Assert.Equal(TimeSpan.FromHours(2), ExportApi.Zone("Europe/Vienna").GetUtcOffset(new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc)));
+        Assert.Equal(TimeSpan.FromHours(1), ExportApi.Zone("Europe/Vienna").GetUtcOffset(new DateTime(2026, 12, 1, 12, 0, 0, DateTimeKind.Utc)));
+    }
+
+    private static async Task<byte[]> BytesAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await response.Content.ReadAsByteArrayAsync(Ct);
+    }
+
+    /// <summary>The MS-DOS date and time of the local file header named <paramref name="name"/>, as written.</summary>
+    private static DateTime DosTime(byte[] zip, string name)
+    {
+        var at = LocalHeader(zip, name);
+        var time = zip[at + 10] | (zip[at + 11] << 8);
+        var date = zip[at + 12] | (zip[at + 13] << 8);
+        return new DateTime(1980 + (date >> 9), (date >> 5) & 0xF, date & 0x1F, time >> 11, (time >> 5) & 0x3F, (time & 0x1F) * 2);
     }
 
     [Fact]
@@ -88,12 +139,19 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     /// <summary>The general-purpose flags of the local file header whose name is <paramref name="name"/> in UTF-8.</summary>
     private static int LocalHeaderFlags(byte[] zip, string name)
     {
+        var at = LocalHeader(zip, name);
+        return zip[at + 6] | (zip[at + 7] << 8);
+    }
+
+    /// <summary>The offset of the local file header whose name is <paramref name="name"/> in UTF-8.</summary>
+    private static int LocalHeader(byte[] zip, string name)
+    {
         var wanted = Encoding.UTF8.GetBytes(name);
         for (var i = 0; i + 30 <= zip.Length; i++)
         {
             if (zip[i] != 0x50 || zip[i + 1] != 0x4B || zip[i + 2] != 0x03 || zip[i + 3] != 0x04) continue;
             var length = zip[i + 26] | (zip[i + 27] << 8);
-            if (zip.AsSpan(i + 30, length).SequenceEqual(wanted)) return zip[i + 6] | (zip[i + 7] << 8);
+            if (i + 30 + length <= zip.Length && zip.AsSpan(i + 30, length).SequenceEqual(wanted)) return i;
         }
 
         throw new InvalidOperationException($"No local header for {name}.");
@@ -120,14 +178,15 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         using var written = await user.SendAsync(HttpMethod.Put, "/api/notes/Ideen/x/c.md", new { content = "c\n" });
         Assert.Equal(HttpStatusCode.Created, written.StatusCode);
 
+        var before = DateTime.UtcNow;
         using var response = await user.GetAsync("/api/export?vault=Arbeit&vault=Ideen");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/", "Arbeit/a.md", "Ideen/", "Ideen/x/c.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
         Assert.Equal("c\n", Read(zip.GetEntry("Ideen/x/c.md")!));
         var disposition = response.Content.Headers.ContentDisposition!;
-        Assert.Equal($"Kumbu export {Today}.zip", disposition.FileName!.Trim('"'));
-        Assert.Equal($"Kumbu² export {Today}.zip", disposition.FileNameStar);
+        AssertDated("Kumbu export {date}.zip", disposition.FileName!.Trim('"'), before);
+        AssertDated("Kumbu² export {date}.zip", disposition.FileNameStar, before);
     }
 
     [Fact]
@@ -139,8 +198,12 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         using var one = await user.GetAsync($"/api/vaults/{user.Vault}/export", bearer: key);
         using var several = await user.GetAsync($"/api/export?vault={user.Vault}", bearer: key);
 
+        using var dev = await user.GetAsync($"/api/export?vault={user.Vault}", bearer: KumbuAppFactory.Token);
+
         Assert.Equal(HttpStatusCode.Forbidden, one.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, several.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, dev.StatusCode);
+        Assert.Contains("signed-in session", await RestClient.ErrorAsync(several), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -166,9 +229,12 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
         using var none = await user.GetAsync("/api/export");
         using var twice = await user.GetAsync("/api/export?vault=Arbeit&vault=Arbeit");
+        // "Bücher" precomposed and decomposed: one vault after NFC.
+        using var spelt = await user.GetAsync("/api/export?vault=B%C3%BCcher&vault=Bu%CC%88cher");
 
         Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, twice.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, spelt.StatusCode);
     }
 
     [Fact]

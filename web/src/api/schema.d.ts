@@ -3824,7 +3824,9 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    tz?: string;
+                };
                 header?: never;
                 path: {
                     vault: string;
@@ -3906,6 +3908,7 @@ export interface paths {
             parameters: {
                 query?: {
                     vault?: string[];
+                    tz?: string;
                 };
                 header?: never;
                 path?: never;
