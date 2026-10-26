@@ -181,7 +181,10 @@ public sealed class OAuthTokens(
                     throw new ConnectionUnavailableException("This connection's rights changed; start the connection again in the app.");
                 // A password change, recovery or deactivation stamps the user first and then revokes the tokens of
                 // every connection: before the stamp this code is found by the revocation, after it it's refused here.
-                if (!await Users.Find(s, u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt)).AnyAsync(token))
+                // The key id: a rotation of the user key committed before this read is refused here, and one committing
+                // after it re-seals this connection's meta, a write that conflicts with the client's below.
+                var keyId = UserCatalog.KeyId(userKey, user.Id);
+                if (!await Users.Find(s, u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId).AnyAsync(token))
                     throw new CredentialsChangedException();
                 // A vault deleted since the slots were wrapped is gone from the connection's vaults: no slot for it. A
                 // deletion under way writes this document too, and conflicts.

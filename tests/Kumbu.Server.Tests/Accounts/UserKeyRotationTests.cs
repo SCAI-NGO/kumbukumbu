@@ -282,6 +282,94 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
         Assert.Contains(created.Id, await OpenIdsAsync(account, rotation.NewUserKey));
     }
 
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        var until = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > until) throw new TimeoutException("The condition never held.");
+            await Task.Delay(5, Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_sign_in_during_apply_gets_no_session_with_the_old_key()
+    {
+        var account = await AccountAsync("Arbeit");
+        // Ready before the transaction: building its indexes would wait for it.
+        var users = Users();
+        Assert.NotNull(await users.TrySignInAsync(account.User.Username, Password, Ct));
+        Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?>? signIn = null;
+        Rotation().FaultAt = async at =>
+        {
+            if (at != "inside-apply") return;
+            // After the stamp, a sign-in reads the old password slot outside the transaction, and finishes after the commit.
+            _time.Advance(TimeSpan.FromSeconds(1));
+            var runs = _kdf.Runs;
+            signIn = Task.Run(() => users.TrySignInAsync(account.User.Username, Password, Ct), Ct);
+            await WaitForAsync(() => _kdf.Runs > runs || signIn.IsCompleted);
+        };
+
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, null, Ct))!;
+
+        var (user, key, readAt) = (await signIn!)!.Value;
+        Assert.Equal(account.Key, key);
+        var changedAt = (await UserDocs.Find(new BsonDocument("_id", account.User.Id)).FirstAsync(Ct))["credentialsChangedAt"].ToUniversalTime();
+        Assert.True(readAt > changedAt);
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Sessions().StartAsync(user, key, readAt, Ct));
+        Assert.Equal(0, await _db.GetCollection<UserSlotDocument>("user_slots").CountDocumentsAsync(s => s.Kind == UserSlotDocument.Session, cancellationToken: Ct));
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Neu", user.Id, key, Ct, readAt));
+        Assert.Equal(account.Vaults.Values.ToHashSet(), await OpenIdsAsync(account, rotation.NewUserKey));
+    }
+
+    /// <summary>A catalog whose Argon2 waits at <paramref name="gate"/>: a password check holds there, after its slot read.</summary>
+    private (UserCatalog Users, Argon2Kdf Kdf) GatedUsers(SemaphoreSlim gate)
+    {
+        var kdf = new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1), gate);
+        return (new UserCatalog(_db, kdf, Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance, Rotation()), kdf);
+    }
+
+    [Fact]
+    public async Task A_password_change_racing_a_rotation_fails_and_changes_nothing()
+    {
+        var account = await AccountAsync("Arbeit");
+        var kept = await Sessions().StartAsync(account.User, account.Key, account.ReadAt, Ct);
+        await Keys().CreateAsync(account.User, account.Key, account.ReadAt, "laptop", Grant(account.Vaults["Arbeit"]), Ct);
+        using var gate = new SemaphoreSlim(0, int.MaxValue);
+        var (users, kdf) = GatedUsers(gate);
+
+        var change = Task.Run(() => users.ChangePasswordAsync(account.User, account.Key, Password, NewPassword, revokeApiKeys: true, Ct), Ct);
+        await WaitForAsync(() => kdf.Runs > 0);
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, kept, Ct))!;
+        gate.Release(100);
+
+        await Assert.ThrowsAsync<PasswordConflictException>(() => change);
+        Assert.Null(await Users().TrySignInAsync(account.User.Username, NewPassword, Ct));
+        Assert.Equal(rotation.NewUserKey, (await Users().TrySignInAsync(account.User.Username, Password, Ct))!.Value.UserKey);
+        // Failed before anything signed the user out or revoked a key.
+        Assert.Equal(rotation.NewUserKey, (await Sessions().ResolveAsync(kept, Ct))!.Value.UserKey);
+        Assert.Null(Assert.Single(await Keys().ListAsync(account.User, rotation.NewUserKey, Ct)).RevokedAt);
+    }
+
+    [Fact]
+    public async Task A_new_recovery_key_racing_a_rotation_fails_and_the_rotations_key_works()
+    {
+        var account = await AccountAsync("Arbeit");
+        using var gate = new SemaphoreSlim(0, int.MaxValue);
+        var (users, kdf) = GatedUsers(gate);
+
+        var regenerate = Task.Run(() => users.RegenerateRecoveryKeyAsync(account.User.Id, account.Key, Password, Ct), Ct);
+        await WaitForAsync(() => kdf.Runs > 0);
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, null, Ct))!;
+        gate.Release(100);
+
+        await Assert.ThrowsAsync<PasswordConflictException>(() => regenerate);
+        Assert.Equal(rotation.NewUserKey, (await Users().TrySignInAsync(account.User.Username, Password, Ct))!.Value.UserKey);
+        var recovered = await Users().RecoverWithKeyAsync(account.User.Username, rotation.RecoveryKey, NewPassword, Ct);
+        Assert.NotNull(recovered);
+        Assert.Equal(account.Vaults.Values.ToHashSet(), await OpenIdsAsync(account, recovered.Value.UserKey));
+    }
+
     [Fact]
     public async Task A_recovery_race_still_lets_one_through()
     {

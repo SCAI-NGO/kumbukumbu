@@ -161,7 +161,8 @@ public sealed class UserCatalog(
     /// Replaces the password; false if <paramref name="oldPassword"/> is wrong or doesn't open
     /// <paramref name="userKey"/>. Ends every session, as a changed password must, and with
     /// <paramref name="revokeApiKeys"/> revokes every API key of the user and the tokens of every connection
-    /// (<see cref="ConnectionReasons.PasswordChanged"/>): the apps need a reconnect.
+    /// (<see cref="ConnectionReasons.PasswordChanged"/>): the apps need a reconnect. <see cref="PasswordConflictException"/>
+    /// if the password slot changed after it was opened here (a rotation of the user key, another password change).
     /// </summary>
     public async Task<bool> ChangePasswordAsync(User user, byte[] userKey, string oldPassword, string newPassword, bool revokeApiKeys, CancellationToken ct)
     {
@@ -176,13 +177,15 @@ public sealed class UserCatalog(
 
         // Only if the slot is still the one just opened: a rotation of the user key in between would otherwise be
         // undone for the password, which would then open the old user key, which no vault slot uses any more.
-        return (await SetPasswordAsync(user, userKey, newPassword, revokeApiKeys, slot.Wrapped, ct)).Set;
+        if (!(await SetPasswordAsync(user, userKey, newPassword, revokeApiKeys, slot.Wrapped, ct)).Set) throw new PasswordConflictException();
+        return true;
     }
 
     /// <summary>
     /// A new recovery key for the user, the old one stops working at once; null if <paramref name="currentPassword"/>
     /// is wrong or doesn't open <paramref name="userKey"/>. The password is asked for because a stolen session
     /// alone must not be able to make a recovery key, set a new password with it and lock the owner out.
+    /// <see cref="PasswordConflictException"/> if the password slot changed after it was opened here.
     /// </summary>
     public async Task<string?> RegenerateRecoveryKeyAsync(string userId, byte[] userKey, string currentPassword, CancellationToken ct)
     {
@@ -196,7 +199,7 @@ public sealed class UserCatalog(
             return null;
         }
 
-        if (await ReplaceRecoveryKeyAsync(userId, userKey, slot.Wrapped, ct) is not { } recoveryKey) return null;
+        var recoveryKey = await ReplaceRecoveryKeyAsync(userId, userKey, slot.Wrapped, ct) ?? throw new PasswordConflictException();
         log.LogInformation("User {Username} has a new recovery key", user.Username);
         return recoveryKey;
     }
@@ -268,6 +271,9 @@ public sealed class UserCatalog(
         var userId = user.Id;
         // Argon2 before the stamp only for a password change: a recovery's runs in the rotation's preparation, below.
         var slot = recovery is null ? await PasswordSlotAsync(kdf, userId, userKey, password, Now, ct) : null;
+        // A slot changed since it was opened fails here, before anything signs the user out or revokes a key; the
+        // conditional write below still catches one changed between here and there.
+        if (slot is not null && !await Slots.Find(s => s.User == userId && s.Kind == UserSlotDocument.Password && s.Wrapped == passwordUsed).AnyAsync(ct)) return (false, null);
         // Stamped before the new slot, so sessions of the old password are refused even if a crash leaves their
         // slots behind (a crash before the slot write only leaves the old password in place, signed out) ...
         await StampCredentialsChangedAsync(userId, ct);
@@ -427,5 +433,9 @@ public sealed class UserCatalog(
 }
 
 public sealed class UsernameTakenException(string username) : Exception($"The username '{username}' is taken.");
+
+/// <summary>The password slot changed while a password change or a new recovery key was under way: nothing was
+/// written (or, in a rare race, only the sign-out and revocations of a password change); the user tries again.</summary>
+public sealed class PasswordConflictException() : Exception("Your password or keys changed meanwhile; try again.");
 
 public sealed class PrimaryAdminExistsException() : Exception("There is a primary admin already; there can only be one.");

@@ -222,7 +222,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                     // with a rotation of the user key, whose slot check then sees this vault's slot, or whose stamp
                     // refuses it here.
                     var owner = await Users.UpdateOneAsync(
-                        s, OwnerFilter(userId, credentialReadAt), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
+                        s, OwnerFilter(userId, userKey, credentialReadAt), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
                     if (owner.MatchedCount == 0) throw new Accounts.CredentialsChangedException();
                     await Vaults.InsertOneAsync(s, doc, cancellationToken: token);
                     return true;
@@ -962,11 +962,19 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         _ready = true;
     }
 
-    private static FilterDefinition<Accounts.UserDocument> OwnerFilter(string userId, DateTime? credentialReadAt)
+    /// <summary>
+    /// The owner, active. With the session's <paramref name="credentialReadAt"/> (every request's creation passes it),
+    /// also: credentials unchanged since then, and <paramref name="userKey"/> still the user key in force (its key id),
+    /// so a key a rotation made dead can't create a vault under it. Without it (the seeding and tests, which give
+    /// vaults to users made directly in the database) only the first two hold.
+    /// </summary>
+    private static FilterDefinition<Accounts.UserDocument> OwnerFilter(string userId, byte[] userKey, DateTime? credentialReadAt)
     {
         var f = Builders<Accounts.UserDocument>.Filter;
         var owner = f.Eq(u => u.Id, userId) & f.Eq(u => u.Active, true);
-        return credentialReadAt is { } readAt ? owner & (f.Eq(u => u.CredentialsChangedAt, null) | f.Lt(u => u.CredentialsChangedAt, readAt)) : owner;
+        return credentialReadAt is { } readAt
+            ? owner & (f.Eq(u => u.CredentialsChangedAt, null) | f.Lt(u => u.CredentialsChangedAt, readAt)) & f.Eq(u => u.KeyId, Accounts.UserCatalog.KeyId(userKey, userId))
+            : owner;
     }
 
     /// <summary>The lookup of a user's slots under <paramref name="userKey"/>.</summary>

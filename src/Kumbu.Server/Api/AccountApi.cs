@@ -103,8 +103,8 @@ public static class AccountApi
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/session", Session).Errors(401, 403);
         account.MapDelete("/session", SignOutAsync).Errors(401, 403);
-        account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 429);
-        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 409, 429);
+        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
         account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
 

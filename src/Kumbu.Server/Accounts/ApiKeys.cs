@@ -97,6 +97,8 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)));
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
+        // The meta and name id are sealed under this user key: it must still be the one in force (UserKeyRotation).
+        var keyId = UserCatalog.KeyId(userKey, user.Id);
         var doc = new ApiKeyDocument
         {
             Id = id,
@@ -125,7 +127,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                     {
                         var current = await Users.UpdateOneAsync(
                             s,
-                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt),
+                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
                             Builders<UserDocument>.Update.Inc(u => u.KeysCreated, 1),
                             cancellationToken: token);
                         if (current.MatchedCount == 0) throw new CredentialsChangedException();

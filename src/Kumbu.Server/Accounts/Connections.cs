@@ -106,6 +106,8 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
 
         var id = NewId();
         var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null);
+        // Sealed under this user key: it must still be the one in force (UserKeyRotation).
+        var keyId = UserCatalog.KeyId(userKey, user.Id);
         var now = Now;
         var doc = new ConnectionDocument
         {
@@ -131,7 +133,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     {
                         var current = await Users.UpdateOneAsync(
                             s,
-                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt),
+                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
                             Builders<UserDocument>.Update.Inc(u => u.ConnectionsCreated, 1),
                             cancellationToken: token);
                         if (current.MatchedCount == 0) throw new CredentialsChangedException();
@@ -229,7 +231,10 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)) };
                     // As at creation: a vault deleted since the check above is seen here, or its deletion conflicts on
                     // the user document.
-                    await Users.UpdateOneAsync(s, u => u.Id == user.Id, Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1), cancellationToken: token);
+                    // Opening the meta above already needs the user key in force; the key id says so in the clear too.
+                    var keyId = UserCatalog.KeyId(userKey, user.Id);
+                    var owner = await Users.UpdateOneAsync(s, u => u.Id == user.Id && u.KeyId == keyId, Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1), cancellationToken: token);
+                    if (owner.MatchedCount == 0) return false;
                     await catalog.RequireVaultsAsync(s, [.. vaults.Keys], Noun, token);
                     await Docs.UpdateOneAsync(
                         s,
