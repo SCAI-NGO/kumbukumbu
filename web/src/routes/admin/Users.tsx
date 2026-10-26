@@ -9,6 +9,7 @@ import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, secondaryButtonClass } from "../../components/form";
 import { useSession } from "../../state/session";
 import AdminOnly, { useIsAdmin } from "./AdminOnly";
+import DeletionReceipt, { type Receipt } from "./DeletionReceipt";
 
 type AdminUser = components["schemas"]["AdminUserView"];
 
@@ -29,6 +30,7 @@ export default function Users() {
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
 
   return (
     <AdminOnly title="Users">
@@ -41,7 +43,17 @@ export default function Users() {
         </ul>
       )}
       {target && <ToggleDialog user={target} onClose={() => setTarget(null)} />}
-      {deleting && <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />}
+      {deleting && (
+        <DeleteDialog
+          user={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={(r) => {
+            setDeleting(null);
+            setReceipt(r);
+          }}
+        />
+      )}
+      {receipt && <DeletionReceipt receipt={receipt} onClose={() => setReceipt(null)} />}
     </AdminOnly>
   );
 }
@@ -102,10 +114,10 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
               {user.active ? "Deactivate" : "Reactivate"}
             </button>
           )}
-          {/* Only a deactivated user can be deleted: two deliberate steps, the first of which can be undone. */}
-          {!self && !user.active && (
-            <button type="button" onClick={onDelete} aria-label={`Delete ${user.display}`} className={secondaryButtonClass}>
-              Delete
+          {/* Any user but oneself (Settings → delete account) and the primary admin, active or not, in one step. */}
+          {!self && (
+            <button type="button" onClick={onDelete} className={secondaryButtonClass}>
+              Delete for a privacy request…
             </button>
           )}
         </div>
@@ -114,21 +126,21 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
   );
 }
 
-function DeleteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
+function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose(): void; onDeleted(receipt: Receipt): void }) {
   const queryClient = useQueryClient();
   // The admin's own password, read through the closure: the mutation cache keeps no variables of it.
   const [password, setPassword] = useState("");
   const remove = useMutation({
     mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { password, confirm: user.username } })),
-    onSuccess: async () => {
+    onSuccess: async (receipt) => {
+      onDeleted(receipt);
       await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
-      onClose();
     },
   });
   return (
     <ConfirmTyped
-      title={`Delete ${user.display}?`}
-      text={`Their account goes for good, with ${user.vaults === 1 ? "their vault" : `their ${user.vaults} vaults`} and every note in them, the history, trash and checkpoints, and their API keys. Nobody can bring it back. The invitations they made stay.`}
+      title={`Delete ${user.display} for a privacy request?`}
+      text="Before you go on: make sure the request really comes from this person, and answer within one month (GDPR Art. 12(3)). Their account goes for good, with every vault and note, the history, trash and checkpoints, their API keys and app connections. Nobody can bring it back. Backups are not reached."
       word={user.username}
       action="Delete"
       pending={remove.isPending}

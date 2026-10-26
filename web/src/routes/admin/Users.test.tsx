@@ -105,40 +105,77 @@ describe("Admin users", () => {
     await vi.waitFor(() => expect(patches).toEqual([{ active: true }]));
   });
 
-  it("offers deletion only for a deactivated user, and deletes with the username typed and the admin's password", async () => {
+  it("offers 'Delete for a privacy request…' for an active user, not for the admin's own row or the primary admin", async () => {
+    api();
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    expect(bob.getByRole("button", { name: "Delete for a privacy request…" })).toBeInTheDocument();
+    expect(within(card("Ada")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    expect(within(card("Root")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+  });
+
+  it("offers it for a deactivated user too", async () => {
+    api(admin, { "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { active: false })]) });
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    expect(bob.getByRole("button", { name: "Delete for a privacy request…" })).toBeInTheDocument();
+  });
+
+  it("the dialog says the reminder text and needs the password and the username, then shows the receipt", async () => {
     const bodies: unknown[] = [];
     api(admin, {
-      "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { active: false })]),
       "POST /api/admin/users/u2/delete": async (r) => {
         bodies.push(await r.json());
-        return noContent();
+        return json(200, {
+          userId: "u2",
+          username: "bob",
+          deletedBy: "ada",
+          deletedAt: "2026-10-27T10:15:00Z",
+          vaults: 2,
+          notes: 41,
+          apiKeys: 1,
+          connections: 0,
+          externalProviders: [],
+          privacyContact: null,
+          listed: true,
+        });
       },
     });
     renderApp("/admin/users");
     const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
-    expect(within(card("Ada")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
-    expect(within(card("Root")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
-
-    await userEvent.click(bob.getByRole("button", { name: "Delete Bob" }));
-    const dialog = screen.getByRole("alertdialog", { name: "Delete Bob?" });
-    expect(dialog).toHaveTextContent("their 2 vaults");
+    await userEvent.click(bob.getByRole("button", { name: "Delete for a privacy request…" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Bob for a privacy request?" });
+    expect(dialog).toHaveTextContent(
+      "Before you go on: make sure the request really comes from this person, and answer within one month (GDPR Art. 12(3)). Their account goes for good, with every vault and note, the history, trash and checkpoints, their API keys and app connections. Nobody can bring it back. Backups are not reached.",
+    );
     const confirm = within(dialog).getByRole("button", { name: "Delete" });
-    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "Bob");
-    expect(confirm).toBeDisabled();
-    await userEvent.clear(within(dialog).getByLabelText(/Type bob to confirm/));
     await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
     expect(confirm).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
     await userEvent.click(confirm);
     await vi.waitFor(() => expect(bodies).toEqual([{ password: "admin password, long", confirm: "bob" }]));
-    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+
+    const receipt = await screen.findByRole("dialog", { name: "Deleted for a privacy request" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(receipt).toHaveTextContent("Vaults: 2");
+    expect(receipt).toHaveTextContent("Notes: 41");
+    expect(receipt).toHaveTextContent("API keys: 1");
+    expect(within(receipt).getByRole("button", { name: "Download receipt" })).toBeInTheDocument();
+    expect(within(receipt).getByRole("button", { name: "Copy reply" })).toBeInTheDocument();
+    await userEvent.click(within(receipt).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("offers no deletion of an active user", async () => {
-    api();
+  it("shows the server's sentence when the deletion is refused, and no receipt", async () => {
+    api(admin, { "POST /api/admin/users/u2/delete": () => json(400, { error: "Your password is wrong." }) });
     renderApp("/admin/users");
-    await screen.findByRole("listitem", { name: "Bob" });
-    expect(within(card("Bob")).queryByRole("button", { name: /Delete/ })).not.toBeInTheDocument();
+    await userEvent.click(within(await screen.findByRole("listitem", { name: "Bob" })).getByRole("button", { name: "Delete for a privacy request…" }));
+    const dialog = screen.getByRole("alertdialog");
+    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "wrong password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your password is wrong.");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("changes a role", async () => {
