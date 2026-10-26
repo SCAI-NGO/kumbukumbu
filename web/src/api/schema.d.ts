@@ -3868,6 +3868,7 @@ export interface components {
             revokedAt: null | string;
             /** Format: date-time */
             expiresAt: null | string;
+            kind: string;
         };
         BacklinkView: {
             path: string;
@@ -4026,6 +4027,7 @@ export interface components {
             size: number | string;
             current: boolean;
             changeset: null | string;
+            writerKind?: null | string;
         };
         InvitationPeekView: {
             role: string;
@@ -4069,6 +4071,7 @@ export interface components {
             lastWriter: string;
             /** Format: date-time */
             lastWriteAt: string;
+            lastWriterKind?: null | string;
         };
         NoteView: {
             path: string;
@@ -4078,6 +4081,7 @@ export interface components {
             /** Format: date-time */
             lastWriteAt: string;
             current: boolean;
+            lastWriterKind?: null | string;
         };
         PasswordChangedView: {
             signedOut: boolean;

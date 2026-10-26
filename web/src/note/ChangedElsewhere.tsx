@@ -55,10 +55,20 @@ export function GoneText({ movedTo }: { movedTo: string | null }) {
 
 const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
 
-/** "liz changed this note just now", or "You changed this note elsewhere …" for the user's own write in another tab. */
+/** The device of a key paired from Obsidian: what follows the last "Obsidian " in its name ("Work – Obsidian Laptop" is "Laptop"). */
+export function deviceOf(writer: string): string {
+  const at = writer.lastIndexOf("Obsidian ");
+  return at < 0 ? writer : writer.slice(at + "Obsidian ".length);
+}
+
+/**
+ * "liz changed this note just now"; "You changed this note in Obsidian (Laptop) …" for a write by one of the user's
+ * devices, and "You changed this note elsewhere …" for their own write in another tab.
+ */
 export function ChangeText({ change }: { change: NoteVersion }) {
   const username = useSession((s) => s.user?.username);
   const writer = writerOf(change.lastWriter);
+  if (change.lastWriterKind === "device") return <>You changed this note in Obsidian ({deviceOf(writer)}) {ago(change.lastWriteAt)}</>;
   return writer === username ? (
     <>You changed this note elsewhere {ago(change.lastWriteAt)}</>
   ) : (
