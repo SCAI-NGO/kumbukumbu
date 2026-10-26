@@ -73,6 +73,8 @@ if (typeof document !== "undefined") {
     "input",
     (e) => {
       const field = e.target;
+      // The shell's focus stand-ins (ModeToggle, Dock) only hold the focus while a part loads; they are never cleared.
+      if (field instanceof Element && field.matches("[data-stand-in]")) return;
       if (field instanceof HTMLTextAreaElement && field.id !== "markdown-source") typed.add(field);
       else if (field instanceof HTMLInputElement && !notTyped.has(field.type)) typed.add(field);
     },

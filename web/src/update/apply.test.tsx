@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { useLeaveGuard } from "../components/shownOnce";
@@ -270,15 +270,23 @@ describe("applying an update", () => {
   });
 
   it("asks the editor again if text came in while it saved", async () => {
-    let calls = 0;
-    // The first save finishes, but a keystroke during it left new text: the second ask saves that too.
-    const beforeRead = vi.fn(async () => ++calls >= 1);
+    let text = "draft";
+    let saved = "";
+    // The first save sends "draft"; a keystroke lands while it runs. Only a second ask saves that too.
+    const beforeRead = vi.fn(async () => {
+      const sending = text;
+      if (beforeRead.mock.calls.length === 1) text = "draft, and a keystroke";
+      await Promise.resolve();
+      saved = sending;
+      return true;
+    });
+    let savedAtReload = "";
     useEditor.setState({ mode: "write", beforeRead });
     useUpdate.getState().report(NEWER);
 
-    expect(await tryReload("button")).toBe(true);
+    expect(await tryReload("button", () => (savedAtReload = saved))).toBe(true);
 
-    expect(beforeRead).toHaveBeenCalledTimes(2);
+    expect(savedAtReload).toBe("draft, and a keystroke");
   });
 
   it("does not reload if the second ask finds text it can't save", async () => {
@@ -439,6 +447,22 @@ describe("what a reload must never lose (I2, I3)", () => {
 
     await userEvent.clear(screen.getByLabelText("New name"));
     expect(await tryReload("auto")).toBe(true);
+  });
+
+  it("doesn't count the shell's focus stand-ins as typed fields", async () => {
+    serverAt(NEWER);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Some text.");
+    act(() => useUpdate.getState().report(NEWER));
+
+    // A keystroke while the editor or the search sheet is still loading lands in the field holding the focus.
+    for (const name of ["Markdown source, opening", "Search, opening"]) {
+      const standIn = screen.getByLabelText(name);
+      expect(standIn).toHaveAttribute("data-stand-in");
+      fireEvent.input(standIn, { target: { value: "x" } });
+    }
+
+    expect(await act(() => tryReload("auto"))).toBe(true);
   });
 
   it("lets a typed field go once it has left the page", async () => {
