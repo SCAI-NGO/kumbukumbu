@@ -10,6 +10,7 @@ import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, s
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
 import ExportDialog from "../data/ExportDialog";
+import ImportDialog from "../data/ImportDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -360,17 +361,23 @@ function VaultsSection() {
 /** Taking one's notes out (and, later, bringing them in): rarely used, so it lives here and not in the menus. */
 export function YourDataSection() {
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   return (
     <Section title="Your data">
       <p className="text-text-body">
         The export is a ZIP with a folder of Markdown notes for each vault; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
+        Importing such a ZIP makes a vault of each folder, or merges into the vault of that name.
       </p>
       <div className="flex flex-wrap gap-3">
         <button type="button" onClick={() => setExporting(true)} className={secondaryButtonClass}>
           Export my vaults…
         </button>
+        <button type="button" onClick={() => setImporting(true)} className={secondaryButtonClass}>
+          Import vaults…
+        </button>
       </div>
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
     </Section>
   );
 }
