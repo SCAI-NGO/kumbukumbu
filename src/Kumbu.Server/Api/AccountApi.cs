@@ -149,7 +149,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<JoinedView>> JoinAsync(
-        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
+        JoinRequest body, HttpContext http, Invitations invitations, UserCatalog users, Sessions sessions, Welcome.WelcomeVault welcome, AccountLimits limits,
+        CancellationToken ct)
     {
         if (limits.Join(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (user, recoveryKey) = await invitations.RedeemAsync(body.Code, body.Username, body.Password, ct);
@@ -161,6 +162,8 @@ public static class AccountApi
             && await TryStartSessionAsync(sessions, signedIn, userKey, readAt) is { } secret)
         {
             SetSessionCookie(http, secret);
+            // Never fails the join, and not cancellable, like the rest of the join after the claim.
+            await welcome.CreateAsync(signedIn, userKey, readAt, CancellationToken.None);
         }
 
         return TypedResults.Ok(new JoinedView(UserView.From(user), recoveryKey));

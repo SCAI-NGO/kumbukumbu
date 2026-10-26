@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Accounts/common-passwords.txt" LogicalName="Kumbu.Server.Accounts.common-passwords.txt" />
+    <EmbeddedResource Include="Welcome/Notes/*.md" LogicalName="Kumbu.Server.Welcome.Notes.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
