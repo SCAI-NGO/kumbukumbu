@@ -15,7 +15,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
-import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
+import { BarButton, ChangeText, deviceOf, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -84,7 +84,8 @@ export default function NoteView({ path }: { path: string }) {
   const username = useSession((s) => s.user?.username);
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
-  const [updatedBy, setUpdatedBy] = useState<string | null>(null);
+  // A writer's name, or the user's own device (Obsidian) by its name.
+  const [updatedBy, setUpdatedBy] = useState<string | { device: string } | null>(null);
   // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
   const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
@@ -115,6 +116,7 @@ export default function NoteView({ path }: { path: string }) {
       if (refreshing.current || !note.data) return;
       refreshing.current = true;
       const writer = writerOf(newer.lastWriter);
+      const device = newer.lastWriterKind === "device";
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
       for (const embedded of new Set(links.data?.filter((l) => l.raw.startsWith("!") && l.kind === "note" && l.path && l.path !== path).map((l) => l.path!))) {
@@ -128,7 +130,7 @@ export default function NoteView({ path }: { path: string }) {
       if (fresh.data.version === note.data.version) return;
       keepScroll.current = top;
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
-      setUpdatedBy(auto ? writer : null);
+      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : writer) : null);
     },
     [note, links.data, path, queryClient],
   );
@@ -271,7 +273,11 @@ export default function NoteView({ path }: { path: string }) {
         updatedBy &&
         !(note.data && sameWrite(note.data)) && (
           <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
-            {updatedBy === username ? "Updated: you changed this note elsewhere" : `Updated by ${updatedBy}`}
+            {typeof updatedBy === "object"
+              ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
+              : updatedBy === username
+                ? "Updated: you changed this note elsewhere"
+                : `Updated by ${updatedBy}`}
           </p>
         )
       )}

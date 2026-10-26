@@ -258,6 +258,20 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(document.querySelector("[data-changed]")).toHaveTextContent("Second, changed by liz.");
   });
 
+  it("says the user changed it in Obsidian when a device's write is taken at once", async () => {
+    setAutoRefresh(true);
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "Work – Obsidian Laptop", "device");
+    backToThePage();
+
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated: you changed this note in Obsidian (Laptop)");
+  });
+
   it("tries each new version once when reading it fails, rather than asking again and again", async () => {
     setAutoRefresh(true);
     texts.v3 = "# Plan\n\nThird.\n";
