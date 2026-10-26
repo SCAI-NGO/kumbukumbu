@@ -76,6 +76,8 @@ builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
 builder.Services.AddSingleton<DeletionList>();
+builder.Services.AddSingleton<RestoredDeletions>();
+builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
 builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<BootstrapAdmin>();

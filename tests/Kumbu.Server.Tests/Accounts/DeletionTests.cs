@@ -45,7 +45,9 @@ public sealed class DeletionTests(MongoFixture fixture)
     private DeletionList List() =>
         new(Options.Create(new KumbuOptions { Deletions = new DeletionsOptions { Path = _listPath } }), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<DeletionList>());
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+
+    private RestoredDeletions Restored() => new(_db, List());
 
     private string TempListPath() => _listPath = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
 
@@ -550,6 +552,80 @@ public sealed class DeletionTests(MongoFixture fixture)
         {
             File.Delete(file);
         }
+    }
+
+    [Fact]
+    public async Task A_restored_user_is_found_and_deleted_again_but_never_the_admin_themselves()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, key, _) = await SignedInAsync("lea");
+            var (bob, _, _) = await SignedInAsync("bob");
+            await FilledVaultAsync(lea, key, "Tagebuch");
+            var leaDoc = await Raw("users").Find(Builders<BsonDocument>.Filter.Eq("_id", lea.Id)).FirstAsync(Ct);
+            Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+            Assert.Empty(await Restored().FindAsync(Ct));
+            // A backup restore brings lea back, and with her an id the list names that the admin holds now (anna's
+            // own, listed by hand here; a restore after anna deleted herself would do the same).
+            await Raw("users").InsertOneAsync(leaDoc, cancellationToken: Ct);
+            Assert.True(await List().AddAsync(anna.Id, Ct));
+
+            Assert.Equal(["anna", "lea"], (await Restored().FindAsync(Ct)).Select(u => u.Username).Order());
+            await Assert.ThrowsAsync<ArgumentException>(() => Deletion().RepeatAsync(anna, annaKey, "not anna's password at all", Ct));
+            var again = await Deletion().RepeatAsync(anna, annaKey, Password, Ct);
+
+            var deleted = Assert.Single(again);
+            Assert.Equal(lea.Id, deleted.Id);
+            Assert.Equal("anna", deleted.DeletedBy);
+            Assert.True(deleted.Listed);
+            Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+            Assert.Equal(1, await CountAsync("users", "_id", anna.Id));
+            Assert.Equal(1, await CountAsync("users", "_id", bob.Id));
+            Assert.Equal(["anna"], (await Restored().FindAsync(Ct)).Select(u => u.Username));
+            // Nothing new on the list: lea's id is there once, as before.
+            Assert.Single(await File.ReadAllLinesAsync(Path.Combine(dir, "deleted-users"), Ct), l => l == lea.Id);
+            Assert.Contains(_log.Lines, l => l.Contains($"anna deleted user lea ({lea.Id}) again after a restore", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task At_start_the_log_warns_about_restored_users_by_id_only()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (lea, _, _) = await SignedInAsync("lea");
+            Assert.True(await List().AddAsync(lea.Id, Ct));
+            using var check = new RestoredDeletionsCheck(Restored(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<RestoredDeletionsCheck>());
+
+            await check.StartAsync(Ct);
+            await check.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+            var warning = Assert.Single(_log.Lines, l => l.Contains("deleted users are back after a restore", StringComparison.Ordinal));
+            Assert.StartsWith("Warning", warning, StringComparison.Ordinal);
+            Assert.Contains("1 deleted users are back after a restore; an admin can delete them again on the users page", warning, StringComparison.Ordinal);
+            Assert.Contains(lea.Id, warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("lea", warning.Replace(lea.Id, "", StringComparison.Ordinal).Replace("RestoredDeletions", "", StringComparison.Ordinal), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Only_an_admin_repeats_a_deletion()
+    {
+        var (bob, bobKey, _) = await SignedInAsync("bob");
+
+        await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().RepeatAsync(bob, bobKey, Password, Ct));
+        await Assert.ThrowsAsync<NotPermittedException>(() => Restored().ListAsync(bob, Ct));
     }
 
     [Fact]

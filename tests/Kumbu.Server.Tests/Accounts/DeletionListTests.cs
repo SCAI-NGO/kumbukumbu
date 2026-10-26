@@ -58,6 +58,16 @@ public sealed class DeletionListTests : IDisposable
     }
 
     [Fact]
+    public async Task A_messy_list_reads_as_its_ids()
+    {
+        Directory.CreateDirectory(_root);
+        await File.WriteAllTextAsync(
+            Path.Combine(_root, "deleted-users"), $"{A}\r\n\n  {B} \njunk with spaces\n0123456789abcdef 0123456789abcdef\nABCDEF0123456789ABCDEF0123456789\n{A}\n", Ct);
+
+        Assert.Equal(new HashSet<string> { A, B }, await List(_root).ReadAsync(Ct));
+    }
+
+    [Fact]
     public async Task Without_a_path_nothing_is_written()
     {
         var list = List(null);

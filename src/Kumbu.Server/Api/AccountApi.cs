@@ -75,6 +75,16 @@ public sealed record DeleteAccountRequest(string Password, string Confirm);
 /// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
 public sealed record DeleteUserRequest(string Password, string Confirm);
 
+/// <summary>A deleted user that a backup restore brought back.</summary>
+public sealed record RestoredUserView(string Id, string Username, string Display);
+
+/// <summary><c>configured</c>: the server keeps a list of deleted users (<c>Kumbu:Deletions:Path</c>); without it, a
+/// restored user can't be detected. <c>restored</c>: the users on it that exist again.</summary>
+public sealed record DeletionsView(bool Configured, IReadOnlyList<RestoredUserView> Restored);
+
+/// <summary>Deleting again every user a restore brought back: the admin's own current password.</summary>
+public sealed record RepeatDeletionsRequest(string Password);
+
 /// <summary>
 /// What an admin keeps as a record of a deletion for a privacy request: ids, the usernames, the time and counts, never
 /// content or a vault or note name. <c>externalProviders</c>: the labels of every external embedding provider this
@@ -132,6 +142,8 @@ public static class AccountApi
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
         account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404);
         account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404, 429);
+        account.MapGet("/admin/deletions", ListDeletionsAsync).Errors(401, 403);
+        account.MapPost("/admin/deletions/repeat", RepeatDeletionsAsync).Errors(400, 401, 403, 429);
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
@@ -316,6 +328,20 @@ public static class AccountApi
         var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
             ?? throw ApiErrors.NotFound("There is no such user.");
         return TypedResults.Ok(ReceiptView(deleted, index, options.Value));
+    }
+
+    private static async Task<Ok<DeletionsView>> ListDeletionsAsync(RequestCaller caller, RestoredDeletions restored, CancellationToken ct) =>
+        TypedResults.Ok(new DeletionsView(
+            restored.Configured, (await restored.ListAsync(caller.User!, ct)).Select(u => new RestoredUserView(u.Id, u.Username, u.Display)).ToArray()));
+
+    /// <summary>After a restore: every user it brought back is deleted again, one receipt each.</summary>
+    private static async Task<Ok<DeletionReceiptView[]>> RepeatDeletionsAsync(
+        RepeatDeletionsRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index, IOptions<KumbuOptions> options,
+        CancellationToken ct)
+    {
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var deleted = await deletion.RepeatAsync(caller.User!, caller.UserKey!, body.Password, ct);
+        return TypedResults.Ok(deleted.Select(d => ReceiptView(d, index, options.Value)).ToArray());
     }
 
     internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(

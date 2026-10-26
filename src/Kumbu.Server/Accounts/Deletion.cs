@@ -24,7 +24,8 @@ public sealed record DeletedUser(string Id, string Username, string Display, str
 /// their own), and the remaining admins see and can revoke an open one, as after a deactivation.
 /// </para>
 /// </summary>
-public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, TimeProvider time, ILogger<Deletion> log)
+public sealed class Deletion(
+    IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, RestoredDeletions restored, TimeProvider time, ILogger<Deletion> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -99,6 +100,43 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
             "{Admin} deleted user {Username} ({UserId}): {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Documents} documents",
             acting.Username, target.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Documents);
         return new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, listed);
+    }
+
+    /// <summary>
+    /// After a backup restore: an admin deletes again, in one step, every user on the <see cref="DeletionList"/> that
+    /// the restore brought back, with their own password (no username to type: the list names them). Each user goes
+    /// in a transaction of their own, so one that fails doesn't stop the others (it is logged and stays on the
+    /// users page). Never the primary admin and never the admin themselves. Nothing is added to the list: the ids
+    /// are on it already.
+    /// </summary>
+    public async Task<IReadOnlyList<DeletedUser>> RepeatAsync(User actor, byte[] actorKey, string password, CancellationToken ct)
+    {
+        var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
+        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
+
+        var done = new List<DeletedUser>();
+        foreach (var target in await restored.FindAsync(ct))
+        {
+            if (target.Id == acting.Id) continue;
+            DeletionSummary? summary;
+            try
+            {
+                summary = await DeleteAccountAsync(target.Id, Builders<UserDocument>.Filter.Where(u => u.Id == target.Id && u.Role != Roles.PrimaryAdmin), ct);
+            }
+            catch (Exception e) when (e is MongoException or TimeoutException)
+            {
+                log.LogError("{Admin} could not delete user {UserId} again after a restore ({Error})", acting.Username, target.Id, e.Message);
+                continue;
+            }
+
+            if (summary is null) continue;
+            log.LogInformation(
+                "{Admin} deleted user {Username} ({UserId}) again after a restore: {Vaults} vaults, {Notes} notes, {Keys} API keys, {Connections} connections, {Documents} documents",
+                acting.Username, target.Username, target.Id, summary.Vaults, summary.Notes, summary.ApiKeys, summary.Connections, summary.Documents);
+            done.Add(new DeletedUser(target.Id, target.Username, target.Display, acting.Username, time.GetUtcNow().UtcDateTime, summary, Listed: true));
+        }
+
+        return done;
     }
 
     private static bool ConfirmsUsername(string typed, string username) => string.Equals(typed.Trim(), username, StringComparison.OrdinalIgnoreCase);

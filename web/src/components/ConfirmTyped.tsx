@@ -5,7 +5,8 @@ import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonC
 import { PasswordField } from "./PasswordField";
 import { useDialog } from "../hooks/useDialog";
 
-/** A confirmation that is only possible after typing `word` exactly: for actions that lock someone out, let them back in or delete for good. */
+/** A confirmation that is only possible after typing `word` exactly: for actions that lock someone out, let them back in or delete for good.
+ * Without `word`, only the password is asked for (`password` must be given then). */
 export default function ConfirmTyped({
   title,
   text,
@@ -20,7 +21,7 @@ export default function ConfirmTyped({
 }: {
   title: string;
   text: string;
-  word: string;
+  word?: string;
   action: string;
   pending: boolean;
   error: string | null;
@@ -33,7 +34,7 @@ export default function ConfirmTyped({
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
   const [typed, setTyped] = useState("");
-  const ready = typed === word && (password === undefined || password !== "");
+  const ready = (word === undefined || typed === word) && (password === undefined || password !== "");
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -55,21 +56,23 @@ export default function ConfirmTyped({
         {password !== undefined && (
           <PasswordField label="Your password" value={password} onChange={(v) => onPasswordChange?.(v)} autoComplete="current-password" />
         )}
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={`${id}-word`} className={labelClass}>
-            Type {word} to confirm
-          </label>
-          <input
-            id={`${id}-word`}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            autoComplete="off"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            className={inputClass}
-          />
-        </div>
+        {word !== undefined && (
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor={`${id}-word`} className={labelClass}>
+              Type {word} to confirm
+            </label>
+            <input
+              id={`${id}-word`}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              className={inputClass}
+            />
+          </div>
+        )}
         {error && <FormError>{error}</FormError>}
         <div className="flex gap-3">
           <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>

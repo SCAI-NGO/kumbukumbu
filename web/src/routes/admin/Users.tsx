@@ -30,10 +30,30 @@ export default function Users() {
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
-  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  // One receipt after the other: a repeat after a restore gives one per user.
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [repeating, setRepeating] = useState(false);
+  const deletions = useQuery({
+    queryKey: ["admin", "deletions"],
+    queryFn: () => call(api.GET("/api/admin/deletions")),
+    enabled: useIsAdmin() === true,
+  });
+  const restored = deletions.data?.restored ?? [];
 
   return (
     <AdminOnly title="Users">
+      {restored.length > 0 && (
+        <div role="alert" className="mb-4 flex flex-col gap-3 rounded-[12px] border border-line bg-surface p-4 text-text">
+          <p>
+            A backup restore brought back {restored.length} deleted user(s): {restored.map((u) => u.username).join(", ")}. Delete them again?
+          </p>
+          <div>
+            <button type="button" onClick={() => setRepeating(true)} className={secondaryButtonClass}>
+              Delete again…
+            </button>
+          </div>
+        </div>
+      )}
       {users.isError && <FormError>{errorText(users.error)}</FormError>}
       {users.data && (
         <ul className="flex flex-col gap-3">
@@ -49,11 +69,21 @@ export default function Users() {
           onClose={() => setDeleting(null)}
           onDeleted={(r) => {
             setDeleting(null);
-            setReceipt(r);
+            setReceipts([r]);
           }}
         />
       )}
-      {receipt && <DeletionReceipt receipt={receipt} onClose={() => setReceipt(null)} />}
+      {repeating && (
+        <RepeatDialog
+          count={restored.length}
+          onClose={() => setRepeating(false)}
+          onDeleted={(rs) => {
+            setRepeating(false);
+            setReceipts(rs);
+          }}
+        />
+      )}
+      {receipts.length > 0 && <DeletionReceipt key={receipts[0].userId} receipt={receipts[0]} onClose={() => setReceipts((rs) => rs.slice(1))} />}
     </AdminOnly>
   );
 }
@@ -134,7 +164,7 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose()
     mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { password, confirm: user.username } })),
     onSuccess: async (receipt) => {
       onDeleted(receipt);
-      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      await queryClient.invalidateQueries({ queryKey: ["admin"] });
     },
   });
   return (
@@ -146,6 +176,32 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose()
       pending={remove.isPending}
       error={remove.isError ? errorText(remove.error) : null}
       onConfirm={() => remove.mutate()}
+      onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
+    />
+  );
+}
+
+/** After a restore: deletes again every user it brought back, with the admin's password (the list names them). */
+function RepeatDialog({ count, onClose, onDeleted }: { count: number; onClose(): void; onDeleted(receipts: Receipt[]): void }) {
+  const queryClient = useQueryClient();
+  const [password, setPassword] = useState("");
+  const repeat = useMutation({
+    mutationFn: () => call(api.POST("/api/admin/deletions/repeat", { body: { password } })),
+    onSuccess: async (receipts) => {
+      onDeleted(receipts);
+      await queryClient.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+  return (
+    <ConfirmTyped
+      title={`Delete ${count} restored user(s) again?`}
+      text="They were deleted before, and a backup restore brought their accounts back. Everything of theirs goes again, for good, as the first time."
+      action="Delete again"
+      pending={repeat.isPending}
+      error={repeat.isError ? errorText(repeat.error) : null}
+      onConfirm={() => repeat.mutate()}
       onClose={onClose}
       password={password}
       onPasswordChange={setPassword}

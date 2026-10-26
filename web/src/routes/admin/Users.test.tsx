@@ -25,6 +25,7 @@ function api(who = admin, extra: Parameters<typeof fakeApi>[0] = {}) {
     "GET /api/vaults": () => json(200, []),
     "GET /api/admin/users": () =>
       json(200, [row(root), row(admin), row(plain, { lastSignInAt: null, bytesStored: 5 * 1024 * 1024 + 300000, vaults: 0 })]),
+    "GET /api/admin/deletions": () => json(200, { configured: true, restored: [] }),
     ...extra,
   });
 }
@@ -176,6 +177,61 @@ describe("Admin users", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your password is wrong.");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows no restore warning when no deleted user is back", async () => {
+    api();
+    renderApp("/admin/users");
+    await screen.findByRole("listitem", { name: "Bob" });
+    expect(screen.queryByText(/A backup restore brought back/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete again…" })).not.toBeInTheDocument();
+  });
+
+  it("the users page shows the restore warning and 'Delete again…' when restored users exist", async () => {
+    const bodies: unknown[] = [];
+    let restored = [
+      { id: "u7", username: "anna", display: "Anna" },
+      { id: "u8", username: "max", display: "Max" },
+    ];
+    const receipt = (id: string, username: string) => ({
+      userId: id,
+      username,
+      deletedBy: "ada",
+      deletedAt: "2026-10-27T10:15:00Z",
+      vaults: 1,
+      notes: 3,
+      apiKeys: 0,
+      connections: 0,
+      externalProviders: [],
+      privacyContact: null,
+      listed: true,
+    });
+    api(admin, {
+      "GET /api/admin/deletions": () => json(200, { configured: true, restored }),
+      "POST /api/admin/deletions/repeat": async (r) => {
+        bodies.push(await r.json());
+        restored = [];
+        return json(200, [receipt("u7", "anna"), receipt("u8", "max")]);
+      },
+    });
+    renderApp("/admin/users");
+    expect(await screen.findByText("A backup restore brought back 2 deleted user(s): anna, max. Delete them again?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Delete again…" }));
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = within(dialog).getByRole("button", { name: "Delete again" });
+    expect(within(dialog).queryByLabelText(/to confirm/)).not.toBeInTheDocument();
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
+    await userEvent.click(confirm);
+    await vi.waitFor(() => expect(bodies).toEqual([{ password: "admin password, long" }]));
+
+    // One receipt after the other.
+    expect(await screen.findByRole("dialog", { name: "Deleted for a privacy request" })).toHaveTextContent("Username: anna");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(await screen.findByRole("dialog", { name: "Deleted for a privacy request" })).toHaveTextContent("Username: max");
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.queryByText(/A backup restore brought back/)).not.toBeInTheDocument());
   });
 
   it("changes a role", async () => {
