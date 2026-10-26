@@ -42,8 +42,8 @@ public sealed record ApiKeyInfo(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
     DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent);
 
-/// <summary>A key that was presented and checked: whose it is, and the name its writes carry.</summary>
-public sealed record ResolvedApiKey(User User, string Id, string Name);
+/// <summary>A key that was presented and checked: whose it is, the name its writes carry, and whether a device holds it.</summary>
+public sealed record ResolvedApiKey(User User, string Id, string Name, ApiKeyKind Kind = ApiKeyKind.Agent);
 
 /// <summary>
 /// API keys (accounts design, "API keys"): <c>kumbu_</c> and 32 random bytes in Base62, shown once. Each key has
@@ -119,7 +119,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
             Prefix = key.Substring(KeyPrefix.Length, PrefixLength),
             NameId = WriterNames.NameId(userKey, user.Id, clean),
             Meta = VaultCrypto.Seal(MetaKey(userKey, user.Id), JsonSerializer.SerializeToUtf8Bytes(meta), MetaContext(id)),
-            Writer = VaultCrypto.Seal(WriterKey(key), Encoding.UTF8.GetBytes(clean), WriterContext(id, expiresAt)),
+            Writer = VaultCrypto.Seal(WriterKey(key), Encoding.UTF8.GetBytes(clean), WriterContext(id, expiresAt, kind)),
             CreatedAt = Now,
             ExpiresAt = expiresAt,
         };
@@ -302,17 +302,29 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var user = await Users.Find(u => u.Id == doc.User).FirstOrDefaultAsync(ct);
         if (user is null || !user.Active) return null;
 
-        string name;
-        try
+        // The expiry and the kind are bound into this seal: changed or removed in the database, the name doesn't open.
+        // The meta's kind is sealed under the user key, which a request with the key doesn't have.
+        string? name = null;
+        var kind = ApiKeyKind.Agent;
+        foreach (var candidate in (ApiKeyKind[])[ApiKeyKind.Agent, ApiKeyKind.Device])
         {
-            // The expiry is bound into this seal: changed or removed in the database, the name doesn't open.
-            name = Encoding.UTF8.GetString(VaultCrypto.Open(WriterKey(presented), doc.Writer, WriterContext(doc.Id, doc.ExpiresAt)));
+            try
+            {
+                name = Encoding.UTF8.GetString(VaultCrypto.Open(WriterKey(presented), doc.Writer, WriterContext(doc.Id, doc.ExpiresAt, candidate)));
+                kind = candidate;
+                break;
+            }
+            catch (CryptographicException)
+            {
+            }
         }
-        catch (CryptographicException)
+
+        if (name is null)
         {
             log.LogWarning("API key {KeyId} matched but its name does not open", doc.Id);
             return null;
         }
+
         if (doc.LastUsedAt is not { } lastUsed || now - lastUsed >= LastUsedGranularity)
         {
             // Conditional, so of concurrent requests only one writes.
@@ -323,7 +335,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                 cancellationToken: ct);
         }
 
-        return new ResolvedApiKey(user.ToUser(), doc.Id, name);
+        return new ResolvedApiKey(user.ToUser(), doc.Id, name, kind);
     }
 
     /// <summary>Whether the key may still be used: not revoked, not expired, its owner active. For a WebSocket held
@@ -377,9 +389,11 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// <summary>For tests: a meta's plaintext.</summary>
     internal static byte[] OpenMeta(byte[] userKey, string userId, string keyId, byte[] sealedMeta) => VaultCrypto.Open(MetaKey(userKey, userId), sealedMeta, MetaContext(keyId));
 
-    /// <summary>A key without expiry keeps the context every key had before expiry existed.</summary>
-    private static string WriterContext(string keyId, DateTime? expiresAt) =>
-        expiresAt is { } at ? $"api-key:{keyId}:writer:{new DateTimeOffset(at.Ticks, TimeSpan.Zero).ToUnixTimeMilliseconds()}" : $"api-key:{keyId}:writer";
+    /// <summary>A key without expiry keeps the context every key had before expiry existed, and an agent's the one every
+    /// key had before kinds existed. A device key paired before then reads as an agent's here (only its changesets differ).</summary>
+    private static string WriterContext(string keyId, DateTime? expiresAt, ApiKeyKind kind) =>
+        (expiresAt is { } at ? $"api-key:{keyId}:writer:{new DateTimeOffset(at.Ticks, TimeSpan.Zero).ToUnixTimeMilliseconds()}" : $"api-key:{keyId}:writer")
+        + (kind == ApiKeyKind.Device ? ":device" : "");
 
     private static DateTime Milliseconds(DateTime t) => new(t.Ticks - (t.Ticks % TimeSpan.TicksPerMillisecond), DateTimeKind.Utc);
 

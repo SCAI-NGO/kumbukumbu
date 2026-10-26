@@ -370,9 +370,11 @@ MongoDB offers transactions only on a **replica set**, because they are built on
 
 Chapter 3 coalesced writes per note: the same writer within 10 minutes of that note's last write. Two things didn't fit. Each tool decided for itself (`replace` and the link rewrites of `mv` always made a version of their own), so a series of ten renames on one glossary note filled its history with renames and pushed out the state before them. And "a session" was really about the writer, not one note.
 
-A **changeset** is everything one writer writes close together in time: it starts with a write and stays open while that writer writes again within 10 minutes, for an hour at most. Each note gets **one version per changeset**, whichever tool wrote it. The open changeset is derived from the notes themselves: every state carries its changeset's id and start time, and the writer's most recent write in the vault tells whether its changeset is still open. There is no session to keep track of, and a restart changes nothing.
+A **changeset** is everything one writer writes close together in time: it starts with a write and stays open while that writer writes again within 10 minutes, for an hour at most. A person's editor (the web app, Obsidian) saves every few seconds, so for a session or a device key the window is 2 minutes; otherwise an hour of typing would leave one version. Each note gets **one version per changeset**, whichever tool wrote it. The open changeset is derived from the notes themselves: every state carries its changeset's id and start time, and the writer's most recent write in the vault tells whether its changeset is still open. There is no session to keep track of, and a restart changes nothing.
 
 Each history entry records its changeset id. Today that shows in `history <folder>`, grouping a session's writes across notes; later it allows undoing a whole changeset at once.
+
+The state a note is created with is never coalesced away: the next write, even in the same changeset, keeps it as a version. A conflict copy's first state is the evidence of the conflict.
 
 Two kinds of write never join a changeset: a **restore**, which is a deliberate step back and must stay undoable on its own, and **seeding**. In Git terms a changeset is a commit that is squashed while the session lasts.
 

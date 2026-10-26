@@ -20,8 +20,12 @@ public static class Writers
 /// </summary>
 public sealed record Changeset(string Id, DateTime Started)
 {
-    /// <summary>A changeset ends after this long without a write by its writer.</summary>
+    /// <summary>A changeset ends after this long without a write by its writer: an agent (API key, connection, dev token).</summary>
     public static readonly TimeSpan Idle = TimeSpan.FromMinutes(10);
+
+    /// <summary>The same for a person (the web app's session, an Obsidian device key): their editor saves every few
+    /// seconds, so a pause of two minutes already ends a version (decided Oct 26, 2026).</summary>
+    public static readonly TimeSpan HumanIdle = TimeSpan.FromMinutes(2);
 
     /// <summary>And after this long at most, so a long session doesn't become one endless changeset.</summary>
     public static readonly TimeSpan MaxLength = TimeSpan.FromHours(1);
@@ -31,10 +35,11 @@ public sealed record Changeset(string Id, DateTime Started)
     /// <summary>The first 8 characters, enough to tell the changesets of a vault apart in a listing.</summary>
     public string Short => Id[..Math.Min(8, Id.Length)];
 
-    /// <summary>The writer's changeset for a write at <paramref name="now"/>: the latest one, if it is still open.</summary>
-    public static async Task<Changeset> ForAsync(INoteStore store, string vault, string writer, DateTime now, CancellationToken ct) =>
+    /// <summary>The writer's changeset for a write at <paramref name="now"/>: the latest one, if it is still open after
+    /// <paramref name="idle"/> without a write (<see cref="ICaller.ChangesetIdle"/>).</summary>
+    public static async Task<Changeset> ForAsync(INoteStore store, string vault, string writer, TimeSpan idle, DateTime now, CancellationToken ct) =>
         await store.LatestChangesetAsync(vault, Writers.Identity(writer), ct) is { } latest
-        && now - latest.LastWrite < Idle && now - latest.Changeset.Started < MaxLength
+        && now - latest.LastWrite < idle && now - latest.Changeset.Started < MaxLength
             ? latest.Changeset
             : New(now);
 
