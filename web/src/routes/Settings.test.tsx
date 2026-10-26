@@ -109,9 +109,9 @@ describe("Settings", () => {
     api({ "POST /api/password": async (r) => (bodies.push(await r.json()), json(200, { signedOut: true })) });
     const router = renderApp("/settings");
     const form = await screen.findByRole("region", { name: "Password" });
-    const revoke = within(form).getByLabelText("Also revoke all API keys");
+    const revoke = within(form).getByLabelText("Also revoke all API keys and disconnect apps");
     expect(revoke).toBeChecked();
-    expect(form).toHaveTextContent("Agents using them will need new keys.");
+    expect(form).toHaveTextContent("Agents using them will need new keys, and apps will need to reconnect.");
 
     await userEvent.click(revoke);
     await userEvent.type(within(form).getByLabelText("Current password"), "old password here");

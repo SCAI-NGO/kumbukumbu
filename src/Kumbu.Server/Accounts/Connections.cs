@@ -136,6 +136,9 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                             cancellationToken: token);
                         if (current.MatchedCount == 0) throw new CredentialsChangedException();
                         if (await ApiKeys.NameTakenAsync(s, db, user.Id, doc.NameId, now, token)) throw new ConnectionNameTakenException(clean);
+                        // Checked above outside the transaction; a vault deleted since is seen here, or its deletion
+                        // conflicts on the user document written above.
+                        await catalog.RequireVaultsAsync(s, doc.Vaults, Noun, token);
                         await RetireExpiredAsync(s, user.Id, now, token);
                         await Docs.InsertOneAsync(s, doc, cancellationToken: token);
                         return true;
@@ -224,6 +227,10 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
                     var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)) };
+                    // As at creation: a vault deleted since the check above is seen here, or its deletion conflicts on
+                    // the user document.
+                    await Users.UpdateOneAsync(s, u => u.Id == user.Id, Builders<UserDocument>.Update.Inc(u => u.ConnectionsChanged, 1), cancellationToken: token);
+                    await catalog.RequireVaultsAsync(s, [.. vaults.Keys], Noun, token);
                     await Docs.UpdateOneAsync(
                         s,
                         c => c.Id == id,
@@ -381,7 +388,8 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return new ConnectionInfo(
             doc.Id,
             meta.Name,
-            meta.Vaults.Where(v => KeyRights.Parse(v.Value) is not null).ToDictionary(v => v.Key, v => KeyRights.Parse(v.Value)!.Value),
+            // A vault deleted since is gone from the clear list, not from the sealed meta: it isn't listed.
+            meta.Vaults.Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.Parse(v.Value)!.Value),
             doc.CreatedAt,
             doc.LastUsedAt,
             doc.ExpiresAt,
@@ -468,6 +476,49 @@ internal static class ConnectionRevocation
             Builders<ConnectionDocument>.Filter.In(c => c.Id, ids),
             Builders<ConnectionDocument>.Update.Set(c => c.TokensRevokedAt, now).Set(c => c.TokensRevokedReason, reason),
             cancellationToken: ct);
+        return ids.Count;
+    }
+
+    /// <summary>
+    /// Inside a vault deletion: the vault ids go from every connection that had them, a real write to each, so that a
+    /// code or token being issued for one of them at the same time (which writes the connection too) conflicts and,
+    /// retried, wraps no slot for a deleted vault (<c>OAuthTokens</c>). A connection left with no vault is revoked for
+    /// good, as by its owner (Ruling 2): <see cref="ConnectionReasons.VaultDeleted"/>, name freed, its tokens revoked.
+    /// Its slots on the deleted vaults are deleted by the caller, with every slot on them. Returns the revoked ones' ids.
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> RemoveVaultsAsync(
+        IMongoDatabase db, IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct)
+    {
+        var connections = db.GetCollection<ConnectionDocument>(Connections.CollectionName);
+        var f = Builders<ConnectionDocument>.Filter;
+        var having = await connections.Find(session, f.AnyIn(c => c.Vaults, vaultIds)).Project(c => c.Id).ToListAsync(ct);
+        if (having.Count == 0) return [];
+        await connections.UpdateManyAsync(session, f.In(c => c.Id, having), Builders<ConnectionDocument>.Update.PullAll(c => c.Vaults, vaultIds), cancellationToken: ct);
+        var left = await connections.Find(session, f.In(c => c.Id, having) & f.Size(c => c.Vaults, 0) & f.Eq(c => c.RevokedAt, null)).Project(c => c.Id).ToListAsync(ct);
+        if (left.Count == 0) return [];
+        await connections.UpdateManyAsync(
+            session,
+            f.In(c => c.Id, left),
+            Builders<ConnectionDocument>.Update.Set(c => c.RevokedAt, now).Set(c => c.RevokedReason, ConnectionReasons.VaultDeleted).Unset(c => c.NameId),
+            cancellationToken: ct);
+        await RevokeTokensAsync(db, session, f.In(c => c.Id, left), ConnectionReasons.VaultDeleted, now, ct);
+        return left;
+    }
+
+    /// <summary>
+    /// Inside an account's deletion: the user's connections with every code and token of theirs, tombstones included,
+    /// their slots and their pending authorisation requests. Returns how many connections.
+    /// </summary>
+    internal static async Task<int> DeleteAllAsync(IMongoDatabase db, IClientSessionHandle session, string userId, CancellationToken ct)
+    {
+        var connections = db.GetCollection<ConnectionDocument>(Connections.CollectionName);
+        var ids = await connections.Find(session, c => c.User == userId).Project(c => c.Id).ToListAsync(ct);
+        var b = Builders<BsonDocument>.Filter;
+        var ofThese = b.In(ConnectionField, ids);
+        await db.GetCollection<BsonDocument>(TokensCollection).DeleteManyAsync(session, ofThese | b.Eq("user", userId), cancellationToken: ct);
+        await db.GetCollection<BsonDocument>("slots").DeleteManyAsync(session, b.Eq("kind", SlotKind) & ofThese, cancellationToken: ct);
+        await db.GetCollection<BsonDocument>(OAuth.AuthorizationRequests.CollectionName).DeleteManyAsync(session, ofThese, cancellationToken: ct);
+        await connections.DeleteManyAsync(session, c => c.User == userId, cancellationToken: ct);
         return ids.Count;
     }
 

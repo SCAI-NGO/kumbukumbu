@@ -131,7 +131,7 @@ public sealed class OAuthTokens(
         if (doc is null || !IsLive(doc, user.Id, Now) || connections.OpenMeta(user, userKey, doc) is not { } meta)
             throw new ConnectionUnavailableException("This connection is revoked or expired.");
         var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw new ConnectionUnavailableException("This app is no longer known; start the connection again in the app.");
-        var rights = Rights(meta, request.ReadOnly);
+        var rights = Rights(doc, meta, request.ReadOnly);
         if (rights.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
 
         var code = Secrets.New(CodePrefix);
@@ -183,8 +183,12 @@ public sealed class OAuthTokens(
                 // every connection: before the stamp this code is found by the revocation, after it it's refused here.
                 if (!await Users.Find(s, u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt)).AnyAsync(token))
                     throw new CredentialsChangedException();
+                // A vault deleted since the slots were wrapped is gone from the connection's vaults: no slot for it. A
+                // deletion under way writes this document too, and conflicts.
+                var kept = Live(slots, current);
+                if (kept.Count == 0) throw new ConnectionUnavailableException("This connection has no vaults left.");
                 await Docs.InsertOneAsync(s, record, cancellationToken: token);
-                await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);
+                await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
                 await connections.SetClientAsync(s, user, userKey, connectionId, connected, token);
                 return true;
             },
@@ -273,7 +277,10 @@ public sealed class OAuthTokens(
                 if (connection is null || !IsLive(connection, code.User, now) || now >= grant.ConnectionExpiresAt)
                     return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
                 if (!await Users.Find(s, u => u.Id == code.User && u.Active).AnyAsync(token)) return TokenResult.Failure("invalid_grant", InvalidCode);
-                if (keys.Count == 0) return TokenResult.Failure("invalid_grant", InvalidCode);
+                // Opened before the transaction: a vault deleted since is gone from the connection's vaults (read here,
+                // and written below, so a deletion under way conflicts) and gets no slot.
+                var live = Live(keys, connection);
+                if (live.Count == 0) return TokenResult.Failure("invalid_grant", InvalidCode);
 
                 // The connection's expiry as sealed into the grant: a changed expiresAt in the database extends nothing.
                 var connectionExpiresAt = grant.ConnectionExpiresAt;
@@ -300,8 +307,8 @@ public sealed class OAuthTokens(
                 await catalog.Slots.InsertManyAsync(
                     s,
                     [
-                        .. catalog.WrapConnectionSlots(keys, code.ConnectionId, refreshId, refresh, connectionExpiresAt),
-                        .. catalog.WrapConnectionSlots(keys, code.ConnectionId, accessId, access, accessExpiresAt),
+                        .. catalog.WrapConnectionSlots(live, code.ConnectionId, refreshId, refresh, connectionExpiresAt),
+                        .. catalog.WrapConnectionSlots(live, code.ConnectionId, accessId, access, accessExpiresAt),
                     ],
                     cancellationToken: token);
                 await Docs.UpdateOneAsync(s, d => d.Id == code.Id, Builders<OAuthTokenDocument>.Update.Set(d => d.Issued, refreshId), cancellationToken: token);
@@ -309,7 +316,7 @@ public sealed class OAuthTokens(
                 if (connection.AuthorisedAt is null) update = update.Set(c => c.AuthorisedAt, now);
                 await ConnectionDocs.UpdateOneAsync(s, c => c.Id == code.ConnectionId, update, cancellationToken: token);
 
-                return new TokenResult(new TokenPair(access, refresh, ExpiresIn(accessExpiresAt, now), ScopeOf(keys)), null, null);
+                return new TokenResult(new TokenPair(access, refresh, ExpiresIn(accessExpiresAt, now), ScopeOf(live)), null, null);
             },
             cancellationToken: ct);
 
@@ -334,7 +341,10 @@ public sealed class OAuthTokens(
     /// has a live family again and the token was spent more than the grace period ago: an old family's token turning
     /// up beside a new one is a reuse too. A token of another client is refused and changes nothing.
     /// </summary>
-    public async Task<TokenResult> RefreshAsync(string refreshToken, string clientId, string? resource, CancellationToken ct)
+    public Task<TokenResult> RefreshAsync(string refreshToken, string clientId, string? resource, CancellationToken ct) =>
+        RefreshAsync(refreshToken, clientId, resource, retry: true, ct);
+
+    private async Task<TokenResult> RefreshAsync(string refreshToken, string clientId, string? resource, bool retry, CancellationToken ct)
     {
         if (!Secrets.IsWellFormed(refreshToken, RefreshPrefix)) return Refused(null, null, "invalid_grant", InvalidRefresh);
         await EnsureReadyAsync(ct);
@@ -403,13 +413,16 @@ public sealed class OAuthTokens(
                 }
 
                 if (Unusable(grant, resource, now) is { } refused) return refused;
-                if (!await LiveAsync(s, old, now, token)) return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
-                if (keys.Count == 0) return TokenResult.Failure("invalid_grant", InvalidRefresh);
+                if (await LiveAsync(s, old, now, token) is not { } connection) return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
+                // As at the exchange: a vault deleted since the slots were opened gets no slot; a deletion under way
+                // conflicts on the connection's document, written below.
+                var live = Live(keys, connection);
+                if (live.Count == 0) return TokenResult.Failure("invalid_grant", InvalidRefresh);
 
                 // The connection's expiry as sealed into the grant, as at the exchange.
                 var connectionExpiresAt = grant.ConnectionExpiresAt;
                 var accessExpiresAt = AccessExpiry(now, connectionExpiresAt);
-                var kept = new KeptPair(access, refresh, accessExpiresAt, ScopeOf(keys));
+                var kept = new KeptPair(access, refresh, accessExpiresAt, ScopeOf(live));
 
                 // Spent now, only if still unused: a parallel refresh that got here first makes this one conflict and
                 // retry, and the retry takes the used branch above and gets that refresh's pair.
@@ -435,8 +448,8 @@ public sealed class OAuthTokens(
                 await catalog.Slots.InsertManyAsync(
                     s,
                     [
-                        .. catalog.WrapConnectionSlots(keys, old.ConnectionId, refreshId, refresh, connectionExpiresAt),
-                        .. catalog.WrapConnectionSlots(keys, old.ConnectionId, accessId, access, accessExpiresAt),
+                        .. catalog.WrapConnectionSlots(live, old.ConnectionId, refreshId, refresh, connectionExpiresAt),
+                        .. catalog.WrapConnectionSlots(live, old.ConnectionId, accessId, access, accessExpiresAt),
                     ],
                     cancellationToken: token);
                 // The parent's kept pair is this token's: used now, a retry of the parent has nothing to get back.
@@ -450,8 +463,12 @@ public sealed class OAuthTokens(
             cancellationToken: ct);
 
         // Under snapshot isolation a lost race conflicts rather than matching nothing; should it match nothing, it was
-        // still lost, and the next attempt sees the winner's pair.
-        if (result is null) return await RefreshAsync(refreshToken, clientId, resource, ct);
+        // still lost, and the next attempt sees the winner's pair. Once only: a second miss is refused, not looped on.
+        if (result is null)
+        {
+            return retry ? await RefreshAsync(refreshToken, clientId, resource, retry: false, ct) : Refused(found.ConnectionId, null, "invalid_grant", InvalidRefresh);
+        }
+
         if (reused) log.LogWarning("OAuth refresh token {TokenId} was presented again: the tokens of connection {ConnectionId} are revoked", found.Id, found.ConnectionId);
         return result.Pair is not null
             ? Logged(result, found.ConnectionId, null, retried ? "retried" : "refreshed")
@@ -497,7 +514,7 @@ public sealed class OAuthTokens(
         }
 
         if (Unusable(grant, resource, now) is { } refused) return refused;
-        if (!await LiveAsync(s, old, now, ct)) return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
+        if (await LiveAsync(s, old, now, ct) is null) return TokenResult.Failure("invalid_grant", "This connection is revoked or expired.");
         return new TokenResult(new TokenPair(kept.Access, kept.Refresh, ExpiresIn(kept.AccessExpiresAt, now), kept.Scope), null, null);
     }
 
@@ -511,12 +528,21 @@ public sealed class OAuthTokens(
         return null;
     }
 
-    /// <summary>The token's connection is live and its user active, read in the transaction.</summary>
-    private async Task<bool> LiveAsync(IClientSessionHandle s, OAuthTokenDocument record, DateTime now, CancellationToken ct)
+    /// <summary>The token's connection if it is live and its user active, read in the transaction; else null.</summary>
+    private async Task<ConnectionDocument?> LiveAsync(IClientSessionHandle s, OAuthTokenDocument record, DateTime now, CancellationToken ct)
     {
         var connection = await ConnectionDocs.Find(s, c => c.Id == record.ConnectionId).FirstOrDefaultAsync(ct);
-        return connection is not null && IsLive(connection, record.User, now) && await Users.Find(s, u => u.Id == record.User && u.Active).AnyAsync(ct);
+        return connection is not null && IsLive(connection, record.User, now) && await Users.Find(s, u => u.Id == record.User && u.Active).AnyAsync(ct) ? connection : null;
     }
+
+    /// <summary>The keys of the vaults the connection still has, as read in the transaction: a vault's deletion removes
+    /// its id from the connection (<see cref="ConnectionRevocation.RemoveVaultsAsync"/>).</summary>
+    private static IReadOnlyList<VaultCatalog.ConnectionVaultKey> Live(IReadOnlyList<VaultCatalog.ConnectionVaultKey> keys, ConnectionDocument connection) =>
+        [.. keys.Where(k => connection.Vaults.Contains(k.Vault))];
+
+    /// <summary>The slots of the vaults the connection still has, as <see cref="Live(IReadOnlyList{VaultCatalog.ConnectionVaultKey}, ConnectionDocument)"/>.</summary>
+    private static IReadOnlyList<SlotDocument> Live(IReadOnlyList<SlotDocument> slots, ConnectionDocument connection) =>
+        [.. slots.Where(s => connection.Vaults.Contains(s.Vault))];
 
     /// <summary>The connection has a refresh token that is neither used nor revoked: a family issued after any tombstone
     /// of it, since every revocation and every new family turns all earlier records into tombstones.</summary>
@@ -672,10 +698,11 @@ public sealed class OAuthTokens(
     private static bool IsLive(ConnectionDocument doc, string userId, DateTime now) => doc.User == userId && doc.RevokedAt is null && !(now >= doc.ExpiresAt);
 
     /// <summary>The rights of the grant: the connection's, each capped to read for a read-only request (Ruling 3). An
-    /// unknown right (a meta from a later version) gives nothing rather than something.</summary>
-    internal static Dictionary<string, KeyRight> Rights(Connections.ConnectionMeta meta, bool readOnly) =>
+    /// unknown right (a meta from a later version) gives nothing rather than something, and so does a vault deleted
+    /// since: gone from the connection's clear list of vaults, though not from its sealed meta.</summary>
+    internal static Dictionary<string, KeyRight> Rights(ConnectionDocument doc, Connections.ConnectionMeta meta, bool readOnly) =>
         meta.Vaults
-            .Where(v => KeyRights.Parse(v.Value) is not null)
+            .Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key))
             .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.Parse(v.Value)!.Value, StringComparer.Ordinal);
 
     private static bool SameRights(Dictionary<string, string> a, Dictionary<string, string> b) =>

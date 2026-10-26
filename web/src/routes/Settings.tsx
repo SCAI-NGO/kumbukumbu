@@ -164,10 +164,10 @@ function PasswordSection() {
               aria-describedby={`${revokeId}-hint`}
               className="size-5 shrink-0 accent-accent"
             />
-            Also revoke all API keys
+            Also revoke all API keys and disconnect apps
           </label>
           <p id={`${revokeId}-hint`} className="pl-8 text-sm text-text-body">
-            Agents using them will need new keys.
+            Agents using them will need new keys, and apps will need to reconnect.
           </p>
         </div>
         {change.isError && <FormError>{errorText(change.error)}</FormError>}

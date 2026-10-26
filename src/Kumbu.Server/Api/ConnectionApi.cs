@@ -151,7 +151,7 @@ public static class ConnectionApi
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var view = new ConsentConnectionView(
             meta.Name,
-            OAuthTokens.Rights(meta, request.ReadOnly).Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+            OAuthTokens.Rights(doc, meta, request.ReadOnly).Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
             doc.ExpiresAt,
             meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null);
         var renewal = doc.AuthorisedAt is not null || meta.Client is not null;

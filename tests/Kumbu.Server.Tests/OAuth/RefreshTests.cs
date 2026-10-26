@@ -275,11 +275,11 @@ public sealed class RefreshTests(KumbuAppFactory app)
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
         await using var api = WithClock(time);
         var (flow, first) = await ConnectedAsync(api);
-        await api.Services.GetRequiredService<Connections>().RevokeAllTokensAsync(flow.Owner.User, ConnectionReasons.PasswordChanged, Ct);
+        await api.Services.GetRequiredService<Connections>().RevokeAllTokensAsync(flow.Owner.User, ConnectionReasons.RightsChanged, Ct);
         time.Advance(TimeSpan.FromSeconds(31));
 
         Assert.Equal("invalid_grant", await RefreshErrorAsync(flow, first.Refresh));
-        Assert.Equal(("needs_reconnect", ConnectionReasons.PasswordChanged), await StateAsync(flow));
+        Assert.Equal(("needs_reconnect", ConnectionReasons.RightsChanged), await StateAsync(flow));
     }
 
     [Fact]

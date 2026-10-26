@@ -25,13 +25,15 @@ public sealed class UserCatalogTests(MongoFixture fixture)
     {
         db ??= fixture.NewDatabase();
         time ??= TimeProvider.System;
-        return new(db, kdf ?? CheapKdf(), Keys(db, time), time, NullLogger<UserCatalog>.Instance);
+        return new(db, kdf ?? CheapKdf(), Keys(db, time), Connections(db, time), time, NullLogger<UserCatalog>.Instance);
     }
 
     private static VaultCatalog Vaults(IMongoDatabase db, TimeProvider time) =>
         new(db, Options.Create(new KumbuOptions()), time, NullLogger<VaultCatalog>.Instance);
 
     private static ApiKeys Keys(IMongoDatabase db, TimeProvider time) => new(db, Vaults(db, time), time, NullLogger<ApiKeys>.Instance);
+
+    private static Connections Connections(IMongoDatabase db, TimeProvider time) => new(db, Vaults(db, time), time, NullLogger<Connections>.Instance);
 
     [Fact]
     public void The_production_parameters_are_those_of_rfc_9106s_second_recommendation()
@@ -205,7 +207,7 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var db = fixture.NewDatabase();
         var keys = Keys(db, TimeProvider.System);
         var failing = new UserCatalog(
-            db, CheapKdf(), new ApiKeys(db, Vaults(db, TimeProvider.System), TimeProvider.System, new FailAfterRevokingAll()), TimeProvider.System, NullLogger<UserCatalog>.Instance);
+            db, CheapKdf(), new ApiKeys(db, Vaults(db, TimeProvider.System), TimeProvider.System, new FailAfterRevokingAll()), Connections(db, TimeProvider.System), TimeProvider.System, NullLogger<UserCatalog>.Instance);
         var (_, recoveryKey) = await failing.CreateAsync("chris", Password, Roles.User, Ct);
         var (user, userKey, readAt) = (await failing.TrySignInAsync("chris", Password, Ct))!.Value;
         var vaults = new Dictionary<string, KeyRight> { [(await Vaults(db, TimeProvider.System).CreateForUserAsync("Arbeit", user.Id, userKey, Ct)).Id] = KeyRight.Write };
@@ -265,6 +267,7 @@ public sealed class UserCatalogTests(MongoFixture fixture)
                 await Task.Delay(5, Ct);
                 (late, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "late", vaults, Ct);
             })),
+            Connections(db, TimeProvider.System),
             TimeProvider.System,
             NullLogger<UserCatalog>.Instance);
 

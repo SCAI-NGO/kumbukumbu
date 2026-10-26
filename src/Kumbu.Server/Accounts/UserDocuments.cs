@@ -72,6 +72,17 @@ public sealed class UserDocument
     [BsonElement("vaultsCreated")]
     public long VaultsCreated { get; set; }
 
+    /// <summary>How many times the user changed a connection's rights; incremented in each change's transaction, a real
+    /// write to this document, so that it conflicts with a concurrent deletion of one of the vaults (<see cref="VaultsDeleted"/>).</summary>
+    [BsonElement("connectionsChanged")]
+    public long ConnectionsChanged { get; set; }
+
+    /// <summary>How many deletions took vaults of the user; incremented in each deletion's transaction, so that an API
+    /// key or connection created, or a connection changed, at the same time conflicts with it and, retried, finds the vault gone
+    /// (<see cref="Vaults.VaultCatalog.RequireVaultsAsync"/>).</summary>
+    [BsonElement("vaultsDeleted")]
+    public long VaultsDeleted { get; set; }
+
     /// <summary>How many sessions the user has started; incremented in each session's transaction, likewise.</summary>
     [BsonElement("sessionsStarted")]
     public long SessionsStarted { get; set; }

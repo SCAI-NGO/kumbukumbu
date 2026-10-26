@@ -31,8 +31,9 @@ public sealed record JoinedView(UserView User, string RecoveryKey);
 
 public sealed record RecoverRequest(string Username, string RecoveryKey, string NewPassword);
 
-/// <summary><c>revokeApiKeys</c> also revokes every API key of the user; true when left out, so an older client
-/// gets the safe behaviour: a key made from a stolen session doesn't outlive the password change.</summary>
+/// <summary><c>revokeApiKeys</c> also revokes every API key of the user and disconnects every app (the connections'
+/// tokens are revoked, the apps reconnect); true when left out, so an older client gets the safe behaviour: a key or an
+/// app authorised from a stolen session doesn't outlive the password change.</summary>
 public sealed record ChangePasswordRequest(string OldPassword, string NewPassword, bool RevokeApiKeys = true);
 
 /// <summary>Always true: a changed password ends every session, this one too, so the web app signs in again.</summary>

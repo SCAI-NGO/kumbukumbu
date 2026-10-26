@@ -33,7 +33,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
     /// <summary>A new user, signed in, with a vault of their own for each name: the user, their user key and the vault ids by name.</summary>
     private async Task<(User User, byte[] UserKey, Dictionary<string, string> Vaults)> UserWithVaultsAsync(params string[] vaults)
     {
-        var users = new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
+        var users = new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<UserCatalog>.Instance);
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
         await users.CreateAsync(username, Password, Roles.User, Ct);
         var (user, key, _) = (await users.TrySignInAsync(username, Password, Ct))!.Value;

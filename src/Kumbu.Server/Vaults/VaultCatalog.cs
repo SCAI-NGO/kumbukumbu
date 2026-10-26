@@ -477,6 +477,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         }
 
         IReadOnlyList<string> revoked = [];
+        IReadOnlyList<string> revokedConnections = [];
         var loading = false;
         try
         {
@@ -513,9 +514,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                         var keyIds = await (await Slots.DistinctAsync(
                             s, sl => sl.KeyId, slot.Eq(sl => sl.Kind, SlotDocument.ApiKey) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.KeyId), cancellationToken: token))
                             .ToListAsync(token);
+                        await MarkOwnersAsync(s, ids, token);
                         long count = (await Vaults.DeleteManyAsync(s, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: token)).DeletedCount;
+                        // The connections' slots on these vaults go here too, by vault.
                         count += (await Slots.DeleteManyAsync(s, slot.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
                         revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
+                        revokedConnections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, ids, Now, token);
                         foreach (var collection in ContentCollections)
                         {
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
@@ -529,6 +533,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
             tombstoned.Clear();
             foreach (var keyId in revoked) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
+            foreach (var connectionId in revokedConnections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
             foreach (var vault in held) vault.Deleted = true;
             foreach (var id in ids)
             {
@@ -554,6 +559,34 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
             if (loading) _loading.Release();
         }
+    }
+
+    /// <summary>
+    /// Inside a deletion: a real write to the user document of each owner of the vaults (<c>vaultsDeleted</c>), so
+    /// that an API key or connection created, or a connection given new rights, at the same time, which writes that
+    /// document too, conflicts with the deletion and, retried, finds the vault gone (<see cref="RequireVaultsAsync"/>).
+    /// </summary>
+    private async Task MarkOwnersAsync(IClientSessionHandle session, IReadOnlyList<string> ids, CancellationToken ct)
+    {
+        var slot = Builders<SlotDocument>.Filter;
+        var owners = await (await Slots.DistinctAsync(
+            session, sl => sl.Owner, slot.Eq(sl => sl.Kind, SlotDocument.User) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.Owner), cancellationToken: ct))
+            .ToListAsync(ct);
+        if (owners.Count == 0) return;
+        await db.GetCollection<Accounts.UserDocument>("users").UpdateManyAsync(
+            session, Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsDeleted, 1), cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Inside the transaction of an API key's or connection's creation or a connection's rights change, which also
+    /// writes the user document: every one of <paramref name="vaultIds"/> still exists, else <see cref="ArgumentException"/>.
+    /// A deletion that committed first is seen here; one under way conflicts on the user document (<see cref="MarkOwnersAsync"/>).
+    /// </summary>
+    internal async Task RequireVaultsAsync(IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, string noun, CancellationToken ct)
+    {
+        var ids = vaultIds.Distinct(StringComparer.Ordinal).ToList();
+        var existing = await Vaults.CountDocumentsAsync(session, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: ct);
+        if (existing != ids.Count) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
     }
 
     /// <summary>

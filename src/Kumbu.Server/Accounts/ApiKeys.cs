@@ -132,6 +132,9 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                         // Names are unique across keys and connections. A connection made at the same time with
                         // this name writes the user document too: one of the two conflicts and, retried, sees the other.
                         if (await Connections.NameTakenAsync(s, db, user.Id, doc.NameId, Now, token)) throw new ApiKeyNameTakenException(clean);
+                        // The slots were wrapped before the transaction: a vault deleted since is seen here, or its
+                        // deletion conflicts on the user document written above, so no slot outlives its vault.
+                        await catalog.RequireVaultsAsync(s, [.. vaults.Keys], "An API key", token);
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);

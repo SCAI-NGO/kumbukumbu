@@ -11,7 +11,7 @@ namespace Kumbu.Server.Accounts;
 /// the keys of their vaults; it is itself wrapped by the password (Argon2id) and by the recovery key. MongoDB
 /// holds the user key only wrapped, and never a password or recovery key.
 /// </summary>
-public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, TimeProvider time, ILogger<UserCatalog> log)
+public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, Connections connections, TimeProvider time, ILogger<UserCatalog> log)
 {
     private const string KeyIdLabel = "kumbu/v1/user-key-id";
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
@@ -115,9 +115,9 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
 
     /// <summary>
     /// Forgot password: with the recovery key, sets a new password, ends every session of the user, revokes every
-    /// API key and replaces the recovery key, so the used one opens nothing any more. Returns the new recovery key,
-    /// formatted for humans; null if the user or key is unknown or wrong; <see cref="ArgumentException"/> if the
-    /// new password is refused.
+    /// API key and the tokens of every connection (<see cref="ConnectionReasons.Recovery"/>) and replaces the
+    /// recovery key, so the used one opens nothing any more. Returns the new recovery key, formatted for humans;
+    /// null if the user or key is unknown or wrong; <see cref="ArgumentException"/> if the new password is refused.
     /// </summary>
     public async Task<string?> RecoverAsync(string username, string recoveryKey, string newPassword, CancellationToken ct)
     {
@@ -142,14 +142,15 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         var newKey = RecoveryKey.New();
         var replacement = new RecoveryReplacement(slot.Wrapped, RecoverySlot(user.Id, userKey, newKey));
         if (!await SetPasswordAsync(user.ToUser(), userKey, newPassword, revokeApiKeys: true, ct, replacement)) return null;
-        log.LogInformation("User {Username} set a new password with their recovery key; the API keys are revoked and the recovery key replaced", user.Username);
+        log.LogInformation("User {Username} set a new password with their recovery key; the API keys and apps are revoked and the recovery key replaced", user.Username);
         return RecoveryKey.Format(newKey);
     }
 
     /// <summary>
     /// Replaces the password; false if <paramref name="oldPassword"/> is wrong or doesn't open
     /// <paramref name="userKey"/>. Ends every session, as a changed password must, and with
-    /// <paramref name="revokeApiKeys"/> revokes every API key of the user.
+    /// <paramref name="revokeApiKeys"/> revokes every API key of the user and the tokens of every connection
+    /// (<see cref="ConnectionReasons.PasswordChanged"/>): the apps need a reconnect.
     /// </summary>
     public async Task<bool> ChangePasswordAsync(User user, byte[] userKey, string oldPassword, string newPassword, bool revokeApiKeys, CancellationToken ct)
     {
@@ -227,7 +228,7 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
     private sealed record RecoveryReplacement(byte[] Used, UserSlotDocument Slot);
 
     /// <summary>
-    /// Sets the password, ends every session and, if asked, revokes every API key. With <paramref name="recovery"/>
+    /// Sets the password, ends every session and, if asked, revokes every API key and connection token. With <paramref name="recovery"/>
     /// the recovery slot is replaced in the same transaction as the password slot, only if it is still the one
     /// that was opened; false (and no new password) if it isn't, or if a concurrent write got in the way.
     /// </summary>
@@ -241,8 +242,14 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         await StampCredentialsChangedAsync(userId, ct);
         // The keys go after the stamp, so a key whose creation raced it is either found here or refused (see
         // ApiKeys.CreateAsync), and before the new password, so a crash in between leaves the keys revoked and the
-        // old password in place: the safe way round, and the user simply tries again.
-        if (revokeApiKeys) await keys.RevokeAllAsync(user, ct);
+        // old password in place: the safe way round, and the user simply tries again. Apps go with the keys
+        // (Ruling 2), by the same order: a code issued meanwhile is found here or refused by the stamp.
+        var reason = recovery is null ? ConnectionReasons.PasswordChanged : ConnectionReasons.Recovery;
+        if (revokeApiKeys)
+        {
+            await keys.RevokeAllAsync(user, ct);
+            await connections.RevokeAllTokensAsync(user, reason, ct);
+        }
 
         var passwordFilter = Builders<UserSlotDocument>.Filter.Where(s => s.User == userId && s.Kind == UserSlotDocument.Password);
         var passwordUpdate = Builders<UserSlotDocument>.Update.Set(s => s.Salt, slot.Salt).Set(s => s.Wrapped, slot.Wrapped).Set(s => s.CreatedAt, slot.CreatedAt);
@@ -283,8 +290,13 @@ public sealed class UserCatalog(IMongoDatabase db, Argon2Kdf kdf, ApiKeys keys, 
         await StampCredentialsChangedAsync(userId, ct);
         // That sign-in passes the first stamp, so a key it made at once may have landed after the first
         // revocation. Its read time is before the second stamp, so no further key can come from it: revoking
-        // once more here catches the last ones.
-        if (revokeApiKeys) await keys.RevokeAllAsync(user, ct);
+        // once more here catches the last ones, and the last code an app got through such a session.
+        if (revokeApiKeys)
+        {
+            await keys.RevokeAllAsync(user, ct);
+            await connections.RevokeAllTokensAsync(user, reason, ct);
+        }
+
         await Slots.DeleteManyAsync(s => s.User == userId && s.Kind == UserSlotDocument.Session, ct);
         return true;
     }
