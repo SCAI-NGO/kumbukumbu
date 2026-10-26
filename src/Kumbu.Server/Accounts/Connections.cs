@@ -588,6 +588,13 @@ public sealed class ConnectionDocument
     /// <summary>When a code was first exchanged for tokens: from then on, a connection without tokens needs a reconnect.</summary>
     [BsonElement("authorisedAt"), BsonIgnoreIfNull]
     public DateTime? AuthorisedAt { get; set; }
+
+    /// <summary>How many times slots were wrapped for its codes and tokens. Incremented in every issuing transaction (a
+    /// code, an exchange, a refresh): a write that always changes the document, unlike setting a value it may already
+    /// have, so that the issuing conflicts with a vault deletion, which writes the document too
+    /// (<see cref="ConnectionRevocation.RemoveVaultsAsync"/>).</summary>
+    [BsonElement("wraps")]
+    public long Wraps { get; set; }
 }
 
 public sealed class ConnectionNameTakenException(string name) : Exception($"You already have an API key or connection named '{name}'.");

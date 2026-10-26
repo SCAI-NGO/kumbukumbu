@@ -210,12 +210,16 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
     {
         var catalog = Service<VaultCatalog>();
         var connections = Service<Connections>();
-        for (var round = 0; round < 6; round++)
+        for (var round = 0; round < 8; round++)
         {
             var (flow, pair) = await ConnectedAsync(new Dictionary<string, string> { ["Arbeit"] = "write", ["Privat"] = "read" }, privat: true);
             var owner = flow.Owner;
             var vaults = (await catalog.OpenForUserAsync(owner.User.Id, owner.UserKey, Ct)).ToDictionary(v => v.Name, v => v.Id);
             var again = await flow.AgainAsync();
+            // A second consent on the connection already connected: its exchange changes nothing else on the
+            // connection's document, so only the issuing's own write conflicts with the deletion.
+            var second = await flow.AgainAsync();
+            await second.AllowAsync();
             var both = new Dictionary<string, KeyRight> { [vaults["Arbeit"]] = KeyRight.Read, [vaults["Privat"]] = KeyRight.Read };
 
             async Task Quietly(Func<Task> action)
@@ -233,6 +237,7 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
             await Task.WhenAll(
                 Task.Run(() => catalog.DeleteVaultsAsync([vaults["Privat"]], (_, _) => Task.CompletedTask, Ct), Ct),
                 Task.Run(async () => { using var _ = await flow.RefreshAsync(pair.Refresh); }, Ct),
+                Task.Run(async () => { using var _ = await second.TokenAsync(); }, Ct),
                 Task.Run(() => Quietly(async () => { using var _ = await again.DecideAsync(allow: true); }), Ct),
                 Task.Run(() => Quietly(() => connections.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, $"late-{round}", both, Ct)), Ct),
                 Task.Run(() => Quietly(() => connections.SetVaultsAsync(owner.User, owner.UserKey, flow.ConnectionId, both, Ct)), Ct));
@@ -240,6 +245,31 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
             Assert.Equal(0, await Collection("slots").CountDocumentsAsync(new BsonDocument("vault", vaults["Privat"]), cancellationToken: Ct));
             Assert.Equal(0, await Collection("connections").CountDocumentsAsync(new BsonDocument("vaults", vaults["Privat"]), cancellationToken: Ct));
             Assert.All(await connections.ListAsync(owner.User, owner.UserKey, Ct), c => Assert.DoesNotContain(vaults["Privat"], c.Vaults.Keys));
+        }
+    }
+
+    /// <summary>
+    /// The exchange of a second code on a connection that is connected already, raced with a vault deletion: its
+    /// <c>$unset</c> of the revocation fields changes nothing there, and MongoDB conflicts with nothing for an update
+    /// that changes nothing. The issuing's counter on the connection, and the deletion of the code's slot on the vault,
+    /// which the vault's deletion deletes too, make the two conflict.
+    /// </summary>
+    [Fact]
+    public async Task An_exchange_on_a_connected_connection_wraps_no_slot_for_a_vault_deleted_meanwhile()
+    {
+        var catalog = Service<VaultCatalog>();
+        for (var round = 0; round < 10; round++)
+        {
+            var (flow, _) = await ConnectedAsync(new Dictionary<string, string> { ["Arbeit"] = "write", ["Privat"] = "read" }, privat: true);
+            var privat = (await catalog.OpenForUserAsync(flow.Owner.User.Id, flow.Owner.UserKey, Ct)).Single(v => v.Name == "Privat").Id;
+            var second = await flow.AgainAsync();
+            await second.AllowAsync();
+
+            await Task.WhenAll(
+                Task.Run(() => catalog.DeleteVaultsAsync([privat], (_, _) => Task.CompletedTask, Ct), Ct),
+                Task.Run(async () => { using var _ = await second.TokenAsync(); }, Ct));
+
+            Assert.Equal(0, await Collection("slots").CountDocumentsAsync(new BsonDocument("vault", privat), cancellationToken: Ct));
         }
     }
 

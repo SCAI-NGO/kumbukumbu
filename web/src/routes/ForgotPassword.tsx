@@ -32,7 +32,7 @@ export default function ForgotPassword() {
     return (
       <AuthScreen
         title="Your new recovery key"
-        lead="Your new password is set and every session of yours has ended. Your old recovery key no longer works, and all your API keys were revoked: agents using them need new keys."
+        lead="Your new password is set and every session of yours has ended. Your old recovery key no longer works, and all your API keys were revoked and your apps disconnected: agents using them will need new keys, and apps will need to reconnect."
       >
         <RecoveryKeyReveal
           value={newKey}

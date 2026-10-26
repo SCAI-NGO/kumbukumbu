@@ -190,6 +190,7 @@ public sealed class OAuthTokens(
                 await Docs.InsertOneAsync(s, record, cancellationToken: token);
                 await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
                 await connections.SetClientAsync(s, user, userKey, connectionId, connected, token);
+                await ConnectionDocs.UpdateOneAsync(s, c => c.Id == connectionId, Wrapped, cancellationToken: token);
                 return true;
             },
             cancellationToken: ct);
@@ -312,7 +313,7 @@ public sealed class OAuthTokens(
                     ],
                     cancellationToken: token);
                 await Docs.UpdateOneAsync(s, d => d.Id == code.Id, Builders<OAuthTokenDocument>.Update.Set(d => d.Issued, refreshId), cancellationToken: token);
-                var update = Builders<ConnectionDocument>.Update.Unset(c => c.TokensRevokedAt).Unset(c => c.TokensRevokedReason);
+                var update = Wrapped.Unset(c => c.TokensRevokedAt).Unset(c => c.TokensRevokedReason);
                 if (connection.AuthorisedAt is null) update = update.Set(c => c.AuthorisedAt, now);
                 await ConnectionDocs.UpdateOneAsync(s, c => c.Id == code.ConnectionId, update, cancellationToken: token);
 
@@ -455,8 +456,8 @@ public sealed class OAuthTokens(
                 // The parent's kept pair is this token's: used now, a retry of the parent has nothing to get back.
                 if (old.Parent is { } parent)
                     await Docs.UpdateOneAsync(s, d => d.Id == parent && d.Kind == OAuthTokenKinds.Refresh, Builders<OAuthTokenDocument>.Update.Unset(d => d.Successor), cancellationToken: token);
-                // Written here too, so that this conflicts with any revocation of the connection's tokens, which writes it.
-                await ConnectionDocs.UpdateOneAsync(s, c => c.Id == old.ConnectionId, Builders<ConnectionDocument>.Update.Set(c => c.LastUsedAt, now), cancellationToken: token);
+                // Written here too, so that this conflicts with any revocation of the connection's tokens or vault deletion, which write it.
+                await ConnectionDocs.UpdateOneAsync(s, c => c.Id == old.ConnectionId, Wrapped.Set(c => c.LastUsedAt, now), cancellationToken: token);
 
                 return new TokenResult(new TokenPair(access, refresh, ExpiresIn(accessExpiresAt, now), kept.Scope), null, null);
             },
@@ -527,6 +528,14 @@ public sealed class OAuthTokens(
             return TokenResult.Failure("invalid_target", "The resource is not the connection this refresh token was issued for.");
         return null;
     }
+
+    /// <summary>
+    /// The write every issuing transaction makes on the connection's document: a counter, so that it always changes the
+    /// document. MongoDB writes nothing for an update that changes nothing (an <c>$unset</c> of absent fields, a
+    /// <c>lastUsedAt</c> set to the value it has), and such an update conflicts with nothing, so a vault deletion's
+    /// <c>$pull</c> under way would not stop slots being wrapped for the vault.
+    /// </summary>
+    private static UpdateDefinition<ConnectionDocument> Wrapped => Builders<ConnectionDocument>.Update.Inc(c => c.Wraps, 1);
 
     /// <summary>The token's connection if it is live and its user active, read in the transaction; else null.</summary>
     private async Task<ConnectionDocument?> LiveAsync(IClientSessionHandle s, OAuthTokenDocument record, DateTime now, CancellationToken ct)
