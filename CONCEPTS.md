@@ -8,7 +8,7 @@
 
 MCP (Model Context Protocol) is a way for an AI application to use outside capabilities. There are two sides. The **client** is the AI application (Claude Code, for example). The **server** is a program that offers capabilities. The most important kind is a **tool**: a named function with a description and typed arguments. The model reads the description, decides to call the tool, and the client sends the call to the server. Messages are JSON-RPC 2.0.
 
-Kumbu² is a server with one tool, `sh`.
+Kumbu² started as a server with one tool, `sh`; today it has four (`sh`, `write`, `edit`, `replace`).
 
 ### Why Streamable HTTP
 
@@ -170,13 +170,13 @@ When a stage fails, the pipeline stops and that stage's error is the result (bas
 
 Real shells have many operators: `&&`, `;`, `>`, `$( )` and more. Kumbu² supports only `|`. The others are not passed through as text but rejected, with the operator named and a hint to quote it. The reason: a model that writes `ls /A && ls /B` expects two listings. Treating `&&` as an argument would produce a confusing error from `ls` at best, and at worst a plausible but wrong answer. Rejecting it clearly lets the model split the work into two calls.
 
-Two characters stay ordinary on purpose. `*` is not a glob, because globs need a working directory to make sense. `#` does not start a comment, because `note.md#Heading` will address a section (concept §4).
+Two characters stay ordinary on purpose. `*` is not a glob, because globs need a working directory to make sense. `#` does not start a comment, because `note.md#Heading` addresses a section (concept §4).
 
 ### Searching with `rg`
 
 `rg` is ripgrep's command name, and models know its output: `path:line:text` for a match, `path-line-text` for context lines, and `--` between groups that are not adjacent. Kumbu² copies that layout, so a model can read it without instructions. Without a path it searches every vault (there is no working directory to default to). Right of a pipe it filters lines instead and prints them bare, as ripgrep does with standard input.
 
-`rg --files` lists note paths. Together with a filter it answers a question the first test raised: where does `[[kumbu]]` live? `rg --files | rg -i kumbu` prints `/Demo/projects/kumbu.md`. Proper link resolution comes in step 4; until then this is enough.
+`rg --files` lists note paths. Together with a filter it answers a question the first test raised: where does `[[kumbu]]` live? `rg --files | rg -i kumbu` prints `/Demo/projects/kumbu.md`. Since step 4, `links` resolves a wikilink directly (chapter 5).
 
 ### Regular expressions that cannot hang the server
 
@@ -190,7 +190,7 @@ The cost: features that need to remember and revisit, such as look-around (`(?=�
 
 The tool description is sent to the model every time it connects, so every line of it costs tokens in every conversation. It therefore stays a short man page: the commands, one line each, plus the rules that matter on every call. The details (every option of `rg`, examples) live in `help <command>`, which the model only fetches when it needs them. This is called **progressive disclosure**. `rg --help` works too, because models try that first.
 
-Error messages do the same job. `command not found: rm — try 'help'` names the next step. For the commands models reach for most often, the hint is specific: `grep` points to `rg`, `find` to `rg --files`, `cd` to "there is no working directory". Every error should let the model fix its next call without guessing; the phase 1 test showed that this works.
+Error messages do the same job. `command not found: grepp — try 'help'` names the next step. For the commands models reach for most often, the hint is specific: `grep` points to `rg`, `find` to `rg --files`, `cd` to "there is no working directory". Every error should let the model fix its next call without guessing; the phase 1 test showed that this works.
 
 ## 3. Writing safely: versions, history and trash
 
@@ -220,7 +220,7 @@ Because a note's history is stored inside the note's document, the history moves
 
 Each note keeps its last 10 earlier states, newest first, with who wrote them and when (`history <path>`). `restore <path> <version>` makes one current again, and the state it replaces goes into the history, so a restore can be undone the same way.
 
-An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer close together in time coalesce**: the state they replace is not kept again. What survives is the state before the session. (Until step 6b this was "within 10 minutes on the same note"; chapter 8 makes it a changeset across notes.) Today every MCP call writes as `dev`; with API keys (step 8) each key is its own writer, so two agents never coalesce into each other.
+An agent working on a note often saves several times in a row. Keeping every intermediate step would push the interesting state, the one before the agent started, out of the 10 slots. So writes by the **same writer close together in time coalesce**: the state they replace is not kept again. What survives is the state before the session. (Until step 6b this was "within 10 minutes on the same note"; chapter 8 makes it a changeset across notes.) Each API key and app connection writes under its own name (chapter 10), so two agents never coalesce into each other.
 
 ### The trash
 
@@ -309,7 +309,7 @@ The move and its link rewrites are one transaction (chapter 7): delete the old p
 
 The threat is a **leak**: a database dump, a stolen backup, a hoster's disk (concept §3). After step 5 such a copy shows random vault ids, keyed hashes of paths, revision numbers, sizes and times. No content, no file names, no vault names.
 
-It does not protect against whoever runs the server while it runs: to search a note, the server has to read it. And until users and API keys arrive (step 8), the dev token unlocks every vault and sits in the server's configuration, so the database plus that file is still everything. Being honest about this is part of the design.
+It does not protect against whoever runs the server while it runs: to search a note, the server has to read it. Until step 8 the dev token unlocked every vault and sat in the server's configuration, so the database plus that file was everything; since then the dev token opens only the seeded vaults it has slots in, and a user's vaults open only with that user's credentials (chapter 10). Being honest about this is part of the design.
 
 ### Sealing: AES-GCM with a context
 
@@ -319,14 +319,14 @@ GCM can also authenticate **associated data** that is not encrypted. Kumbu² put
 
 ### One key per vault, wrapped in slots
 
-Each vault has its own random 32-byte **vault key**. It is never stored as it is. Instead, a **key slot** stores it **wrapped**: sealed with a key-encryption key (KEK) derived from a credential. Today there are two kinds of slot:
+Each vault has its own random 32-byte **vault key**. It is never stored as it is. Instead, a **key slot** stores it **wrapped**: sealed with a key-encryption key (KEK) derived from a credential. Step 5 had two kinds of slot (chapter 10 adds the user key, sessions and API keys; step 10 app connections):
 
 - **API-key slot** (the dev token): the KEK is `HKDF(token, "kumbu/v1/key-kek", salt = vault id)`. To find the slot without storing the token, the slot carries a second derivation, `HKDF(token, "kumbu/v1/key-lookup")`. Different labels make two unrelated keys from one secret, so knowing the lookup value says nothing about the KEK.
 - **Recovery slot**: the same with the vault's recovery key.
 
-This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 8); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same.
+This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 8); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same. (Step 10 added re-keying anyway, for the case where an old copy of the database is in the wrong hands: revoking a slot doesn't reach that copy; `docs/security-architecture.md` §3.)
 
-**HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for, and it comes with passwords in step 8.
+**HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for (chapter 10).
 
 ### Paths in the dark: keyed hashes
 
@@ -450,7 +450,7 @@ So there is a layer between: the **user key**, a random 32-byte key made when th
 
 The reward is independence. A password change re-wraps one 32-byte key, not every vault. A new credential, a session or an API key, only needs the user key in hand to receive its own slot. And nothing but the user holds it: MongoDB has only wrapped copies, the server forgets the key after a request, and an admin has no credential that opens it. That is also why there is **no password reset**: a reset would be a way in that isn't the user's. The recovery key is the way back, and with neither password nor recovery key the vaults are gone. That is the point, as in chapter 6.
 
-That makes a fresh recovery key as powerful as the password: whoever holds one can set a new password and lock the owner out for good. So making a new one asks for the **current password** too, not just a signed-in session, and the password must open the very user key the session holds. A stolen session (a laptop left open, a cookie copied) can then read and write the user's notes until it ends, but can't turn itself into the account. The check is limited like the old-password check of a password change, 5 a minute per username, the two together.
+That makes a fresh recovery key as powerful as the password: whoever holds one can set a new password and lock the owner out for good. So making a new one asks for the **current password** too, not just a signed-in session, and the password must open the very user key the session holds. A stolen session (a laptop left open, a cookie copied) can then read and write the user's notes until it ends, but can't turn itself into the account. The check is limited like the old-password check of a password change, 5 a minute per username, shared with re-encrypting and deleting.
 
 Passwords are normalised to Unicode NFC before Argon2 runs (the same password typed on two devices that compose "ö" differently must give the same key), have at least 12 characters, and are checked against a list of the 10,000 most common ones. Signing in as an unknown user, with a wrong password and as an inactive user all give the same answer and all run Argon2, so neither the answer nor the time says which usernames exist.
 
@@ -472,7 +472,7 @@ That is the reason the right sits inside the slot and not next to it. If the rig
 
 MongoDB holds only values derived from the key: a lookup, the first eight characters as a **prefix** for the owner's list, and a sealed name and vault list that only the user key opens. The key's **name** is sealed once more under the API key itself, so that it can mark the key's writes in the history ("written by `claude-code`") without the server needing the user. A key's name therefore cannot be the username, `dev` or `seed` (their writes would look alike), contain " (" (the history writes the tool in brackets after the writer, as in "laptop (mv)", and a name must not fake that), control characters or invisible formatting characters such as a zero-width space or a right-to-left override ("chris" followed by a zero-width space would look like the username).
 
-A key is created together with all its slots in one transaction, so it never exists with only some of its vaults. Revoking deletes its slots and nothing has to be re-encrypted: the vault key never changed. The flip side of that independence: a key holds its own slots and never needed the password, so nothing ties it to the password by itself. A key made from a stolen session would outlive a password change, which is the one thing a password change after a suspected compromise must not allow. So a password change revokes every key by default, and the settings page lets the user untick that for an ordinary change, when the agents should keep working. A recovery always revokes them, and replaces the recovery key as well: otherwise a thief of the recovery key and its owner could take the account from each other in turn, and the thief's keys would survive each round.
+A key is created together with all its slots in one transaction, so it never exists with only some of its vaults. Revoking deletes its slots and nothing has to be re-encrypted: the vault key never changed. The flip side of that independence: a key holds its own slots and never needed the password, so nothing ties it to the password by itself. A key made from a stolen session would outlive a password change, which is the one thing a password change after a suspected compromise must not allow. So a password change revokes every key by default, and the settings page lets the user untick that for an ordinary change, when the agents should keep working. A recovery always revokes them, disconnects every app, gives the account a new user key and each vault a new key in the background, and replaces the recovery key as well: otherwise a thief of the recovery key and its owner could take the account from each other in turn, and the thief's keys would survive each round.
 
 ### Invitations: single use, and the code stays in the fragment
 
@@ -500,4 +500,4 @@ This is consistent with the threat model (concept §3): the leak the encryption 
 
 ### Throttles that cost something
 
-Signing in costs an Argon2 run, 64 MiB of memory for a moment, which an attacker could use to exhaust the server instead of guessing. So the account endpoints are limited per minute: sign-in 5 per username and 20 per client network, joining and recovering 5 per network. Every attempt counts, successful or not. The trade-off is deliberate: someone who knows a username can lock that user out of *signing in* for a minute (keys and live sessions are untouched). Checking the current password behind a session, for a password change or a new recovery key, is limited to 5 a minute per username, so a stolen session guesses no faster than signing in would. The limits bound each client, not all of them together: many addresses signing in at once could still start many 64 MiB runs. So Argon2 itself runs **at most once per core** across the process, and further runs wait (asynchronously, holding no thread) for a free one; the server slows down instead of running out of memory. IPv6 addresses count by their /64, since one host usually has a whole /64 and would otherwise get 2^64 times the attempts. And behind a reverse proxy the server sees the proxy's address for everyone unless `KUMBU_TRUSTED_PROXY` is set, in which case one attacker's wrong keys lock out all bearer users for a minute. The README lists these as security notes.
+Signing in costs an Argon2 run, 64 MiB of memory for a moment, which an attacker could use to exhaust the server instead of guessing. So the account endpoints are limited per minute: sign-in 5 per username and 20 per client network, joining and recovering 5 per network. Every attempt counts, successful or not. The trade-off is deliberate: someone who knows a username can lock that user out of *signing in* for a minute (keys and live sessions are untouched). Checking the current password behind a session, for a password change, a new recovery key, re-encrypting or deleting, is limited to 5 a minute per username, so a stolen session guesses no faster than signing in would. The limits bound each client, not all of them together: many addresses signing in at once could still start many 64 MiB runs. So Argon2 itself runs **at most once per core** across the process, and further runs wait (asynchronously, holding no thread) for a free one; the server slows down instead of running out of memory. IPv6 addresses count by their /64, since one host usually has a whole /64 and would otherwise get 2^64 times the attempts. And behind a reverse proxy the server sees the proxy's address for everyone unless `KUMBU_TRUSTED_PROXY` is set, in which case one attacker's wrong keys lock out all bearer users for a minute. The README lists these as security notes.

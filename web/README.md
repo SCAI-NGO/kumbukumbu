@@ -1,6 +1,6 @@
 # Kumbu² web app
 
-A React single-page app for Kumbu²: sign in, browse, read, edit, search and upload notes, manage API keys, and (for admins) users and invitations. It talks only to the server's REST API under `/api`, same origin, and is served by the server from `wwwroot` in the Docker image.
+A React single-page app for Kumbu²: sign in, browse, read, edit, search and upload notes, manage API keys and app connections, see history and trash, manage checkpoints, and (for admins) users and invitations. It talks only to the server's REST API under `/api`, same origin, and is served by the server from `wwwroot` in the Docker image.
 
 Stack: TypeScript, React 18, Vite 6, Tailwind v4, react-router, TanStack Query, zustand, react-markdown, Vitest with Testing Library.
 
@@ -21,10 +21,10 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - `api/`: typed client (`openapi-fetch`), generated `schema.d.ts`, error texts, note path helpers
 - `components/`: shared form parts, menu, password field, one-time secret reveal
 - `hooks/`: dialogs, edge swipe, visual viewport (keyboard)
-- `note/`: note view, Markdown editor and toolbar, `[[` completion, autosave, conflict handling, backlinks, line diff; the renderer's plugins (wiki links and embeds, callouts, find in the note), front matter as properties, the outline
-- `routes/`: sign-in, join, forgot password, keys, settings; `routes/admin/` users and invitations
+- `note/`: note view, Markdown editor and toolbar, `[[` completion, autosave, conflict handling, backlinks, history, the changed-elsewhere bar and the agent banner, line diff; the renderer's plugins (wiki links and embeds, callouts, find in the note), front matter as properties, the outline
+- `routes/`: sign-in, join, forgot password, Access (API keys and app connections), the OAuth consent page, settings; `routes/admin/` users and invitations
 - `search/`: search sheet, mode chips, result cards
-- `shell/`: mobile shell, dock, mode toggle, tree drawer, rename and move
+- `shell/`: mobile shell, dock, mode toggle, tree drawer, vault switcher, new vault, rename and move, trash, checkpoints, search-by-meaning provider
 - `state/`: zustand stores for session and editor
 - `theme/`: colour schemes, applying them, contrast test
 - `upload/`: collecting files and folders, planning the upload, conflict choices
@@ -36,7 +36,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 
 ## Rules the code keeps
 
-- No secrets and no note text in browser storage. The only thing in `localStorage` is the name of the colour scheme.
+- No secrets and no note text in browser storage. `localStorage` holds the colour scheme's name and whether Read mode refreshes automatically; `sessionStorage` a marker against reload loops.
 - Secrets (new API keys, recovery keys, invitation links) stay out of the TanStack mutation cache: those mutations use `gcTime: 0` and the reveal is cleared on close.
 - Same-origin session cookie only; the app never handles a token.
 - A `401` from the API sends the user to `/signin?next=<where they were>`; after signing out on purpose, only a `401` for the session itself does (the page being left may still hear back for a moment).
