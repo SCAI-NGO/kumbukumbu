@@ -326,6 +326,15 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         return new ResolvedApiKey(user.ToUser(), doc.Id, name);
     }
 
+    /// <summary>Whether the key may still be used: not revoked, not expired, its owner active. For a WebSocket held
+    /// open past the request that made its ticket (<see cref="Sync.SyncHub"/>).</summary>
+    public async Task<bool> IsActiveAsync(string keyId, CancellationToken ct)
+    {
+        var doc = await Keys.Find(k => k.Id == keyId).FirstOrDefaultAsync(ct);
+        if (doc is null || doc.RevokedAt is not null || Now >= doc.ExpiresAt) return false;
+        return await Users.Find(u => u.Id == doc.User && u.Active).AnyAsync(ct);
+    }
+
     /// <summary>
     /// Inside a connection's creation: whether a key of the user that is neither revoked nor expired has the name
     /// with <paramref name="nameId"/>. An expired key's name is free even before it is retired.

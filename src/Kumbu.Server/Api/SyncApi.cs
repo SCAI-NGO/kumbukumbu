@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Auth;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -22,6 +24,9 @@ public sealed record VersionEntry(string Path, string Version);
 /// </summary>
 public sealed record VersionsView(bool Full, string Cursor, string State, int Damaged, IReadOnlyList<VersionEntry> Notes, IReadOnlyList<string> Deleted);
 
+/// <summary>A ticket for one connection to <c>GET /api/ws</c>, until <c>expiresAt</c> (30 seconds).</summary>
+public sealed record WsTicketView(string Ticket, DateTime ExpiresAt);
+
 /// <summary>What the Obsidian plugin syncs against: the version list, and (with the hints) asking only for what changed.</summary>
 public static class SyncApi
 {
@@ -35,6 +40,32 @@ public static class SyncApi
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/vaults/{vault}/versions", VersionsAsync).Produces(StatusCodes.Status304NotModified).Errors(400, 401, 404, 503);
+        api.MapPost("/ws-ticket", TicketAsync).Errors(401, 403, 503);
+        // The ticket is the credential: no cookie or header is involved, so neither the caller nor the Origin check applies.
+        app.MapGet("/api/ws", SocketAsync).AllowAnonymous().Produces(StatusCodes.Status101SwitchingProtocols).Errors(400, 401);
+    }
+
+    /// <summary>API keys only: a session has the web app, which polls; the dev token and connections don't sync.</summary>
+    private static async Task<Ok<WsTicketView>> TicketAsync(RequestCaller caller, SyncTickets tickets, CancellationToken ct)
+    {
+        if (caller.Kind != CallerKind.ApiKey || caller.Credential is not ApiKeyCredential key)
+        {
+            throw new ApiException(StatusCodes.Status403Forbidden, "Only an API key gets a WebSocket ticket.");
+        }
+
+        var vaults = await caller.OpenVaultsAsync(ct);
+        var (ticket, expiresAt) = tickets.Issue(key.KeyId, [.. vaults.Select(v => (v.Id, v.Name))]);
+        return TypedResults.Ok(new WsTicketView(ticket, expiresAt));
+    }
+
+    /// <summary>The upgrade; 401 for an unknown, used or expired ticket. Hints go out until the socket closes.</summary>
+    private static async Task<IResult> SocketAsync(HttpContext http, string? ticket, SyncTickets tickets, SyncHub hub)
+    {
+        if (!http.WebSockets.IsWebSocketRequest) return ApiErrors.Result(StatusCodes.Status400BadRequest, "This is a WebSocket; connect with an upgrade and a ticket from POST /api/ws-ticket.");
+        if (ticket is null || tickets.Take(ticket) is not { } grant) return ApiErrors.Result(StatusCodes.Status401Unauthorized, "This ticket is not valid (any more); ask for a new one.");
+        using var socket = await http.WebSockets.AcceptWebSocketAsync();
+        await hub.RunAsync(socket, grant, http.RequestAborted);
+        return Results.Empty;
     }
 
     /// <summary><c>since</c>: a <c>cursor</c> of an earlier answer. Without it, <c>If-None-Match</c> with the last

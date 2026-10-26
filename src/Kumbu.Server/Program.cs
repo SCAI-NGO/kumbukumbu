@@ -12,6 +12,7 @@ using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
@@ -81,6 +82,9 @@ builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
+builder.Services.AddSingleton<SyncTickets>();
+builder.Services.AddSingleton<SyncHub>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
 // body that can't be bound throws, so ApiErrors answers it as {"error": ...} like every other refusal.
@@ -178,6 +182,9 @@ var webApp = new StaticFileOptions
 };
 app.UseDefaultFiles();
 app.UseStaticFiles(webApp);
+
+// The sync hints (GET /api/ws); the server pings every 30 s, so proxies and phones keep the connection.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterval });
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();

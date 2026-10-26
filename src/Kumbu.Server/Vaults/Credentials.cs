@@ -46,6 +46,9 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential,
 {
     private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
 
+    /// <summary>The key's id (not the key): what a sync WebSocket's ticket is bound to.</summary>
+    public string KeyId => keyId;
+
     public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
         [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
 
