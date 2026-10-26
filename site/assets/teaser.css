@@ -11,7 +11,7 @@
 @font-face { font-family: Nunito; font-style: normal; font-weight: 600; font-display: swap;
   src: url(fonts/nunito-latin-600-normal.woff2) format("woff2"); }
 
-/* The latin subset covers "²" and "—"; the drawn footer flower and the arrows are SVG, not glyphs. */
+/* The latin subset covers "²" and "—"; the drawn footer flower is SVG, as "✿" is not in the subset. */
 :root {
   --paper: #fbf8f2; --ink: #4a4553; --graphite: #6d6676; --soft: #8a8394;
   --a: #cfe3c9; --a-deep: #9cc293;   /* sage */
@@ -62,10 +62,13 @@ svg.garden { display: block; width: 100%; max-width: 640px; height: auto; margin
 .links a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
 .links a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
 .links .dot { display: inline-block; width: 24px; height: 24px; margin: 0 14px; vertical-align: -3px; }
+.dot-petals { fill: var(--c); stroke: var(--graphite); stroke-width: 1; }
+.dot-heart { fill: var(--c-deep); stroke: var(--graphite); stroke-width: 1; }
 
 @media (max-width: 480px) { .links { font-size: 24px; } .links .dot { display: none; } .links a { display: block; width: max-content; margin: 8px auto; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes pop { to { transform: scale(1); } }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; }
+  .bud .sway { animation: none; } }
