@@ -1135,27 +1135,38 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task A_retry_after_an_attempt_that_finished_after_all_rekeys_nothing_again()
+    public async Task A_retry_after_an_attempt_that_failed_before_its_start_rekeys_for_real()
     {
         var a = await FilledAsync();
         var id = a.Id("Arbeit");
-        var starts = 0;
-        // The first attempt finishes but fails as it ends, as one given up on at its timeout that finished later.
-        CrashOnceAt("after-finish");
-        var crash = Catalog().RekeyFaultAt!;
-        Catalog().RekeyFaultAt = p =>
-        {
-            if (p == "after-start") Interlocked.Increment(ref starts);
-            return crash(p);
-        };
+        var oldKey = await VaultKeyAsync(a.Key, id);
         var runner = await RunnerAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(id, a.User.Id, a.Key));
-        var key = await VaultKeyAsync(a.Key, id);
+        runner.AttemptTimeout = TimeSpan.FromMinutes(1);
+        // A writer holds the vault's gate: the first attempt waits for it until its time is up, before any start.
+        var gate = Catalog().LocksFor(id).Gate;
+        await gate.WaitAsync(Ct);
+        Task<RekeySummary> first;
+        try
+        {
+            first = runner.RunAsync(id, a.User.Id, a.Key);
+            await WaitUntilAsync(() => Catalog().IsRekeying(id));
+            _time.Advance(TimeSpan.FromMinutes(1));
+            await Assert.ThrowsAsync<TimeoutException>(() => first.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+            await WaitUntilAsync(() => !Catalog().IsRekeying(id));
+        }
+        finally
+        {
+            gate.Release();
+        }
 
+        Assert.Empty(await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
+
+        // Not pending anywhere, since nothing began: the retry re-keys the vault, it doesn't report a re-keying that never ran.
         var summary = await runner.RunAsync(id, a.User.Id, a.Key).WaitAsync(TimeSpan.FromSeconds(30), Ct);
 
-        Assert.Equal((0L, 1), (summary.Documents, starts));
-        Assert.Equal(key, await VaultKeyAsync(a.Key, id));
+        Assert.Equal(13, summary.Documents);
+        Assert.NotEqual(oldKey, await VaultKeyAsync(a.Key, id));
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a).ReadAsync(P("/Arbeit/plan.md"), Ct));
     }
 
     [Fact]

@@ -137,13 +137,6 @@ public sealed partial class VaultCatalog
         await Users.UpdateOneAsync(u => u.Id == userId, Builders<Accounts.UserDocument>.Update.Pull(u => u.RekeyPending, vaultId), cancellationToken: ct);
     }
 
-    /// <summary>Whether the vault is in its two-key period, or still pending for its owner (not re-keyed since a rotation).</summary>
-    internal async Task<bool> IsPendingAsync(string vaultId, string userId, CancellationToken ct)
-    {
-        if (await Vaults.Find(v => v.Id == vaultId && v.RekeyStartedAt != null).AnyAsync(ct)) return true;
-        return await Users.Find(Builders<Accounts.UserDocument>.Filter.Eq(u => u.Id, userId) & Builders<Accounts.UserDocument>.Filter.AnyEq(u => u.RekeyPending, vaultId)).AnyAsync(ct);
-    }
-
     /// <summary>What a run of the vault would take access from: the API keys with a slot on it, and the connections
     /// that list it and aren't revoked.</summary>
     internal async Task<(IReadOnlyList<string> ApiKeyIds, IReadOnlyList<string> ConnectionIds)> AccessAsync(string vaultId, CancellationToken ct)
