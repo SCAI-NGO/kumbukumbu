@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { api, call } from "../api/client";
+import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import ConfirmTyped from "../components/ConfirmTyped";
@@ -279,7 +279,16 @@ function ReencryptSection() {
           </p>
           <form onSubmit={submit} className="flex flex-col gap-4">
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
-            {reencrypt.isError && <FormError>{errorText(reencrypt.error)}</FormError>}
+            {reencrypt.isError && (
+              <FormError>
+                {errorText(reencrypt.error)}
+                {/* A refusal (wrong password, a conflict, too many tries) changed nothing. A fault or a lost connection
+                    may have come after the new keys were in place, with the new recovery key lost on the way: the old
+                    one no longer works then. */}
+                {!(reencrypt.error instanceof HttpError && reencrypt.error.status < 500) &&
+                  ' The re-encryption may have gone through even so: make a new recovery key under "Recovery key" above, since the old one may no longer work.'}
+              </FormError>
+            )}
             {done && <Done>Your vaults are being re-encrypted with new keys, and your new recovery key is in place. The vault list shows each until it is done.</Done>}
             <button type="submit" disabled={reencrypt.isPending || !password} className={secondaryButtonClass}>
               {reencrypt.isPending ? "Re-encrypting…" : "Re-encrypt my vaults"}

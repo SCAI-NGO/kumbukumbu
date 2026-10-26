@@ -357,6 +357,59 @@ public sealed class RekeyingTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Reencrypt_answers_the_recovery_key_even_when_the_revocation_fails()
+    {
+        var (owner, vaults) = await OwnerAsync();
+        var keys = Api.Services.GetRequiredService<ApiKeys>();
+        var (key, _) = await keys.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, "arbeit", new Dictionary<string, KeyRight> { [vaults["Arbeit"]] = KeyRight.Read }, Ct);
+        var rekeying = Api.Services.GetRequiredService<Rekeying>();
+        rekeying.RevokeFault = () => throw new InvalidOperationException("revocation failed");
+        string recoveryKey;
+        try
+        {
+            using var response = await owner.SendAsync(HttpMethod.Post, "/api/account/reencrypt", new { password = RestClient.Password });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            recoveryKey = (await RestClient.JsonAsync(response))["recoveryKey"]!.GetValue<string>();
+        }
+        finally
+        {
+            rekeying.RevokeFault = null;
+        }
+
+        // Stage 2 still runs, and revokes the key with its vault.
+        await AllRekeyedAsync(owner.User.Id, vaults.Values);
+        Assert.Null(await keys.ResolveAsync(key, Ct));
+        Assert.NotNull(await Api.Services.GetRequiredService<UserCatalog>().RecoverAsync(owner.Username, recoveryKey, NewPassword, Ct));
+    }
+
+    [Fact]
+    public async Task A_vault_in_its_two_key_period_is_rekeyed_through_the_endpoint()
+    {
+        var (owner, vaults) = await OwnerAsync();
+        var id = vaults["Arbeit"];
+        var oldKey = await VaultKeyAsync(owner.UserKey, id);
+        Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(id, owner.User.Id, owner.UserKey, Ct));
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+
+        Assert.True(await StartedAsync([id]));
+        Assert.Equal(id, await Catalog.FindForUserAsync(owner.User.Id, owner.UserKey, "Arbeit", Ct));
+
+        using var response = await owner.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/rekey", new { password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(await StartedAsync([id]));
+        Assert.Empty(await RekeyPendingAsync(owner.User.Id));
+        Assert.False(await MetaOpensAsync(oldKey, id));
+        Assert.Contains("# Plan", (await owner.ReadAsync("plan.md"))["content"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Access_lists_what_will_lose_access()
     {
         var (owner, vaults) = await OwnerAsync("Diary");
@@ -367,6 +420,10 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         await keys.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, "diary only", On("Diary"), Ct);
         var (_, revoked) = await keys.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, "old", On("Arbeit"), Ct);
         Assert.True(await keys.RevokeAsync(owner.User, revoked.Id, Ct));
+        // Expired, not swept yet: its slots are still there, but it has no access to lose.
+        var (_, expired) = await keys.CreateAsync(owner.User, owner.UserKey, DateTime.UtcNow, "expired", On("Arbeit"), Ct, 30);
+        await Raw("api_keys").UpdateOneAsync(
+            new BsonDocument("_id", expired.Id), new BsonDocument("$set", new BsonDocument("expiresAt", DateTime.UtcNow.AddMinutes(-1))), cancellationToken: Ct);
         foreach (var (name, vault) in new[] { ("claude", "Arbeit"), ("chatgpt", "Diary"), ("gone", "Arbeit") })
         {
             using var created = await owner.SendAsync(HttpMethod.Post, "/api/connections", new { name, vaults = new Dictionary<string, string> { [vault] = "read" } });

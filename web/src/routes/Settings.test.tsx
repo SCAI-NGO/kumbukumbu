@@ -212,6 +212,25 @@ describe("Settings", () => {
     expect(await within(part).findByText("The password is wrong.")).toBeInTheDocument();
   });
 
+  it("says a re-encryption may have gone through when its answer is lost, and to make a new recovery key", async () => {
+    api({ "POST /api/account/reencrypt": () => json(502, {}) });
+    renderApp("/settings");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "my password");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText(/may have gone through even so/)).toHaveTextContent('make a new recovery key under "Recovery key" above');
+  });
+
+  it("says nothing of that when re-encrypting was refused", async () => {
+    api({ "POST /api/account/reencrypt": () => json(400, { error: "The password is wrong." }) });
+    renderApp("/settings");
+    const part = await screen.findByRole("region", { name: "Re-encrypt my vaults" });
+    await userEvent.type(within(part).getByLabelText("Current password"), "wrong");
+    await userEvent.click(within(part).getByRole("button", { name: "Re-encrypt my vaults" }));
+    expect(await within(part).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(part).not.toHaveTextContent(/may have gone through/);
+  });
+
   it("re-encrypting a vault lists the keys and apps that lose access first", async () => {
     const bodies: unknown[] = [];
     let release: () => void = () => {};

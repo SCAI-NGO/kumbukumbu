@@ -11,14 +11,18 @@ namespace Kumbu.Server.Accounts;
 /// </summary>
 public sealed class Rekeying(
     UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, ApiKeys keys, Connections connections, RekeyRunner runner, IMongoDatabase db,
-    ILogger<Rekeying> log)
+    TimeProvider time, ILogger<Rekeying> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
+
+    /// <summary>Runs before the revocations of <see cref="ReencryptAccountAsync"/> (tests make them fail).</summary>
+    internal Func<Task>? RevokeFault { get; set; }
 
     /// <summary>
     /// "Re-encrypt my vaults": a new user key (keeping the session of <paramref name="sessionSecret"/>), then every API
     /// key of the user revoked and the tokens of every connection (<see cref="ConnectionReasons.Rekeyed"/>), then each
-    /// vault handed to the runner. Returns the new recovery key, to be shown once; null if the password is wrong.
+    /// vault handed to the runner. Returns the new recovery key, to be shown once, also when the revocations failed (they
+    /// are logged, and stage 2 makes them per vault); null if the password is wrong.
     /// </summary>
     public async Task<string?> ReencryptAccountAsync(User user, byte[] userKey, string password, string sessionSecret, CancellationToken ct)
     {
@@ -28,15 +32,20 @@ public sealed class Rekeying(
         try
         {
             // Before the answer, and whatever happens to the request now: access an attacker may hold must not
-            // outlive it while stage 2 runs in the background. Should this fail, stage 2 still revokes each key and
-            // disconnects each app with its vault (every vault is pending), and the request answers the error.
+            // outlive it while stage 2 runs in the background.
+            if (RevokeFault is { } fault) await fault();
             await keys.RevokeAllAsync(user, CancellationToken.None);
             await connections.RevokeAllTokensAsync(user, ConnectionReasons.Rekeyed, CancellationToken.None);
         }
-        finally
+        catch (Exception e)
         {
-            foreach (var vaultId in rotated.VaultIds) runner.Start(vaultId, user.Id, rotated.NewUserKey);
+            // The rotation is committed: the old recovery key opens nothing any more, so the new one must reach the
+            // user. Stage 2 still revokes each key and disconnects each app at its vault's start (every vault is
+            // pending), and every vault is handed to it just below.
+            log.LogError(e, "Revoking the API keys and apps of user {Username} after their user key was rotated failed; each goes with its vault's re-keying", user.Username);
         }
+
+        foreach (var vaultId in rotated.VaultIds) runner.Start(vaultId, user.Id, rotated.NewUserKey);
 
         log.LogInformation("User {Username} re-encrypts their {Vaults} vaults; API keys and apps are revoked", user.Username, rotated.VaultIds.Count);
         return rotated.RecoveryKey;
@@ -91,8 +100,13 @@ public sealed class Rekeying(
     {
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
         var (keyIds, connectionIds) = await catalog.AccessAsync(vaultId, ct);
-        var keyNames = (await keys.ListAsync(user, userKey, ct)).Where(k => keyIds.Contains(k.Id)).Select(k => k.Name);
-        var connectionNames = (await connections.ListAsync(user, userKey, ct)).Where(c => connectionIds.Contains(c.Id)).Select(c => c.Name);
+        // Only what has access now: a key or app past its expiry or revoked has none to lose, even while its slots
+        // wait for the sweep.
+        var now = time.GetUtcNow().UtcDateTime;
+        var keyNames = (await keys.ListAsync(user, userKey, ct))
+            .Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).Select(k => k.Name);
+        var connectionNames = (await connections.ListAsync(user, userKey, ct))
+            .Where(c => connectionIds.Contains(c.Id) && c.RevokedAt is null && !(c.ExpiresAt <= now)).Select(c => c.Name);
         return ([.. keyNames.Order(StringComparer.Ordinal)], [.. connectionNames.Order(StringComparer.Ordinal)]);
     }
 }
