@@ -445,8 +445,12 @@ describe("the shell", () => {
     expect(within(drawer()).getByRole("heading", { name: "Work" })).toHaveFocus();
     await within(drawer()).findByRole("button", { name: "inbox" });
 
+    // The resize handle is the last stop in the drawer, after the account row.
+    await userEvent.tab({ shift: true });
+    expect(within(drawer()).getByRole("separator", { name: "Resize the sidebar" })).toHaveFocus();
     await userEvent.tab({ shift: true });
     expect(within(drawer()).getByRole("button", { name: "Sign out" })).toHaveFocus();
+    await userEvent.tab();
     await userEvent.tab();
     expect(within(drawer()).getByRole("button", { name: "Actions for Work" })).toHaveFocus();
 
