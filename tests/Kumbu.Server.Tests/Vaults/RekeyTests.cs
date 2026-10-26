@@ -1113,6 +1113,52 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_resume_refused_for_a_replaced_user_key_keeps_the_old_key_out()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var stale = Store(a);
+        var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
+        CrashOnceAt("after-start");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+        var rotation = (await Rotation().RotateAsync(a.User, a.Key, Password, null, Ct))!;
+        var before = await RawAsync(id);
+
+        // A runner still holding the key the rotation replaced.
+        await Assert.ThrowsAsync<VaultNotRekeyableException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+
+        Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct))).Message);
+        await Index().IndexAsync((await stale.UnlockedVaultsAsync(Ct)).Single(), P("/Arbeit/plan.md"), Ct);
+        Assert.Equal(before, await RawAsync(id));
+        await Catalog().RekeyAsync(id, a.User.Id, rotation.NewUserKey, Ct);
+        Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a, key: rotation.NewUserKey).ReadAsync(P("/Arbeit/plan.md"), Ct));
+    }
+
+    [Fact]
+    public async Task A_retry_after_an_attempt_that_finished_after_all_rekeys_nothing_again()
+    {
+        var a = await FilledAsync();
+        var id = a.Id("Arbeit");
+        var starts = 0;
+        // The first attempt finishes but fails as it ends, as one given up on at its timeout that finished later.
+        CrashOnceAt("after-finish");
+        var crash = Catalog().RekeyFaultAt!;
+        Catalog().RekeyFaultAt = p =>
+        {
+            if (p == "after-start") Interlocked.Increment(ref starts);
+            return crash(p);
+        };
+        var runner = await RunnerAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(id, a.User.Id, a.Key));
+        var key = await VaultKeyAsync(a.Key, id);
+
+        var summary = await runner.RunAsync(id, a.User.Id, a.Key).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+
+        Assert.Equal((0L, 1), (summary.Documents, starts));
+        Assert.Equal(key, await VaultKeyAsync(a.Key, id));
+    }
+
+    [Fact]
     public async Task A_damaged_holder_of_the_new_pid_never_pushes_out_a_readable_note()
     {
         var a = await AccountAsync("Arbeit");

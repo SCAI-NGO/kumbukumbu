@@ -157,6 +157,17 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
         using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stopping, timeout.Token);
         try
         {
+            // A retry of a vault that is pending no more: an earlier attempt, given up on at its timeout, finished after
+            // all. Done, rather than a second re-keying. (A first attempt runs whatever: re-keying one vault on request
+            // needs no pending state.)
+            if (entry.Failures > 0 && !await catalog.IsPendingAsync(entry.VaultId, userId, attempt.Token))
+            {
+                log.LogInformation("Re-keying vault {VaultId} was finished by an earlier attempt", entry.VaultId);
+                End(entry);
+                entry.Next.TrySetResult(new RekeySummary(0, 0, [], []));
+                return;
+            }
+
             // WaitAsync too: a run stuck somewhere that doesn't watch the token still lets the queue go on. It keeps the
             // vault (a later attempt meets it busy, and backs off) until it notices.
             var summary = await catalog.RekeyAsync(entry.VaultId, userId, userKey, attempt.Token).WaitAsync(attempt.Token);
