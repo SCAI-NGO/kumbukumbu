@@ -73,7 +73,7 @@ It prints a one-time link `https://kumbu.example.org/join#<code>` (on stdout, ne
 claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Authorization: Bearer kumbu_…"
 ```
 
-**The REST API** lives under `/api` and serves the web app and, later, the Obsidian plugin; notes are addressed by vault and path, and a write carries the version token from the read. `GET /api/openapi.json` describes it. The session cookie is `HttpOnly`, `Secure` and `SameSite=Strict`, lasts 30 idle minutes and 12 hours at most, and survives a server restart. A browser needs HTTPS for it (localhost counts as secure in browsers), so a public instance runs behind a TLS-terminating proxy.
+**The REST API** lives under `/api` and serves the web app and the Obsidian plugin (see "Syncing with Obsidian"); notes are addressed by vault and path, and a write carries the version token from the read. `GET /api/openapi.json` describes it. The session cookie is `HttpOnly`, `Secure` and `SameSite=Strict`, lasts 30 idle minutes and 12 hours at most, and survives a server restart. A browser needs HTTPS for it (localhost counts as secure in browsers), so a public instance runs behind a TLS-terminating proxy.
 
 **Security notes for a public instance:**
 
@@ -92,6 +92,7 @@ claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Author
   - **Changes to the metadata take about 5 minutes to reach claude.ai**: both documents are cacheable for 5 minutes (`Cache-Control: public, max-age=300`), so after changing `KUMBU_PUBLIC_URL` or the routing, wait before testing again.
   - **Always set `KUMBU_PUBLIC_URL` on a public instance.** Without it, the OAuth addresses (issuer, endpoints, the connection's URL) are taken from the request's `Host` header and served in cacheable documents, so a request with a forged `Host` could leave a wrong address in a cache in front of the server.
 - To identify an app connection's client (for example Claude), the server fetches the client's metadata document from the URL the client names: a plain `https` request from the server to the internet, so a public instance needs outbound access (for `claude.ai`, `https://claude.ai/oauth/mcp-oauth-client-metadata`). The fetch follows no redirects, refuses any host that does not resolve to a public address, and reads at most 16 KiB in 5 seconds; a firewall that blocks it makes the consent page report that the app can't be identified.
+- **WebSockets for the Obsidian sync**: the proxy must pass the upgrade on `/api/ws` (Traefik does without extra configuration) and keep an idle connection open for at least a minute (the server pings every 30 seconds). Its access log shows `/api/ws?ticket=…`: a ticket works for one connection and only within 30 seconds of being made, so a logged one is worthless. Redeeming a pairing code is limited to 10 attempts a minute per client network and stops for everyone while the server has seen 100 wrong codes in the last minute.
 - Invitation codes travel in the link's fragment (`#…`), which browsers do not send, so they never reach the server's or the proxy's logs.
 - A reverse proxy's **access log** holds what the server's own log leaves out: request lines under `/api` name vaults and note paths (`/api/notes/Work/plan.md`) and carry search queries (`/api/search?q=…`). On a public instance, disable the access log for `/api` or filter those paths and the query string out. The server's own log names vaults by id and logs no note path; only seeding names the folders and files it reads from `Kumbu:Seed:Path`.
 - Without a dev token, the server logs a warning at every start (`Kumbu:DevToken is not set: neither Kumbu:Seed:Path nor Kumbu:Recovery:Keys is applied`) and seeds nothing. On a public instance this is expected.
@@ -117,6 +118,25 @@ claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Author
   ```
 
   Everything else, the key file, the user and a later password change, is as above.
+
+### Syncing with Obsidian
+
+The Obsidian plugin [Kumbu² Sync](https://github.com/SCAI-NGO/kumbu-obsidian) keeps one Obsidian vault and one Kumbu² vault the same, both ways. A vault's menu has **Connect Obsidian…**: it shows the plugin to add in BRAT, this server's address, how long the device's key lasts (never, the default, or 30, 90 or 365 days) and a **pairing code** such as `K7QM-4XDA`, valid once for ten minutes. Typed into the plugin, the code becomes an API key the device keeps in Obsidian's secret storage; nobody sees or copies it. Each device gets its own key, named `<Vault> – Obsidian <device>`, with write on that one vault, listed under API keys as an **Obsidian device** and revoked there like any key. A device's writes are the user's own in the web app ("You changed this note in Obsidian (Laptop) just now"); they don't count as an agent's.
+
+What the plugin uses, all under `/api` and in `GET /api/openapi.json` (errors are `{"error": "<sentence>"}`; every sync endpoint answers `401` for a revoked, expired or unknown key and `503` with `Retry-After` while the vault is being re-encrypted, which a client retries rather than reading the vault as gone):
+
+| Request | Answers |
+|---|---|
+| `POST /api/vaults/{vault}/pairing` (session), `{"expiresInDays": null \| 30 \| 90 \| 365}` | `201 {"code", "expiresAt"}` · `400` expiry · `403` not a session · `404` not the user's vault · `503`. A new code replaces the user's open one for the vault. |
+| `POST /api/pairing/redeem` (anonymous), `{"code", "device"}` | `201 {"key", "vault", "keyName"}` · `400` device name (1 to 32 characters, nothing invisible, no `" ("`; the code stays valid) · `404 This pairing code is not valid (any more).` · `409` every numbered name taken · `429` with `Retry-After`. The code ignores case, spaces and dashes, and reads I and L as 1 and O as 0. |
+| `GET /api/vaults` | each vault with `canWrite` for the caller |
+| `GET /api/vaults/{vault}/versions` | `200 {"full", "cursor", "state", "damaged", "notes": [{"path", "version"}], "deleted": []}` with `ETag: "<state>"` · `304` for `If-None-Match: "<state>"` while nothing changed · `404` · `503` |
+| `GET /api/vaults/{vault}/versions?since=<cursor>` | `full: false`: every path touched since the cursor minus five minutes, at its version now in `notes` or, with no note there now, in `deleted`. A cursor the server can't answer for (from before a restart or before the vault was last unlocked, older than 25 days, in the future, garbled) gets the full list. |
+| `DELETE /api/notes/{vault}/{path}?version=<v>` | `204` trashed · `409` with the note as it is now, as a stale `PUT` · `404` |
+| `POST /api/ws-ticket` (API keys only) | `200 {"ticket": "kumbu_wst_…", "expiresAt"}`, for one connection within 30 seconds · `403` for a session, the dev token or a connection |
+| `GET /api/ws?ticket=<ticket>` | the WebSocket: `{"type":"changed","vault":"Work"}` after each change to one of the key's vaults (at most one per vault per 500 ms), pings every 30 seconds, closed with `4401` once the key is revoked or expired (checked every 30 seconds) and `1001` when the server stops · `401` for an unknown, used or expired ticket · `400` without an upgrade |
+
+A hint carries a vault's name and nothing else: it is a nudge to ask for the versions, so a lost or doubled one does no harm. The plugin keeps the `cursor` of each answer and asks with `since` on a hint, and for the full list on start, when Obsidian comes back to the foreground, once an hour, and when the cursor is old. Notes from the plugin are stored as written (only CRLF becomes LF), so nothing it uploads comes back changed.
 
 ### Connecting claude.ai and other apps
 
