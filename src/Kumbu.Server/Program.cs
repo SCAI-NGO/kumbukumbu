@@ -83,6 +83,7 @@ builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
 builder.Services.AddSingleton<SyncTickets>();
+builder.Services.AddSingleton<Pairings>();
 builder.Services.AddSingleton<SyncHub>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
 
@@ -204,6 +205,7 @@ app.MapNoteApi();
 app.MapHistoryApi();
 app.MapUploadApi();
 app.MapSyncApi();
+app.MapPairingApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
