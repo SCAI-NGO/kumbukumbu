@@ -320,7 +320,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
-            foreach (var link in Links.WikiLink.Parse(content))
+            foreach (var link in Links.NoteLink.Parse(content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(note.Path, link.Target);

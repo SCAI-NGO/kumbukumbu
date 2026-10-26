@@ -53,6 +53,65 @@ public class LinkCommandsTests
         """,
         (await Run("backlinks /Demo/projects/kumbu.md")).Output);
 
+    private const string MarkdownNote =
+        "[k](/projects/kumbu.md) [m](Meeting%20Notes.md) [w](<welcome.md#Welcome>)\n[p](plan.md) [n](nope.md) [r](report.pdf) [h](#Top) [x](https://x.org)\n";
+
+    // Its own store, so the shared fixtures stay as they are.
+    private static Func<string, Task<ShellResult>> WithMarkdownNote()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Demo/md.md", MarkdownNote),
+            ("/Demo/welcome.md", Welcome),
+            ("/Demo/Meeting Notes.md", Meeting),
+            ("/Demo/projects/kumbu.md", "# Kumbu\n"),
+            ("/Demo/a/plan.md", "a"), ("/Demo/b/plan.md", "b"));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return line => sh.RunAsync(line, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task MarkdownLinksAreLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Equal(
+            """
+            1: [k](/projects/kumbu.md) → /Demo/projects/kumbu.md
+            1: [m](Meeting%20Notes.md) → /Demo/Meeting Notes.md
+            1: [w](<welcome.md#Welcome>) → /Demo/welcome.md
+            2: [p](plan.md) → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
+            2: [n](nope.md) → not found
+            2: [r](report.pdf) → attachment (not a note)
+            2: [h](#Top) → this note
+            """,
+            (await sh("links /Demo/md.md")).Output);
+    }
+
+    [Fact]
+    public async Task BacklinksFindMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md:1:[k](/projects/kumbu.md) ", (await sh("backlinks /Demo/projects/kumbu.md")).Output);
+    }
+
+    [Fact]
+    public async Task RmCountsMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md", (await sh("rm /Demo/projects/kumbu.md")).Output.Split("now lead nowhere")[0]);
+    }
+
+    [Fact]
+    public async Task LinksOfADirectoryListsBrokenMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md:2: [n](nope.md) → not found", (await sh("links /Demo")).Output);
+    }
+
     [Theory]
     [InlineData("links", "links: missing operand")]
     [InlineData("links /Demo/nope.md", "links: /Demo/nope.md: No such file or directory")]

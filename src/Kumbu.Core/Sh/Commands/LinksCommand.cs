@@ -79,7 +79,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         var output = new List<string>();
         foreach (var source in all.Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
-            foreach (var link in WikiLink.Parse(source.Content))
+            foreach (var link in NoteLink.Parse(source.Content))
             {
                 var r = resolver.Resolve(source.Path, link.Target);
                 if (r.Kind is LinkKind.NotFound or LinkKind.Ambiguous)

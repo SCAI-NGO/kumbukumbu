@@ -111,6 +111,27 @@ public sealed class CheckpointReadApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Markdown_links_resolve_inside_the_checkpoint_even_after_a_move()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "[b](p/b.md) [c](/c.md)\n");
+        await user.CreateAsync("p/b.md", "b\n");
+        await MakeAsync(user, "cp");
+        using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/p/b.md", to = "/Arbeit/z/b.md" });
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        await user.CreateAsync("c.md", "c\n");
+
+        using var note = await user.GetAsync(Note(user, "cp", "a.md"));
+        var links = (await JsonAsync(note))["links"]!.AsArray();
+        Assert.Equal(2, links.Count);
+        Assert.Equal("note", links[0]!["kind"]!.GetValue<string>());
+        Assert.Equal("/Arbeit/p/b.md", links[0]!["path"]!.GetValue<string>());
+        Assert.Equal(1, links[0]!["line"]!.GetValue<int>());
+        Assert.Equal("not_found", links[1]!["kind"]!.GetValue<string>());
+        Assert.Equal("/c.md", links[1]!["target"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_read_only_key_reads_a_checkpoint()
     {
         var user = await ThenAndNowAsync(await RestClient.NewAsync(Api));

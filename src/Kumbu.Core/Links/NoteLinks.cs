@@ -6,7 +6,7 @@ using Kumbu.Core.Sh;
 namespace Kumbu.Core.Links;
 
 /// <summary>A link of a note and where it leads.</summary>
-public sealed record ResolvedLink(WikiLink Link, LinkResolution Resolution);
+public sealed record ResolvedLink(NoteLink Link, LinkResolution Resolution);
 
 /// <summary>A line of another note that links to a note; <paramref name="Line"/> 0-based. <paramref name="Ambiguous"/>:
 /// the link matches several notes, this one among them.</summary>
@@ -22,7 +22,7 @@ public static class NoteLinks
     {
         var vault = path.Segments[0];
         var resolver = new LinkResolver(vault, await notes.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct));
-        return [.. WikiLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
+        return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
     }
 
     /// <summary>The lines in the vault that link to <paramref name="path"/>, by source path and line; then the lines
@@ -37,7 +37,7 @@ public static class NoteLinks
         foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var lines = Lines.Split(source.Content);
-            var resolved = WikiLink.Parse(source.Content)
+            var resolved = NoteLink.Parse(source.Content)
                 .Where(l => l.Target.Trim().Length > 0)
                 .Select(l => (l.Line, Resolution: resolver.Resolve(source.Path, l.Target)))
                 .ToList();
