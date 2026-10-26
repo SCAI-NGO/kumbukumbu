@@ -247,4 +247,108 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Equal("Kumbu export 2026-10-26.zip", ExportApi.AsciiName("Kumbu² export 2026-10-26.zip"));
         Assert.Equal("Bucher 2026-10-26.zip", ExportApi.AsciiName("Bücher 2026-10-26.zip"));
     }
+
+    private static async Task MakeCheckpointAsync(RestClient user, string name)
+    {
+        using var made = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints", new { name });
+        Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_checkpoint_exports_as_its_vault_folder_of_its_notes_then()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "then\n");
+        await user.CreateAsync("Bücher/Ü².md", "u\n");
+        await MakeCheckpointAsync(user, "cp");
+        var version = (await user.ReadAsync("a.md"))["version"]!.GetValue<string>();
+        using var rewritten = await user.SendAsync(HttpMethod.Put, user.Url("a.md"), new { content = "now\n", version });
+        Assert.Equal(HttpStatusCode.OK, rewritten.StatusCode);
+        await user.CreateAsync("c.md", "c\n");
+
+        var before = DateTime.UtcNow;
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+
+        using var zip = await ZipAsync(response);
+        Assert.Equal(["Arbeit/", "Arbeit/Bücher/Ü².md", "Arbeit/a.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        Assert.Equal("then\n", Read(zip.GetEntry("Arbeit/a.md")!));
+        AssertDated("Arbeit checkpoint cp {date}.zip", response.Content.Headers.ContentDisposition!.FileNameStar, before);
+    }
+
+    [Fact]
+    public async Task A_folder_checkpoint_exports_with_the_vault_folder_on_top()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateAsync("p/b.md", "b\n");
+        var made = await user.ShAsync("mkcp /Arbeit/p cp", write);
+        Assert.False(made.IsError, made.Text);
+
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+
+        using var zip = await ZipAsync(response);
+        Assert.Equal(["Arbeit/", "Arbeit/p/b.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Checkpoint_entries_carry_the_time_it_was_made()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateAsync("p/b.md", "b\n");
+        await MakeCheckpointAsync(user, "cp");
+        using var list = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints");
+        var madeAt = (await RestClient.JsonAsync(list))["checkpoints"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == "cp")!["createdAt"]!.GetValue<DateTime>().ToUniversalTime();
+
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+
+        var bytes = await BytesAsync(response);
+        foreach (var path in new[] { "a.md", "p/b.md" })
+        {
+            Assert.InRange((DosTime(bytes, $"Arbeit/{path}") - madeAt).Duration(), TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
+    public async Task Checkpoint_export_is_for_sessions_only()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await MakeCheckpointAsync(user, "cp");
+        var url = $"/api/vaults/{user.Vault}/checkpoints/cp/export";
+
+        using var read = await user.GetAsync(url, bearer: await user.KeyAsync("r", KeyRight.Read));
+        using var write = await user.GetAsync(url, bearer: await user.KeyAsync("w", KeyRight.Write));
+        using var dev = await user.GetAsync(url, bearer: KumbuAppFactory.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, read.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, write.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, dev.StatusCode);
+    }
+
+    [Fact]
+    public async Task Checkpoint_export_of_an_unknown_vault_or_checkpoint_is_not_found()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var other = await RestClient.NewAsync(Api, vault: "Fremd" + Guid.NewGuid().ToString("N")[..6]);
+        await other.CreateAsync("geheim.md", "secret\n");
+        await MakeCheckpointAsync(other, "cp");
+
+        using var foreign = await user.GetAsync($"/api/vaults/{other.Vault}/checkpoints/cp/export");
+        using var unknown = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/nope/export");
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.Equal("application/json", unknown.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public void Checkpoint_zip_name_is_dated_in_the_readers_zone()
+    {
+        var at = new DateTime(2026, 10, 19, 23, 30, 0, DateTimeKind.Utc);
+
+        Assert.Equal("Ideas checkpoint before-cleanup 2026-10-20.zip", ExportApi.CheckpointZipName("Ideas", "before-cleanup", at, TimeZoneInfo.FindSystemTimeZoneById("Europe/Vienna")));
+        Assert.Equal("Ideas checkpoint before-cleanup 2026-10-19.zip", ExportApi.CheckpointZipName("Ideas", "before-cleanup", at, TimeZoneInfo.Utc));
+    }
 }

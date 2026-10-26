@@ -13,7 +13,8 @@ namespace Kumbu.Server.Api;
 /// The export (demo-round design §2): vaults of the session as a ZIP, one top-level folder per vault named as the
 /// vault, its notes verbatim at their paths below it, each entry dated with the note's last write. Only the current
 /// notes: no history, trash, checkpoints or settings. Unpacked, each folder opens in Obsidian as a vault; it is also
-/// what the import reads. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports.
+/// what the import reads. A checkpoint exports the same way, its notes as it holds them (a folder checkpoint
+/// below the vault's folder), each entry dated with the time the checkpoint was made. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports.
 /// </summary>
 public static class ExportApi
 {
@@ -28,6 +29,24 @@ public static class ExportApi
                 ExportAsync(vault ?? [], tz, store, time, http, ct))
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
+        api.MapGet("/vaults/{vault}/checkpoints/{name}/export", CheckpointExportAsync)
+            .Produces(StatusCodes.Status200OK, contentType: "application/zip")
+            .Errors(400, 401, 403, 404, 503);
+    }
+
+    /// <summary>As the vault export: the vault, the checkpoint and its notes are read before the first byte.</summary>
+    private static async Task<IResult> CheckpointExportAsync(
+        string vault, string name, string? tz, INoteStore store, Checkpoints checkpoints, HttpContext http, CancellationToken ct)
+    {
+        var root = ApiPaths.Parse(vault, null, note: false);
+        var view = await HistoryApi.OpenCheckpointAsync(root, name, store, checkpoints, ct);
+        var made = view.Checkpoint.CreatedAt;
+        var notes = (await view.ReadNotesUnderAsync(root, ct))
+            .OrderBy(n => n.Path.Value, StringComparer.Ordinal)
+            .Select(n => new ExportNote(n.Path, n.Content, made))
+            .ToList();
+        var zone = Zone(tz);
+        return Zip(http, CheckpointZipName(root.Segments[0], name, made, zone), [(root.Segments[0], notes)], zone, ct);
     }
 
     /// <summary>Every vault is checked and its notes taken before the first byte, so a refusal (unknown vault,
@@ -40,23 +59,29 @@ public static class ExportApi
         var roots = vaults.Select(v => ApiPaths.Parse(v, null, note: false)).ToList();
         if (roots.Select(r => r.Segments[0]).Distinct(StringComparer.Ordinal).Count() != roots.Count) throw ApiErrors.BadRequest("Name each vault once.");
 
-        var content = new List<(string Vault, IReadOnlyList<StoredNote> Notes)>();
+        var content = new List<(string Vault, IReadOnlyList<ExportNote> Notes)>();
         foreach (var root in roots)
         {
             await NoteApi.RequireVaultAsync(store, root, ct);
-            var notes = new List<StoredNote>();
+            var notes = new List<ExportNote>();
             foreach (var path in (await store.ListNotesUnderAsync(root, ct)).OrderBy(p => p.Value, StringComparer.Ordinal))
             {
                 // Only notes that open are listed (a damaged one isn't, and isn't exported); null only if the note
                 // went between the listing and here.
-                if (await store.GetAsync(path, ct) is { } note) notes.Add(note);
+                if (await store.GetAsync(path, ct) is { } note) notes.Add(new ExportNote(note.Path, note.Content, note.LastWriteAt));
             }
 
             content.Add((root.Segments[0], notes));
         }
 
-        var zone = Zone(tz);
-        var name = ZipName([.. content.Select(c => c.Vault)], time.GetUtcNow().UtcDateTime);
+        return Zip(http, ZipName([.. content.Select(c => c.Vault)], time.GetUtcNow().UtcDateTime), content, Zone(tz), ct);
+    }
+
+    /// <summary>A note as it goes into the ZIP: what a vault's current note and a checkpoint's note have in common.</summary>
+    private sealed record ExportNote(VaultPath Path, string Content, DateTime WrittenAt);
+
+    private static IResult Zip(HttpContext http, string name, IReadOnlyList<(string Vault, IReadOnlyList<ExportNote> Notes)> content, TimeZoneInfo zone, CancellationToken ct)
+    {
         var disposition = new ContentDispositionHeaderValue("attachment") { FileName = $"\"{AsciiName(name)}\"", FileNameStar = name };
         http.Response.Headers.ContentDisposition = disposition.ToString();
         return TypedResults.Stream(body => WriteAsync(body, content, zone, ct), "application/zip");
@@ -73,7 +98,7 @@ public static class ExportApi
     /// export never sits in memory as a whole. <see cref="ZipArchive"/> still writes some headers synchronously,
     /// which Kestrel refuses; they go into <see cref="Chunks"/> and reach the response asynchronously in pieces of
     /// about <see cref="DrainAt"/>.</summary>
-    private static async Task WriteAsync(Stream body, IReadOnlyList<(string Vault, IReadOnlyList<StoredNote> Notes)> content, TimeZoneInfo zone, CancellationToken ct)
+    private static async Task WriteAsync(Stream body, IReadOnlyList<(string Vault, IReadOnlyList<ExportNote> Notes)> content, TimeZoneInfo zone, CancellationToken ct)
     {
         var chunks = new Chunks();
         // A null entry-name encoding: names are UTF-8 with the language flag set, so Bücher/Ü².md unpacks as such.
@@ -88,7 +113,7 @@ public static class ExportApi
                     var entry = zip.CreateEntry(vault + "/" + string.Join('/', note.Path.Segments.Skip(1)), CompressionLevel.Optimal);
                     // A ZIP entry's time has no zone: unpackers read it as their local time. So the reader's clock at
                     // the moment of the write, each note with its own offset (summer or winter time).
-                    entry.LastWriteTime = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(note.LastWriteAt, DateTimeKind.Utc)), zone);
+                    entry.LastWriteTime = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(note.WrittenAt, DateTimeKind.Utc)), zone);
                     await using (var stream = await entry.OpenAsync(ct)) await stream.WriteAsync(Encoding.UTF8.GetBytes(note.Content), ct);
                     if (chunks.Buffered >= DrainAt) await chunks.DrainAsync(body, ct);
                 }
@@ -163,6 +188,14 @@ public static class ExportApi
     {
         var date = utcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         return vaults.Count == 1 ? $"{vaults[0]} {date}.zip" : $"Kumbu² export {date}.zip";
+    }
+
+    /// <summary><c>Work checkpoint before-cleanup 2026-10-19.zip</c>: the day the checkpoint was made, on the reader's
+    /// clock, so it matches the date the web app shows.</summary>
+    internal static string CheckpointZipName(string vault, string name, DateTime createdAtUtc, TimeZoneInfo zone)
+    {
+        var made = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(createdAtUtc, DateTimeKind.Utc)), zone);
+        return $"{vault} checkpoint {name} {made.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
     }
 
     /// <summary>The plain <c>filename</c> beside <c>filename*</c>, for clients that read only it: accents dropped
