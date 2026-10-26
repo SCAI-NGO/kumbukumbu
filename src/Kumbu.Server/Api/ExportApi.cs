@@ -14,7 +14,8 @@ namespace Kumbu.Server.Api;
 /// vault, its notes verbatim at their paths below it, each entry dated with the note's last write. Only the current
 /// notes: no history, trash, checkpoints or settings. Unpacked, each folder opens in Obsidian as a vault; it is also
 /// what the import reads. A checkpoint exports the same way, its notes as it holds them (a folder checkpoint
-/// below the vault's folder), each entry dated with the time the checkpoint was made. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports.
+/// below the vault's folder), each entry dated with the time the checkpoint was made. Sessions only
+/// (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports.
 /// </summary>
 public static class ExportApi
 {

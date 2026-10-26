@@ -116,7 +116,6 @@ export const useCheckpointTree = (vault: string, name: string) =>
     queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/tree", { params: { path: { vault, name } } })),
     refetchOnWindowFocus: false,
     retry: false,
-    // Kept only while shown: a checkpoint removed and made again under the name must not show the old notes.
     gcTime: 0,
   });
 

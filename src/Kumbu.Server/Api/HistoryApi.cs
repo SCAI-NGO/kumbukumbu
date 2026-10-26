@@ -80,8 +80,8 @@ public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More
 /// A note's restore, the vault's trash and its checkpoints for the web app: the code paths of <c>restore</c>,
 /// <c>trash</c>, <c>mkcp</c>, <c>lscp</c> and <c>rmcp</c>, with their rights. Every caller lists what its
 /// credential opens; a restore, making and removing a checkpoint need write rights to the vault, and so does a
-/// checkpoint restore's preview, as in the shell. Removing a checkpoint is for good. Opening and reading a checkpoint needs only the right to read
-/// the vault.
+/// checkpoint restore's preview, as in the shell. Removing a checkpoint is for good. Opening and reading a checkpoint
+/// needs only the right to read the vault.
 /// </summary>
 public static class HistoryApi
 {
