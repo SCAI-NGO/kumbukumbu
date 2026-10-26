@@ -19,7 +19,10 @@ public sealed class SessionTests(MongoFixture fixture)
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private readonly IMongoDatabase _db = fixture.NewDatabase();
-    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 24, 9, 0, 0, TimeSpan.Zero));
+    // Starts at the real time (whole seconds, as MongoDB keeps milliseconds): the user slots carry a TTL index on
+    // their expiry, and MongoDB's TTL monitor goes by the real clock, so a fixed date in the past lets it delete a
+    // slot halfway through a test.
+    private readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
 
     private IMongoCollection<UserSlotDocument> Slots => _db.GetCollection<UserSlotDocument>("user_slots");
 
