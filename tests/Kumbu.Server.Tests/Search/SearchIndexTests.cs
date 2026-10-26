@@ -195,7 +195,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public void EmbeddingsWithoutAModelAreArcticM()
     {
         var vaultKey = VaultCrypto.NewKey();
-        var vault = new UnlockedVault("v1", "Work", vaultKey, T0);
+        var vault = new UnlockedVault("v1", "Work", vaultKey, T0, new VaultLocks());
         var path = P("/Work/a.md");
         var pathId = vault.PathId(path);
 

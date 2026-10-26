@@ -6,16 +6,32 @@ namespace Kumbu.Server.Tests;
 
 public sealed class MongoFixture : IAsyncLifetime
 {
-    private readonly MongoDbContainer _container = TestImages.MongoContainer();
+    private readonly MongoDbContainer? _container = TestImages.ExternalMongo is null ? TestImages.MongoContainer() : null;
 
-    public string ConnectionString => _container.GetConnectionString();
+    public string ConnectionString => TestImages.ExternalMongo ?? _container!.GetConnectionString();
 
     public IMongoDatabase NewDatabase() =>
         new MongoClient(ConnectionString).GetDatabase("t" + Guid.NewGuid().ToString("N"));
 
-    public async ValueTask InitializeAsync() => await _container.StartAsync();
+    public async ValueTask InitializeAsync()
+    {
+        if (_container is not null)
+        {
+            await _container.StartAsync();
+        }
+        else
+        {
+            await TestImages.EnsureReplicaSetAsync(ConnectionString, TestContext.Current.CancellationToken);
+        }
+    }
 
-    public async ValueTask DisposeAsync() => await _container.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        if (_container is not null)
+        {
+            await _container.DisposeAsync();
+        }
+    }
 }
 
 [CollectionDefinition("mongo")]

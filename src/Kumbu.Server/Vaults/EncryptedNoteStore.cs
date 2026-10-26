@@ -49,7 +49,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public async Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? (await VaultsAsync(ct)).Values : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
+        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? (await VaultsAsync(ct)).Values.Where(v => !v.Pending) : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
         return vaults.Sum(v => v.DamagedPathIds.Count);
     }
 
@@ -72,9 +72,12 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         if (await VaultAsync(path, ct) is not { } vault) return null;
         if (!vault.Notes.ContainsKey(path) && vault.IsDamaged(path))
         {
+            // The refresh writes the working set: not of an object a re-keying made old, nor during a run.
+            catalog.CheckWritable(vault);
             await vault.Gate.WaitAsync(ct);
             try
             {
+                catalog.CheckWritable(vault);
                 await catalog.RefreshAsync(vault, path, ct);
             }
             finally
@@ -123,7 +126,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 var update = Builders<SealedDocument>.Update
                     .Set(d => d.Revision, next.Revision)
                     .Set(d => d.Blob, vault.SealNote(entry.Id, next));
-                var result = await catalog.Notes.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision), update, cancellationToken: ct);
+                var result = await catalog.Notes.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), update, cancellationToken: ct);
                 if (result.MatchedCount == 0) return Refuse(current.Path);
                 apply.Add(() => vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next)));
             }
@@ -137,7 +140,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             foreach (var (current, _) in batch.Moves)
             {
                 if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
-                var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+                var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
             }
@@ -342,7 +345,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         return await WriteAsync(vault, [], async session =>
         {
             if (vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == name) is not { } stored) return null;
-            var deleted = await catalog.Checkpoints.DeleteOneAsync(session, F.Eq(d => d.Id, stored.Id), cancellationToken: ct);
+            // Also on the name's id: an object of the vault's old key computes one that a resealed document no longer has.
+            var deleted = await catalog.Checkpoints.DeleteOneAsync(session, F.Eq(d => d.Id, stored.Id) & F.Eq(d => d.PathId, vault.NameId(name)), cancellationToken: ct);
             if (deleted.DeletedCount == 0) return null;
 
             var kept = vault.Checkpoints.Where(c => c.Id != stored.Id).SelectMany(c => c.TextIds.Values).Select(Convert.ToBase64String).ToHashSet();
@@ -394,7 +398,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
     {
         if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
-        var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision), cancellationToken: ct);
+        var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
         if (deleted.DeletedCount == 0) return null;
 
         var trashed = new TrashedNote(current, deletedBy, deletedAt);
@@ -436,7 +440,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null };
             var id = ObjectId.GenerateNewId();
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
-            var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id), cancellationToken: ct);
+            var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id) & F.Eq(d => d.PathId, vault.PathId(path)), cancellationToken: ct);
             if (removed.DeletedCount == 0) return null;
             return () =>
             {
@@ -455,10 +459,12 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// </summary>
     private async Task<bool> WriteAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
     {
+        // Before waiting too: nothing queues behind a re-keying run.
+        catalog.CheckWritable(vault);
         await vault.Gate.WaitAsync(ct);
         try
         {
-            if (vault.Deleted || catalog.IsDeleted(vault.Id)) throw new VaultDeletedException();
+            catalog.CheckWritable(vault);
             using var session = await catalog.StartSessionAsync(ct);
             session.StartTransaction();
             Action? apply;
@@ -525,8 +531,13 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
     }
 
-    private static FilterDefinition<SealedDocument> AtRevision(ObjectId id, long revision) =>
-        F.Eq(d => d.Id, id) & F.Eq(d => d.Revision, revision);
+    /// <summary>
+    /// The document at this revision, and still under this path id: a re-keying keeps <c>_id</c> and <c>rev</c> but not
+    /// the pid, so a writer still holding the old key (another process, say) matches nothing, rather than leaving
+    /// a blob sealed under the old key beside the new key's pid.
+    /// </summary>
+    private static FilterDefinition<SealedDocument> AtRevision(ObjectId id, long revision, byte[] pathId) =>
+        F.Eq(d => d.Id, id) & F.Eq(d => d.Revision, revision) & F.Eq(d => d.PathId, pathId);
 
     private async Task<IEnumerable<StoredNote>> NotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
@@ -536,23 +547,27 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     /// <summary>The vault of a path, marked as used now: only vaults a request actually touches count for
-    /// the idle timeout and the least-recently-used order, not every vault its token can open.</summary>
+    /// the idle timeout and the least-recently-used order, not every vault its token can open. A vault in its
+    /// two-key period is named but not served: <see cref="VaultBusyException"/>.</summary>
     private async Task<UnlockedVault?> VaultAsync(VaultPath path, CancellationToken ct)
     {
         if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var vault)) return null;
+        if (vault.Pending) throw VaultBusyException.Being();
         vault.Touch(catalog.Now);
         return vault;
     }
 
-    /// <summary>All of the credential's vaults, marked as used (a search or listing over every vault).</summary>
+    /// <summary>All of the credential's vaults, marked as used (a search or listing over every vault); a vault in its
+    /// two-key period is left out.</summary>
     private async Task<IEnumerable<UnlockedVault>> AllVaultsAsync(CancellationToken ct)
     {
-        var all = (await VaultsAsync(ct)).Values;
+        var all = (await VaultsAsync(ct)).Values.Where(v => !v.Pending).ToList();
         foreach (var v in all) v.Touch(catalog.Now);
         return all;
     }
 
-    /// <summary>The credential's vaults by name, unlocked once per store (one request).</summary>
+    /// <summary>The credential's vaults by name, unlocked once per store (one request); a vault in its two-key period
+    /// as a placeholder (<see cref="UnlockedVault.Pending"/>), so that the name lists keep it.</summary>
     private async Task<Dictionary<string, UnlockedVault>> VaultsAsync(CancellationToken ct)
     {
         if (_vaults is not null) return _vaults;

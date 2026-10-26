@@ -12,7 +12,13 @@ export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
-export const useVaults = () => useQuery({ queryKey: ["vaults"], queryFn: () => call(api.GET("/api/vaults")) });
+/** The vaults; while one is being re-encrypted, asked again every few seconds, so that it shows as done by itself. */
+export const useVaults = () =>
+  useQuery({
+    queryKey: ["vaults"],
+    queryFn: () => call(api.GET("/api/vaults")),
+    refetchInterval: (query) => (query.state.data?.some((v) => v.pending) ? 5000 : false),
+  });
 
 /** The server's embedding providers, the internal model first. */
 export const useEmbeddingProviders = () =>

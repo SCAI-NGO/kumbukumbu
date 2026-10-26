@@ -17,7 +17,7 @@ namespace Kumbu.Server.Vaults;
 /// in-memory working set with an idle timeout and a memory cap, and creates new vaults. Vault keys exist
 /// only here, in memory; MongoDB holds them only wrapped.
 /// </summary>
-public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time, ILogger<VaultCatalog> log)
+public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time, ILogger<VaultCatalog> log)
 {
     private const string LookupLabel = "kumbu/v1/key-lookup";
     private const string KeyKekLabel = "kumbu/v1/key-kek";
@@ -26,6 +26,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     private const string UserKekLabel = "kumbu/v1/user-slot-kek";
     private const string VaultNameLabel = "kumbu/v1/vault-name-id";
     private const string ApiKeyKekLabel = "kumbu/v1/api-key-kek";
+    private const string ConnectionKekLabel = "kumbu/v1/oauth-kek";
 
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
@@ -34,8 +35,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();
 
-    /// <summary>Per vault, what cancels its embedding calls when it is deleted (<see cref="DeletionToken"/>).</summary>
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _deletions = new();
+    /// <summary>Per vault, what cancels its embedding calls when it is deleted or re-keyed (<see cref="InterruptToken"/>).</summary>
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _interrupts = new();
     private volatile bool _ready;
 
     internal IMongoCollection<VaultDocument> Vaults { get; } = db.GetCollection<VaultDocument>("vaults");
@@ -126,7 +127,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             }, cancellationToken: ct);
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now);
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
         return vault;
@@ -142,30 +144,54 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         var result = new List<UnlockedVault>();
         foreach (var slot in slots)
         {
-            byte[] vaultKey;
+            if (OpenUserSlot(slot) is not { } vaultKey) continue;
+            UnlockedVault? vault;
             try
             {
-                vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                vault = await LoadAsync(slot.Vault, vaultKey, ct);
+            }
+            catch (VaultBusyException)
+            {
+                // A finish committed between the slot read and the load: the slot read gave the old key, the vault is
+                // now under the new one. Its slot, read again, wraps the new key. Once only: a second failure is real.
+                var again = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
+                    & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup) & Builders<SlotDocument>.Filter.Eq(s => s.Vault, slot.Vault)).FirstOrDefaultAsync(ct);
+                if (again is null || OpenUserSlot(again) is not { } newKey) continue;
+                vault = await LoadAsync(slot.Vault, newKey, ct);
+            }
+
+            if (vault is null) continue;
+            result.Add(vault);
+            // Only a session meets a placeholder: the start of a run deleted every API key and connection slot.
+            if (vault.Pending) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
+        }
+
+        return result;
+
+        byte[]? OpenUserSlot(SlotDocument slot)
+        {
+            try
+            {
+                return VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
             }
             catch (CryptographicException)
             {
                 log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
-                continue;
+                return null;
             }
-
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(vault);
         }
-
-        return result;
     }
 
     /// <summary>
     /// Creates a vault owned by a user: its key wrapped by <paramref name="userKey"/> and nothing else, so the
     /// user's recovery key reaches it through the user key. Throws <see cref="VaultNameTakenException"/> if the
     /// user has a vault of that name (compared case-insensitively), also when another create won a race, and
-    /// <see cref="Accounts.CredentialsChangedException"/> if the user no longer exists or is inactive.
+    /// <see cref="Accounts.CredentialsChangedException"/> if the user no longer exists or is inactive, or, with
+    /// <paramref name="credentialReadAt"/> (when the session's password was read), if the user's credentials changed at
+    /// or after it: a rotation of the user key (<see cref="Accounts.UserKeyRotation"/>) may have made
+    /// <paramref name="userKey"/> one that no slot uses any more, and a vault under it would be lost.
     /// </summary>
-    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct)
+    public async Task<UnlockedVault> CreateForUserAsync(string name, string userId, byte[] userKey, CancellationToken ct, DateTime? credentialReadAt = null)
     {
         await EnsureReadyAsync(ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
@@ -214,9 +240,11 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 async (s, token) =>
                 {
                     // A real write to the owner's document, in the vault's transaction: it conflicts with a deletion of
-                    // the account running at the same time (retried, then refused), so no vault outlives its owner.
+                    // the account running at the same time (retried, then refused), so no vault outlives its owner, and
+                    // with a rotation of the user key, whose slot check then sees this vault's slot, or whose stamp
+                    // refuses it here.
                     var owner = await Users.UpdateOneAsync(
-                        s, u => u.Id == userId && u.Active, Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
+                        s, OwnerFilter(userId, userKey, credentialReadAt), Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsCreated, 1), cancellationToken: token);
                     if (owner.MatchedCount == 0) throw new Accounts.CredentialsChangedException();
                     await Vaults.InsertOneAsync(s, doc, cancellationToken: token);
                     return true;
@@ -230,7 +258,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             throw;
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now);
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
         return vault;
@@ -262,22 +291,24 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     }
 
     /// <summary>
-    /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
-    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
-    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
-    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction.
+    /// The vault keys of <paramref name="vaultIds"/>, opened from the user's own slots: <see cref="ArgumentException"/>
+    /// (its message starting with <paramref name="noun"/>, "An API key", "A connection") if a vault isn't the user's
+    /// or no longer exists. What an API key or a connection is given must be the user's own.
+    /// <see cref="VaultBusyException"/> for a vault in its two-key period: its user slot still wraps the old key, which
+    /// must not go into a new slot.
     /// </summary>
-    internal async Task<IReadOnlyList<SlotDocument>> ApiKeySlotsAsync(
-        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+    internal async Task<IReadOnlyDictionary<string, byte[]>> UserVaultKeysAsync(
+        string userId, byte[] userKey, IReadOnlyCollection<string> vaultIds, string noun, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var ids = vaults.Keys.ToList();
+        var ids = vaultIds.ToList();
         var userSlots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User)
             & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(userKey, userId)) & Builders<SlotDocument>.Filter.In(s => s.Vault, ids)).ToListAsync(ct);
-        var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => v.Id).ToListAsync(ct)).ToHashSet();
+        var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => new { v.Id, v.RekeyStartedAt }).ToListAsync(ct))
+            .ToDictionary(v => v.Id, v => v.RekeyStartedAt is not null, StringComparer.Ordinal);
 
-        var result = new List<SlotDocument>();
-        foreach (var (vaultId, right) in vaults)
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var vaultId in ids)
         {
             byte[]? vaultKey = null;
             foreach (var slot in userSlots.Where(s => s.Vault == vaultId))
@@ -292,20 +323,131 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 }
             }
 
-            if (vaultKey is null || !existing.Contains(vaultId)) throw new ArgumentException("An API key can only be given vaults of your own.", nameof(vaults));
-            result.Add(new SlotDocument
-            {
-                Vault = vaultId,
-                Kind = SlotDocument.ApiKey,
-                KeyId = keyId,
-                Wrapped = VaultCrypto.Seal(
-                    ApiKeyKek(apiKey, vaultId), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKey, Accounts.KeyRights.ToText(right))), ApiKeySlotContext(vaultId, keyId)),
-                CreatedAt = Now,
-            });
+            if (vaultKey is null || !existing.TryGetValue(vaultId, out var pending)) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
+            if (pending) throw VaultBusyException.Being();
+            result[vaultId] = vaultKey;
         }
 
         return result;
     }
+
+    /// <summary>
+    /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
+    /// key and the right together, under a key derived from the API key and bound to the vault and the key's id.
+    /// The vault keys come from the user's own slots, so <see cref="ArgumentException"/> if a vault isn't the user's.
+    /// Not stored here: <see cref="Accounts.ApiKeys"/> inserts them with the key, in one transaction, after checking
+    /// the returned vault keys again there (<see cref="RequireSameVaultKeysAsync"/>).
+    /// </summary>
+    internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, byte[]> VaultKeys)> ApiKeySlotsAsync(
+        string userId, byte[] userKey, string keyId, string apiKey, IReadOnlyDictionary<string, Accounts.KeyRight> vaults, CancellationToken ct)
+    {
+        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "An API key", ct);
+        IReadOnlyList<SlotDocument> slots = [.. vaults.Select(v => new SlotDocument
+        {
+            Vault = v.Key,
+            Kind = SlotDocument.ApiKey,
+            KeyId = keyId,
+            Wrapped = VaultCrypto.Seal(
+                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))), ApiKeySlotContext(v.Key, keyId)),
+            CreatedAt = Now,
+        })];
+        await IssueFaultAsync("after-wrap");
+        return (slots, vaultKeys);
+    }
+
+    /// <summary>
+    /// The slots one token of a connection gets when the user consents (the code): one per vault in
+    /// <paramref name="vaults"/> (vault id → right), sealing the vault key and the right together as an API key's slot
+    /// does, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c> and bound to the vault, the connection and the
+    /// token's id, so a slot can't be moved to another token or connection, nor read as an API key's. With
+    /// <paramref name="expiresAt"/> the slot carries it for the TTL index. The vault keys come from the user's own
+    /// slots, so <see cref="ArgumentException"/> if a vault isn't the user's. Not stored here: the caller inserts them
+    /// with the token's record, in one transaction, after checking the returned vault keys again there
+    /// (<see cref="RequireSameVaultKeysAsync"/>).
+    /// </summary>
+    internal async Task<(IReadOnlyList<SlotDocument> Slots, IReadOnlyDictionary<string, byte[]> VaultKeys)> ConnectionSlotsFromUserAsync(
+        string userId, byte[] userKey, string connectionId, string tokenId, string token, IReadOnlyDictionary<string, Accounts.KeyRight> vaults,
+        DateTime? expiresAt, CancellationToken ct)
+    {
+        var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
+        var slots = WrapConnectionSlots([.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key], v.Value))], connectionId, tokenId, token, expiresAt);
+        await IssueFaultAsync("after-wrap");
+        return (slots, vaultKeys);
+    }
+
+    /// <summary>A vault key opened from a token's slot, with the right sealed into it.</summary>
+    internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right);
+
+    /// <summary>
+    /// The vault keys a connection's token has slots for, each with its right. Every slot is opened, and one past its
+    /// <c>expiresAt</c> is refused here (MongoDB's TTL index only tidies up, once a minute); a slot that doesn't open
+    /// (changed or moved in the database) gives nothing.
+    /// </summary>
+    internal async Task<IReadOnlyList<ConnectionVaultKey>> OpenConnectionSlotsAsync(string connectionId, string tokenId, string token, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<SlotDocument>.Filter;
+        var slots = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.Connection) & f.Eq(s => s.TokenId, tokenId) & f.Eq(s => s.ConnectionId, connectionId)).ToListAsync(ct);
+        var now = Now;
+        var result = new List<ConnectionVaultKey>();
+        foreach (var slot in slots)
+        {
+            if (now >= slot.ExpiresAt) continue;
+            try
+            {
+                var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(
+                    VaultCrypto.Open(ConnectionKek(token, slot.Vault), slot.Wrapped, ConnectionSlotContext(slot.Vault, connectionId, tokenId)))!;
+                result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, Accounts.KeyRights.Parse(payload.Rights) ?? throw new JsonException("unknown right")));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("A slot of connection {ConnectionId} on vault {VaultId} did not open", connectionId, slot.Vault);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Wraps opened vault keys for a token of the connection, under <c>HKDF(token, "kumbu/v1/oauth-kek", vault id)</c>
+    /// and bound to the vault, the connection and the token's id, so a slot can't be moved to another token or
+    /// connection, nor read as an API key's.</summary>
+    internal IReadOnlyList<SlotDocument> WrapConnectionSlots(
+        IReadOnlyList<ConnectionVaultKey> keys, string connectionId, string tokenId, string token, DateTime? expiresAt) =>
+        [.. keys.Select(k => new SlotDocument
+        {
+            Vault = k.Vault,
+            Kind = SlotDocument.Connection,
+            ConnectionId = connectionId,
+            TokenId = tokenId,
+            ExpiresAt = expiresAt,
+            Wrapped = VaultCrypto.Seal(
+                ConnectionKek(token, k.Vault),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right))),
+                ConnectionSlotContext(k.Vault, connectionId, tokenId)),
+            CreatedAt = Now,
+        })];
+
+    /// <summary>
+    /// The vaults an access token of a connection has slots for, unlocked, each with its right: opened afresh on every
+    /// request, as <see cref="OpenForApiKeyAsync"/>, so a revoked or expired token (whose slots are gone or past their
+    /// expiry) opens nothing, whatever is in memory.
+    /// </summary>
+    internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForConnectionAsync(
+        string connectionId, string tokenId, string token, CancellationToken ct)
+    {
+        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
+        {
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add((vault, key.Right));
+        }
+
+        return result;
+    }
+
+    /// <summary>Deletes the slots of these tokens of connections, inside the caller's transaction.</summary>
+    internal Task DeleteTokenSlotsAsync(IClientSessionHandle session, IReadOnlyCollection<string> tokenIds, CancellationToken ct) =>
+        Slots.DeleteManyAsync(
+            session, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.Connection) & Builders<SlotDocument>.Filter.In(s => s.TokenId, tokenIds), cancellationToken: ct);
 
     /// <summary>
     /// The vaults an API key has slots for, unlocked, each with the right sealed into its slot. As in
@@ -348,7 +490,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
-    /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="DeletionToken"/>):
+    /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
     /// from then on the vault isn't loaded, written or indexed, whatever <see cref="UnlockedVault"/> object a request
     /// or the search index's queue still holds, and no more of its text goes to an external provider. Then the vault in
     /// memory is taken off writes and indexing (both its gates), which waits for a write or an embedding call already
@@ -365,34 +507,37 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     {
         await EnsureReadyAsync(ct);
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        var held = new List<UnlockedVault>();
+        var held = new List<VaultLocks>();
+        var seen = new List<UnlockedVault>();
         var tombstoned = ids.Where(id => _deleted.TryAdd(id, 0)).ToList();
-        foreach (var id in ids)
-        {
-            if (_deletions.TryRemove(id, out var deletion)) deletion.Cancel();
-        }
+        foreach (var id in ids) Interrupt(id);
 
         IReadOnlyList<string> revoked = [];
+        IReadOnlyList<string> revokedConnections = [];
         var loading = false;
         try
         {
             // In id order, so two deletions can't each hold a gate the other waits for. A vault loaded after this
-            // look is held by nobody, but the tombstone keeps it from writing and indexing already.
+            // look is held by nobody, but the tombstone keeps it from writing and indexing already. A re-keying run
+            // holds both gates; it sees the tombstone at its next batch and lets go of them.
             foreach (var id in ids)
             {
-                if (!_open.TryGetValue(id, out var vault)) continue;
-                await vault.Gate.WaitAsync(ct);
+                var open = _open.TryGetValue(id, out var vault);
+                if (!open && !IsRekeying(id)) continue;
+                if (open) seen.Add(vault!);
+                var locks = LocksFor(id);
+                await locks.Gate.WaitAsync(ct);
                 try
                 {
-                    await vault.IndexGate.WaitAsync(ct);
+                    await locks.IndexGate.WaitAsync(ct);
                 }
                 catch
                 {
-                    vault.Gate.Release();
+                    locks.Gate.Release();
                     throw;
                 }
 
-                held.Add(vault);
+                held.Add(locks);
             }
 
             // After the gates: nothing that holds _loading waits for a gate, so this order can't deadlock.
@@ -409,9 +554,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                         var keyIds = await (await Slots.DistinctAsync(
                             s, sl => sl.KeyId, slot.Eq(sl => sl.Kind, SlotDocument.ApiKey) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.KeyId), cancellationToken: token))
                             .ToListAsync(token);
+                        await MarkOwnersAsync(s, ids, token);
                         long count = (await Vaults.DeleteManyAsync(s, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: token)).DeletedCount;
+                        // The connections' slots on these vaults go here too, by vault.
                         count += (await Slots.DeleteManyAsync(s, slot.In(sl => sl.Vault, ids), cancellationToken: token)).DeletedCount;
                         revoked = await RevokeKeysWithoutVaultsAsync(s, keyIds, token);
+                        revokedConnections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, ids, Now, token);
                         foreach (var collection in ContentCollections)
                         {
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
@@ -425,7 +573,8 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
             tombstoned.Clear();
             foreach (var keyId in revoked) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
-            foreach (var vault in held) vault.Deleted = true;
+            foreach (var connectionId in revokedConnections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
+            foreach (var vault in seen) vault.Deleted = true;
             foreach (var id in ids)
             {
                 if (_open.TryRemove(id, out var vault)) vault.Deleted = true;
@@ -442,14 +591,47 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         {
             // A deletion that failed takes its tombstones back: the vault is still there.
             foreach (var id in tombstoned) _deleted.TryRemove(id, out _);
-            foreach (var vault in held)
+            foreach (var locks in held)
             {
-                vault.IndexGate.Release();
-                vault.Gate.Release();
+                locks.IndexGate.Release();
+                locks.Gate.Release();
             }
 
             if (loading) _loading.Release();
         }
+    }
+
+    /// <summary>
+    /// Inside a deletion: a real write to the user document of each owner of the vaults (<c>vaultsDeleted</c>, and the
+    /// vaults out of <c>rekeyPending</c>), so that an API key or connection created, or a connection given new rights,
+    /// at the same time, which writes that document too, conflicts with the deletion and, retried, finds the vault gone
+    /// (<see cref="RequireVaultsAsync"/>).
+    /// </summary>
+    private async Task MarkOwnersAsync(IClientSessionHandle session, IReadOnlyList<string> ids, CancellationToken ct)
+    {
+        var slot = Builders<SlotDocument>.Filter;
+        var owners = await (await Slots.DistinctAsync(
+            session, sl => sl.Owner, slot.Eq(sl => sl.Kind, SlotDocument.User) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.Owner), cancellationToken: ct))
+            .ToListAsync(ct);
+        if (owners.Count == 0) return;
+        await db.GetCollection<Accounts.UserDocument>("users").UpdateManyAsync(
+            session,
+            Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners),
+            // A vault that is gone has nothing left to re-key.
+            Builders<Accounts.UserDocument>.Update.Inc(u => u.VaultsDeleted, 1).PullAll(u => u.RekeyPending, ids),
+            cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Inside the transaction of an API key's or connection's creation or a connection's rights change, which also
+    /// writes the user document: every one of <paramref name="vaultIds"/> still exists, else <see cref="ArgumentException"/>.
+    /// A deletion that committed first is seen here; one under way conflicts on the user document (<see cref="MarkOwnersAsync"/>).
+    /// </summary>
+    internal async Task RequireVaultsAsync(IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, string noun, CancellationToken ct)
+    {
+        var ids = vaultIds.Distinct(StringComparer.Ordinal).ToList();
+        var existing = await Vaults.CountDocumentsAsync(session, Builders<VaultDocument>.Filter.In(v => v.Id, ids), cancellationToken: ct);
+        if (existing != ids.Count) throw new ArgumentException($"{noun} can only be given vaults of your own.", nameof(vaultIds));
     }
 
     /// <summary>
@@ -463,7 +645,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
         var left = (await (await Slots.DistinctAsync(session, sl => sl.KeyId, slot.In(sl => sl.KeyId, keyIds), cancellationToken: ct)).ToListAsync(ct)).ToHashSet();
         var orphans = keyIds.Where(k => k is not null && !left.Contains(k)).Select(k => k!).ToList();
         if (orphans.Count == 0) return [];
-        var keys = db.GetCollection<Accounts.ApiKeyDocument>("api_keys");
+        var keys = db.GetCollection<Accounts.ApiKeyDocument>(Accounts.ApiKeys.CollectionName);
         var unrevoked = await keys.Find(session, k => orphans.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
         if (unrevoked.Count == 0) return [];
         await keys.UpdateManyAsync(
@@ -478,13 +660,23 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// written or indexed again, whatever <see cref="UnlockedVault"/> object a caller still holds.</summary>
     public bool IsDeleted(string vaultId) => _deleted.ContainsKey(vaultId);
 
-    /// <summary>Cancelled when the vault is deleted: an embedding call for it stops, rather than holding up the deletion.
-    /// Already cancelled for a vault deleted (or being deleted) now.</summary>
-    internal CancellationToken DeletionToken(string vaultId)
+    /// <summary>
+    /// Cancelled when the vault is deleted or a re-keying run marks it: an embedding call for it stops, rather than
+    /// holding up the deletion or the run for minutes. Already cancelled while either is in force. After a run (finished
+    /// or not), the next call gets a fresh token, so indexing of the vault resumes.
+    /// </summary>
+    internal CancellationToken InterruptToken(string vaultId)
     {
-        var token = _deletions.GetOrAdd(vaultId, _ => new CancellationTokenSource()).Token;
-        // After the lookup: a deletion tombstones first and cancels second, so one of the two catches it.
-        return IsDeleted(vaultId) ? new CancellationToken(canceled: true) : token;
+        var token = _interrupts.GetOrAdd(vaultId, _ => new CancellationTokenSource()).Token;
+        // After the lookup: a deletion tombstones first and a run marks first, each cancelling second, so one of the
+        // two catches it.
+        return IsDeleted(vaultId) || IsRekeying(vaultId) ? new CancellationToken(canceled: true) : token;
+    }
+
+    /// <summary>Cancels the vault's interrupt token and forgets it, after the tombstone or the mark is in place.</summary>
+    private void Interrupt(string vaultId)
+    {
+        if (_interrupts.TryRemove(vaultId, out var source)) source.Cancel();
     }
 
     /// <summary>Deletes an API key's slots, outside a transaction (an expired key, on its first use after expiry).</summary>
@@ -589,11 +781,13 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
     /// </summary>
     internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, CancellationToken ct)
     {
+        CheckWritable(vault);
         await vault.Gate.WaitAsync(ct);
         try
         {
-            // Deleted since the request read it (here, or in another process: then only its document is gone).
-            if (vault.Deleted || IsDeleted(vault.Id)) throw new VaultDeletedException();
+            // Deleted since the request read it (here, or in another process: then only its document is gone), or
+            // re-keyed meanwhile.
+            CheckWritable(vault);
             var result = await Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(provider)), cancellationToken: ct);
             if (result.MatchedCount == 0) throw new VaultDeletedException();
             vault.EmbeddingProvider = provider;
@@ -638,15 +832,34 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             if (IsDeleted(id)) return null;
             if (_open.TryGetValue(id, out var cached))
             {
-                return CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", [])) ? cached : null;
+                if (CryptographicOperations.FixedTimeEquals(cached.KeyId, VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []))) return cached;
+                // A key held from before a re-keying here (a request that opened its slot just before the finish, say).
+                if (WasRekeyed(id)) throw VaultBusyException.Just();
+                return null;
             }
 
             var doc = await Vaults.Find(v => v.Id == id).FirstOrDefaultAsync(ct);
             if (doc is null) return null;
-            var meta = JsonSerializer.Deserialize<VaultMeta>(
-                VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
+            VaultMeta meta;
+            try
+            {
+                meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{id}"))!;
+            }
+            catch (CryptographicException) when (WasRekeyed(id))
+            {
+                throw VaultBusyException.Just();
+            }
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now) { EmbeddingProvider = meta.Embeddings ?? Search.EmbeddingProviders.Internal };
+            var provider = meta.Embeddings ?? Search.EmbeddingProviders.Internal;
+
+            // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
+            // Never in the working set, never with a current key id, never announced to the search index.
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider };
+            // Outside its period (under _loading, as every start and finish): a start whose commit went unanswered didn't
+            // commit after all.
+            _pending.TryRemove(id, out _);
+
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider };
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))
@@ -673,6 +886,7 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 .OfType<StoredCheckpoint>()
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
 
+            RecordKey(vault);
             _open[id] = vault;
             log.LogInformation("Unlocked vault {VaultId} ({Notes})", vault.Id, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
             Unlocked?.Invoke(vault);
@@ -724,6 +938,12 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
 
     /// <summary>Also bound to the key's id, so a slot can't be moved to another key, nor read as a dev-token slot.</summary>
     private static string ApiKeySlotContext(string vaultId, string keyId) => $"slot:{vaultId}:{SlotDocument.ApiKey}:{keyId}";
+
+    private static byte[] ConnectionKek(string token, string vaultId) => VaultCrypto.Derive(token, ConnectionKekLabel, Encoding.UTF8.GetBytes(vaultId));
+
+    /// <summary>Bound to the connection and the token's id: a slot can't be moved to another token, connection or kind.</summary>
+    private static string ConnectionSlotContext(string vaultId, string connectionId, string tokenId) =>
+        $"slot:{vaultId}:{SlotDocument.Connection}:{connectionId}:{tokenId}";
 
     /// <summary>What an API key's slot seals: the vault key and the key's right on the vault, together.</summary>
     private sealed record ApiKeySlotPayload(
@@ -792,6 +1012,24 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.KeyId),
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.KeyId) }),
+                // A connection's token finds its slots by its id; revoking a connection finds them by the connection.
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.TokenId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.TokenId) }),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.ConnectionId),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.ConnectionId) }),
+                // A token's slots vanish physically when it expires (spec §5); only slots with expiresAt carry one.
+                new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.ExpiresAt), new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+                // One run at a time per vault: at most one slot with its new key.
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.Vault),
+                    new CreateIndexOptions<SlotDocument>
+                    {
+                        Unique = true,
+                        Name = "vault_user_next",
+                        PartialFilterExpression = Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.UserNext),
+                    }),
                 // One vault name per user: only user slots carry a nameId.
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup).Ascending(s => s.NameId),
@@ -803,6 +1041,88 @@ public sealed class VaultCatalog(IMongoDatabase db, IOptions<KumbuOptions> optio
             ],
             ct);
         _ready = true;
+    }
+
+    /// <summary>
+    /// The owner, active. With the session's <paramref name="credentialReadAt"/> (every request's creation passes it),
+    /// also: credentials unchanged since then, and <paramref name="userKey"/> still the user key in force (its key id),
+    /// so a key a rotation made dead can't create a vault under it. Without it (the seeding and tests, which give
+    /// vaults to users made directly in the database) only the first two hold.
+    /// </summary>
+    private static FilterDefinition<Accounts.UserDocument> OwnerFilter(string userId, byte[] userKey, DateTime? credentialReadAt)
+    {
+        var f = Builders<Accounts.UserDocument>.Filter;
+        var owner = f.Eq(u => u.Id, userId) & f.Eq(u => u.Active, true);
+        return credentialReadAt is { } readAt
+            ? owner & (f.Eq(u => u.CredentialsChangedAt, null) | f.Lt(u => u.CredentialsChangedAt, readAt)) & f.Eq(u => u.KeyId, Accounts.UserCatalog.KeyId(userKey, userId))
+            : owner;
+    }
+
+    /// <summary>The lookup of a user's slots under <paramref name="userKey"/>.</summary>
+    internal static byte[] UserSlotLookup(byte[] userKey, string userId) => UserLookup(userKey, userId);
+
+    /// <summary>What a rotation of the user key does to the vault slots (<see cref="Accounts.UserKeyRotation"/>).</summary>
+    internal sealed record PreparedUserSlots(
+        IReadOnlyList<Accounts.SlotRewrap> Rewraps, IReadOnlyList<MongoDB.Bson.ObjectId> Skipped, IReadOnlyList<MongoDB.Bson.ObjectId> Orphans, IReadOnlyList<string> VaultIds);
+
+    /// <summary>
+    /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
+    /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
+    /// under the new key, from the name in the vault's meta. Writes nothing. A slot that doesn't open is skipped and
+    /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
+    /// logged; one without a vault document is an orphan of a creation that failed half way, to be deleted if older
+    /// than <see cref="OrphanGrace"/>, else <see cref="Accounts.RotationConflictException"/>: it may belong to a
+    /// creation still under way. <c>VaultIds</c> are the vaults of the user's <c>user</c> slots, for stage 2.
+    /// Static, on the collections, so that the rotation needs no <see cref="VaultCatalog"/> (rekeying design §9).
+    /// </summary>
+    internal static async Task<PreparedUserSlots> PrepareUserSlotsAsync(
+        IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, DateTime now, ILogger log, CancellationToken ct)
+    {
+        var slots = await db.GetCollection<SlotDocument>("slots").Find(Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(oldUserKey, userId))).ToListAsync(ct);
+        var ids = slots.Select(s => s.Vault).Distinct().ToList();
+        var vaults = (await db.GetCollection<VaultDocument>("vaults").Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).ToListAsync(ct)).ToDictionary(v => v.Id);
+        var nameKey = VaultCrypto.Derive(newUserKey, VaultNameLabel, []);
+        var (rewraps, skipped, orphans, vaultIds) = (new List<Accounts.SlotRewrap>(), new List<MongoDB.Bson.ObjectId>(), new List<MongoDB.Bson.ObjectId>(), new List<string>());
+        foreach (var slot in slots)
+        {
+            byte[] vaultKey;
+            try
+            {
+                vaultKey = VaultCrypto.Open(UserKek(oldUserKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("A slot of vault {VaultId} matched the user key of user {UserId} but did not open; it is left as it is", slot.Vault, userId);
+                skipped.Add(slot.Id);
+                continue;
+            }
+
+            if (!vaults.TryGetValue(slot.Vault, out var vault))
+            {
+                if (now - slot.CreatedAt < OrphanGrace) throw new Accounts.RotationConflictException();
+                orphans.Add(slot.Id);
+                continue;
+            }
+
+            byte[]? nameId = null;
+            if (slot.Kind == SlotDocument.User)
+            {
+                vaultIds.Add(slot.Vault);
+                try
+                {
+                    var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), vault.Meta, $"vault:{vault.Id}"))!;
+                    nameId = VaultCrypto.Mac(nameKey, NormaliseVaultName(meta.Name));
+                }
+                catch (Exception e) when (e is CryptographicException or JsonException)
+                {
+                    log.LogWarning("The meta of vault {VaultId} of user {UserId} does not open; its slot is wrapped again without its name", slot.Vault, userId);
+                }
+            }
+
+            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind)), nameId));
+        }
+
+        return new PreparedUserSlots(rewraps, skipped, orphans, [.. vaultIds.Distinct()]);
     }
 }
 

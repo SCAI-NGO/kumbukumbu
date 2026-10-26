@@ -31,11 +31,18 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 }
 
+/// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): it may write
+/// only where a slot says so. Every other credential writes wherever it opens.</summary>
+public interface IRightsCredential
+{
+    bool CanWrite(string vault);
+}
+
 /// <summary>
 /// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
 /// request, so the rights <see cref="CanWrite"/> answers from are those of exactly the vaults the store sees.
 /// </summary>
-public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
+public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential, IRightsCredential
 {
     private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
 
@@ -54,8 +61,53 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential
         _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
 }
 
+/// <summary>
+/// A connection's access token: opens the vaults its own slots wrap, each with the right sealed into the slot, as
+/// <see cref="ApiKeyCredential"/>. Not a record, so that ToString can't print the token.
+/// </summary>
+public sealed class ConnectionCredential(string connectionId, string tokenId, string token) : ICredential, IRightsCredential
+{
+    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+
+    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
+
+    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForConnectionAsync(connectionId, tokenId, token, ct);
+
+    public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
+
+    /// <summary>As <see cref="ApiKeyCredential.CanWrite"/>: fails closed before the vaults were opened and for a vault it doesn't have.</summary>
+    public bool CanWrite(string vault) =>
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
+}
+
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>
-public sealed class VaultUnavailableException(string message) : Exception(message);
+public class VaultUnavailableException(string message) : Exception(message);
+
+/// <summary>
+/// The vault is being re-encrypted, or the object a request holds was made with its old key (rekeying design §3):
+/// nothing was written. Answered with 503 and <c>Retry-After</c>; only <see cref="BeingReencrypted"/> and
+/// <see cref="JustReencrypted"/> are ever its message.
+/// </summary>
+public sealed class VaultBusyException : VaultUnavailableException
+{
+    public const string BeingReencrypted = "This vault is being re-encrypted; try again in a moment.";
+    public const string JustReencrypted = "This vault was just re-encrypted; try again.";
+
+    public VaultBusyException(string message)
+        : base(message is BeingReencrypted or JustReencrypted ? message : throw new ArgumentException("Not a message of a busy vault.", nameof(message)))
+    {
+    }
+
+    public static VaultBusyException Being() => new(BeingReencrypted);
+
+    public static VaultBusyException Just() => new(JustReencrypted);
+}
+
+/// <summary>A re-keying run was asked for a vault that has no user slot opening with the key it was given (and
+/// so isn't, or is no longer, that user's to re-key with it), or whose two-key period's slot doesn't open with it.</summary>
+public sealed class VaultNotRekeyableException() : VaultUnavailableException("This vault can't be re-encrypted with this key.");
 
 /// <summary>A write reached a vault that was deleted while the request was under way; nothing was written.</summary>
 public sealed class VaultDeletedException() : Exception("This vault has just been deleted; nothing was written.");

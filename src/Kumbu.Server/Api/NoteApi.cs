@@ -15,8 +15,19 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace Kumbu.Server.Api;
 
 /// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to,
-/// <c>internal</c> (the model on this server) unless its owner chose an external one.</summary>
-public sealed record VaultView(string Name, int Notes, string Embeddings);
+/// <c>internal</c> (the model on this server) unless its owner chose an external one. <c>pending</c>: the vault is being
+/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0).</summary>
+public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending);
+
+/// <summary>What would lose access if the vault were re-encrypted: the names of the API keys with access to it and of
+/// the connected apps that list it.</summary>
+public sealed record VaultAccessView(string[] ApiKeys, string[] Connections);
+
+/// <summary>Re-encrypting one vault: the owner's current password.</summary>
+public sealed record RekeyVaultRequest(string Password);
+
+/// <summary>How many API keys were revoked and apps disconnected because they had the vault.</summary>
+public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps);
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
@@ -105,33 +116,37 @@ public static class NoteApi
     public static void MapNoteApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/vaults", ListVaultsAsync).Errors(401);
+        api.MapGet("/vaults", ListVaultsAsync).Errors(401, 503);
         api.MapPost("/vaults", CreateVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 409);
         api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429);
-        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404);
-        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
-        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401);
+        api.MapGet("/vaults/{vault}/access", AccessAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPost("/vaults/{vault}/rekey", RekeyVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
+        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
-        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413);
-        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409);
-        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409);
+        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503);
+        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
 
-        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404);
-        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404);
-        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404);
+        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
-        api.MapGet("/search", SearchAsync).Errors(400, 401, 404);
-        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403);
+        api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
     private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)
     {
-        var providers = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.EmbeddingProvider, StringComparer.Ordinal);
+        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
-            views.Add(new VaultView(name, (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count, providers[name]));
+            // A vault being re-encrypted has no notes to count yet; it is listed all the same.
+            var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
+            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider, vaults[name].Pending));
         }
 
         return TypedResults.Ok(views.ToArray());
@@ -158,13 +173,13 @@ public static class NoteApi
             throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
         }
 
-        if (unlocked.EmbeddingProvider != body.Provider)
+        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider)
         {
             await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
             index.CatchUp(unlocked);
         }
 
-        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider));
+        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -175,8 +190,8 @@ public static class NoteApi
         // A vault is the top folder of its notes, so its name follows the rules of every other path segment.
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
-        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal));
+        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal, Pending: false));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
@@ -188,6 +203,26 @@ public static class NoteApi
         return await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct) is not null
             ? TypedResults.NoContent()
             : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+    }
+
+    /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding.</summary>
+    private static async Task<Ok<VaultAccessView>> AccessAsync(string vault, RequestCaller caller, Rekeying rekeying, CancellationToken ct)
+    {
+        var (keys, connections) = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
+            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        return TypedResults.Ok(new VaultAccessView(keys, connections));
+    }
+
+    /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps
+    /// that list it disconnected: they can't be given the new key without their owner.</summary>
+    private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
+        string vault, RekeyVaultRequest body, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+    {
+        // The same budget as the other password checks behind a session.
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct)
+            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));
     }
 
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)

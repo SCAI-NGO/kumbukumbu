@@ -27,7 +27,7 @@ public sealed class SessionTests(MongoFixture fixture)
         new(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<ApiKeys>.Instance);
 
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), new Connections(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<Connections>.Instance), _time, NullLogger<UserCatalog>.Instance);
 
     private Sessions Sessions() => new(_db, _time);
 

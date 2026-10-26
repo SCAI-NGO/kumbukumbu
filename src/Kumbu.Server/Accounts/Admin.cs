@@ -15,7 +15,7 @@ public sealed record UserSummary(
 /// primary admin, and nobody is made primary admin. Admins never see content: the figures here come from what
 /// MongoDB holds in the clear (slot owners, document sizes), and no vault is opened.
 /// </summary>
-public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, TimeProvider time, ILogger<Admin> log)
+public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, TimeProvider time, ILogger<Admin> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -46,9 +46,10 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
     /// <summary>
     /// Deactivates or reactivates a user; false if there is no such user, true (and nothing done) if they already
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
-    /// and revokes every API key of the user, in one transaction with the flag, and stamps
-    /// <c>credentialsChangedAt</c>. Revoking again on reactivation catches a key whose creation raced the
-    /// deactivation (its request's session resolved just before it): reactivating revives no key and no session.
+    /// and revokes every API key of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
+    /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>. Revoking again on reactivation
+    /// catches a key or a code whose creation raced the deactivation (its request's session resolved just before
+    /// it): reactivating revives no key, no app and no session.
     /// </summary>
     public async Task<bool> SetActiveAsync(User actor, string userId, bool active, CancellationToken ct)
     {
@@ -58,31 +59,33 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deactivated.");
         if (!active && target.Id == acting.Id) throw new NotPermittedException("You can't deactivate yourself.");
 
-        int revoked;
+        (int Keys, int Connections)? revoked;
         using (var session = await catalog.StartSessionAsync(ct))
         {
-            session.StartTransaction();
-            // The role is checked again in the filter, in case it changed since the read above; the state, so that
-            // only a real change revokes anything.
-            var updated = await Users.UpdateOneAsync(
-                session,
-                u => u.Id == userId && u.Role != Roles.PrimaryAdmin && u.Active != active,
-                Builders<UserDocument>.Update.Set(u => u.Active, active).Set(u => u.CredentialsChangedAt, Now),
-                cancellationToken: ct);
-            if (updated.MatchedCount == 0)
-            {
-                // The user exists (read above) and can't have become primary admin, so they already are as asked.
-                await session.AbortTransactionAsync(CancellationToken.None);
-                return true;
-            }
+            // Retried on a write conflict: a key or a connection in use writes its lastUsedAt outside any transaction.
+            revoked = await session.WithTransactionAsync<(int, int)?>(
+                async (s, token) =>
+                {
+                    // The role is checked again in the filter, in case it changed since the read above; the state, so
+                    // that only a real change revokes anything.
+                    var updated = await Users.UpdateOneAsync(
+                        s,
+                        u => u.Id == userId && u.Role != Roles.PrimaryAdmin && u.Active != active,
+                        Builders<UserDocument>.Update.Set(u => u.Active, active).Set(u => u.CredentialsChangedAt, Now),
+                        cancellationToken: token);
+                    // The user exists (read above) and can't have become primary admin, so they already are as asked.
+                    if (updated.MatchedCount == 0) return null;
 
-            await sessions.EndAllAsync(session, userId, ct);
-            revoked = await keys.RevokeAllAsync(session, userId, ct);
-            await session.CommitTransactionAsync(CancellationToken.None);
+                    await sessions.EndAllAsync(s, userId, token);
+                    var keyCount = await keys.RevokeAllAsync(s, userId, token);
+                    return (keyCount, await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token));
+                },
+                cancellationToken: ct);
         }
 
+        if (revoked is not { } count) return true;
         if (active) log.LogInformation("{Admin} reactivated user {Username}", acting.Username, target.Username);
-        else log.LogInformation("{Admin} deactivated user {Username}; {Count} API keys revoked", acting.Username, target.Username, revoked);
+        else log.LogInformation("{Admin} deactivated user {Username}; {Count} API keys and the tokens of {Connections} connections revoked", acting.Username, target.Username, count.Keys, count.Connections);
         return true;
     }
 

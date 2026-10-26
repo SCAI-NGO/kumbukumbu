@@ -4,10 +4,16 @@ using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server;
 
-/// <summary>Startup checks for <see cref="KumbuOptions"/>; with ValidateOnStart the server refuses to start on failure.</summary>
-public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
+/// <summary>Startup checks for <see cref="KumbuOptions"/>; with ValidateOnStart the server refuses to start on failure.
+/// <paramref name="environment"/> is the host's, for the checks that depend on it (none without one).</summary>
+public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment = null) : IValidateOptions<KumbuOptions>
 {
     public const string MongoMessage = "Kumbu:Mongo:ConnectionString must be set";
+    public const string AccessTokenMinutesMessage = "Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440";
+
+    public const string LoopbackClientsMessage =
+        "Kumbu:OAuth:AllowLoopbackClients is for tests and development only: it lets client metadata documents come from this machine's own addresses, so it is refused in Production";
+
     public const string CheckpointLimitMessage = "Kumbu:Vaults:CheckpointLimit must be 0 or more";
 
     public const string PublicUrlMessage =
@@ -55,6 +61,17 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
         if (options.Vaults.CheckpointLimit < 0)
         {
             failures.Add(CheckpointLimitMessage);
+        }
+
+        if (options.OAuth.AccessTokenMinutes is < 5 or > 1440)
+        {
+            failures.Add(AccessTokenMinutesMessage);
+        }
+
+        // An SSRF guard switched off: never on a real instance, which runs as Production unless told otherwise.
+        if (options.OAuth.AllowLoopbackClients && environment?.IsProduction() == true)
+        {
+            failures.Add(LoopbackClientsMessage);
         }
 
         if (!ModelFiles.Catalogue.ContainsKey(options.Search.Model))

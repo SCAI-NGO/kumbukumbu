@@ -41,7 +41,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     private async Task<(User User, byte[] UserKey, Dictionary<string, string> Vaults)> UserWithVaultsAsync(params string[] vaults)
     {
         var users = new UserCatalog(
-            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys, TimeProvider.System, NullLogger<UserCatalog>.Instance);
+            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys, app.Services.GetRequiredService<Connections>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
         await users.CreateAsync(username, Password, Roles.User, Ct);
         var (user, key, _) = (await users.TrySignInAsync(username, Password, Ct))!.Value;

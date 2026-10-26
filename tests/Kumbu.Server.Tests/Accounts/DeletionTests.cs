@@ -34,11 +34,11 @@ public sealed class DeletionTests(MongoFixture fixture)
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<UserCatalog>.Instance);
 
     private Sessions Sessions() => new(_db, _time);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
 
     private Deletion Deletion() => new(_db, Catalog(), Users(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
 

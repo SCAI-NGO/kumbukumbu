@@ -31,8 +31,9 @@ public sealed record JoinedView(UserView User, string RecoveryKey);
 
 public sealed record RecoverRequest(string Username, string RecoveryKey, string NewPassword);
 
-/// <summary><c>revokeApiKeys</c> also revokes every API key of the user; true when left out, so an older client
-/// gets the safe behaviour: a key made from a stolen session doesn't outlive the password change.</summary>
+/// <summary><c>revokeApiKeys</c> also revokes every API key of the user and disconnects every app (the connections'
+/// tokens are revoked, the apps reconnect); true when left out, so an older client gets the safe behaviour: a key or an
+/// app authorised from a stolen session doesn't outlive the password change.</summary>
 public sealed record ChangePasswordRequest(string OldPassword, string NewPassword, bool RevokeApiKeys = true);
 
 /// <summary>Always true: a changed password ends every session, this one too, so the web app signs in again.</summary>
@@ -42,6 +43,10 @@ public sealed record PasswordChangedView(bool SignedOut);
 public sealed record RegenerateRecoveryKeyRequest(string CurrentPassword);
 
 public sealed record RecoveryKeyView(string RecoveryKey);
+
+/// <summary>"Re-encrypt my vaults": the current password, so a stolen session alone can't rotate the keys and take the
+/// new recovery key.</summary>
+public sealed record ReencryptRequest(string Password);
 
 /// <summary>An API key as its owner sees it: vault names with <c>read</c> or <c>write</c>; never the key.
 /// <c>expiresAt</c> is null for a key that doesn't expire; once past, the key is refused like a revoked one.</summary>
@@ -97,18 +102,19 @@ public static class AccountApi
         // POST with the code in the body, never in the path: request lines end up in logs.
         open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404);
         open.MapPost("/join", JoinAsync).Errors(400, 403, 409, 429);
-        open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 429);
+        open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 409, 429);
 
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/session", Session).Errors(401, 403);
         account.MapDelete("/session", SignOutAsync).Errors(401, 403);
-        account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 429);
-        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 409, 429);
+        account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
         account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/account/reencrypt", ReencryptAsync).Errors(400, 401, 403, 409, 429);
 
-        account.MapGet("/keys", ListKeysAsync).Errors(401, 403);
-        account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409);
+        account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
+        account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
@@ -120,7 +126,7 @@ public static class AccountApi
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
-        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
+        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -130,6 +136,9 @@ public static class AccountApi
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
         if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
         SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct));
+        // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
+        // started, and never waited for, so that sign-in is never held up by a re-keying.
+        rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt));
     }
 
@@ -171,12 +180,15 @@ public static class AccountApi
         }
     }
 
-    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once.</summary>
-    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(RecoverRequest body, HttpContext http, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once. The user key
+    /// is rotated in the recovery; the vaults are re-keyed in the background, after the answer, which never waits for them.</summary>
+    private static async Task<Ok<RecoveryKeyView>> RecoverAsync(
+        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var recoveryKey = await users.RecoverAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
+        var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
+        rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -215,6 +227,20 @@ public static class AccountApi
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
+    /// <summary>
+    /// "Re-encrypt my vaults": a new user key, every API key and app revoked, the vaults re-keyed in the background, and
+    /// a new recovery key, shown here once. This session stays signed in; every other one ends.
+    /// </summary>
+    private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
+        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var recoveryKey = await rekeying.ReencryptAccountAsync(user, caller.UserKey!, body.Password, http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct)
+            ?? throw ApiErrors.BadRequest("The password is wrong.");
+        return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
+    }
+
     /// <summary>Everything of the account goes, this session too: the cookie is cleared with it.</summary>
     private static async Task<NoContent> DeleteAccountAsync(
         DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
@@ -242,14 +268,7 @@ public static class AccountApi
     private static async Task<Created<CreatedApiKeyView>> CreateKeyAsync(CreateApiKeyRequest body, RequestCaller caller, ApiKeys keys, CancellationToken ct)
     {
         var names = await VaultNamesAsync(caller, ct);
-        var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
-        var vaults = new Dictionary<string, KeyRight>();
-        foreach (var (name, rightText) in body.Vaults)
-        {
-            var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
-            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
-        }
-
+        var vaults = RightsByVaultId(body.Vaults, names);
         var (key, info) = await keys.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
         return TypedResults.Created($"/api/keys/{info.Id}", new CreatedApiKeyView(key, KeyView(info, names)));
     }
@@ -302,8 +321,23 @@ public static class AccountApi
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         await invitations.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such open invitation.");
 
+    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>) by vault id; 400 for a vault the caller
+    /// has no such name for or another right.</summary>
+    internal static Dictionary<string, KeyRight> RightsByVaultId(IReadOnlyDictionary<string, string> requested, Dictionary<string, string> names)
+    {
+        var idsByName = names.ToDictionary(n => n.Value, n => n.Key, StringComparer.Ordinal);
+        var vaults = new Dictionary<string, KeyRight>();
+        foreach (var (name, rightText) in requested)
+        {
+            var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
+            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
+        }
+
+        return vaults;
+    }
+
     /// <summary>The caller's vaults, id → name. Opening them is what a session does on every vault request anyway.</summary>
-    private static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
+    internal static async Task<Dictionary<string, string>> VaultNamesAsync(RequestCaller caller, CancellationToken ct) =>
         (await caller.OpenVaultsAsync(ct)).ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal);
 
     /// <summary>A vault the key was given but that no longer opens for the user isn't listed: it has no name to show.</summary>

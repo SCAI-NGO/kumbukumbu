@@ -47,7 +47,7 @@ public static class Security
             {
                 var headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
-                headers["Referrer-Policy"] = "same-origin";
+                headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):

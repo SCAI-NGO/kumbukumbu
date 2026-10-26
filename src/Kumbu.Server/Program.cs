@@ -10,6 +10,7 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -57,17 +58,28 @@ builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
+// Re-keys vaults in the background, one at a time; a hosted service so that it is there to hear of pending vaults.
+builder.Services.AddSingleton<RekeyRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
+builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddSingleton<Connections>();
+builder.Services.AddClientMetadataFetcher();
+builder.Services.AddSingleton<OAuthClients>();
+builder.Services.AddSingleton<AuthorizationRequests>();
+builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
 builder.Services.AddSingleton<Deletion>();
+builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
+builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
@@ -168,12 +180,18 @@ app.UseStaticFiles(webApp);
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
+app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
 app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
 app.MapMcp("/mcp");
+// One URL per connection (Ruling 18): CallerMiddleware answers for an unknown id and, until a token is valid, 401.
+app.MapMcp("/mcp/c/{id}");
+app.MapDiscovery();
+app.MapOAuthEndpoints();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
+app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
 app.MapUploadApi();

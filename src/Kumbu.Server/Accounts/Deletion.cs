@@ -5,7 +5,7 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Accounts;
 
 /// <summary>What a deletion removed, for the log and the caller: counts only, never a name.</summary>
-public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents);
+public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections);
 
 /// <summary>
 /// Deleting for good: one vault (its owner), one's own account, or a deactivated user's account (an admin). Each is
@@ -28,8 +28,8 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
     /// <summary>
     /// Deletes the user's vault named <paramref name="name"/> (exactly, as the user sees it) with everything in it,
     /// once <paramref name="confirm"/> repeats the name and <paramref name="password"/> is the user's (so a stolen
-    /// session alone can't); null if the user has no vault of that name. API keys that had it keep their other vaults;
-    /// one left with none is revoked in the same transaction.
+    /// session alone can't); null if the user has no vault of that name. API keys and connections that had it keep their
+    /// other vaults; one left with none is revoked for good in the same transaction.
     /// </summary>
     public async Task<DeletionSummary?> DeleteVaultAsync(User user, byte[] userKey, string name, string password, string confirm, CancellationToken ct)
     {
@@ -41,7 +41,7 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
         var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct);
         log.LogInformation("User {Username} deleted vault {VaultId} ({Documents} documents)", user.Username, vaultId, documents);
-        return new DeletionSummary(1, 0, documents);
+        return new DeletionSummary(1, 0, documents, 0);
     }
 
     /// <summary>
@@ -57,7 +57,8 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
         var summary = await DeleteAccountAsync(user.Id, Builders<UserDocument>.Filter.Where(u => u.Id == user.Id && u.Role != Roles.PrimaryAdmin), ct)
             ?? throw new NotPermittedException("Your account changed meanwhile; nothing was deleted.");
         log.LogInformation(
-            "User {Username} deleted their account: {Vaults} vaults, {Keys} API keys, {Documents} documents", user.Username, summary.Vaults, summary.ApiKeys, summary.Documents);
+            "User {Username} deleted their account: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
+            user.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
         return true;
     }
 
@@ -83,8 +84,8 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
             userId, Builders<UserDocument>.Filter.Where(u => u.Id == userId && !u.Active && u.Role != Roles.PrimaryAdmin), ct)
             ?? throw new NotPermittedException("The user was reactivated or changed meanwhile; nothing was deleted.");
         log.LogInformation(
-            "{Admin} deleted user {Username}: {Vaults} vaults, {Keys} API keys, {Documents} documents",
-            acting.Username, target.Username, summary.Vaults, summary.ApiKeys, summary.Documents);
+            "{Admin} deleted user {Username}: {Vaults} vaults, {Keys} API keys, {Connections} connections, {Documents} documents",
+            acting.Username, target.Username, summary.Vaults, summary.ApiKeys, summary.Connections, summary.Documents);
         return true;
     }
 
@@ -92,13 +93,15 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
 
     /// <summary>
     /// In one transaction: the user's vaults with everything in them, the user, their password, recovery and
-    /// session slots, and their API keys with the keys' slots. Null, and nothing deleted, if the user no longer
-    /// matches <paramref name="stillDeletable"/>.
+    /// session slots, their API keys with the keys' slots, and their connections with their codes and tokens (tombstones
+    /// included), the tokens' slots and the pending authorisation requests. Null, and nothing deleted, if the user no
+    /// longer matches <paramref name="stillDeletable"/>.
     /// </summary>
     private async Task<DeletionSummary?> DeleteAccountAsync(string userId, FilterDefinition<UserDocument> stillDeletable, CancellationToken ct)
     {
         var vaults = await OwnedVaultsAsync(userId, ct);
         var keyCount = 0;
+        var connectionCount = 0;
         long documents;
         try
         {
@@ -111,6 +114,9 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
                 foreach (var id in keyIds) await catalog.DeleteApiKeySlotsAsync(s, id, token);
                 await Keys.DeleteManyAsync(s, k => k.User == userId, cancellationToken: token);
                 keyCount = keyIds.Count;
+                // The user document is deleted above, in this transaction: a connection being created or a token being
+                // issued writes it or the connection's document, and conflicts.
+                connectionCount = await ConnectionRevocation.DeleteAllAsync(db, s, userId, token);
             }, ct);
         }
         catch (UserChangedException)
@@ -122,7 +128,7 @@ public sealed class Deletion(IMongoDatabase db, VaultCatalog catalog, UserCatalo
         // that no longer exists: it goes too.
         var late = await OwnedVaultsAsync(userId, ct);
         if (late.Count > 0) documents += await catalog.DeleteVaultsAsync(late, (_, _) => Task.CompletedTask, ct);
-        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents);
+        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount);
     }
 
     /// <summary>The vaults whose user slot names this owner, orphans of a failed create included.</summary>

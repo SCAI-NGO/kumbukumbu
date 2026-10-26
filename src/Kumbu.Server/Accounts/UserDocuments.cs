@@ -61,14 +61,42 @@ public sealed class UserDocument
     [BsonElement("keysCreated")]
     public long KeysCreated { get; set; }
 
+    /// <summary>How many connections the user has created; incremented in each connection's transaction, for the same
+    /// reason as <see cref="KeysCreated"/>, and so that a key and a connection made with one name at once conflict
+    /// (see <see cref="Connections.CreateAsync"/>).</summary>
+    [BsonElement("connectionsCreated")]
+    public long ConnectionsCreated { get; set; }
+
     /// <summary>How many vaults the user has created; incremented in each vault's transaction, for the same reason
     /// as <see cref="KeysCreated"/>: a concurrent deletion of the account conflicts with it.</summary>
     [BsonElement("vaultsCreated")]
     public long VaultsCreated { get; set; }
 
+    /// <summary>How many times the user changed a connection's rights; incremented in each change's transaction, a real
+    /// write to this document, so that it conflicts with a concurrent deletion of one of the vaults (<see cref="VaultsDeleted"/>).</summary>
+    [BsonElement("connectionsChanged")]
+    public long ConnectionsChanged { get; set; }
+
+    /// <summary>How many deletions took vaults of the user; incremented in each deletion's transaction, so that an API
+    /// key or connection created, or a connection changed, at the same time conflicts with it and, retried, finds the vault gone
+    /// (<see cref="Vaults.VaultCatalog.RequireVaultsAsync"/>).</summary>
+    [BsonElement("vaultsDeleted")]
+    public long VaultsDeleted { get; set; }
+
     /// <summary>How many sessions the user has started; incremented in each session's transaction, likewise.</summary>
     [BsonElement("sessionsStarted")]
     public long SessionsStarted { get; set; }
+
+    /// <summary>The ids of the user's vaults still to be re-keyed (stage 2) after their user key was rotated
+    /// (<see cref="UserKeyRotation"/>), which records every vault of the user here.</summary>
+    [BsonElement("rekeyPending"), BsonIgnoreIfNull]
+    public List<string>? RekeyPending { get; set; }
+
+    /// <summary>How many re-keying starts and finishes touched the user's vaults; incremented in each of their
+    /// transactions, a real write to this document, so that a vault, key or connection created at the same time
+    /// conflicts with them (rekeying design §3).</summary>
+    [BsonElement("vaultsRekeyed")]
+    public long VaultsRekeyed { get; set; }
 
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
