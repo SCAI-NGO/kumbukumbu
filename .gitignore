@@ -495,3 +495,6 @@ obisdian/.trash/
 
 # Brainstorming companion and agent scratch
 .superpowers/
+
+# The embedding model a local `dotnet run` downloads (e.g. for pnpm -C web gen:api)
+src/Kumbu.Server/models/
