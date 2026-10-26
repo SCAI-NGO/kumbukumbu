@@ -153,6 +153,24 @@ public class SearchTests
         Assert.DoesNotContain(meaning.Hits, h => h.Chunk.Path.Value == "/Ideas/x.md");
     }
 
+    [Theory]
+    [InlineData("große meister")]
+    [InlineData("Große MEISTER")]
+    public async Task TheWordPartMatchesANoteNameThatIsNotInItsText(string query)
+    {
+        // The title lives only in the file name (a name with spaces and an ß; the query arrives decomposed).
+        var name = "Der große Meister".Normalize(System.Text.NormalizationForm.FormC);
+        var notes = new List<Note>
+        {
+            new(P($"/Test/{name}.md"), "Nothing about it here.\n"),
+            new(P("/Test/Other.md"), "Something else entirely.\n"),
+        };
+
+        var result = await SectionSearch.RankAsync(notes, VaultPath.Root, query.Normalize(System.Text.NormalizationForm.FormD), SearchMode.Words, 10, new FakeIndex(new SemanticResult(SemanticState.Ready, [], 0, null)), CancellationToken.None);
+
+        Assert.Equal([$"/Test/{name}.md"], result.Hits.Select(h => h.Chunk.Path.Value));
+    }
+
     [Fact]
     public async Task SemsearchNamesTheVaultsRankedByWordsOnly()
     {
