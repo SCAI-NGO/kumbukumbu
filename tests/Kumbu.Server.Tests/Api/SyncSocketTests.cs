@@ -193,6 +193,37 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_key_revokes_itself_and_its_socket_closes_at_the_next_check()
+    {
+        var user = await NewAsync(Api);
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        var other = await user.KeyAsync("agent", KeyRight.Read);
+        using var socket = await ConnectAsync(await TicketAsync(user, key));
+
+        using var revoked = await user.SendAsync(HttpMethod.Delete, "/api/key", bearer: key);
+        using var after = await user.GetAsync($"/api/vaults/{user.Vault}/versions", key);
+        using var otherAfter = await user.GetAsync($"/api/vaults/{user.Vault}/versions", other);
+        await Api.Services.GetRequiredService<SyncHub>().CheckAsync(Ct);
+
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, otherAfter.StatusCode);
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task Only_an_api_key_revokes_itself()
+    {
+        var user = await NewAsync(Api);
+
+        using var asSession = await user.SendAsync(HttpMethod.Delete, "/api/key");
+        using var asDev = await user.SendAsync(HttpMethod.Delete, "/api/key", bearer: KumbuAppFactory.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, asSession.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asDev.StatusCode);
+    }
+
+    [Fact]
     public async Task A_revoked_key_is_disconnected()
     {
         var user = await NewAsync(Api);
