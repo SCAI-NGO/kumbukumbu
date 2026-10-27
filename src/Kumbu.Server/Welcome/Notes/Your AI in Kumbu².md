@@ -12,7 +12,12 @@ Your AI reaches Kumbu² through MCP, the Model Context Protocol: an open standar
 - move and rename notes and folders (links to them are rewritten);
 - remove notes to the trash;
 - make checkpoints;
-- replace a text across a folder, after showing you a preview first.
+- replace a text across a folder, after showing you a preview first;
+- read and change your board.
+
+## The board
+
+If a vault has a board, your AI reads it and plans with you: "What do we get done tonight?" It adds cards, moves them, gives them due dates and tags, and rejects a card only with a reason. It follows the instructions in the board's Board.md, so write there how you want the board worked. Moving a card never touches its text, and you see each move in the card's history. Your AI makes a new board only when you ask for one.
 
 ## It can't overwrite your work by accident
 

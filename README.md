@@ -6,7 +6,7 @@ Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes
 
 ## Status: reading, searching, writing, encrypted at rest; accounts, a web app, app connections, Obsidian sync
 
-The server offers four MCP tools. `sh` is a shell over your notes:
+The server offers five MCP tools. `sh` is a shell over your notes:
 
 - `ls [path]` lists a directory (no path lists the vaults, and says if vaults don't open with the token or notes are damaged)
 - `cat <path>` prints a note, with its **version token** in a separate block; `cat "<path>#Heading"` prints one section (nested: `#Parent#Child`)
@@ -15,6 +15,7 @@ The server offers four MCP tools. `sh` is a shell over your notes:
 - `semsearch <query> [path]` finds the sections that best match a question or topic, ranked by words (BM25) and by meaning (embeddings, also across languages), combined into one score that each result shows; `--words` or `--meaning` uses one ranking only
 - `rg --files [path...]` lists note paths, so `rg --files | rg -i kumbu` finds a note by name
 - `links <path>` shows where a note's `[[wikilinks]]` lead (`links <directory>` lists the broken ones), `backlinks <path>` which notes link to it
+- `board /<vault>` prints the vault's Kanban board: its Instructions, then each column's cards by rank (see "Kanban board" below)
 - `head`, `tail`, `wc`, `sort` work on a note or on piped input; `sort`, `ls` and `rg` list in human order (Ü next to U)
 - `history <path>` lists a note's versions, `restore <path> <version>` goes back to one; `history <folder> --since 2h` lists the latest writes below a folder or vault, with lines added and removed
 - `diff <path>` shows what the last write changed, `diff <path> <version> [<version>]` compares versions, `diff <path> <other>` two notes; `--word` marks changed words inside lines
@@ -28,13 +29,15 @@ The server offers four MCP tools. `sh` is a shell over your notes:
 
 `replace` changes a text in every note below a folder or vault: the first call previews every note it would change and returns a plan token, the second call with that token applies exactly that preview in one transaction, or nothing if a note changed in between. The replace is literal, also inside `[[links]]`; the preview names the notes named after the old text, the links that would lead nowhere afterwards and those that would lead to another note, with the hint to `mv` a note before renaming it. Changes that need judgement, like a sentence that depends on a name without containing it, are for the agent, not the tool. A plan is applied once; a second apply says when it was applied, or why it failed.
 
+`board` changes a vault's Kanban board: `add` a card, `move` one to a column and a position, `update` its due date or tags, `create` the board from the template (only when the user asks) and `rename_column`. A move or update never touches the card's text and needs no version token.
+
 Commands chain with `|`, for example `cat /Work/plan.md | rg -n TODO` or `rg -l Hecate | wc -l`. `|` is the only operator: redirection, `&&`, `;` and `$()` are rejected with an error that says so. Regexes follow ripgrep's syntax and never backtrack, so no pattern can stall the server (no look-around, no backreferences).
 
 Paths are always absolute, for example `/Work/projects/plan.md`. Top-level folders are vaults. Links resolve like in Obsidian, within the note's vault: the note whose path ends with the link, case-insensitive; ambiguous links are reported, never guessed. Kumbu² never rewrites note content on its own; only `mv` changes links. Markdown links (`[text](note.md)`) are not followed yet. The web app (below) and the REST API under `/api` sit on top of this; accounts and API keys are described further down.
 
 ### The web app
 
-The server also serves a web app, built from `web/` into the image. It works on a phone first and on a laptop too (from 1024 px wide, the file tree sits beside the note instead of in a drawer: resizable by its edge, collapsed and expanded with the top bar's left button or Ctrl+\ / ⌘\, remembered per browser): sign in, browse vaults and folders, read and edit notes in Markdown (saved automatically, with a conflict prompt if an agent wrote in the meantime), see a note's earlier versions and restore one (the note's ⋯ menu, "History"), bring back removed notes from a vault's trash and make, restore (after a preview of exactly what changes) or remove a vault's named checkpoints (the vault's ⋯ menu in the drawer, "Trash" and "Checkpoints"; removing a checkpoint is for good), open one read-only (its tree and notes as they were, links kept inside it; "Copy for your AI" copies a note's reference and the `cat --checkpoint` command) or export it as ZIP, see a vault's activity (the vault's ⋯ menu, "Activity": its changesets newest first, who wrote them (you, you in Obsidian, an agent) and which notes they changed, added, renamed or deleted, each note compared side by side with the version before or with today's text; only as complete as the last 10 versions of each note and 30 days of trash and moves), search by words and meaning (and, with the switch "Include earlier versions", by words in earlier versions, each opening next to today's text), upload Markdown files or folders, export vaults as ZIP (Settings, "Your data", for several at once) and import such a ZIP, see when the open note changes elsewhere (an agent, another tab or device; a bar offers the new version, which never replaces the text on screen by itself unless "Refresh Read mode automatically" is on in Settings, and never in Write mode), make API keys and connect apps such as claude.ai (Access), connect a vault with Obsidian (the vault's ⋯ menu, "Connect Obsidian…"), install it as an app (below), and, for admins, manage users and invitations and delete a user for a privacy request ("Delete for a privacy request…"). It talks only to the REST API, with the same-origin session cookie. Notes are text only for now.
+The server also serves a web app, built from `web/` into the image. It works on a phone first and on a laptop too (from 1024 px wide, the file tree sits beside the note instead of in a drawer: resizable by its edge, collapsed and expanded with the top bar's left button or Ctrl+\ / ⌘\, remembered per browser): sign in, browse vaults and folders, read and edit notes in Markdown (saved automatically, with a conflict prompt if an agent wrote in the meantime), see a note's earlier versions and restore one (the note's ⋯ menu, "History"), bring back removed notes from a vault's trash and make, restore (after a preview of exactly what changes) or remove a vault's named checkpoints (the vault's ⋯ menu in the drawer, "Trash" and "Checkpoints"; removing a checkpoint is for good), open one read-only (its tree and notes as they were, links kept inside it; "Copy for your AI" copies a note's reference and the `cat --checkpoint` command) or export it as ZIP, see a vault's activity (the vault's ⋯ menu, "Activity": its changesets newest first, who wrote them (you, you in Obsidian, an agent) and which notes they changed, added, renamed or deleted, each note compared side by side with the version before or with today's text; only as complete as the last 10 versions of each note and 30 days of trash and moves), search by words and meaning (and, with the switch "Include earlier versions", by words in earlier versions, each opening next to today's text), upload Markdown files or folders, export vaults as ZIP (Settings, "Your data", for several at once) and import such a ZIP, see when the open note changes elsewhere (an agent, another tab or device; a bar offers the new version, which never replaces the text on screen by itself unless "Refresh Read mode automatically" is on in Settings, and never in Write mode), make API keys and connect apps such as claude.ai (Access), connect a vault with Obsidian (the vault's ⋯ menu, "Connect Obsidian…"), plan with the vault's Kanban board (the vault's ⋯ menu, "Board", or "Create board" for the template: on a phone one column per screen with "Move to…", on a laptop the columns side by side with drag and drop; a checkpoint's board read-only at `/board/<Vault>?checkpoint=<name>`), install it as an app (below), and, for admins, manage users and invitations and delete a user for a privacy request ("Delete for a privacy request…"). It talks only to the REST API, with the same-origin session cookie. Notes are text only for now.
 
 ### Updates and installing as an app
 
@@ -138,6 +141,79 @@ claude mcp add --transport http kumbu http://localhost:8080/mcp --header "Author
   ```
 
   Everything else, the key file, the user and a later password change, is as above.
+
+### Kanban board
+
+A vault can carry one board: cards in columns, ordered within each column. **A card is a note**, `/<Vault>/Board/<Title>.md`, and its place on the board is in its frontmatter, so history, undo, checkpoints, links, `mv`, the trash, search and the Obsidian sync apply to cards as to any note. In Obsidian, `/Board/` is a folder of notes: a card moves there by editing its `column`.
+
+The board is defined by `/<Vault>/Board/Board.md`, an ordinary note whose frontmatter the server reads:
+
+```markdown
+---
+kumbu-board: 1
+columns:
+  - Ideas
+  - Backlog
+  - Today
+  - Doing
+  - Done: [archivable]
+  - Rejected: [archivable, reason]
+archive: { after: 30, minDays: 14 }
+---
+# Work
+
+## Instructions
+
+Don't let ideas go stale: when Today and Backlog run short, look at Ideas. Reject a card only with a reason.
+```
+
+- `kumbu-board` is the format's version; a missing or unknown one is shown as a problem, not guessed at, and the board can't be changed until it is fixed. So is malformed YAML or a duplicate column.
+- `columns` in order, each a name or `Name: [flags]`; names are unique ignoring case, 1 to 64 characters, no `/`. `archivable`: the column tidies itself into the archive; `reason`: a card goes there only with a reason.
+- `archive`: `after` cards an archivable column holds before it tidies (default 30), `minDays` a card stays in it at least (default 14).
+- `## Instructions` is printed first by the `board` reader, so an agent works the board the way it is meant to be worked.
+
+A card's own keys, which the server writes line by line and leaves every other frontmatter line as it is:
+
+```yaml
+---
+column: Doing
+rank: a0V
+due: 2026-11-03
+tags: [security]
+moved: { Backlog: 2026-10-27, Doing: 2026-10-29 }
+---
+```
+
+`column` (the column's name, matched ignoring case), `rank` (the place within the column, a sortable key; a card without one sorts after the others, by title), `due` (`YYYY-MM-DD`), `tags` (the Obsidian property), `moved` (the day the card last entered each column), `reason` (why it went into a `reason` column) and `archived` (the day it went into the archive). Notes in `/Board/` the board can't place (no `column`, a column `Board.md` doesn't name, frontmatter that doesn't parse, a sub-folder other than `Archive/`) are listed as **problems**, never dropped.
+
+**Reading:** `board /<vault> [--column <name>] [--tag <tag>]` in `sh` prints the Instructions, then each column with its count and its cards' titles by rank, with `due` (`overdue` once the day has passed) and `#tags`. A column stops after 20 titles with a hint, archivable columns show only their count unless `--column` names them, a column that needs a reason says so, and problems come last. `--checkpoint <name>` reads a checkpoint's board. A card's text is read with `cat`, as any note.
+
+**Changing:** the MCP tool `board`, with `vault`, `action` and that action's arguments; a card is named by its title or its path:
+
+| Action | Arguments |
+|---|---|
+| `add` | `title`, `column`; optional `text`, `position`, `due`, `tags`. Fails if the note exists or the title can't be a note name. |
+| `move` | `card`, `column`; optional `position`; `reason` for a `reason` column, kept on the card. Also reorders within a column. |
+| `update` | `card` and at least one of `due`, `tags` (replacing the card's), `clear_due`, `clear_tags` |
+| `create` | nothing more; `Board.md` from the template, refused when there is one. Only when the user asks for a board. |
+| `rename_column` | `from`, `to`; `Board.md` and every card's `column` and `moved`, archive included, in one transaction or not at all |
+
+`position` is `top`, `bottom` (the default), `before:<card>` or `after:<card>`, naming a card of the target column. A move or update takes no version token: the server changes only its own frontmatter lines under the vault's write gate, so text someone is writing on the card at the same time is never lost. Reading the board needs read on the vault, changing it write.
+
+**Archive:** after an `add` or `move` into an archivable column (a reorder within it counts too), if the column holds more than `after` cards, its oldest cards by the day they entered it, among those at least `minDays` there, move to `/Board/Archive/` until it holds `after`, each with `archived:` set; the result names them. They go with `mv`, so links follow and the history shows them as `(mv)`. A board nobody touches never changes.
+
+**REST** for the web app, mirroring the tool (errors are `{"error": "<sentence>"}`):
+
+| Request | Answers |
+|---|---|
+| `GET /api/vaults/{vault}/board` (`?checkpoint=<name>`) | `200` the board: `title`, `instructions`, `columns` (`name`, `archivable`, `needsReason`, `cards` with `path`, `title`, `due`, `overdue`, `tags`, `reason`) and `problems` (`path`, `what`) · `404` no vault or no board · `409` `Board.md` can't be read |
+| `POST /api/vaults/{vault}/board` | `201` the board, made from the template · `409` there is one |
+| `POST /api/vaults/{vault}/board/cards`, `{"title", "column", "text"?, "position"?, "due"?, "tags"?}` | `201` the board · `409` the note exists |
+| `POST /api/vaults/{vault}/board/move`, `{"card", "column", "position"?, "reason"?}` | `200` the board |
+| `POST /api/vaults/{vault}/board/update`, `{"card", "due"?, "tags"?, "clearDue"?, "clearTags"?}` | `200` the board |
+| `POST /api/vaults/{vault}/board/rename-column`, `{"from", "to"}` | `200` the board · `409` the name is taken |
+
+Every write answers `400` for a bad argument (an unknown column, a missing reason, a date not `YYYY-MM-DD`, a position naming a card of another column), `403` without write on the vault, `404` for an unknown card or vault or a vault without a board, and `409` when `Board.md` can't be read (malformed, a duplicate column, an unknown `kumbu-board`), a card's frontmatter doesn't parse, or the notes kept changing while the server wrote.
 
 ### Syncing with Obsidian
 

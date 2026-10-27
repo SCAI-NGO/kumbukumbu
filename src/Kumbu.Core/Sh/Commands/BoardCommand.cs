@@ -23,7 +23,8 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
           Print a vault's Kanban board, titles first: the board's instructions, then each column in
           order with its card count and its cards' titles by rank, with 'due' ('overdue' once the
           day has passed) and #tags. Long columns stop after 20 titles with a hint; archivable
-          columns (Done, say) show only their count. Problems come last: notes in the board folder
+          columns (Done, say) show only their count; a column that takes a card only with a reason
+          says so ('Rejected (2, needs a reason)'). Problems come last: notes in the board folder
           that no column can place. Read a card with cat, as any note: cat "/Work/Board/<title>.md".
           --column C  every card of that column, archivable or long (ignoring case)
           --tag T     only the cards with that tag (ignoring case, with or without '#')
@@ -83,12 +84,12 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
             var cards = tag is null ? all : all.Where(c => c.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)).ToList();
             if (only is null && column.Archivable)
             {
-                archivable.Add($"{column.Name} ({cards.Count})");
+                archivable.Add(Heading(column, cards.Count));
                 continue;
             }
 
             var cut = only is null && cards.Count > LaneLimit;
-            lines.Add($"{column.Name} ({cards.Count}){(cut ? $": first {LaneLimit}" : "")}");
+            lines.Add($"{Heading(column, cards.Count)}{(cut ? $": first {LaneLimit}" : "")}");
             var shown = cut ? cards.Take(LaneLimit).ToList() : cards;
             var pad = Math.Min(shown.Count == 0 ? 0 : shown.Max(c => c.Title.Length), MaxPad) + 2;
             lines.AddRange(shown.Select(c => "  " + Row(c, pad, today)));
@@ -105,10 +106,14 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
         {
             lines.Add($"Problems ({board.Problems.Count})");
             lines.AddRange(board.Problems.Select(p => $"  {p.Path.Value}: {p.What}"));
+            lines.Add("  the board tool's move puts a card in a column");
         }
 
         return ShellResult.Ok(string.Join('\n', lines));
     }
+
+    // A move into a reason column is refused without one: the agent should know before it tries.
+    private static string Heading(BoardColumn column, int count) => $"{column.Name} ({count}{(column.NeedsReason ? ", needs a reason" : "")})";
 
     private static string Row(Card card, int pad, DateOnly today)
     {

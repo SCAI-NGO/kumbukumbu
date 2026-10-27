@@ -150,14 +150,14 @@ The tool's description tells the agent how to work the board: read `board` first
 
 - **`BoardReader`** (`Kumbu.Core`): a pure function from `Board.md` and the notes under `/Board/` to a `Board` (columns with their cards in order, problems), over `INoteReader`, so it works on a checkpoint's view as on today's notes. Unit-tested without a database.
 - **`BoardService`** (`Kumbu.Core`): the five write actions, on `NoteWriter` and `NoteMover`. The MCP tool and the REST endpoints both call it; neither can do what the other can't.
-- **Archive, without a background job:** after each `add` or `move` into an archivable column, if the column holds more than `after` cards, the oldest of them by `moved[column]`, among those at least `minDays` there, go to `/Board/Archive/` until it holds `after`, each with `archived:` set. They go with `mv`, so links follow and the history has it; the writer is the caller's, with the tool label `board`. A board nobody touches never changes.
+- **Archive, without a background job:** after each `add` or `move` into an archivable column, if the column holds more than `after` cards, the oldest of them by `moved[column]`, among those at least `minDays` there, go to `/Board/Archive/` until it holds `after`, each with `archived:` set. They go with `mv` (`NoteMover` as it is), so links follow and the history has it; the writer is the caller's, shown as `(mv)` like any move. A board nobody touches never changes.
 - **Rights and identity:** as for notes. Reading the board needs read on the vault, changing it write. Each change carries its writer in the history.
 - **Concurrency:** two moves of the same card: the later one wins, both are in its history, neither blocks the other.
 - **REST** for the web app, mirroring the tool: `GET /api/vaults/{vault}/board` (the `Board` as JSON, problems included; `?checkpoint=` for a checkpoint's), `POST /api/vaults/{vault}/board` (`create`), `POST /api/vaults/{vault}/board/cards` (`add`), `POST /api/vaults/{vault}/board/move`, `/update` and `/rename-column`. Errors as everywhere: `{"error": "<sentence>"}`.
 
 ## Web app
 
-- **Entry:** the vault's ⋯ menu shows "Board" when the vault has one, else "Create board…" (the template, one click). Route `/board/<Vault>`.
+- **Entry:** the vault's ⋯ menu shows "Board" when the vault has one, else "Create board" (no ellipsis: it makes the board from the template at once and opens it). Route `/board/<Vault>`.
 - **Phone:** one column per screen, a bar of column names with counts to tap, swiping between columns. A card shows its title, `due` (red when overdue) and tags; tapping it opens the note in the editor. Its ⋯ menu: "Move to…" (the columns, then top or bottom), "Up", "Down"; a `reason` column asks for the reason. Problems show as a red bar at the top, each opening its card.
 - **Laptop (from 1024 px):** all columns side by side, scrolling sideways; archivable columns narrow and collapsed, with their count. Drag and drop with the browser's own drag and drop (no new dependency), and the same ⋯ menu, for the keyboard and for anyone not at ease with a mouse. "+ Card" under each column: a title and optional text.
 - **Up to date:** the board follows changes from elsewhere (an agent, Obsidian, another tab) with the polling the web app already does.

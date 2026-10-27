@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -219,7 +220,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         var conflicts = await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct);
         if (conflicts.Count > 0)
             return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again", ShellErrorKind.Conflict);
-        return ShellResult.Ok($"{Tool}: renamed column {column.Name} to {name} in Board.md and {Count(cards, "card")}");
+        // The Instructions are the user's text: the rename leaves them alone, but says when they name the old column.
+        var stale = current.Instructions is { } instructions
+            && Regex.IsMatch(instructions, $@"(?<!\w){Regex.Escape(column.Name)}(?!\w)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return ShellResult.Ok($"{Tool}: renamed column {column.Name} to {name} in Board.md and {Count(cards, "card")}"
+            + (stale ? $"; the Instructions in Board.md still name {column.Name}: edit them if they should follow" : ""));
 
         static bool DirectlyIn(VaultPath path, VaultPath dir) =>
             path.Segments.Count == dir.Segments.Count + 1 && path.Value.StartsWith(dir.Value + "/", StringComparison.Ordinal);
@@ -484,7 +489,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             .Select(c => c.card)
             .ToList();
 
-        var archived = 0;
+        var archived = new List<string>();
         var unmarked = new List<string>();
         var stopped = "";
         foreach (var card in candidates)
@@ -499,11 +504,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
             var note = await MarkArchivedAsync(target, ct);
             if (note is null) unmarked.Add(card.Title);
-            else archived++;
+            else archived.Add(target.Name[..^".md".Length]);
             if (card.Path == written.Path) written = note ?? await store.GetAsync(target, ct) ?? written;
         }
 
-        var message = archived == 0 ? "" : $"; archived {Count(archived, "card")} to {BoardPaths.Archive(vault).Value}/";
+        // Named, so the agent can tell the user which cards went and cat them there.
+        const int named = 5;
+        var names = string.Join(", ", archived.Take(named).Select(t => $"'{t}'")) + (archived.Count > named ? $" and {archived.Count - named} more" : "");
+        var message = archived.Count == 0 ? "" : $"; archived {names} to {BoardPaths.Archive(vault).Value}/";
         message += string.Concat(unmarked.Select(t => $"; '{t}' is in the archive but 'archived' could not be set"));
         return (message + stopped, written);
     }

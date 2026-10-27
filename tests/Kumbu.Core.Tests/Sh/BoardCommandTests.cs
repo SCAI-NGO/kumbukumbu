@@ -43,7 +43,7 @@ public class BoardCommandTests
             Doing (2)
               Export needs the password  due 2026-11-03  #security #ops
               Kanban spec
-            Done (1) · Rejected (0): archivable; board /Work --column Done
+            Done (1) · Rejected (0, needs a reason): archivable; board /Work --column Done
             """), await Run(shell, "board /Work"));
     }
 
@@ -75,7 +75,8 @@ public class BoardCommandTests
 
         var plain = (await Run(shell, "board /Work")).Output;
         Assert.DoesNotContain("  A", plain);
-        Assert.EndsWith("Done (2) · Rejected (1): archivable; board /Work --column Done", plain);
+        Assert.EndsWith("Done (2) · Rejected (1, needs a reason): archivable; board /Work --column Done", plain);
+        Assert.Equal("Rejected (1, needs a reason)\n  C", (await Run(shell, "board /Work --column Rejected")).Output);
         Assert.Equal("Done (2)\n  A\n  B", (await Run(shell, "board /Work --column Done")).Output);
     }
 
@@ -111,7 +112,7 @@ public class BoardCommandTests
         var (shell, _, _) = Make(("/Work/Board/Old idea.md", "No frontmatter\n"), ("/Work/Board/A.md", Card("Doing", "a")));
 
         var output = (await Run(shell, "board /Work")).Output;
-        Assert.EndsWith("Problems (1)\n  /Work/Board/Old idea.md: no column", output);
+        Assert.EndsWith("Problems (1)\n  /Work/Board/Old idea.md: no column\n  the board tool's move puts a card in a column", output);
     }
 
     [Fact]

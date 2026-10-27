@@ -62,7 +62,7 @@ public static class BoardTool
         if (due is not null && clearDue) return ShellResult.Error("board: give due or clear_due, not both");
         if (tags is not null && clearTags) return ShellResult.Error("board: give tags or clear_tags, not both");
         if (due is null && tags is null && !clearDue && !clearTags)
-            return ShellResult.Error("board: update needs due (or clear_due) or tags (or clear_tags)");
+            return ShellResult.Error("board: update needs at least one of due, tags, clear_due, clear_tags; to remove the due date or the tags, set clear_due or clear_tags");
         if (!TryDay(due, out var day, out var error)) return error;
 
         // A parameter left out is "not given"; removal is asked for explicitly, as the tool binds an absent and a null alike.

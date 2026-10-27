@@ -329,7 +329,7 @@ public class BoardServiceTests
 
         var result = await service.MoveAsync("Work", "X", "Done", null, null, Ct);
 
-        Assert.Equal("board: moved 'X' to Done (31 of 31); archived 1 card to /Work/Board/Archive/", result.Output);
+        Assert.Equal("board: moved 'X' to Done (31 of 31); archived 'Card 17' to /Work/Board/Archive/", result.Output);
         Assert.Equal(30, (await Lane(store, "Done")).Count());
         Assert.DoesNotContain("Card 17", await Lane(store, "Done"));
         Assert.Null(await Content(store, "/Work/Board/Card 17.md"));
@@ -373,7 +373,7 @@ public class BoardServiceTests
 
         var result = await service.MoveAsync("Work", "X", "Done", "top", null, Ct);
 
-        Assert.Equal("board: moved 'X' to Done (1 of 3); archived 2 cards to /Work/Board/Archive/", result.Output);
+        Assert.Equal("board: moved 'X' to Done (1 of 3); archived 'A 2', 'B' to /Work/Board/Archive/", result.Output);
         Assert.Equal(["X"], await Lane(store, "Done"));
         // An existing name is never overwritten: the title gets a number.
         Assert.Equal("---\ncolumn: Done\narchived: 2026-01-01\n---\nAn older A\n", await Content(store, "/Work/Board/Archive/A.md"));
@@ -494,6 +494,22 @@ public class BoardServiceTests
         Assert.Equal(stray, await Content(store, "/Work/Board/Notes/Stray.md"));
         Assert.Equal(stray, await Content(store, "/Work/Board/Archive/Old/Deep.md"));
         Assert.Contains("column: Working\n", await Content(store, "/Work/Board/A.md"));
+    }
+
+    [Fact]
+    public async Task Rename_says_when_the_Instructions_name_the_old_column()
+    {
+        const string board = "---\nkumbu-board: 1\ncolumns: [Ideas, Today]\n---\n# Work\n\n## Instructions\n\nPlan today's work first.\n";
+        var store = new InMemoryNoteStore(("/Work/Board/Board.md", board));
+        var service = Service(store);
+
+        var result = await service.RenameColumnAsync("Work", "Today", "Tonight", Ct);
+
+        Assert.Equal("board: renamed column Today to Tonight in Board.md and 0 cards; the Instructions in Board.md still name Today: edit them if they should follow", result.Output);
+        Assert.EndsWith("## Instructions\n\nPlan today's work first.\n", await Content(store, "/Work/Board/Board.md"));
+
+        // Instructions that do not name the column: no hint.
+        Assert.Equal("board: renamed column Ideas to Thoughts in Board.md and 0 cards", (await service.RenameColumnAsync("Work", "Ideas", "Thoughts", Ct)).Output);
     }
 
     [Theory]

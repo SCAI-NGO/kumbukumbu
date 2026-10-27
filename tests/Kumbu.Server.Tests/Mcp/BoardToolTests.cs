@@ -47,7 +47,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         var tool = (await client.ListToolsAsync(cancellationToken: Ct)).Single(t => t.Name == "board");
 
         var description = string.Join(' ', tool.Description!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        Assert.Contains("Read the board first with sh `board <vault>` and follow its Instructions.", description, StringComparison.Ordinal);
+        Assert.Contains("Read the board first with sh `board /<vault>` and follow its Instructions.", description, StringComparison.Ordinal);
         Assert.Contains("A move or update needs no version token and never changes the card's text; change the text with edit.", description, StringComparison.Ordinal);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.ReadOnlyHint);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.DestructiveHint);
@@ -104,7 +104,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         Assert.Equal("board: column is required for add", Text(add));
         Assert.Equal("board: card is required for move", Text(move));
         Assert.Equal("board: to is required for rename_column", Text(rename));
-        Assert.Equal("board: update needs due (or clear_due) or tags (or clear_tags)", Text(update));
+        Assert.Equal("board: update needs at least one of due, tags, clear_due, clear_tags; to remove the due date or the tags, set clear_due or clear_tags", Text(update));
         Assert.Contains("YYYY-MM-DD", Text(date), StringComparison.Ordinal);
         Assert.Contains("add, move, update, create or rename_column", Text(unknown), StringComparison.Ordinal);
         Assert.Equal("board: action is required", Text(noAction));
