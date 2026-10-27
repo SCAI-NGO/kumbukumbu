@@ -17,7 +17,7 @@ namespace Kumbu.Server.Search;
 /// MongoDB (<c>embeddings</c>) and held in the vault's working set, so a search is dot products in memory.
 /// A vault catches up when it is unlocked, so nothing written while it was locked, or before a restart, is missed.
 /// Each vault is embedded by its own provider (<see cref="UnlockedVault.EmbeddingProvider"/>): the internal model,
-/// or the external one its owner opted in to.
+/// or an external one its owner opted in to or the instance's default.
 /// </summary>
 public sealed class SearchIndex : BackgroundService
 {

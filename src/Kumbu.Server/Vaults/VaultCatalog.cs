@@ -150,7 +150,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }, cancellationToken: ct);
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider };
         RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
@@ -281,7 +281,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             throw;
         }
 
-        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id));
+        var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider };
         RecordKey(vault);
         _open[id] = vault;
         Unlocked?.Invoke(vault);
@@ -814,6 +814,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>The embedding provider of a vault whose owner never chose one; its meta keeps no name for it.</summary>
+    public string DefaultEmbeddingProvider => options.Value.Embeddings.Default;
+
     /// <summary>
     /// Points the vault at another embedding provider: its meta is sealed again with the choice, then the working set
     /// follows. The search index re-embeds the vault afterwards (<see cref="Search.SearchIndex.CatchUp"/>).
@@ -900,7 +903,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 throw VaultBusyException.Just();
             }
 
-            var provider = meta.Embeddings ?? Search.EmbeddingProviders.Internal;
+            // Never chosen: the instance's default, so the vault follows it when the admin changes it.
+            var provider = meta.Embeddings ?? DefaultEmbeddingProvider;
 
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.

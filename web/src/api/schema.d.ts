@@ -5183,6 +5183,7 @@ export interface components {
             external: boolean;
             available: boolean;
             reason: null | string;
+            default: boolean;
         };
         HistoryEntryView: {
             version: string;

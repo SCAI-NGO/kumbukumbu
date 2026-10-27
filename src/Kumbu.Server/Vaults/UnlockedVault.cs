@@ -75,9 +75,9 @@ public sealed class UnlockedVault
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
 
     /// <summary>
-    /// The embedding provider the owner chose for this vault (<see cref="Search.EmbeddingProviders.Internal"/> unless
-    /// they opted in to an external one). Sealed in the vault's meta: someone who can write to the database can't
-    /// point a vault at a provider and have its notes sent there.
+    /// The embedding provider of this vault: the one its owner chose, or the instance's default
+    /// (<see cref="EmbeddingsOptions.Default"/>) if they never chose. The choice is sealed in the vault's meta: someone
+    /// who can write to the database can't point a vault at a provider and have its notes sent there.
     /// </summary>
     public string EmbeddingProvider { get; set; } = Search.EmbeddingProviders.Internal;
 
@@ -130,9 +130,9 @@ public sealed class UnlockedVault
         return note;
     }
 
-    /// <summary>The vault's name and embedding provider, as <see cref="VaultCatalog"/> seals them at creation.</summary>
-    public byte[] SealMeta(string embeddingProvider) =>
-        Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider == Search.EmbeddingProviders.Internal ? null : embeddingProvider));
+    /// <summary>The vault's name and the embedding provider its owner chose. An explicit <c>internal</c> is kept as
+    /// such, so that the vault stays on this server whatever the instance's default.</summary>
+    public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider));
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
         Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
@@ -355,7 +355,9 @@ internal sealed record MovePayload(
     string From, string To, string MovedBy, DateTime MovedAt,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
 
-/// <remarks>Embeddings: the vault's embedding provider; missing (vaults before the overnight round) or null is the internal model.</remarks>
+/// <remarks>Embeddings: the embedding provider the owner chose; missing (vaults before the overnight round, or never
+/// chosen) or null is the instance's default (<see cref="EmbeddingsOptions.Default"/>). Up to 0.2.2 an explicit
+/// <c>internal</c> was stored as null too.</remarks>
 internal sealed record VaultMeta(
     string Name,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null);

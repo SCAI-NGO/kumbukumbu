@@ -15,8 +15,8 @@ using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
 
-/// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to,
-/// <c>internal</c> (the model on this server) unless its owner chose an external one. <c>pending</c>: the vault is being
+/// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to: the one its
+/// owner chose, or the server's default (<c>internal</c>, the model on this server, unless the admin set another). <c>pending</c>: the vault is being
 /// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>canWrite</c>:
 /// whether the caller may write to it (an API key or connection with only <c>read</c> may not).</summary>
 public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite);
@@ -33,8 +33,8 @@ public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps);
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
-/// switched off, or failing).</summary>
-public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason);
+/// switched off, or failing). <c>default</c>: the provider of every vault whose owner never chose one.</summary>
+public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason, bool Default);
 
 /// <summary><c>provider</c>: the name of one of <c>GET /api/embeddings</c>, <c>internal</c> for the model on this server.</summary>
 public sealed record SetEmbeddingsRequest(string Provider);
@@ -163,9 +163,10 @@ public static class NoteApi
         return TypedResults.Ok(views.ToArray());
     }
 
-    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index) =>
+    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index, VaultCatalog catalog) =>
         TypedResults.Ok(index.Providers.All
-            .Select(p => new EmbeddingProviderView(p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason))
+            .Select(p => new EmbeddingProviderView(
+                p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason, p.Name == catalog.DefaultEmbeddingProvider))
             .ToArray());
 
     /// <summary>
@@ -202,7 +203,7 @@ public static class NoteApi
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
         await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal, Pending: false, CanWrite: true));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>

@@ -188,6 +188,21 @@ public sealed class KumbuOptionsValidatorTests
     }
 
     [Fact]
+    public void The_default_embedding_provider_is_internal_or_a_configured_one()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Embeddings.Default = "tensorx";
+        Assert.Equal(
+            "Kumbu:Embeddings:Default (KUMBU_EMBEDDINGS_DEFAULT) must be 'internal' or the name of a provider under Kumbu:Embeddings:Providers (there are none)",
+            Assert.Single(Validate(options).Failures!));
+
+        options.Embeddings.Providers["tensorx"] = Provider();
+        Assert.True(Validate(options).Succeeded);
+        options.Embeddings.Default = "openai";
+        Assert.Contains("(tensorx)", Assert.Single(Validate(options).Failures!), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Accepts_an_external_provider_over_https_with_a_key_file()
     {
         Assert.Empty(ProviderFailures(Provider(p => p.Dimensions = 1024)));
