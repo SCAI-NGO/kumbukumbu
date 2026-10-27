@@ -165,7 +165,9 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
   }
   // The budget is summed from the sizes the ZIP declares. That bounds memory because fflate (pinned to 0.8.3 in
   // package.json for this) allocates each entry's output at exactly its declared size and never grows it; a lying
-  // size truncates the note instead. Check this again before moving to another fflate version.
+  // size truncates the note instead. A stored entry is cut at its compressed size, so it is never larger than the ZIP,
+  // and the size check below still refuses it. readImport.test.ts pins all three with lying ZIPs: run it before
+  // moving to another fflate version.
   if (bytes > budget) throw new ImportTooLarge();
 
   // Only the notes are unpacked.

@@ -4498,6 +4498,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/pairing": {
         parameters: {
             query?: never;
@@ -4659,6 +4710,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/export/ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ExportTicketRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ExportTicketView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/export": {
         parameters: {
             query?: never;
@@ -4670,6 +4796,7 @@ export interface paths {
             parameters: {
                 query?: {
                     tz?: string;
+                    ticket?: string;
                 };
                 header?: never;
                 path: {
@@ -4753,6 +4880,7 @@ export interface paths {
                 query?: {
                     vault?: string[];
                     tz?: string;
+                    ticket?: string;
                 };
                 header?: never;
                 path?: never;
@@ -4833,6 +4961,7 @@ export interface paths {
             parameters: {
                 query?: {
                     tz?: string;
+                    ticket?: string;
                 };
                 header?: never;
                 path: {
@@ -5184,6 +5313,14 @@ export interface components {
             available: boolean;
             reason: null | string;
             default: boolean;
+        };
+        ExportTicketRequest: {
+            password: string;
+        };
+        ExportTicketView: {
+            ticket: string;
+            /** Format: date-time */
+            expiresAt: string;
         };
         HistoryEntryView: {
             version: string;

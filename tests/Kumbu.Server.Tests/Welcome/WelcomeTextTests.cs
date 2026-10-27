@@ -42,7 +42,7 @@ public sealed partial class WelcomeTextTests
     {
         var section = Section(Text("Working by hand.md"), "## Checkpoints");
         Assert.Contains("**Open**", section, StringComparison.Ordinal);
-        Assert.Contains("**Export as ZIP**", section, StringComparison.Ordinal);
+        Assert.Contains("**Export as ZIP…**", section, StringComparison.Ordinal);
         Assert.Contains("**Copy for your AI**", section, StringComparison.Ordinal);
         Assert.Contains("--checkpoint", section, StringComparison.Ordinal);
     }

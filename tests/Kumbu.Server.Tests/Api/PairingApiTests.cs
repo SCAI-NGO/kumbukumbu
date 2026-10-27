@@ -102,6 +102,22 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("Arbeit – Obsidian Laptop", body["keyName"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("DELETE", "/api/session")]
+    [InlineData("POST", "/api/sessions/end-others")]
+    public async Task Signing_out_or_ending_the_other_sessions_drops_the_open_code(string method, string path)
+    {
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+
+        using var done = await user.SendAsync(new HttpMethod(method), path);
+        using var redeemed = await RedeemAsync(code, "Laptop");
+
+        Assert.Equal(HttpStatusCode.NoContent, done.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, redeemed.StatusCode);
+        Assert.Equal(0, Api.Services.GetRequiredService<Pairings>().Count);
+    }
+
     [Fact]
     public async Task The_redeemed_key_works_on_the_versions_endpoint()
     {

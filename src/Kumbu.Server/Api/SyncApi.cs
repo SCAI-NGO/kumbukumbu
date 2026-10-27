@@ -42,6 +42,7 @@ public static class SyncApi
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/vaults/{vault}/versions", VersionsAsync).Produces(StatusCodes.Status304NotModified).Errors(400, 401, 404, 503);
         api.MapPost("/ws-ticket", TicketAsync).Errors(401, 403, 503);
+        api.MapDelete("/key", RevokeSelfAsync).Errors(401, 403);
         // The ticket is the credential: no cookie or header is involved, so neither the caller nor the Origin check applies.
         app.MapGet("/api/ws", SocketAsync).AllowAnonymous().Produces(StatusCodes.Status101SwitchingProtocols).Errors(400, 401);
     }
@@ -57,6 +58,22 @@ public static class SyncApi
         var vaults = await caller.OpenVaultsAsync(ct);
         var (ticket, expiresAt) = tickets.Issue(key.KeyId, [.. vaults.Select(v => (v.Id, v.Name))]);
         return TypedResults.Ok(new WsTicketView(ticket, expiresAt));
+    }
+
+    /// <summary>
+    /// The API key revokes itself: the plugin's Disconnect, so that a device given away or lost holds no key that still
+    /// works. Any API key may, since it can only lose access by it; its sockets close at the hub's next check.
+    /// </summary>
+    private static async Task<NoContent> RevokeSelfAsync(RequestCaller caller, ApiKeys keys, CancellationToken ct)
+    {
+        if (caller.Kind != CallerKind.ApiKey || caller.Credential is not ApiKeyCredential key)
+        {
+            throw new ApiException(StatusCodes.Status403Forbidden, "Only an API key revokes itself here; a session revokes keys with DELETE /api/keys/{id}.");
+        }
+
+        // A key revoked meanwhile (by the user in the web app) is not found again: it is revoked either way.
+        await keys.RevokeAsync(caller.User!, key.KeyId, ct);
+        return TypedResults.NoContent();
     }
 
     /// <summary>The upgrade; 401 for an unknown, used or expired ticket. Hints go out until the socket closes.</summary>
