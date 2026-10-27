@@ -288,6 +288,148 @@ describe("the board", () => {
     }
   });
 
+  it("drops onto the collapsed strip of an archivable lane on a laptop", async () => {
+    laptop();
+    const fetch = api({ "POST /api/vaults/Work/board/move": () => json(200, board()) });
+    renderApp("/board/Work");
+    const plan = (await screen.findByRole("link", { name: "Plan" })).closest("li")!;
+    const data = new Map<string, string>();
+    const dataTransfer = { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "" };
+    fireEvent.dragStart(plan, { dataTransfer });
+    const strip = screen.getByRole("button", { name: "Show Done, 1 card" });
+    expect(fireEvent.dragOver(strip, { dataTransfer })).toBe(false);
+    fireEvent.drop(strip, { dataTransfer });
+
+    await waitFor(async () => expect(await bodies(fetch, "/api/vaults/Work/board/move")).toEqual([{ card: "Plan", column: "Done", position: "bottom" }]));
+  });
+
+  it("renames a column", async () => {
+    const fetch = api({
+      "POST /api/vaults/Work/board/rename-column": () => {
+        const b = board();
+        b.columns[1].name = "In progress";
+        return json(200, b);
+      },
+    });
+    renderApp("/board/Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Column actions for Doing" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const dialog = screen.getByRole("dialog", { name: "Rename Doing" });
+    const name = within(dialog).getByRole("textbox", { name: "New name" });
+    expect(within(dialog).getByRole("button", { name: "Rename" })).toBeDisabled();
+    await userEvent.clear(name);
+    await userEvent.type(name, "In progress");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+    expect(await screen.findByRole("list", { name: "In progress" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await bodies(fetch, "/api/vaults/Work/board/rename-column")).toEqual([{ from: "Doing", to: "In progress" }]);
+  });
+
+  it("says why a rename didn't go through, in the dialog", async () => {
+    api({ "POST /api/vaults/Work/board/rename-column": () => json(400, { error: "there is a column named Backlog already" }) });
+    renderApp("/board/Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Column actions for Doing" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const dialog = screen.getByRole("dialog", { name: "Rename Doing" });
+    await userEvent.clear(within(dialog).getByRole("textbox", { name: "New name" }));
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "New name" }), "backlog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("there is a column named Backlog already");
+  });
+
+  it("changes a card's tags and sends nothing for the unchanged due date", async () => {
+    const fetch = api({ "POST /api/vaults/Work/board/update": () => json(200, board()) });
+    renderApp("/board/Work");
+    await chooseFromMenu("Write spec", "Due and tags…");
+    const dialog = screen.getByRole("dialog", { name: "Due and tags of Write spec" });
+    expect(within(dialog).getByLabelText("Due")).toHaveValue("2026-10-20");
+    const tags = within(dialog).getByRole("textbox", { name: "Tags" });
+    expect(tags).toHaveValue("docs");
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await userEvent.type(tags, ", #urgent later");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await bodies(fetch, "/api/vaults/Work/board/update")).toEqual([{ card: "Write spec", tags: ["docs", "urgent", "later"] }]);
+  });
+
+  it("clears a due date and tags the user emptied, and sets a new due date", async () => {
+    const fetch = api({ "POST /api/vaults/Work/board/update": () => json(200, board()) });
+    renderApp("/board/Work");
+    await chooseFromMenu("Write spec", "Due and tags…");
+    let dialog = screen.getByRole("dialog", { name: "Due and tags of Write spec" });
+    fireEvent.change(within(dialog).getByLabelText("Due"), { target: { value: "" } });
+    await userEvent.clear(within(dialog).getByRole("textbox", { name: "Tags" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    await chooseFromMenu("Review", "Due and tags…");
+    dialog = screen.getByRole("dialog", { name: "Due and tags of Review" });
+    fireEvent.change(within(dialog).getByLabelText("Due"), { target: { value: "2026-11-05" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(await bodies(fetch, "/api/vaults/Work/board/update")).toEqual([
+      { card: "Write spec", clearDue: true, clearTags: true },
+      { card: "Review", due: "2026-11-05" },
+    ]);
+  });
+
+  it("says why an update didn't go through, in the dialog", async () => {
+    api({ "POST /api/vaults/Work/board/update": () => json(400, { error: "a tag can't contain ':'" }) });
+    renderApp("/board/Work");
+    await chooseFromMenu("Plan", "Due and tags…");
+    const dialog = screen.getByRole("dialog", { name: "Due and tags of Plan" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Tags" }), "a:b");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("a tag can't contain ':'");
+  });
+
+  it("adds a card with a due date and tags", async () => {
+    const fetch = api({ "POST /api/vaults/Work/board/cards": () => json(201, board()) });
+    renderApp("/board/Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Add a card to Doing" }));
+    const form = screen.getByRole("form", { name: "New card in Doing" });
+    await userEvent.type(within(form).getByRole("textbox", { name: "Title" }), "Print flyers");
+    await userEvent.click(within(form).getByRole("button", { name: "More" }));
+    fireEvent.change(within(form).getByLabelText("Due (optional)"), { target: { value: "2026-11-05" } });
+    await userEvent.type(within(form).getByRole("textbox", { name: "Tags (optional)" }), "#print, flyers");
+    await userEvent.click(within(form).getByRole("button", { name: "Add" }));
+
+    await waitFor(async () =>
+      expect(await bodies(fetch, "/api/vaults/Work/board/cards")).toEqual([{ title: "Print flyers", column: "Doing", due: "2026-11-05", tags: ["print", "flyers"] }]),
+    );
+  });
+
+  it("doesn't poll while a change is under way, so the old board can't come back over the new one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let reads = 0;
+      let answer: (r: Response) => void = () => {};
+      api({
+        "GET /api/vaults/Work/board": () => {
+          reads++;
+          return json(200, board());
+        },
+        "POST /api/vaults/Work/board/move": () => new Promise<Response>((resolve) => (answer = resolve)),
+      });
+      renderApp("/board/Work");
+      await chooseFromMenu("Plan", "Up");
+      const before = reads;
+
+      await act(() => vi.advanceTimersByTimeAsync(12_000));
+      expect(reads).toBe(before);
+
+      answer(json(200, moved()));
+      expect(await within(lane("Doing")).findByRole("link", { name: "Plan" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drags nothing on a phone", async () => {
     api();
     renderApp("/board/Work");
@@ -366,6 +508,7 @@ describe("a checkpoint's board", () => {
     expect(screen.getByRole("region", { name: "Checkpoint" })).toHaveTextContent("read only");
     expect(screen.queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Add a card/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Column actions for/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/checkpoints/Work/before-cleanup/Board/Plan.md");
     expect(screen.getByRole("link", { name: "Plan" }).closest("li")).not.toHaveAttribute("draggable", "true");
     const read = fetch.mock.calls.map(([r]) => new URL((r as Request).url)).find((u) => u.pathname === "/api/vaults/Work/board")!;

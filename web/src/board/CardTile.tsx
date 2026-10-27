@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ArrowDown, ArrowUp, Ellipsis, MoveRight } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarDays, Ellipsis, MoveRight } from "lucide-react";
 import type { DragEvent } from "react";
 import { Link } from "react-router-dom";
 import type { BoardCard } from "../api/board";
@@ -8,6 +8,7 @@ import { Menu } from "../components/Menu";
 /** What a card can do; absent on a checkpoint's board, which is read-only. */
 export interface CardActions {
   moveTo(): void;
+  dueAndTags(): void;
   /** Null at the top of the lane (Up) or at its bottom (Down). */
   up: (() => void) | null;
   down: (() => void) | null;
@@ -78,6 +79,7 @@ export default function CardTile({ card, href, actions }: { card: BoardCard; hre
             { label: "Move to…", icon: MoveRight, onSelect: actions.moveTo },
             { label: "Up", icon: ArrowUp, onSelect: () => actions.up?.(), disabled: !actions.up },
             { label: "Down", icon: ArrowDown, onSelect: () => actions.down?.(), disabled: !actions.down },
+            { label: "Due and tags…", icon: CalendarDays, onSelect: actions.dueAndTags },
           ]}
         >
           <Ellipsis size={18} aria-hidden />

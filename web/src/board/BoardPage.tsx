@@ -2,16 +2,18 @@
 import { ArrowLeft } from "lucide-react";
 import { useId, useState, type DragEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useBoard, useBoardAction, type BoardView } from "../api/board";
+import { useBoard, useBoardAction, type BoardCard, type BoardView } from "../api/board";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { checkpointUrl, noteUrl, titleOf } from "../api/paths";
 import { FormError, primaryButtonClass } from "../components/form";
 import { useDesktop } from "../hooks/useDesktop";
 import CardTile, { DRAG_TYPE, type CardActions } from "./CardTile";
+import DueTagsDialog from "./DueTagsDialog";
 import Lane from "./Lane";
 import MoveToSheet from "./MoveToSheet";
 import ReasonDialog from "./ReasonDialog";
+import RenameColumnDialog from "./RenameColumnDialog";
 
 /**
  * `/board/<Vault>`: the vault's board, the cards of `/<Vault>/Board/` in their columns. `?checkpoint=<name>` shows
@@ -77,6 +79,8 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
   const [active, setActive] = useState(0);
   const [moving, setMoving] = useState<{ card: string; from: string } | null>(null);
   const [asking, setAsking] = useState<Asking | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [editing, setEditing] = useState<BoardCard | null>(null);
   const [problem, setProblem] = useState<{ column: string; text: string } | null>(null);
   const readOnly = checkpoint !== null;
   const laneId = (i: number) => `${id}-lane-${i}`;
@@ -111,6 +115,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
     const title = cards[index].title;
     return {
       moveTo: () => setMoving({ card: title, from: column }),
+      dueAndTags: () => setEditing(cards[index]),
       up: index > 0 ? () => quick(title, column, `before:${cards[index - 1].title}`) : null,
       down: index < cards.length - 1 ? () => quick(title, column, `after:${cards[index + 1].title}`) : null,
       draggable: desktop,
@@ -169,6 +174,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
               column={c}
               vault={vault}
               readOnly={readOnly}
+              onRename={() => setRenaming(c.name)}
               onDrop={!readOnly && desktop ? (e) => dropped(c.name, "bottom", e) : null}
               problem={problem?.column === c.name ? problem.text : null}
             >
@@ -193,6 +199,26 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
             }
             await send(moving.card, column, position);
             setMoving(null);
+          }}
+        />
+      )}
+      {renaming && (
+        <RenameColumnDialog
+          column={renaming}
+          onCancel={() => setRenaming(null)}
+          onRename={async (to) => {
+            await action.mutateAsync({ kind: "rename-column", from: renaming, to });
+            setRenaming(null);
+          }}
+        />
+      )}
+      {editing && (
+        <DueTagsDialog
+          card={editing}
+          onCancel={() => setEditing(null)}
+          onSave={async (update) => {
+            await action.mutateAsync({ kind: "update", ...update });
+            setEditing(null);
           }}
         />
       )}
