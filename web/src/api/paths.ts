@@ -8,6 +8,11 @@ export const noteUrl = (path: string) => `/notes/${path.split("/").slice(1).map(
 /** The note path of `/notes/:vault/*`, from React Router's (decoded) params. */
 export const pathFromRoute = (vault: string, rest: string) => `/${vault}/${rest}`;
 
+/** The app's URL of a checkpoint, and of a note in it (`path` from the root of the tree, the vault first). */
+export const checkpointUrl = (vault: string, name: string, path?: string) =>
+  `/checkpoints/${encodeURIComponent(vault)}/${encodeURIComponent(name)}` +
+  (path ? `/${inVault(path).split("/").map(encodeURIComponent).join("/")}` : "");
+
 export const vaultOf = (path: string) => path.split("/")[1];
 
 export const folderOf = (path: string) => path.slice(0, path.lastIndexOf("/"));

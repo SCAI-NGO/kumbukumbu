@@ -104,6 +104,7 @@ describe("a session that ends mid-use", () => {
 describe("safeNext", () => {
   it.each([
     ["/notes/Arbeit/plan.md?line=4", "/notes/Arbeit/plan.md?line=4"],
+    ["/consent?request=r1", "/consent?request=r1"],
     ["/", "/"],
     [null, "/"],
     ["", "/"],

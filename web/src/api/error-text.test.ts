@@ -14,6 +14,13 @@ describe("errorText", () => {
     expect(errorText(new TypeError("Failed to fetch"))).toBe(unreachable);
   });
 
+  it("passes on the sentence of a vault being re-encrypted, and not of any other 503", () => {
+    expect(errorText(new HttpError(503, "This vault is being re-encrypted; try again in a moment."))).toBe(
+      "This vault is being re-encrypted; try again in a moment.",
+    );
+    expect(errorText(new HttpError(503, ""))).toBe("The server can't be reached right now. Try again in a moment.");
+  });
+
   it("falls back to a plain sentence", () => {
     expect(errorText(new Error("boom"))).toBe("Something went wrong. Try again.");
   });

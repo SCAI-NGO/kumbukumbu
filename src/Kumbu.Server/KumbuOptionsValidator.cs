@@ -4,10 +4,16 @@ using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server;
 
-/// <summary>Startup checks for <see cref="KumbuOptions"/>; with ValidateOnStart the server refuses to start on failure.</summary>
-public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOptions>
+/// <summary>Startup checks for <see cref="KumbuOptions"/>; with ValidateOnStart the server refuses to start on failure.
+/// <paramref name="environment"/> is the host's, for the checks that depend on it (none without one).</summary>
+public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment = null) : IValidateOptions<KumbuOptions>
 {
     public const string MongoMessage = "Kumbu:Mongo:ConnectionString must be set";
+    public const string AccessTokenMinutesMessage = "Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440";
+
+    public const string LoopbackClientsMessage =
+        "Kumbu:OAuth:AllowLoopbackClients is for tests and development only: it lets client metadata documents come from this machine's own addresses, so it is refused in Production";
+
     public const string CheckpointLimitMessage = "Kumbu:Vaults:CheckpointLimit must be 0 or more";
 
     public const string PublicUrlMessage =
@@ -57,12 +63,30 @@ public sealed partial class KumbuOptionsValidator : IValidateOptions<KumbuOption
             failures.Add(CheckpointLimitMessage);
         }
 
+        if (options.OAuth.AccessTokenMinutes is < 5 or > 1440)
+        {
+            failures.Add(AccessTokenMinutesMessage);
+        }
+
+        // An SSRF guard switched off: never on a real instance, which runs as Production unless told otherwise.
+        if (options.OAuth.AllowLoopbackClients && environment?.IsProduction() == true)
+        {
+            failures.Add(LoopbackClientsMessage);
+        }
+
         if (!ModelFiles.Catalogue.ContainsKey(options.Search.Model))
         {
             failures.Add($"Kumbu:Search:Model must be one of: {string.Join(", ", ModelFiles.Catalogue.Keys.Order())}");
         }
 
         foreach (var (providerName, provider) in options.Embeddings.Providers) failures.AddRange(ProviderFailures(providerName, provider));
+
+        var embeddings = options.Embeddings;
+        if (embeddings.Default != EmbeddingProviders.Internal && !embeddings.Providers.ContainsKey(embeddings.Default))
+        {
+            var names = embeddings.Providers.Count == 0 ? "there are none" : string.Join(", ", embeddings.Providers.Keys.Order(StringComparer.Ordinal));
+            failures.Add($"Kumbu:Embeddings:Default (KUMBU_EMBEDDINGS_DEFAULT) must be '{EmbeddingProviders.Internal}' or the name of a provider under Kumbu:Embeddings:Providers ({names})");
+        }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }

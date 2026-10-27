@@ -1,0 +1,217 @@
+@font-face { font-family: Caveat; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(fonts/caveat-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: Caveat; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(fonts/caveat-latin-700-normal.woff2) format("woff2"); }
+@font-face { font-family: Fraunces; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/fraunces-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: Fraunces; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/fraunces-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: Nunito; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/nunito-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: Nunito; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(fonts/nunito-latin-600-normal.woff2) format("woff2"); }
+
+/* The latin subset covers "²" and "—"; the drawn footer flower is SVG, as "✿" is not in the subset. */
+:root {
+  --paper: #fbf8f2; --ink: #4a4553; --graphite: #6d6676; --soft: #8a8394;
+  --a: #cfe3c9; --a-deep: #9cc293;   /* sage */
+  --b: #f8d5c2; --b-deep: #eaa98a;   /* peach */
+  --c: #dcd3f0; --c-deep: #b2a3dc;   /* lavender */
+  --d: #f6e3b4; --d-deep: #e2c27a;   /* butter */
+  --stem: #8fae86; --tick: #5b8a52;   /* the roadmap's check mark; 3.9:1 on white */
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font: 400 19.5px/1.65 Nunito, system-ui, sans-serif;
+  background-image: radial-gradient(rgba(0,0,0,.025) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+.wrap { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+
+header { text-align: center; margin-top: 28px; }
+h1 {
+  font: 600 clamp(48px, 9vw, 84px)/1 Fraunces, Georgia, serif; margin: 0; letter-spacing: -.02em;
+  opacity: 0; animation: rise 1s .1s ease-out forwards;
+}
+h1 sup { font-size: .45em; color: var(--c-deep); }
+.tag {
+  font-size: clamp(20px, 3vw, 26px); color: var(--graphite); max-width: 620px; margin: 14px auto 0;
+  opacity: 0; animation: rise 1s .5s ease-out forwards;
+}
+
+.pencil { filter: url(#pencil); }
+.ground { fill: none; stroke: var(--graphite); stroke-width: 1.6; stroke-linecap: round;
+  stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s .6s ease-out forwards; }
+.stem { fill: none; stroke: var(--stem); stroke-width: 3; stroke-linecap: round;
+  stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.6s ease-in-out forwards; }
+.leaf { stroke: var(--graphite); stroke-width: 1.2; fill: var(--a);
+  transform-box: fill-box; transform: scale(0); animation: pop .7s ease-out forwards; }
+.plant .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
+  animation: pop .9s cubic-bezier(.3,1.6,.5,1) forwards; }
+.plant .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+/* Petals drawn through <use> can't be matched by a descendant selector, so the colour arrives as an inherited property. */
+.petal { stroke: var(--graphite); stroke-width: 1.2; fill: var(--petal, var(--c)); }
+
+.links { text-align: center; margin-top: 56px; font: 700 28px Caveat, cursive;
+  opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
+.links a { white-space: nowrap; color: var(--ink); text-decoration: none; padding: 2px 6px;
+  background: linear-gradient(transparent 62%, var(--b) 62%, var(--b) 90%, transparent 90%); }
+.links a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
+.links a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.links .dot { display: inline-block; width: 24px; height: 24px; margin: 0 14px; vertical-align: -3px; }
+.dot-petals { fill: var(--c); stroke: var(--graphite); stroke-width: 1; }
+.dot-heart { fill: var(--c-deep); stroke: var(--graphite); stroke-width: 1; }
+
+@media (max-width: 480px) { .links { font-size: 24px; } .links .dot { display: none; } .links a { display: block; width: max-content; margin: 8px auto; } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes pop { to { transform: scale(1); } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; }
+  .plant .sway { animation: none; } }
+
+/* ---- The garden of four, sections, cards and the sheet ---- */
+html { scrollbar-gutter: stable; }
+html.sheet-open { overflow: hidden; }
+.scribble { font: 700 28px Caveat, cursive; color: var(--soft); margin: 10px 0 0;
+  opacity: 0; animation: rise 1s 3.6s ease-out forwards; }
+.scribble svg { width: 22px; height: 30px; vertical-align: -8px; margin-left: 6px;
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Each plant is its own button and SVG, cut from one 900-wide drawing; the ground segments meet at y=352,
+   so four in a row draw one line, and two rows on a phone draw two. */
+.meadow { display: grid; grid-template-columns: repeat(4, 1fr); max-width: 900px; margin: 8px auto 0; }
+.plant { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit;
+  cursor: pointer; border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px; }
+.plant:focus-visible { outline: 2px dashed var(--graphite); outline-offset: -2px; }
+.plant svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ground.seg { stroke-dasharray: 260; stroke-dashoffset: 260; animation-duration: .45s; animation-timing-function: linear; }
+.plant use { transition: transform .6s cubic-bezier(.3,1.5,.5,1); transform-box: view-box; }
+.plant:hover use, .plant.open use { transform: scale(1.12); }
+.plant .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--heart); }
+.plant text { font: 700 30px Caveat, cursive; fill: var(--ink); text-anchor: middle; }
+.p1 { --petal: var(--b); --heart: var(--b-deep); } .p2 { --petal: var(--c); --heart: var(--c-deep); }
+.p3 { --petal: var(--d); --heart: var(--d-deep); } .p4 { --petal: var(--a); --heart: var(--a-deep); }
+/* 22 viewBox units of label at 360 px still render above 16 px; two by two keeps them readable. */
+@media (max-width: 639px) { .meadow { grid-template-columns: repeat(2, 1fr); max-width: 460px; } }
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.panel { min-height: 120px; scroll-margin-top: 16px; }
+.section-card {
+  background: rgba(255,255,255,.65); border: 1.6px solid var(--graphite);
+  border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  padding: 26px 30px; margin: 8px auto 0; max-width: 820px; animation: unfold .6s ease-out;
+}
+.section-card h2 { font: 600 33px/1.2 Fraunces, Georgia, serif; margin: 0 0 4px; }
+.section-card .hand { font: 700 27px/1.25 Caveat, cursive; color: var(--soft); margin: 0 0 14px; }
+.moments { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.moment {
+  padding: 14px 16px; border: 1.3px dashed var(--graphite); background: var(--paper);
+  border-radius: 18px 225px 18px 255px / 255px 18px 225px 18px;
+  opacity: 0; animation: settle .5s ease-out forwards;
+  cursor: pointer; transition: transform .35s cubic-bezier(.3,1.4,.5,1), box-shadow .35s;
+}
+.moment:nth-child(2) { animation-delay: .12s } .moment:nth-child(3) { animation-delay: .24s }
+.moment:nth-child(4) { animation-delay: .36s } .moment:nth-child(5) { animation-delay: .48s }
+.moment:hover { transform: translateY(-3px) rotate(-.4deg); box-shadow: 0 6px 0 -2px var(--c); }
+.moment:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.moment b { display: block; font-weight: 600; margin-bottom: 4px; }
+.moment > span { display: block; color: var(--graphite); font-size: 18px; }
+.moment.ask { background: var(--c); border-style: solid; }
+.moment.ask > span { color: var(--ink); }   /* graphite on lavender would miss AA */
+.moment .more { display: none; }
+.moment .more p { margin: 10px 0 0; }
+.moment a { color: var(--ink); text-decoration: none; background: linear-gradient(transparent 62%, var(--a) 62%); }
+.moment a:hover { background: linear-gradient(transparent 40%, var(--a) 40%); }
+.moment a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 2px; }
+.moment a:has(code) { background: none; }
+.moment a code { text-decoration: underline 1.5px var(--a-deep); text-underline-offset: 3px; }
+.moment code { font-size: 16px; background: var(--a); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+
+.veil { position: fixed; inset: 0; z-index: 10; background: rgba(251,248,242,.55); backdrop-filter: blur(3px);
+  opacity: 0; transition: opacity .35s; }
+.veil.on { opacity: 1; }
+.moment.pop { position: fixed; z-index: 11; margin: 0; opacity: 1; animation: none; translate: none;
+  background: #fff; cursor: default; padding: 26px 30px; font-size: 1.05em; transform-origin: top left;
+  box-shadow: 0 14px 0 -6px var(--b), 0 18px 40px -18px rgba(74,69,83,.35); max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px); overflow: auto; }
+.moment.pop:hover { transform: none; }
+.moment.pop b { font: 600 26px/1.25 Fraunces, Georgia, serif; margin: 0 72px 8px 0; }
+.moment.pop .more { display: block; }
+.moment.pop .close { position: absolute; top: 10px; right: 16px; font: 700 26px Caveat, cursive;
+  color: var(--soft); background: none; border: 0; padding: 0 4px; cursor: pointer; }
+.moment.pop .close:focus-visible { outline: 2px solid var(--graphite); outline-offset: 2px; }
+@media (max-width: 480px) { .section-card, .moment.pop { padding: 22px 18px; } }
+
+.closing { text-align: center; max-width: 640px; margin: 64px auto 0; color: var(--graphite);
+  opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
+.closing a { color: var(--ink); text-decoration: none; padding: 0 3px;
+  background: linear-gradient(transparent 62%, var(--b) 62%, var(--b) 90%, transparent 90%); }
+.closing a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
+.closing a:focus-visible { outline: 2px solid var(--graphite); outline-offset: 3px; }
+.closing + .links { margin-top: 28px; }
+
+@keyframes settle { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+@keyframes unfold { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .veil, .moment, .plant use { transition: none; }
+  .moment:hover { transform: none; }
+}
+
+/* ---- The roadmap: a vine that draws itself once in view, a blossom or bud per release ---- */
+.roadmap { max-width: 900px; margin: 72px auto 0; text-align: center; }
+.roadmap h2 { font: 600 33px/1.2 Fraunces, Georgia, serif; margin: 0; }
+.roadmap .hand { font: 700 27px/1.25 Caveat, cursive; color: var(--soft); margin: 4px 0 22px; }
+.road { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); }
+.road li { position: relative; }
+/* Each piece of vine is stretched only along its length, so its stroke keeps its width; the pieces meet at the
+   cell edges. --i is the stop's place in the row: the pieces draw one after another, then the stop opens. */
+.vine { position: absolute; display: block; overflow: visible; pointer-events: none; }
+.vine path { fill: none; stroke: var(--stem); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.roadmap.grown .vine path { animation: draw .45s calc(var(--i) * .45s) linear forwards; }
+.vine-h { left: 0; top: 36px; width: 100%; height: 20px; }
+.vine-v { display: none; }
+.stop { position: relative; display: flex; flex-direction: column; align-items: center; padding: 0 6px 8px;
+  cursor: pointer; border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+  transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+.stop:hover { transform: translateY(-3px) rotate(-.4deg); }
+.stop:focus-visible { outline: 2px dashed var(--graphite); outline-offset: -2px; }
+.stop-art { display: block; flex: none; width: 92px; height: 92px; overflow: visible; }
+.stop b { font: 700 27px/1.1 Caveat, cursive; margin-top: 4px; }
+.stop > span { font-size: 16px; line-height: 1.4; color: var(--graphite); }
+.stop b, .stop > span { opacity: 0; }
+.roadmap.grown .stop b, .roadmap.grown .stop > span { animation: settle .5s calc(var(--i) * .45s + .35s) ease-out forwards; }
+.stop .more { display: none; }
+.stop .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0); }
+.roadmap.grown .stop .bloom { animation: pop .9s calc(var(--i) * .45s + .2s) cubic-bezier(.3,1.6,.5,1) forwards; }
+.stop .sway { transform-box: fill-box; transform-origin: bottom center; }
+.roadmap.grown .stop .sway { animation: sway 6s ease-in-out infinite; }
+.stop use { transition: transform .6s cubic-bezier(.3,1.5,.5,1); transform-box: view-box; }
+.stop:hover use { transform: scale(1.12); }
+.stop .heart { stroke: var(--graphite); stroke-width: 1.2; fill: var(--heart); }
+.stop .sprig, .stop .sepal { fill: var(--a); stroke: var(--graphite); stroke-width: 1.2; }
+.stop .bud-shut { fill: var(--petal); stroke: var(--graphite); stroke-width: 1.2; }
+.stop .bud-fold { fill: none; stroke: var(--graphite); stroke-width: 1; }
+.stop .badge { fill: #fff; stroke: var(--graphite); stroke-width: 1.2; }
+.stop .tick { fill: none; stroke: var(--tick); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.moment.pop .stop-art { display: none; }
+.moment.pop .aside { font: 700 26px/1.2 Caveat, cursive; color: var(--soft); margin: 6px 0 0; }
+
+/* Six in a row need about 140 px each; below that the vine turns and runs down the left. */
+@media (max-width: 879px) {
+  .road { grid-template-columns: 1fr; max-width: 460px; margin: 0 auto; }
+  .vine-h { display: none; }
+  .vine-v { display: block; left: 36px; top: 0; width: 20px; height: 100%; }
+  .road li:first-child .vine-v { top: 46px; height: calc(100% - 46px); }
+  .road li:last-child .vine-v { height: 76px; }
+  .stop { display: grid; grid-template-columns: 92px 1fr; column-gap: 12px; align-items: start;
+    text-align: left; padding: 0 8px 18px 0; }
+  .stop-art { grid-row: 1 / span 2; }
+  .stop b { margin-top: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stop, .stop use { transition: none; }
+  .stop:hover { transform: none; }
+  .roadmap.grown .stop .sway { animation: none; }
+}

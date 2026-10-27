@@ -2,13 +2,13 @@
 
 **Date:** 2026-10-22
 **Scope:** The Obsidian plugin that keeps a local Obsidian vault in sync with a Kumbu² vault, and the server API it needs. Builds on [concept.md](concept.md) §13 "Obsidian sync" (build order step 11), which chose a sync plugin over mounting.
-**Status:** Draft by Claude after discussing questions a) to d) with Chris. Conflict handling and licence are settled (§12); everything else is a proposal for review.
+**Status:** Superseded on 2026-10-26 by [the Obsidian sync design](superpowers/specs/2026-10-26-obsidian-sync-design.md), which carries over what this draft settled. Kept for the record.
 
 ## 1. Intent
 
 A person writes in Obsidian as they always do, on desktop or mobile, online or offline. Their notes are in Kumbu², where their agents read and write them. Changes on either side show up on the other within seconds while online, and after reconnecting otherwise. Nobody loses an edit, ever: a conflict produces two visible versions, never a silent overwrite.
 
-At COR.energy this is a personal second brain per employee; sharing between people is out of scope (handled by another tool).
+In the first workplace pilot this is a personal second brain per person; sharing between people is out of scope (handled by another tool).
 
 ### Success criteria
 - Edit a note in Obsidian → an agent can `cat` the new text a few seconds later.

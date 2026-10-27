@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Crypto;
+using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -25,6 +26,32 @@ public sealed class UserVaultTests(MongoFixture fixture)
         var vault = Assert.Single(opened);
         Assert.Equal(created.Id, vault.Id);
         Assert.Equal("Arbeit", vault.Name);
+    }
+
+    [Fact]
+    public async Task A_vault_whose_owner_never_chose_follows_the_instances_default_embedding_provider()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var key = VaultCrypto.NewKey();
+        var created = await world.Catalog(embeddingsDefault: "remote").CreateForUserAsync("Arbeit", "u1", key, Ct);
+        Assert.Equal("remote", created.EmbeddingProvider);
+
+        // Nothing was stored for it: the next process's default is what it gets.
+        Assert.Equal("remote", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
+        Assert.Equal("internal", Assert.Single(await world.Catalog().OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
+    }
+
+    [Fact]
+    public async Task An_explicit_choice_of_the_internal_model_holds_under_an_external_default()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var key = VaultCrypto.NewKey();
+        var catalog = world.Catalog(embeddingsDefault: "remote");
+        var vault = await catalog.CreateForUserAsync("Arbeit", "u1", key, Ct);
+
+        await catalog.SetEmbeddingProviderAsync(vault, EmbeddingProviders.Internal, Ct);
+
+        Assert.Equal("internal", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
     }
 
     [Fact]

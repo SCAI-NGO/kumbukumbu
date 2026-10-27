@@ -9,6 +9,7 @@ import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, secondaryButtonClass } from "../../components/form";
 import { useSession } from "../../state/session";
 import AdminOnly, { useIsAdmin } from "./AdminOnly";
+import DeletionReceipt, { type Receipt } from "./DeletionReceipt";
 
 type AdminUser = components["schemas"]["AdminUserView"];
 
@@ -29,9 +30,36 @@ export default function Users() {
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
+  // One receipt after the other: a repeat after a restore gives one per user.
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [repeating, setRepeating] = useState(false);
+  const deletions = useQuery({
+    queryKey: ["admin", "deletions"],
+    queryFn: () => call(api.GET("/api/admin/deletions")),
+    enabled: useIsAdmin() === true,
+  });
+  const restored = deletions.data?.restored ?? [];
 
   return (
     <AdminOnly title="Users">
+      {deletions.isError && <FormError>{errorText(deletions.error)}</FormError>}
+      {deletions.data?.configured === false && (
+        <p className="mb-4 text-sm text-text-body">
+          Deleted users aren't listed outside the database (Kumbu:Deletions:Path isn't set), so a backup restore that brings one back won't be noticed.
+        </p>
+      )}
+      {restored.length > 0 && (
+        <div role="status" className="mb-4 flex flex-col gap-3 rounded-[12px] border border-line bg-surface p-4 text-text">
+          <p>
+            A backup restore brought back {restored.length} deleted user(s): {restored.map((u) => u.username).join(", ")}. Delete them again?
+          </p>
+          <div>
+            <button type="button" onClick={() => setRepeating(true)} className={secondaryButtonClass}>
+              Delete again…
+            </button>
+          </div>
+        </div>
+      )}
       {users.isError && <FormError>{errorText(users.error)}</FormError>}
       {users.data && (
         <ul className="flex flex-col gap-3">
@@ -41,7 +69,27 @@ export default function Users() {
         </ul>
       )}
       {target && <ToggleDialog user={target} onClose={() => setTarget(null)} />}
-      {deleting && <DeleteDialog user={deleting} onClose={() => setDeleting(null)} />}
+      {deleting && (
+        <DeleteDialog
+          user={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={(r) => {
+            setDeleting(null);
+            setReceipts([r]);
+          }}
+        />
+      )}
+      {repeating && (
+        <RepeatDialog
+          count={restored.length}
+          onClose={() => setRepeating(false)}
+          onDeleted={(rs) => {
+            setRepeating(false);
+            setReceipts(rs);
+          }}
+        />
+      )}
+      {receipts.length > 0 && <DeletionReceipt key={receipts[0].userId} receipt={receipts[0]} onClose={() => setReceipts((rs) => rs.slice(1))} />}
     </AdminOnly>
   );
 }
@@ -102,10 +150,10 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
               {user.active ? "Deactivate" : "Reactivate"}
             </button>
           )}
-          {/* Only a deactivated user can be deleted: two deliberate steps, the first of which can be undone. */}
-          {!self && !user.active && (
-            <button type="button" onClick={onDelete} aria-label={`Delete ${user.display}`} className={secondaryButtonClass}>
-              Delete
+          {/* Any user but oneself (Settings → delete account) and the primary admin, active or not, in one step. */}
+          {!self && (
+            <button type="button" onClick={onDelete} className={secondaryButtonClass}>
+              Delete for a privacy request…
             </button>
           )}
         </div>
@@ -114,26 +162,52 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
   );
 }
 
-function DeleteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
+function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose(): void; onDeleted(receipt: Receipt): void }) {
   const queryClient = useQueryClient();
   // The admin's own password, read through the closure: the mutation cache keeps no variables of it.
   const [password, setPassword] = useState("");
   const remove = useMutation({
     mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { password, confirm: user.username } })),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
-      onClose();
+    onSuccess: async (receipt) => {
+      onDeleted(receipt);
+      await queryClient.invalidateQueries({ queryKey: ["admin"] });
     },
   });
   return (
     <ConfirmTyped
-      title={`Delete ${user.display}?`}
-      text={`Their account goes for good, with ${user.vaults === 1 ? "their vault" : `their ${user.vaults} vaults`} and every note in them, the history, trash and checkpoints, and their API keys. Nobody can bring it back. The invitations they made stay.`}
+      title={`Delete ${user.display} for a privacy request?`}
+      text="Before you go on: make sure the request really comes from this person, and answer within one month (GDPR Art. 12(3)). Their account goes for good, with every vault and note, the history, trash and checkpoints, their API keys and app connections. Nobody can bring it back. Backups are not reached."
       word={user.username}
       action="Delete"
       pending={remove.isPending}
       error={remove.isError ? errorText(remove.error) : null}
       onConfirm={() => remove.mutate()}
+      onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
+    />
+  );
+}
+
+/** After a restore: deletes again every user it brought back, with the admin's password (the list names them). */
+function RepeatDialog({ count, onClose, onDeleted }: { count: number; onClose(): void; onDeleted(receipts: Receipt[]): void }) {
+  const queryClient = useQueryClient();
+  const [password, setPassword] = useState("");
+  const repeat = useMutation({
+    mutationFn: () => call(api.POST("/api/admin/deletions/repeat", { body: { password } })),
+    onSuccess: async (receipts) => {
+      onDeleted(receipts);
+      await queryClient.invalidateQueries({ queryKey: ["admin"] });
+    },
+  });
+  return (
+    <ConfirmTyped
+      title={`Delete ${count} restored user(s) again?`}
+      text="They were deleted before, and a backup restore brought their accounts back. Everything of theirs goes again, for good, as the first time."
+      action="Delete again"
+      pending={repeat.isPending}
+      error={repeat.isError ? errorText(repeat.error) : null}
+      onConfirm={() => repeat.mutate()}
       onClose={onClose}
       password={password}
       onPasswordChange={setPassword}

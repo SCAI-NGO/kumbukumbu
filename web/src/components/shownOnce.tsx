@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useBlocker } from "react-router-dom";
 import { useDialog } from "../hooks/useDialog";
 import { primaryButtonClass, secondaryButtonClass } from "./form";
+import { useHoldUpdates } from "../update/apply";
 
 /**
  * For a secret shown once: until it was saved (downloaded or copied), reloading or closing the page asks the
@@ -12,6 +13,8 @@ import { primaryButtonClass, secondaryButtonClass } from "./form";
  */
 export function useLeaveGuard(saved: boolean) {
   const blocker = useBlocker(!saved);
+  // A new release waits too: its reload would drop the secret as surely as leaving.
+  useHoldUpdates(!saved);
 
   useEffect(() => {
     if (saved) return;
@@ -74,7 +77,20 @@ export function LeaveDialog({
  * Copies `value`, then says so for two seconds: the button reads "Copied" with a check, and a polite status
  * announces it (the button keeps its name, so it is not announced twice). The announcement never holds the value. A failed copy is the caller's to explain.
  */
-export function CopyButton({ value, label, className, onResult }: { value: string; label: string; className: string; onResult(copied: boolean): void }) {
+export function CopyButton({
+  value,
+  label,
+  name = label,
+  className,
+  onResult,
+}: {
+  value: string;
+  label: string;
+  /** What a screen reader hears when `label` alone would not say what is copied; it should start with the label. */
+  name?: string;
+  className: string;
+  onResult(copied: boolean): void;
+}) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -95,7 +111,7 @@ export function CopyButton({ value, label, className, onResult }: { value: strin
 
   return (
     <>
-      <button type="button" onClick={() => void copy()} aria-label={label} className={className}>
+      <button type="button" onClick={() => void copy()} aria-label={name} className={className}>
         {copied ? (
           <span aria-hidden className="inline-flex items-center justify-center gap-1.5">
             <Check size={16} strokeWidth={2.5} aria-hidden />

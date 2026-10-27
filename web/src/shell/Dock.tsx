@@ -34,6 +34,7 @@ export default function Dock(props: { newNote: (() => void) | null; upload: (() 
         ref={standIn}
         aria-label="Search, opening"
         tabIndex={-1}
+        data-stand-in
         data-focus-return="dock-search"
         className="pointer-events-none absolute size-px text-[16px] opacity-0"
       />

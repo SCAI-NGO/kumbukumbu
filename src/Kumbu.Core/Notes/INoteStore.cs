@@ -28,7 +28,9 @@ public interface INoteStore : INoteReader
     /// </summary>
     Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct);
 
-    /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>.</summary>
+    /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>, with no changeset. For tests and
+    /// tools only: a removal by a writer goes through <see cref="TryCommitAsync"/> with the writer's changeset
+    /// (<see cref="NoteWriter.RemoveAsync"/>), so it shows in the vault's activity.</summary>
     Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct);
 
     /// <summary>Trashed notes at <paramref name="path"/> or below it, most recently deleted first.</summary>

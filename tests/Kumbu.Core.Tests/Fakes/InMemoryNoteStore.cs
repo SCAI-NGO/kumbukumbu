@@ -75,11 +75,8 @@ public sealed class InMemoryNoteStore : INoteStore
         Task.FromResult(_notes.GetValueOrDefault(path));
 
     public Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
-        Task.FromResult(_notes.Values
-            .Where(n => n.Path.Vault == vault && n.Changeset is not null && Writers.Identity(n.LastWriter) == writer)
-            .OrderByDescending(n => n.LastWriteAt)
-            .Select(n => ((Changeset, DateTime)?)(n.Changeset!, n.LastWriteAt))
-            .FirstOrDefault());
+        Task.FromResult(Changeset.Latest(
+            _notes.Values.Where(n => n.Path.Vault == vault), _trash.Where(t => t.Note.Path.Vault == vault), _moves.Where(m => m.From.Vault == vault), writer));
 
     public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>
         Task.FromResult(_vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path) && _notes.TryAdd(note.Path, note));
@@ -116,7 +113,7 @@ public sealed class InMemoryNoteStore : INoteStore
         foreach (var current in batch.Trashes)
         {
             _notes.Remove(current.Path);
-            _trash.Add(new TrashedNote(current, by, at));
+            _trash.Add(new TrashedNote(current, by, at, batch.Changeset));
         }
 
         foreach (var (current, _) in batch.Moves) _notes.Remove(current.Path);
@@ -124,7 +121,7 @@ public sealed class InMemoryNoteStore : INoteStore
         foreach (var (current, target) in batch.Moves)
         {
             _notes[target.Path] = target;
-            _moves.Add(new MoveRecord(current.Path, target.Path, by, at));
+            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset));
         }
 
         return Task.FromResult<IReadOnlyList<VaultPath>>([]);

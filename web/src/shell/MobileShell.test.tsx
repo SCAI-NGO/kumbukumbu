@@ -36,9 +36,9 @@ const workTree = {
 
 const homeTree = { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [note("/Home/garden.md")] } };
 
-const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null };
+const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null, default: true };
 // The admin wrote the description as a sentence: the dialog doesn't add a second full stop.
-const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention.", external: true, available: true, reason: null };
+const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention.", external: true, available: true, reason: null, default: false };
 
 function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
   return fakeApi({
@@ -255,6 +255,22 @@ describe("the shell", () => {
     expect(drawer()).toBeInTheDocument();
   });
 
+  it("marks the provider that is the server's default", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "tensorx" }]),
+      "GET /api/embeddings": () => json(200, [{ ...internalProvider, default: false }, { ...tensorx, default: true }]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /TensorX/ })).toBeChecked());
+    expect(within(dialog).getByRole("radio", { name: /default on this server/ })).toHaveAttribute("value", "tensorx");
+    expect(dialog).toHaveTextContent("TensorX (now, default on this server)");
+  });
+
   it("shows why a choice failed and keeps the dialog open", async () => {
     signedInApi({
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal" }]),
@@ -301,17 +317,17 @@ describe("the shell", () => {
     expect(within(switcher).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("links to keys and settings, and to admin only for admins", async () => {
+  it("links to access and settings, and to admin only for admins", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
-    expect(within(account).getByRole("link", { name: "Keys" })).toHaveAttribute("href", "/keys");
+    expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/keys");
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
   it.each([
-    ["Keys", "API keys"],
+    ["Access", "Access"],
     ["Settings", "Settings"],
     ["Admin", "Users"],
   ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
@@ -319,7 +335,8 @@ describe("the shell", () => {
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
     await userEvent.click(within(account).getByRole("link", { name: link }));
-    expect(await screen.findByRole("heading", { name: title })).toBeInTheDocument();
+    // The page's first lazy import: slow on a busy machine.
+    expect(await screen.findByRole("heading", { name: title }, { timeout: 5_000 })).toBeInTheDocument();
     expect(useEditor.getState().overlay).toBe("none");
 
     await userEvent.click(screen.getByRole("link", { name: "Back to the notes" }));
@@ -371,6 +388,22 @@ describe("the shell", () => {
     await waitFor(() => expect(rows()).toEqual(["projects3 notes", "zeta1 note", "inbox", "readme"]));
   });
 
+  it("shows a vault being re-encrypted as such, and its tree as busy for a moment", async () => {
+    signedInApi({
+      "GET /api/vaults": () =>
+        json(200, [
+          { name: "Home", notes: 0, embeddings: "internal", pending: true },
+          { name: "Work", notes: 6, embeddings: "internal", pending: false },
+        ]),
+      "GET /api/vaults/Home/tree": () => json(503, { error: "This vault is being re-encrypted; try again in a moment." }),
+    });
+    renderApp("/");
+    expect(await screen.findByRole("button", { name: /^Home/ })).toHaveTextContent("Being re-encrypted");
+    expect(screen.getByRole("button", { name: /^Work/ })).toHaveTextContent("6 notes");
+    await userEvent.click(screen.getByRole("button", { name: /^Home/ }));
+    expect(await within(await screen.findByRole("dialog", { name: "File tree" })).findByText("This vault is being re-encrypted; try again in a moment.")).toBeInTheDocument();
+  });
+
   it('asks an empty account to "Create your first vault", and creates it', async () => {
     let vaults: { name: string; notes: number }[] = [];
     let body: unknown;
@@ -409,7 +442,7 @@ describe("the shell", () => {
   });
 
   it.each([
-    ["/keys", "API keys"],
+    ["/keys", "Access"],
     ["/settings", "Settings"],
     ["/admin/users", "Users"],
     ["/admin/invitations", "Invitations"],
@@ -428,8 +461,12 @@ describe("the shell", () => {
     expect(within(drawer()).getByRole("heading", { name: "Work" })).toHaveFocus();
     await within(drawer()).findByRole("button", { name: "inbox" });
 
+    // The resize handle is the last stop in the drawer, after the account row.
+    await userEvent.tab({ shift: true });
+    expect(within(drawer()).getByRole("separator", { name: "Resize the sidebar" })).toHaveFocus();
     await userEvent.tab({ shift: true });
     expect(within(drawer()).getByRole("button", { name: "Sign out" })).toHaveFocus();
+    await userEvent.tab();
     await userEvent.tab();
     expect(within(drawer()).getByRole("button", { name: "Actions for Work" })).toHaveFocus();
 

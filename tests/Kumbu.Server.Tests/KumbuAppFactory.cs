@@ -10,13 +10,15 @@ using Testcontainers.MongoDb;
 namespace Kumbu.Server.Tests;
 
 /// <summary>
-/// The real server in memory: Program.cs wiring, a MongoDB container, and the repo's samples/ seeded.
+/// The real server in memory: Program.cs wiring, a MongoDB container (or the server in <c>KUMBU_TEST_MONGO</c>), and the repo's samples/ seeded.
 /// </summary>
 public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string Token = "test-token-0123456789abcdef";
 
-    private readonly MongoDbContainer _mongo = TestImages.MongoContainer();
+    private readonly MongoDbContainer? _mongo = TestImages.ExternalMongo is null ? TestImages.MongoContainer() : null;
+
+    private string MongoConnectionString => TestImages.ExternalMongo ?? _mongo!.GetConnectionString();
 
     public static string SamplesPath { get; } = Path.Combine(FindRepoRoot(), "samples");
 
@@ -25,19 +27,32 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     public string DatabaseName { get; } = "t" + Guid.NewGuid().ToString("N");
 
     /// <summary>The app's database, for tests that change it behind the server's back.</summary>
-    public MongoDB.Driver.IMongoDatabase Database => new MongoDB.Driver.MongoClient(_mongo.GetConnectionString()).GetDatabase(DatabaseName);
+    public MongoDB.Driver.IMongoDatabase Database => new MongoDB.Driver.MongoClient(MongoConnectionString).GetDatabase(DatabaseName);
 
-    public async ValueTask InitializeAsync() => await _mongo.StartAsync();
+    public async ValueTask InitializeAsync()
+    {
+        if (_mongo is not null)
+        {
+            await _mongo.StartAsync();
+        }
+        else
+        {
+            await TestImages.EnsureReplicaSetAsync(MongoConnectionString, TestContext.Current.CancellationToken);
+        }
+    }
 
     public override async ValueTask DisposeAsync()
     {
         await base.DisposeAsync();
-        await _mongo.DisposeAsync();
+        if (_mongo is not null)
+        {
+            await _mongo.DisposeAsync();
+        }
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseSetting("Kumbu:Mongo:ConnectionString", _mongo.GetConnectionString());
+        builder.UseSetting("Kumbu:Mongo:ConnectionString", MongoConnectionString);
         builder.UseSetting("Kumbu:Mongo:Database", DatabaseName);
         builder.UseSetting("Kumbu:DevToken", Token);
         builder.UseSetting("Kumbu:Seed:Path", SamplesPath);

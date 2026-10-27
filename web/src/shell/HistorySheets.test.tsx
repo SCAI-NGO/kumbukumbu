@@ -2,6 +2,7 @@
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkpointExportUrl } from "../data/exportUrl";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -9,6 +10,7 @@ import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   useSession.getState().reset();
   useEditor.getState().reset();
 });
@@ -44,6 +46,24 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
 const sheet = (name: string) => screen.getByRole("dialog", { name });
 
 describe("a note's history", () => {
+  it("marks a version written from Obsidian as an Obsidian device's", async () => {
+    api({
+      "GET /api/history/Work/inbox.md": () =>
+        json(200, [
+          { version: "v2", writtenAt: "2026-10-25T09:00:00Z", writer: "Work – Obsidian Laptop", lines: 3, size: 21, current: true, changeset: null, writerKind: "device" },
+          { version: "v1", writtenAt: "2026-10-24T09:00:00Z", writer: "liz", lines: 3, size: 21, current: false, changeset: null, writerKind: "agent" },
+        ]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+
+    const versions = await within(await screen.findByRole("dialog", { name: "History" })).findByRole("list", { name: "Versions" });
+    const rows = within(versions).getAllByRole("button");
+    expect(rows[0]).toHaveTextContent("by Work – Obsidian Laptop · Obsidian device");
+    expect(rows[1]).not.toHaveTextContent("Obsidian device");
+  });
+
   it("lists the versions, shows an earlier one and its changes, and restores it", async () => {
     const fetch = api({
       "GET /api/history/Work/inbox.md": () =>
@@ -309,5 +329,27 @@ describe("checkpoints", () => {
     expect(await within(sheet("Checkpoints")).findByRole("status")).toHaveTextContent("Removed checkpoint before-cleanup.");
     await waitFor(() => expect(within(sheet("Checkpoints")).queryByRole("list", { name: "Checkpoints" })).not.toBeInTheDocument());
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE")).toBe(true);
+  });
+
+  it("opens a checkpoint and exports it as ZIP", async () => {
+    const downloads: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      if (this.hasAttribute("download")) downloads.push(this.getAttribute("href")!);
+    });
+    const fetch = api({
+      "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [checkpoint] }),
+      "GET /api/vaults/Work/checkpoints/before-cleanup/tree": () =>
+        json(200, { checkpoint: { name: "before-cleanup", createdAt: checkpoint.createdAt, notes: 3 }, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+    });
+    await openVaultMenu("Checkpoints");
+    const dialog = sheet("Checkpoints");
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Export before-cleanup as ZIP" }));
+    expect(downloads).toEqual([checkpointExportUrl("Work", "before-cleanup")]);
+    expect(fetch.mock.calls.every(([r]) => (r as Request).method === "GET")).toBe(true);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Open before-cleanup" }));
+    expect(await screen.findByRole("region", { name: "Checkpoint" })).toHaveTextContent("Checkpoint before-cleanup");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

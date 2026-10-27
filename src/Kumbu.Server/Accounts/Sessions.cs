@@ -39,12 +39,14 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// nothing here checks it, and the session would hand on whatever key it got. <paramref name="credentialReadAt"/>
     /// is when that credential was read, before Argon2; it becomes the session's <c>createdAt</c>, so a password
     /// change that lands while the sign-in is still in Argon2 refuses the session too.
-    /// <see cref="CredentialsChangedException"/> if the user no longer exists (deleted meanwhile) or is inactive.
+    /// <see cref="CredentialsChangedException"/> if the user no longer exists (deleted meanwhile), is inactive, or has
+    /// another user key now (rotated meanwhile).
     /// </summary>
     public async Task<string> StartAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var secret = RandomNumberGenerator.GetBytes(SecretBytes);
+        var keyId = UserCatalog.KeyId(userKey, user.Id);
         var now = Now;
         var slot = new UserSlotDocument
         {
@@ -62,9 +64,11 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
                 async (s, token) =>
                 {
                     // A real write to the user's document, as for a new vault: a deletion of the account at the same
-                    // time conflicts with it, so no session slot is left behind for a user who is gone.
+                    // time conflicts with it, so no session slot is left behind for a user who is gone. And only for the
+                    // user key in force: a sign-in that read the password slot just before a rotation committed holds
+                    // the old key, which opens no vault any more (UserKeyRotation).
                     var current = await Users.UpdateOneAsync(
-                        s, u => u.Id == user.Id && u.Active, Builders<UserDocument>.Update.Inc(u => u.SessionsStarted, 1), cancellationToken: token);
+                        s, u => u.Id == user.Id && u.Active && u.KeyId == keyId, Builders<UserDocument>.Update.Inc(u => u.SessionsStarted, 1), cancellationToken: token);
                     if (current.MatchedCount == 0) throw new CredentialsChangedException();
                     await Slots.InsertOneAsync(s, slot, cancellationToken: token);
                     return true;
@@ -190,5 +194,26 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             ],
             ct);
         _ready = true;
+    }
+
+    /// <summary>
+    /// For a rotation of the user key (<see cref="UserKeyRotation"/>): the session of <paramref name="secret"/>, its slot
+    /// sealed again under the same secret with <paramref name="newUserKey"/>. Writes nothing. Null if the secret is no
+    /// live session of this user (ended, expired or refused meanwhile): then no session is kept. The rotation moves the
+    /// kept slot's <c>createdAt</c> past its stamp, so a session already refused must not be kept, or it would come back.
+    /// </summary>
+    internal static async Task<KeptSession?> PrepareKeepAsync(IMongoDatabase db, string userId, string secret, byte[] newUserKey, DateTime now, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return null;
+        var lookup = Lookup(bytes);
+        var slot = await db.GetCollection<UserSlotDocument>("user_slots")
+            .Find(s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.User == userId).FirstOrDefaultAsync(ct);
+        var user = await db.GetCollection<UserDocument>("users").Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (slot is null || user is null || slot.CreatedAt <= user.CredentialsChangedAt || !(now < slot.ExpiresAt) || slot.LastUsedAt is not { } lastUsed || now - lastUsed > IdleTimeout)
+        {
+            return null;
+        }
+
+        return new KeptSession(slot.Id, slot.Wrapped, VaultCrypto.Seal(Kek(bytes, userId), newUserKey, SlotContext(userId)));
     }
 }

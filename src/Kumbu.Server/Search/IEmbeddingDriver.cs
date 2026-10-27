@@ -58,8 +58,9 @@ public sealed record EmbeddingProvider(string Name, string Label, string? Descri
 
 /// <summary>
 /// The embedding providers of this instance: the internal model (<c>Kumbu:Search:Model</c>, always there, the default of
-/// every vault) and the external ones under <c>Kumbu:Embeddings:Providers</c>. Per instance, so the admin decides
-/// where notes may go; each vault's owner then opts in to one of them (accounts are per instance too).
+/// every vault unless the admin sets <c>Kumbu:Embeddings:Default</c>) and the external ones under
+/// <c>Kumbu:Embeddings:Providers</c>. Per instance, so the admin decides where notes may go; each vault's owner then
+/// chooses one of them (accounts are per instance too).
 /// </summary>
 public sealed class EmbeddingProviders
 {

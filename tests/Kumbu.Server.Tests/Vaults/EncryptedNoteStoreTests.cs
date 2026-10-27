@@ -182,6 +182,51 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Move_and_trash_records_keep_their_changeset_when_reopened()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = New("/Work/a.md", "a");
+        var b = New("/Work/b.md", "b");
+        await store.TryCreateAsync(a, Ct);
+        await store.TryCreateAsync(b, Ct);
+        var changeset = Changeset.New(T0);
+
+        var batch = new NoteBatch { Moves = { (a, a with { Path = P("/Work/moved.md"), Revision = 2 }) }, Trashes = { b }, Changeset = changeset };
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0.AddMinutes(1), Ct));
+
+        // A fresh catalog: the records come from the database, not the working set.
+        var later = Store(world.Catalog());
+        Assert.Equal(changeset, Assert.Single(await later.ListMovesAsync(P("/Work"), Ct)).Changeset);
+        Assert.Equal(changeset, Assert.Single(await later.ListTrashAsync(P("/Work"), Ct)).Changeset);
+        // Removals and moves keep a writer's changeset open, also without a note written in it.
+        Assert.Equal((changeset, T0.AddMinutes(1)), await later.LatestChangesetAsync("Work", Writers.Dev, Ct));
+    }
+
+    [Fact]
+    public void Records_sealed_before_changesets_open_without_one()
+    {
+        var vaultKey = VaultCrypto.NewKey();
+        var vault = new UnlockedVault("v1", "Work", vaultKey, T0, new VaultLocks());
+        var content = VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []);
+        var moveId = ObjectId.GenerateNewId();
+        var trashId = ObjectId.GenerateNewId();
+
+        // The payloads as written before moves and trash records carried a changeset.
+        var move = new { From = "/Work/a.md", To = "/Work/b.md", MovedBy = "dev", MovedAt = T0 };
+        var note = new { Path = "/Work/c.md", Content = "c", LastWriter = "dev", LastWriteAt = T0, History = Array.Empty<object>(), SeedContent = (string?)null };
+        var trash = new { Note = note, Revision = 3L, DeletedBy = "dev", DeletedAt = T0 };
+        var movedDoc = new SealedDocument { Id = moveId, Vault = "v1", Blob = VaultCrypto.Seal(content, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(move), $"move:v1:{moveId}") };
+        var trashDoc = new SealedDocument { Id = trashId, Vault = "v1", Blob = VaultCrypto.Seal(content, System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(trash), $"trash:v1:{trashId}") };
+
+        Assert.Null(vault.OpenMove(movedDoc).Changeset);
+        Assert.Null(vault.OpenTrash(trashDoc).Changeset);
+
+        // And a record without a changeset is still sealed in that shape.
+        var written = vault.SealMove(moveId, new MoveRecord(P("/Work/a.md"), P("/Work/b.md"), "dev", T0));
+        Assert.DoesNotContain("Changeset", Encoding.UTF8.GetString(VaultCrypto.Open(content, written, $"move:v1:{moveId}")));
+    }
+
+    [Fact]
     public async Task Another_token_sees_no_vault_at_all()
     {
         var (world, _, store) = await WorldAsync();
