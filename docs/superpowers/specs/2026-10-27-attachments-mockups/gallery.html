@@ -1,0 +1,63 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kumbu² attachments mockup</title><style>body{background:#111113;color:#eceae4;font-family:system-ui,sans-serif;padding:24px}.subtitle{color:#a09d96}</style></head><body>
+<style>
+  .phones{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+  .phone{width:270px;background:#111113;border:1px solid #2e2e34;border-radius:26px;padding:10px 10px 14px;color:#eceae4;font:13px/1.35 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+  .bar{display:flex;align-items:center;gap:8px;padding:6px 6px 10px;border-bottom:1px solid #2e2e34;margin-bottom:8px}
+  .bar b{flex:1;font-size:14px}
+  .ico{width:22px;height:22px;border-radius:6px;background:#232328;display:inline-flex;align-items:center;justify-content:center;color:#a09d96;font-size:12px}
+  .h{color:#8f8c86;font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:10px 4px 6px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+  .t{aspect-ratio:1;border-radius:6px;position:relative;overflow:hidden}
+  .t span{position:absolute;left:4px;bottom:3px;font-size:9px;color:#eceae4;text-shadow:0 1px 2px #000}
+  .a{background:linear-gradient(135deg,#3b4a6b,#1f2a40)} .b{background:linear-gradient(135deg,#6b4a3b,#40281f)}
+  .c{background:linear-gradient(135deg,#3b6b55,#1f4031)} .d{background:linear-gradient(135deg,#5e3b6b,#351f40)}
+  .e{background:linear-gradient(135deg,#6b663b,#403c1f)}
+  .seg{display:flex;background:#1a1a1e;border:1px solid #2e2e34;border-radius:9px;padding:2px;margin:0 2px 8px}
+  .seg span{flex:1;text-align:center;font-size:11px;padding:4px 0;border-radius:7px;color:#a09d96}
+  .seg span.on{background:#f0a848;color:#17110a;font-weight:600}
+  .folder{display:flex;align-items:center;gap:6px;padding:6px 4px;color:#d9d6cf}
+  .folder small{color:#8f8c86;margin-left:auto}
+  .cap{text-align:center;color:#a09d96;font-size:12px;margin-top:8px;max-width:270px}
+</style>
+
+<h2>Galerie v2: ein Schalter, drei Ordnungen</h2>
+<p class="subtitle">Nur Bilder (PDFs bleiben vorerst draußen). Derselbe Schalter in allen drei Zuständen; die Wahl merkt sich das Gerät.</p>
+
+<div class="phones">
+  <div>
+    <div class="phone">
+      <div class="bar"><span class="ico">☰</span><b>Galerie · Work</b><span class="ico">⬆</span></div>
+      <div class="seg"><span class="on">Datum</span><span>Ordner</span><span>Name</span></div>
+      <div class="h">Heute</div>
+      <div class="grid"><div class="t a"><span>layout_editor_bad1</span></div><div class="t b"><span>layout_editor_bad2</span></div><div class="t c"><span>whiteboard</span></div></div>
+      <div class="h">Gestern</div>
+      <div class="grid"><div class="t d"><span>sketch</span></div><div class="t e"><span>banner</span></div><div class="t a"><span>chart_q3</span></div></div>
+    </div>
+    <p class="cap">Datum: neueste zuerst, nach Tagen</p>
+  </div>
+  <div>
+    <div class="phone">
+      <div class="bar"><span class="ico">☰</span><b>Galerie · Work</b><span class="ico">⬆</span></div>
+      <div class="seg"><span>Datum</span><span class="on">Ordner</span><span>Name</span></div>
+      <div class="folder">📁 /Projects/Teaser <small>2</small></div>
+      <div class="grid"><div class="t e"><span>banner</span></div><div class="t a"><span>chart_q3</span></div></div>
+      <div class="folder">📁 /Screenshots <small>3</small></div>
+      <div class="grid"><div class="t a"><span>layout_editor_bad1</span></div><div class="t b"><span>layout_editor_bad2</span></div><div class="t c"><span>whiteboard</span></div></div>
+      <div class="folder">📁 /Sketches <small>1</small></div>
+      <div class="grid"><div class="t d"><span>sketch</span></div></div>
+    </div>
+    <p class="cap">Ordner: Abschnitte A–Z, darin A–Z</p>
+  </div>
+  <div>
+    <div class="phone">
+      <div class="bar"><span class="ico">☰</span><b>Galerie · Work</b><span class="ico">⬆</span></div>
+      <div class="seg"><span>Datum</span><span>Ordner</span><span class="on">Name</span></div>
+      <div class="grid" style="margin-top:6px">
+        <div class="t e"><span>banner</span></div><div class="t a"><span>chart_q3</span></div><div class="t a"><span>layout_editor_bad1</span></div>
+        <div class="t b"><span>layout_editor_bad2</span></div><div class="t d"><span>sketch</span></div><div class="t c"><span>whiteboard</span></div>
+      </div>
+    </div>
+    <p class="cap">Name: flach, A–Z über alle Ordner</p>
+  </div>
+</div>
+</body></html>
