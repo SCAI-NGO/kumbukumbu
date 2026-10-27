@@ -171,6 +171,13 @@ The Access page then shows the connection as connected, with when it was last us
 
 **Reconnect.** A connection whose app must sign in again is listed with "Use Reconnect in the app": after the app revoked its own tokens, after a password change (unless you untick "Also revoke all API keys and disconnect apps"), a recovery, a re-encryption of one of its vaults or of the account, a deactivation and reactivation, a rights change, or when a refresh token turned up twice (a sign that it was copied). In claude.ai: Settings → Connectors → the connector → **Reconnect**, then Allow again. Same URL, same name, same rights (the new ones after a rights change).
 
+**ChatGPT** connects in two different ways (tested 2026-10-26):
+
+- **On the web (chatgpt.com):** add the connection's URL as a custom connector and set its authentication to **DCR** (dynamic client registration); with ChatGPT's default setting the sign-in fails. Then Allow on the consent page as above.
+- **In the ChatGPT desktop app** OAuth doesn't work at all; use an **API key** with plain `/mcp` instead, sent as a **custom header** `Authorization: Bearer kumbu_…`, not through the app's own token field.
+
+Grok and Mistral connect with a connection's URL and OAuth like claude.ai, with no extra step.
+
 Good to know:
 
 - **Plain `/mcp` is for API keys only** (Claude Code, Hermes and other agents on your machine, as above). It has no OAuth: pasted into claude.ai, the consent page explains that you need a connection's URL. A connection's URL in turn takes no API key.
