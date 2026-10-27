@@ -8,7 +8,7 @@ using BoardModel = Kumbu.Core.Board.Board;
 
 namespace Kumbu.Server.Api;
 
-/// <summary><c>due</c>: <c>YYYY-MM-DD</c>; <c>overdue</c>: before today (UTC). <c>reason</c>: the note on the last move.</summary>
+/// <summary><c>due</c>: <c>YYYY-MM-DD</c>; <c>overdue</c>: before today (UTC). <c>reason</c>: why the card is in its reason column.</summary>
 public sealed record CardView(string Path, string Title, string? Due, bool Overdue, IReadOnlyList<string> Tags, string? Reason);
 
 /// <summary><c>archivable</c>: cards leave it for the archive after a while; <c>needsReason</c>: a move into it takes a reason.</summary>

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { act, cleanup, createEvent, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -188,8 +189,51 @@ describe("the board", () => {
     await userEvent.type(within(again).getByRole("textbox", { name: "Reason" }), "Waiting for the review");
     await userEvent.click(within(again).getByRole("button", { name: "Move" }));
 
+    expect(again).toHaveTextContent("The card keeps the reason while it stays in Waiting.");
+    await userEvent.click(within(again).getByRole("button", { name: "Move" }));
+
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await bodies(fetch, "/api/vaults/Work/board/move")).toEqual([{ card: "Plan", column: "Waiting", position: "top", reason: "Waiting for the review" }]);
+  });
+
+  it("filters every lane by a tag tapped on a card, and the chip clears it", async () => {
+    api({
+      "GET /api/vaults/Work/board": () => {
+        const b = board();
+        b.columns[1].cards = [card("Docs site", { tags: ["Docs"] }), card("Refactor", { tags: ["code"] })];
+        return json(200, b);
+      },
+    });
+    renderApp("/board/Work");
+
+    await userEvent.click(within(await screen.findByRole("list", { name: "Backlog" })).getByRole("button", { name: "#docs" }));
+
+    expect(within(lane("Backlog")).getAllByRole("listitem").map((li) => within(li).getByRole("link").textContent)).toEqual(["Write spec"]);
+    expect(within(lane("Doing")).getAllByRole("listitem").map((li) => within(li).getByRole("link").textContent)).toEqual(["Docs site"]);
+    expect(within(lane("Waiting")).queryAllByRole("listitem")).toHaveLength(0);
+    const chip = screen.getByRole("button", { name: "#docs (show all cards)" });
+    expect(chip).toHaveTextContent("#docs ×");
+
+    await userEvent.click(chip);
+    expect(within(lane("Backlog")).getAllByRole("listitem")).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: /show all cards/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the board and says so when a later read fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let reads = 0;
+      api({ "GET /api/vaults/Work/board": () => (++reads === 1 ? json(200, board()) : json(503, { error: "The database is not reachable." })) });
+      renderApp("/board/Work");
+      expect(await screen.findByRole("list", { name: "Backlog" })).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(5_000));
+
+      expect(await screen.findByText("The board can't be read right now: The database is not reachable.")).toBeInTheDocument();
+      expect(lane("Backlog")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows problems in a red bar, each leading to its note", async () => {
@@ -421,7 +465,14 @@ describe("the board", () => {
       const before = reads;
 
       await act(() => vi.advanceTimersByTimeAsync(12_000));
+      // Nor when the window gets the focus back.
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await act(() => vi.advanceTimersByTimeAsync(100));
       expect(reads).toBe(before);
+      act(() => focusManager.setFocused(undefined));
 
       answer(json(200, moved()));
       expect(await within(lane("Doing")).findByRole("link", { name: "Plan" })).toBeInTheDocument();
@@ -511,6 +562,8 @@ describe("a checkpoint's board", () => {
     expect(screen.queryByRole("button", { name: /^Column actions for/ })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("href", "/checkpoints/Work/before-cleanup/Board/Plan.md");
     expect(screen.getByRole("link", { name: "Plan" }).closest("li")).not.toHaveAttribute("draggable", "true");
+    await userEvent.click(screen.getByRole("button", { name: "#docs" }));
+    expect(within(lane("Backlog")).getAllByRole("listitem")).toHaveLength(1);
     const read = fetch.mock.calls.map(([r]) => new URL((r as Request).url)).find((u) => u.pathname === "/api/vaults/Work/board")!;
     expect(read.searchParams.get("checkpoint")).toBe("before-cleanup");
   });

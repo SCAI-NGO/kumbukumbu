@@ -51,6 +51,12 @@ export default function BoardPage() {
       </header>
 
       {board.isPending && <p className="p-4 text-sm text-muted">Loading …</p>}
+      {/* A later poll that failed: the board below is the last one read. */}
+      {board.isError && board.data && (
+        <p role="status" className="flex-none bg-red-700 px-4 py-2 text-sm text-white [overflow-wrap:anywhere]">
+          The board can't be read right now: {errorText(board.error)}
+        </p>
+      )}
       {board.isError && !board.data && (
         <div className="flex max-w-md flex-col gap-3 p-4">
           <p className="text-text">{errorText(board.error)}</p>
@@ -82,7 +88,10 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
   const [renaming, setRenaming] = useState<string | null>(null);
   const [editing, setEditing] = useState<BoardCard | null>(null);
   const [problem, setProblem] = useState<{ column: string; text: string } | null>(null);
+  /** Shows only the cards with this tag, in every lane; Obsidian's tags ignore case. */
+  const [tag, setTag] = useState<string | null>(null);
   const readOnly = checkpoint !== null;
+  const columns = view.columns.map((c) => (tag ? { ...c, cards: c.cards.filter((k) => k.tags.some((t) => t.toLowerCase() === tag.toLowerCase())) } : c));
   const laneId = (i: number) => `${id}-lane-${i}`;
   const href = (path: string) => (checkpoint ? checkpointUrl(vault, checkpoint, path) : noteUrl(path));
 
@@ -111,7 +120,8 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
 
   const actions = (column: string, index: number): CardActions | undefined => {
     if (readOnly) return undefined;
-    const cards = view.columns.find((c) => c.name === column)!.cards;
+    // The lane as shown: with a tag filter, Up and Down go past the visible neighbour.
+    const cards = columns.find((c) => c.name === column)!.cards;
     const title = cards[index].title;
     return {
       moveTo: () => setMoving({ card: title, from: column }),
@@ -147,8 +157,21 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
         </section>
       )}
 
+      {tag && (
+        <div className="flex flex-none items-center gap-2 border-b border-line px-4 py-1.5">
+          <button
+            type="button"
+            onClick={() => setTag(null)}
+            className="flex min-h-11 items-center gap-1 rounded-full border border-line px-3 font-mono text-sm text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+          >
+            #{tag} <span aria-hidden>×</span>
+            <span className="sr-only"> (show all cards)</span>
+          </button>
+        </div>
+      )}
+
       <nav aria-label="Columns" className="flex flex-none gap-1 overflow-x-auto border-b border-line px-2 [scrollbar-width:none] lg:hidden">
-        {view.columns.map((c, i) => (
+        {columns.map((c, i) => (
           <button
             key={c.name}
             type="button"
@@ -167,7 +190,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
         onScroll={(e) => !desktop && setActive(Math.round(e.currentTarget.scrollLeft / Math.max(1, e.currentTarget.clientWidth)))}
         className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto py-3 lg:snap-none lg:gap-3 lg:px-4"
       >
-        {view.columns.map((c, i) => (
+        {columns.map((c, i) => (
             <Lane
               key={c.name}
               id={laneId(i)}
@@ -179,7 +202,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
               problem={problem?.column === c.name ? problem.text : null}
             >
               {c.cards.map((card, at) => (
-                <CardTile key={card.path} card={card} href={href(card.path)} actions={actions(c.name, at)} />
+                <CardTile key={card.path} card={card} href={href(card.path)} actions={actions(c.name, at)} onTag={setTag} />
               ))}
             </Lane>
         ))}

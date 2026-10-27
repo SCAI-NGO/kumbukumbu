@@ -29,7 +29,7 @@ export function useBoard(vault: string, checkpoint: string | null = null, interv
     retry: false,
     ...(checkpoint
       ? { refetchOnWindowFocus: false, gcTime: 0 }
-      : { refetchInterval: changing ? false : interval, refetchIntervalInBackground: false, refetchOnWindowFocus: "always" as const }),
+      : { refetchInterval: changing ? false : interval, refetchIntervalInBackground: false, refetchOnWindowFocus: changing ? false : ("always" as const) }),
   });
 }
 

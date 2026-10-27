@@ -21,8 +21,11 @@ export interface CardActions {
 
 export const DRAG_TYPE = "text/plain";
 
-/** A card in its lane: the title opens the note; due (red when overdue), tags and the reason of the last move under it. */
-export default function CardTile({ card, href, actions }: { card: BoardCard; href: string; actions?: CardActions }) {
+/**
+ * A card in its lane: the title opens the note; due (red when overdue), tags and, in a reason column, the reason
+ * under it. A tag shows only the cards with it.
+ */
+export default function CardTile({ card, href, actions, onTag }: { card: BoardCard; href: string; actions?: CardActions; onTag(tag: string): void }) {
   const drag = actions?.draggable ? actions : null;
   return (
     <li
@@ -62,9 +65,14 @@ export default function CardTile({ card, href, actions }: { card: BoardCard; hre
               </span>
             )}
             {card.tags.map((t) => (
-              <span key={t} className="font-mono text-accent-text">
+              <button
+                key={t}
+                type="button"
+                onClick={() => onTag(t)}
+                className="-my-1 rounded-[6px] px-0.5 py-1 font-mono text-accent-text focus-visible:outline-2 focus-visible:outline-accent"
+              >
                 #{t}
-              </span>
+              </button>
             ))}
           </p>
         )}
