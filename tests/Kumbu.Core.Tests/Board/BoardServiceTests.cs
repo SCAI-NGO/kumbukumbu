@@ -243,7 +243,7 @@ public class BoardServiceTests
         Assert.Equal("board: updated 'X': no tags", tags.Output);
         Assert.Equal("---\ncolumn: Ideas\nrank: V\n---\nText\n", await Content(store, "/Work/Board/X.md"));
 
-        Assert.Equal("board: update needs due or tags (null removes them)", (await service.UpdateAsync("Work", "X", default, default, Ct)).Output);
+        Assert.Equal("board: update needs at least one of due or tags, to set or remove (given as null, it removes)", (await service.UpdateAsync("Work", "X", default, default, Ct)).Output);
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 # Test notes: the Kanban board, hands-on as the agent
 
-Date: 2026-10-27. Hands-on test of the board (branch `claude/kanban`, spec [2026-10-27-kanban-design](superpowers/specs/2026-10-27-kanban-design.md)) by Claude, as the agent that will use it. Set-up: the server from `src/Kumbu.Server` on `127.0.0.1:8099` against a local MongoDB, a dev token, a seeded vault `Work`, search off. Driven over MCP (`/mcp`, JSON-RPC over HTTP) with a throwaway client, reading nothing but the tool descriptions, `help board` and the tools' output. The REST endpoints were checked with `curl`.
+Date: 2026-10-27. Hands-on test of the board (spec [2026-10-27-kanban-design](superpowers/specs/2026-10-27-kanban-design.md)) by Claude, as the agent that will use it. Set-up: the server from `src/Kumbu.Server` on `127.0.0.1:8099` against a local MongoDB, a dev token, a seeded vault `Work`, search off. Driven over MCP (`/mcp`, JSON-RPC over HTTP) with a throwaway client, reading nothing but the tool descriptions, `help board` and the tools' output. The REST endpoints were checked with `curl`.
 
 ## What was done
 
@@ -46,4 +46,3 @@ Date: 2026-10-27. Hands-on test of the board (branch `claude/kanban`, spec [2026
 - `board --tag` still prints the Instructions and every column, empty ones included; consistent, a little long.
 - Cards that entered an archivable column on the same day are archived in rank order, so with `minDays: 0` the card just moved to the top of Done went first. Days are the rule's unit by design; with the defaults (14 days) this doesn't arise.
 - Two cards with the same content (same column, rank and day) get the same version token; tokens are per note, so nothing is confused.
-- The web app opens a checkpoint's board at `/board/<Vault>?checkpoint=<name>`, but the checkpoint view has no link to it yet.

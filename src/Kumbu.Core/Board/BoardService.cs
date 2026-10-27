@@ -134,7 +134,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
         if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
-        if (!due.IsGiven && !tags.IsGiven) return Error("update needs due or tags (null removes them)");
+        if (!due.IsGiven && !tags.IsGiven) return Error("update needs at least one of due or tags, to set or remove (given as null, it removes)");
         IReadOnlyList<string>? tagList = null;
         if (tags.IsGiven && !TryTags(tags.Value, out tagList, out error)) return error;
 
