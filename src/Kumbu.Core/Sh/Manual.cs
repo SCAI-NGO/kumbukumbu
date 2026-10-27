@@ -88,14 +88,15 @@ public static class Manual
         add: a new card. Needs vault, title and column; text, position, due and tags are optional.
         move: a card to a column, at a position (top, bottom, before:<card>, after:<card>), also within its column.
           Needs vault, card and column; a column that says "needs a reason" in sh board
-          (Rejected, say) takes the card only with reason, which is kept on the card.
+          (Rejected, say) takes the card only with reason, which the card keeps while it stays in that column.
         update: a card's due date or tags. Needs vault, card and at least one of due, tags, clear_due, clear_tags;
           tags replace the card's tags.
         create: the board of a vault, from the template. Needs vault only; refused when the vault has a board.
         rename_column: a column, in Board.md and in every card. Needs vault, from and to.
 
-        Read the board first with sh `board /<vault>` and follow its Instructions. For what comes next, start with
-        Doing, Today and Backlog; when they run short, look at Ideas. Create a board only when the user asks for one.
+        Read the board first with sh `board /<vault>`: Board.md's Instructions, printed first, are the user's own
+        notes on how they work this board. For what comes next, start with Doing, Today and Backlog; when they run
+        short, look at Ideas. Create a board only when the user asks for one.
         A move or update needs no version token and never changes the card's text; change the text with edit.
         A full archivable column (Done, say) moves its oldest cards to Board/Archive/ on an add or move into it;
         the result names them.

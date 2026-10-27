@@ -33,6 +33,9 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 {
     private const string Tool = "board";
     private const int Attempts = 3;
+    private const int MaxReason = 2000;
+    private const int MaxTags = 20;
+    private const int MaxTagLength = 64;
 
     public async Task<ShellResult> AddAsync(
         string vault, string title, string column, string? text, string? position, DateOnly? due, IReadOnlyList<string>? tags,
@@ -51,7 +54,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         {
             var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
             if (board is null) return boardError!;
-            if (path == board.Definition) return Error($"'{title}' is the board's own note (Board.md); choose another title");
+            if (string.Equals(title, TitleOf(board.Definition), StringComparison.OrdinalIgnoreCase))
+                return Error($"'{title}' is the board's own note (Board.md); choose another title");
+            // Ignoring case: on a case-insensitive file system (Obsidian's, often) "old.md" and "Old.md" are one note.
+            if (KnownCards(board).FirstOrDefault(p => string.Equals(TitleOf(p), title, StringComparison.OrdinalIgnoreCase)) is { } taken)
+                return Error($"'{title}' exists already ({taken.Value}); move or update it instead", ShellErrorKind.Conflict);
             if (await store.GetAsync(path, ct) is not null) return Error($"'{title}' exists already ({path.Value}); move or update it instead", ShellErrorKind.Conflict);
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(Tool, path)) with { Kind = ShellErrorKind.Conflict };
             if (!TryColumn(board, column, out var target, out error)) return error;
@@ -65,14 +72,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (due is { } day) changes.Add(("due", Day(day)));
             if (tagList is { Count: > 0 }) changes.Add(("tags", FlowList(tagList)));
             changes.Add(("moved", FlowMap([(target.Name, Day(Today))])));
-            var written = Frontmatter.Set(content, changes);
-            if (Encoding.UTF8.GetByteCount(written) > NoteWriter.MaxBytes)
-                return Error($"the card would be {Encoding.UTF8.GetByteCount(written)} bytes; the limit is {NoteWriter.MaxBytes} (1 MiB)");
+            if (!TryOwnedKeys(path, content, changes, out var written, out error)) return error;
 
             var changeset = await writer.ChangesetAsync(path, ct);
             var note = new StoredNote(path, written, 1, caller.Writer, writer.Now, [], Changeset: changeset);
             var batch = new NoteBatch { Changeset = changeset, Creates = { note } };
-            if (!await AddRespreadAsync(batch, respread, changeset, ct)) continue;
+            var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
+            if (refusal is not null) return refusal;
+            if (!ready) continue;
             if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, note, ct);
@@ -86,6 +93,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
         if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        if (reason is { Length: > MaxReason }) return Error($"a reason has at most {MaxReason} characters; this one has {reason.Length}");
 
         for (var attempt = 0; attempt < Attempts; attempt++)
         {
@@ -98,7 +107,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
             var from = values.GetValueOrDefault("column") is string written ? board.Columns.Find(written.Trim()) : null;
             var entering = from != target;
-            if (entering && target.NeedsReason && string.IsNullOrWhiteSpace(reason))
+            if (entering && target.NeedsReason && reason is null)
                 return Error($"{target.Name} needs a reason; move '{title}' there with one");
 
             var lane = LaneOf(board, target, except: current.Path);
@@ -107,9 +116,12 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
             List<(string Key, string? Yaml)> changes = [("column", Scalar(target.Name)), ("rank", Scalar(rank))];
             if (entering) changes.Add(("moved", Moved(board.Columns, values.GetValueOrDefault("moved"), target.Name)));
-            if (!string.IsNullOrWhiteSpace(reason)) changes.Add(("reason", Scalar(reason.Trim())));
+            // The reason belongs to the stay in a reason column: given, it is written (or replaced); leaving, it goes.
+            if (target.NeedsReason && reason is not null) changes.Add(("reason", Scalar(reason)));
+            else if (!target.NeedsReason && entering && values.ContainsKey("reason")) changes.Add(("reason", null));
+            if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
             var changeset = await writer.ChangesetAsync(current.Path, ct);
-            var next = NoteWriter.Next(current, Frontmatter.Set(current.Content, changes), caller.Writer, writer.Now, changeset);
+            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset);
 
             if (respread.Count == 0)
             {
@@ -118,12 +130,15 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             else
             {
                 var batch = new NoteBatch { Changeset = changeset, Replaces = { (current, next) } };
-                if (!await AddRespreadAsync(batch, respread, changeset, ct)) continue;
+                var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
+                if (refusal is not null) return refusal;
+                if (!ready) continue;
                 if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
             }
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, next, ct);
-            return Written($"moved '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
+            var unused = reason is not null && !target.NeedsReason ? $"; {target.Name} takes no reason, so it was not written" : "";
+            return Written($"moved '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{unused}{archived}", kept);
         }
 
         return Error($"'{card}' kept changing while moving it ({Attempts} tries); try again", ShellErrorKind.Conflict);
@@ -159,8 +174,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             var (current, _, cardError) = await FindCardAsync(board, card, ct);
             if (current is null) return cardError!;
 
-            var next = NoteWriter.Next(current, Frontmatter.Set(current.Content, changes), caller.Writer, writer.Now,
-                await writer.ChangesetAsync(current.Path, ct));
+            if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
+            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(current.Path, ct));
             if (!await store.TryReplaceAsync(current, next, ct)) continue;
             return Written($"updated '{TitleOf(current.Path)}': {string.Join(", ", said)}", next);
         }
@@ -210,7 +225,9 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (read.Values.GetValueOrDefault("column") is string written && Same(written, column.Name)) changes.Add(("column", Scalar(name)));
             if (read.Values.GetValueOrDefault("moved") is IReadOnlyDictionary<string, object?> moved && moved.Keys.Any(k => Same(k, column.Name)))
                 changes.Add(("moved", Renamed(moved, column.Name, name)));
-            if (changes.Count > 0) batch.Replaces.Add((card, NoteWriter.Next(card, Frontmatter.Set(card.Content, changes), caller.Writer, writer.Now, changeset)));
+            if (changes.Count == 0) continue;
+            if (!TryOwnedKeys(card.Path, card.Content, changes, out var renamed, out error)) return error;
+            batch.Replaces.Add((card, NoteWriter.Next(card, renamed, caller.Writer, writer.Now, changeset)));
         }
 
         var cards = batch.Replaces.Count;
@@ -293,11 +310,18 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
         var folder = BoardPaths.Folder(board.Definition.Vault!);
         var exact = folder.Child(card + ".md");
-        var known = board.Lanes.SelectMany(l => l.Cards).Select(c => c.Path).Concat(board.Problems.Select(p => p.Path))
-            .Where(p => p.Segments.Count == folder.Segments.Count + 1).ToList();
+        var known = KnownCards(board);
         if (known.Contains(exact)) return exact;
         var alike = known.Where(p => string.Equals(TitleOf(p), card, StringComparison.OrdinalIgnoreCase)).ToList();
         return alike.Count == 1 ? alike[0] : exact;
+    }
+
+    /// <summary>The notes directly in the board's folder: its cards and the ones it can't place.</summary>
+    private static List<VaultPath> KnownCards(Board board)
+    {
+        var folder = BoardPaths.Folder(board.Definition.Vault!);
+        return [.. board.Lanes.SelectMany(l => l.Cards).Select(c => c.Path).Concat(board.Problems.Select(p => p.Path))
+            .Where(p => p.Segments.Count == folder.Segments.Count + 1)];
     }
 
     private static string TitleOf(VaultPath path) => path.Name.EndsWith(".md", StringComparison.Ordinal) ? path.Name[..^".md".Length] : path.Name;
@@ -351,7 +375,19 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 return false;
             }
 
+            if (tag.Length > MaxTagLength)
+            {
+                error = Error($"tag '{raw}' is longer than {MaxTagLength} characters");
+                return false;
+            }
+
             if (!list.Contains(tag, StringComparer.Ordinal)) list.Add(tag);
+        }
+
+        if (list.Count > MaxTags)
+        {
+            error = Error($"a card has at most {MaxTags} tags; these are {list.Count}");
+            return false;
         }
 
         result = list;
@@ -425,17 +461,20 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         return (keys[index], others);
     }
 
-    /// <summary>Adds the new ranks of the other cards to <paramref name="batch"/>; false when one of them is gone or no longer parses.</summary>
-    private async Task<bool> AddRespreadAsync(NoteBatch batch, IReadOnlyList<(Card Card, string Rank)> respread, Changeset changeset, CancellationToken ct)
+    /// <summary>Adds the new ranks of the other cards to <paramref name="batch"/>; not ready when one of them is gone or no
+    /// longer parses (the board changed: try again), refused when one can't take its new rank.</summary>
+    private async Task<(bool Ready, ShellResult? Refused)> AddRespreadAsync(
+        NoteBatch batch, IReadOnlyList<(Card Card, string Rank)> respread, Changeset changeset, CancellationToken ct)
     {
         foreach (var (card, rank) in respread)
         {
             var current = await store.GetAsync(card.Path, ct);
-            if (current is null || Frontmatter.Read(current.Content).Problem is not null) return false;
-            batch.Replaces.Add((current, NoteWriter.Next(current, Frontmatter.Set(current.Content, [("rank", Scalar(rank))]), caller.Writer, writer.Now, changeset)));
+            if (current is null || Frontmatter.Read(current.Content).Problem is not null) return (false, null);
+            if (!TryOwnedKeys(current.Path, current.Content, [("rank", Scalar(rank))], out var content, out var error)) return (false, error);
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset)));
         }
 
-        return true;
+        return (true, null);
     }
 
     private static string Respread(IReadOnlyList<(Card Card, string Rank)> respread, BoardColumn column, int count) =>
@@ -534,8 +573,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         for (var attempt = 0; attempt < Attempts; attempt++)
         {
             if (await store.GetAsync(path, ct) is not { } current || Frontmatter.Read(current.Content).Problem is not null) return null;
-            var next = NoteWriter.Next(current, Frontmatter.Set(current.Content, [("archived", Day(Today))]), caller.Writer, writer.Now,
-                await writer.ChangesetAsync(path, ct));
+            if (!TryOwnedKeys(path, current.Content, [("archived", Day(Today))], out var content, out _)) return null;
+            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(path, ct));
             if (await store.TryReplaceAsync(current, next, ct)) return next;
         }
 
@@ -559,6 +598,45 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         return FlowMap([.. entries.Select(e => (e.Key, Scalar(e.Value)))]);
     }
 
+    /// <summary>The note's content with the server's own keys changed, when that leaves frontmatter that parses, reads each of
+    /// those keys back as written and fits the note limit; otherwise why not, and nothing is to be written.</summary>
+    private static bool TryOwnedKeys(
+        VaultPath path, string content, IReadOnlyList<(string Key, string? Yaml)> changes, out string written, out ShellResult error)
+    {
+        error = ShellResult.Ok("");
+        written = Frontmatter.Set(content, changes);
+        var read = Frontmatter.Read(written);
+        if (read.Problem is not null)
+        {
+            error = Error($"{path.Value}: changing {string.Join(", ", changes.Select(c => c.Key))} would leave frontmatter that does not parse, "
+                + $"so nothing was written; fix the note with edit: {read.Problem}", ShellErrorKind.Conflict);
+            return false;
+        }
+
+        foreach (var (key, yaml) in changes)
+        {
+            var wanted = yaml is null ? null : Frontmatter.Read($"---\n{key}: {yaml}\n---\n").Values.GetValueOrDefault(key);
+            var found = read.Values.TryGetValue(key, out var value);
+            if (yaml is null ? !found : found && Same(wanted, value)) continue;
+            error = Error($"{path.Value}: {key} would not read back as written, so nothing was written; fix the note's frontmatter with edit",
+                ShellErrorKind.Conflict);
+            return false;
+        }
+
+        var bytes = Encoding.UTF8.GetByteCount(written);
+        if (bytes <= NoteWriter.MaxBytes) return true;
+        error = Error($"{path.Value} would be {bytes} bytes; the limit is {NoteWriter.MaxBytes} (1 MiB)");
+        return false;
+
+        static bool Same(object? a, object? b) => (a, b) switch
+        {
+            (IReadOnlyList<object?> x, IReadOnlyList<object?> y) => x.Count == y.Count && x.Zip(y).All(p => Same(p.First, p.Second)),
+            (IReadOnlyDictionary<string, object?> x, IReadOnlyDictionary<string, object?> y) =>
+                x.Count == y.Count && x.All(p => y.TryGetValue(p.Key, out var v) && Same(p.Value, v)),
+            _ => Equals(a, b),
+        };
+    }
+
     /// <summary>A column as <c>Board.md</c> lists it: its name, or <c>{ Name: [flags] }</c>.</summary>
     private static string ColumnYaml(BoardColumn column)
     {
@@ -580,11 +658,13 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     private static readonly HashSet<string> YamlWords =
         new(["null", "~", "true", "false", "yes", "no", "on", "off", "y", "n"], StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>A one-line YAML scalar: plain when it reads back as the same string, otherwise double-quoted.</summary>
+    /// <summary>A one-line YAML scalar: plain when it reads back as the same string, otherwise double-quoted. A value that
+    /// starts with a digit is quoted unless it is a day, so that no reader (Obsidian's) takes a rank or tag for a number.</summary>
     private static string Scalar(string value)
     {
         var plain = value.Length > 0 && char.IsLetterOrDigit(value[0]) && value[^1] != ' ' && !YamlWords.Contains(value)
-            && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '_' or '.');
+            && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '_' or '.')
+            && (!char.IsAsciiDigit(value[0]) || DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _));
         if (plain) return value;
 
         var quoted = new StringBuilder("\"");

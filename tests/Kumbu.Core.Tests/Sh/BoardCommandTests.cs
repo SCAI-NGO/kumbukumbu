@@ -112,7 +112,17 @@ public class BoardCommandTests
         var (shell, _, _) = Make(("/Work/Board/Old idea.md", "No frontmatter\n"), ("/Work/Board/A.md", Card("Doing", "a")));
 
         var output = (await Run(shell, "board /Work")).Output;
-        Assert.EndsWith("Problems (1)\n  /Work/Board/Old idea.md: no column\n  the board tool's move puts a card in a column", output);
+        Assert.EndsWith("Problems (1)\n  /Work/Board/Old idea.md: no column\n  the board tool's move puts a card with no column or an unknown one in a column", output);
+    }
+
+    [Fact]
+    public async Task A_problem_move_cannot_fix_says_to_fix_the_note()
+    {
+        var (shell, _, _) = Make(("/Work/Board/Broken.md", "---\ncolumn: [\n---\n"), ("/Work/Board/Sub/Deep.md", Card("Doing", "a")));
+
+        var output = (await Run(shell, "board /Work")).Output;
+        Assert.EndsWith("  frontmatter that does not parse or a note in a sub-folder: fix the note (edit it, or mv it into Board)", output);
+        Assert.DoesNotContain("the board tool's move", output);
     }
 
     [Fact]

@@ -38,7 +38,8 @@ public static class Frontmatter
     }
 
     /// <summary>Replaces, adds or (Yaml null) removes the given top-level keys; every other line stays as it was.
-    /// A key's extent is its line plus the lines indented under it or starting with "- ".</summary>
+    /// A key's extent is its line plus the lines indented under it or starting with "- ", and the blank lines between those;
+    /// a key written quoted (<c>"column":</c>, <c>'column':</c>) is the same key.</summary>
     public static string Set(string content, IReadOnlyList<(string Key, string? Yaml)> changes)
     {
         var lines = Lines.Split(content).ToList();
@@ -62,7 +63,12 @@ public static class Frontmatter
             }
 
             var stop = start + 1;
-            while (stop < close && IsContinuation(lines[stop])) stop++;
+            for (var next = stop; next < close; next++)
+            {
+                if (IsContinuation(lines[next])) stop = next + 1;
+                else if (lines[next].Trim().Length > 0) break;
+            }
+
             lines.RemoveRange(start, stop - start);
             close -= stop - start;
             if (yaml is null) continue;
@@ -74,10 +80,13 @@ public static class Frontmatter
     }
 
     private static bool IsKeyLine(string line, string key) =>
-        line.StartsWith(key, StringComparison.Ordinal) && line[key.Length..].TrimStart(' ', '\t').StartsWith(':');
+        new[] { key, $"\"{key}\"", $"'{key}'" }.Any(written =>
+            line.StartsWith(written, StringComparison.Ordinal) && line[written.Length..].TrimStart(' ', '\t').StartsWith(':'));
 
+    /// <summary>A non-blank line that belongs to the key above; <see cref="Set"/> takes blank lines between such lines along.</summary>
     private static bool IsContinuation(string line) =>
-        line.StartsWith(' ') || line.StartsWith('\t') || line.StartsWith("- ", StringComparison.Ordinal) || line.TrimEnd() == "-";
+        line.Trim().Length > 0
+        && (line.StartsWith(' ') || line.StartsWith('\t') || line.StartsWith("- ", StringComparison.Ordinal) || line.TrimEnd() == "-");
 
     private static Dictionary<string, object?> ToMap(IDictionary<object, object?> map) =>
         map.ToDictionary(p => p.Key.ToString() ?? "", p => Convert(p.Value));

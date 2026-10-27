@@ -107,4 +107,23 @@ public class FrontmatterTests
 
         Assert.Equal("---\ncolumn: Done\n---\n" + body, output);
     }
+
+    [Fact]
+    public void Set_replaces_a_block_list_with_a_blank_line_inside_it()
+    {
+        var output = Frontmatter.Set("---\ntags:\n  - a\n\n  - b\n\nrank: m\n---\nbody\n", Changes(("tags", "[x]")));
+
+        Assert.Equal("---\ntags: [x]\n\nrank: m\n---\nbody\n", output);
+        Assert.Null(Frontmatter.Read(output).Problem);
+    }
+
+    [Theory]
+    [InlineData("\"column\": Ideas")]
+    [InlineData("'column' : Ideas")]
+    public void Set_replaces_a_quoted_key(string line)
+    {
+        var output = Frontmatter.Set($"---\ntitle: T\n{line}\n---\n", Changes(("column", "Doing")));
+
+        Assert.Equal("---\ntitle: T\ncolumn: Doing\n---\n", output);
+    }
 }

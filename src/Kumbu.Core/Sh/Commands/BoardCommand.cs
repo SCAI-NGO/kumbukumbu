@@ -106,7 +106,11 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
         {
             lines.Add($"Problems ({board.Problems.Count})");
             lines.AddRange(board.Problems.Select(p => $"  {p.Path.Value}: {p.What}"));
-            lines.Add("  the board tool's move puts a card in a column");
+            // move fixes only a missing or unknown column; the other problems are the note's, for edit or mv.
+            var noteProblems = board.Problems.Count(p =>
+                p.What.StartsWith("the frontmatter does not parse", StringComparison.Ordinal) || p.What.StartsWith("in a sub-folder", StringComparison.Ordinal));
+            if (noteProblems < board.Problems.Count) lines.Add("  the board tool's move puts a card with no column or an unknown one in a column");
+            if (noteProblems > 0) lines.Add("  frontmatter that does not parse or a note in a sub-folder: fix the note (edit it, or mv it into Board)");
         }
 
         return ShellResult.Ok(string.Join('\n', lines));

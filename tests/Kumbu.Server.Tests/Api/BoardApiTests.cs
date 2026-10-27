@@ -157,6 +157,28 @@ public sealed class BoardApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Write_errors_map_to_their_status_with_the_sentence()
+    {
+        var user = await BoardUserAsync();
+        await CardAsync(user, "Task", "Ideas", "a1");
+
+        using var unknown = await user.SendAsync(HttpMethod.Post, Board(user, "/update"), new { card = "Ghost", due = "2030-01-01" });
+        using var noReason = await user.SendAsync(HttpMethod.Post, Board(user, "/move"), new { card = "Task", column = "Blocked" });
+        using var exists = await user.SendAsync(HttpMethod.Post, Board(user, "/cards"), new { title = "task", column = "Doing" });
+        using var tooMany = await user.SendAsync(HttpMethod.Post, Board(user, "/update"),
+            new { card = "Task", tags = Enumerable.Range(1, 21).Select(i => $"t{i}").ToArray() });
+
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.Equal($"no card 'Ghost' in /{user.Vault}/Board ('board /{user.Vault}' lists them)", await RestClient.ErrorAsync(unknown));
+        Assert.Equal(HttpStatusCode.BadRequest, noReason.StatusCode);
+        Assert.Equal("Blocked needs a reason; move 'Task' there with one", await RestClient.ErrorAsync(noReason));
+        Assert.Equal(HttpStatusCode.Conflict, exists.StatusCode);
+        Assert.Equal($"'task' exists already (/{user.Vault}/Board/Task.md); move or update it instead", await RestClient.ErrorAsync(exists));
+        Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+        Assert.Equal("a card has at most 20 tags; these are 21", await RestClient.ErrorAsync(tooMany));
+    }
+
+    [Fact]
     public async Task A_read_key_can_read_but_not_move()
     {
         var user = await BoardUserAsync();

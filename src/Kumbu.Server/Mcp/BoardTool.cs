@@ -28,7 +28,7 @@ public static class BoardTool
         [Description("add, update: the tags, replacing the card's; leave out to keep them")] string[]? tags = null,
         [Description("update: remove the due date (leave due out)")] bool clear_due = false,
         [Description("update: remove all tags (leave tags out)")] bool clear_tags = false,
-        [Description("move: why, noted on the card; required for a column that asks for a reason")] string? reason = null,
+        [Description("move: why, kept on the card while it stays in that column; required for a column that asks for a reason, not written for others")] string? reason = null,
         [Description("rename_column: the column's current name")] string? from = null,
         [Description("rename_column: the new name")] string? to = null,
         CancellationToken ct = default) =>

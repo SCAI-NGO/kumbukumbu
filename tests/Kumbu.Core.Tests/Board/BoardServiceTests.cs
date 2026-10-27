@@ -535,4 +535,142 @@ public class BoardServiceTests
         Assert.Equal("board: the column is called Doing already", (await Service(store).RenameColumnAsync("Work", "doing", "Doing", Ct)).Output);
         Assert.Equal(0, store.Commits);
     }
+
+    [Fact]
+    public async Task A_change_that_would_leave_frontmatter_unparseable_is_refused()
+    {
+        // The alias names the anchor on the column line, which the move rewrites.
+        const string card = "---\ncolumn: &c Ideas\nrank: V\nsame: *c\n---\nText\n";
+        var store = Store(("/Work/Board/X.md", card));
+        var service = Service(store);
+
+        var result = await service.MoveAsync("Work", "X", "Doing", null, null, Ct);
+
+        Assert.True(result.IsError);
+        Assert.Equal(ShellErrorKind.Conflict, result.Kind);
+        Assert.StartsWith("board: /Work/Board/X.md: changing column, rank, moved would leave frontmatter that does not parse", result.Output);
+        Assert.Equal(card, await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
+    public async Task A_rename_that_would_leave_a_card_unparseable_renames_nothing()
+    {
+        const string card = "---\ncolumn: &c Doing\nrank: V\nsame: *c\n---\nText\n";
+        var store = Store(("/Work/Board/X.md", card));
+
+        var result = await Service(store).RenameColumnAsync("Work", "Doing", "Active", Ct);
+
+        Assert.StartsWith("board: /Work/Board/X.md: changing column would leave frontmatter that does not parse", result.Output);
+        Assert.Equal(0, store.Commits);
+        Assert.Equal(Definition, await Content(store, "/Work/Board/Board.md"));
+    }
+
+    [Fact]
+    public async Task A_quoted_key_and_a_blank_line_in_a_block_list_are_rewritten_in_place()
+    {
+        var store = Store(("/Work/Board/X.md", "---\n\"column\": Ideas\nrank: V\ntags:\n  - a\n\n  - b\n---\nText\n"));
+        var service = Service(store);
+
+        Assert.False((await service.MoveAsync("Work", "X", "Doing", null, null, Ct)).IsError);
+        Assert.False((await service.UpdateAsync("Work", "X", default, new(["c"]), Ct)).IsError);
+
+        Assert.Equal("---\ncolumn: Doing\nrank: V\ntags: [c]\nmoved: { Doing: 2026-10-27 }\n---\nText\n", await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
+    public async Task Moves_and_updates_past_the_size_limit_are_refused()
+    {
+        var text = new string('x', NoteWriter.MaxBytes - 40) + "\n";
+        var store = Store(("/Work/Board/X.md", Card("Ideas", "V", text)));
+        var service = Service(store);
+
+        var moved = await service.MoveAsync("Work", "X", "Doing", null, null, Ct);
+        var updated = await service.UpdateAsync("Work", "X", default, new(["security", "web", "ops"]), Ct);
+
+        Assert.Equal(ShellErrorKind.Invalid, moved.Kind);
+        Assert.StartsWith("board: /Work/Board/X.md would be ", moved.Output);
+        Assert.EndsWith("bytes; the limit is 1048576 (1 MiB)", moved.Output);
+        Assert.Equal(ShellErrorKind.Invalid, updated.Kind);
+        Assert.Equal(Card("Ideas", "V", text), await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
+    public async Task Leaving_a_reason_column_removes_the_reason_and_staying_keeps_it()
+    {
+        var store = Store(("/Work/Board/X.md", Card("Ideas", "V")), ("/Work/Board/Y.md", Card("Rejected", "V")));
+        var service = Service(store);
+        await service.MoveAsync("Work", "X", "Rejected", null, "Duplicate", Ct);
+
+        var within = await service.MoveAsync("Work", "X", "Rejected", "top", null, Ct);
+        Assert.False(within.IsError, within.Output);
+        Assert.Equal("Duplicate", (await CardOf(store, "X")).Reason);
+
+        await service.MoveAsync("Work", "X", "Doing", null, null, Ct);
+        Assert.DoesNotContain("reason", await Content(store, "/Work/Board/X.md"));
+        Assert.Null((await CardOf(store, "X")).Reason);
+    }
+
+    [Fact]
+    public async Task A_reason_for_a_column_without_the_flag_is_not_written()
+    {
+        var store = Store(("/Work/Board/X.md", Card("Ideas", "V")));
+        var service = Service(store);
+
+        var result = await service.MoveAsync("Work", "X", "Doing", null, "Because", Ct);
+
+        Assert.Equal("board: moved 'X' to Doing (1 of 1); Doing takes no reason, so it was not written", result.Output);
+        Assert.DoesNotContain("reason", await Content(store, "/Work/Board/X.md"));
+    }
+
+    [Fact]
+    public async Task Reasons_and_tags_have_a_cap()
+    {
+        var store = Store(("/Work/Board/X.md", Card("Ideas", "V")));
+        var service = Service(store);
+        var tooMany = Enumerable.Range(1, 21).Select(i => $"t{i}").ToList();
+
+        var reason = await service.MoveAsync("Work", "X", "Rejected", null, new string('r', 2001), Ct);
+        var many = await service.UpdateAsync("Work", "X", default, new(tooMany), Ct);
+        var tooLong = await service.AddAsync("Work", "Y", "Ideas", null, null, null, [new string('t', 65)], Ct);
+
+        Assert.Equal("board: a reason has at most 2000 characters; this one has 2001", reason.Output);
+        Assert.Equal("board: a card has at most 20 tags; these are 21", many.Output);
+        Assert.Equal($"board: tag '{new string('t', 65)}' is longer than 64 characters", tooLong.Output);
+        Assert.All([reason, many, tooLong], r => Assert.Equal(ShellErrorKind.Invalid, r.Kind));
+        Assert.Equal(Card("Ideas", "V"), await Content(store, "/Work/Board/X.md"));
+        Assert.Null(await Content(store, "/Work/Board/Y.md"));
+        Assert.False((await service.MoveAsync("Work", "X", "Rejected", null, new string('r', 2000), Ct)).IsError);
+    }
+
+    [Fact]
+    public async Task A_title_equal_to_Board_or_an_existing_card_ignoring_case_is_refused()
+    {
+        var store = Store(("/Work/Board/Old.md", Card("Ideas", "V")));
+        var service = Service(store);
+        var before = await NoteCount(store);
+
+        var board = await service.AddAsync("Work", "board", "Ideas", null, null, null, null, Ct);
+        var old = await service.AddAsync("Work", "OLD", "Ideas", null, null, null, null, Ct);
+
+        Assert.Equal("board: 'board' is the board's own note (Board.md); choose another title", board.Output);
+        Assert.Equal("board: 'OLD' exists already (/Work/Board/Old.md); move or update it instead", old.Output);
+        Assert.Equal(ShellErrorKind.Conflict, old.Kind);
+        Assert.Equal(before, await NoteCount(store));
+    }
+
+    [Fact]
+    public async Task Number_like_ranks_and_tags_are_written_quoted()
+    {
+        var store = Store(("/Work/Board/A.md", Card("Doing", "1")), ("/Work/Board/X.md", Card("Ideas", "V")));
+        var service = Service(store);
+
+        await service.MoveAsync("Work", "X", "Doing", "top", null, Ct);
+        await service.UpdateAsync("Work", "X", new DateOnly(2026, 11, 3), new(["2026", "v2"]), Ct);
+
+        var content = await Content(store, "/Work/Board/X.md");
+        Assert.Contains("rank: \"0", content);
+        Assert.Contains("tags: [\"2026\", v2]\n", content);
+        Assert.Contains("due: 2026-11-03\n", content);
+        Assert.Contains("moved: { Doing: 2026-10-27 }\n", content);
+    }
 }

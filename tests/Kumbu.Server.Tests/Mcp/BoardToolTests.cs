@@ -47,7 +47,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         var tool = (await client.ListToolsAsync(cancellationToken: Ct)).Single(t => t.Name == "board");
 
         var description = string.Join(' ', tool.Description!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        Assert.Contains("Read the board first with sh `board /<vault>` and follow its Instructions.", description, StringComparison.Ordinal);
+        Assert.Contains("Read the board first with sh `board /<vault>`: Board.md's Instructions, printed first, are the user's own notes on how they work this board.", description, StringComparison.Ordinal);
         Assert.Contains("A move or update needs no version token and never changes the card's text; change the text with edit.", description, StringComparison.Ordinal);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.ReadOnlyHint);
         Assert.Equal(false, tool.ProtocolTool.Annotations?.DestructiveHint);
