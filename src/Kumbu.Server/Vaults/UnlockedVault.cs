@@ -289,11 +289,12 @@ public sealed class UnlockedVault
     /// <paramref name="collection"/> under this object's key, with the AAD its clear fields give and without checking its
     /// <c>pid</c>, and seals what it holds under <paramref name="to"/>'s key, keeping <c>_id</c> and <c>rev</c>. The pid
     /// is computed under <paramref name="to"/> from what is sealed inside, whatever the stored one says; where the AAD
-    /// holds the pid (embeddings, texts), the new seal has the new one. A checkpoint sealed under another key than
-    /// <paramref name="to"/>'s gets its text ids through <paramref name="textIds"/> (base64 of the old id → new id);
-    /// one not found there stays as it is, and is named in <c>Unmapped</c>. Null if the document doesn't open.
+    /// holds the pid (embeddings, texts, blobs), the new seal has the new one; a blob's <c>bid</c> stands in for its pid.
+    /// A checkpoint or an attachment record sealed under another key than <paramref name="to"/>'s gets its text or blob
+    /// ids through <paramref name="ids"/>; one not found there stays as it is, and is named in <c>Unmapped</c>. Null if
+    /// the document doesn't open.
     /// </summary>
-    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, IReadOnlyDictionary<string, byte[]> textIds, bool seal = true)
+    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, RekeyIds ids, bool seal = true)
     {
         var context = collection switch
         {
@@ -303,6 +304,9 @@ public sealed class UnlockedVault
             "embeddings" => $"embeddings:{Id}:{Convert.ToBase64String(doc.PathId)}",
             "checkpoints" => $"checkpoint:{Id}:{doc.Id}",
             "checkpoint_texts" => $"cptext:{Id}:{Convert.ToBase64String(doc.PathId)}",
+            "attachments" => $"attachment:{Id}:{doc.Id}:{doc.Revision}",
+            "attachment_trash" => $"attachtrash:{Id}:{doc.Id}",
+            "blobs" => BlobContext(doc.PathId),
             _ => throw new ArgumentException($"No sealed documents in {collection}", nameof(collection)),
         };
         byte[] plain;
@@ -338,13 +342,34 @@ public sealed class UnlockedVault
                     var (pid, from) = (to.NameId(p.Name), NameId(p.Name));
                     if (ReferenceEquals(this, to)) return new Resealed(pid, from, SealPlain(context), null, []);
                     var unmapped = new List<string>();
-                    var notes = p.Notes.Select(n =>
-                    {
-                        if (textIds.TryGetValue(n.TextId, out var mapped)) return n with { TextId = Convert.ToBase64String(mapped) };
-                        unmapped.Add(n.TextId);
-                        return n;
-                    }).ToList();
+                    var notes = p.Notes.Select(n => n with { TextId = Map(n.TextId, ids.Texts, unmapped) }).ToList();
                     return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes }) : [], null, unmapped);
+                }
+
+                case "attachments":
+                {
+                    var p = Parse<AttachmentPayload>(plain);
+                    var path = Payload.Path(p.Path);
+                    if (ReferenceEquals(this, to)) return Same(path);
+                    var unmapped = new List<string>();
+                    var mapped = MapBlobIds(p, ids, unmapped);
+                    return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
+                }
+
+                case "attachment_trash":
+                {
+                    var p = Parse<AttachmentTrashPayload>(plain);
+                    var path = Payload.Path(p.Attachment.Path);
+                    if (ReferenceEquals(this, to)) return Same(path);
+                    var unmapped = new List<string>();
+                    var mapped = p with { Attachment = MapBlobIds(p.Attachment, ids, unmapped) };
+                    return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
+                }
+
+                case "blobs":
+                {
+                    var pid = to.BlobId(plain);
+                    return new Resealed(pid, BlobId(plain), SealPlain(to.BlobContext(pid)), null, []) { Bytes = seal ? null : plain };
                 }
 
                 default:
@@ -367,9 +392,48 @@ public sealed class UnlockedVault
         byte[] SealPlain(string newContext) => seal ? VaultCrypto.Seal(to._contentKey, plain, newContext) : [];
     }
 
+    /// <summary>
+    /// The ids keyed by content that a re-keying run has learnt, base64 of the id under the old key → the id under the
+    /// new one: checkpoint texts' (<see cref="TextId"/>) and blobs' (<see cref="BlobId"/>). Their passes come first, so
+    /// the documents that name them find every one.
+    /// </summary>
+    internal sealed class RekeyIds
+    {
+        public Dictionary<string, byte[]> Texts { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, byte[]> Blobs { get; } = new(StringComparer.Ordinal);
+    }
+
     /// <summary>What <see cref="Reseal"/> made of a document: its pid and blob under the new key, the pid it should have
-    /// had under the key it opened with, a text's content, and the text ids of a checkpoint that had no new one.</summary>
-    internal sealed record Resealed(byte[] PathId, byte[] FromPathId, byte[] Blob, string? Content, IReadOnlyList<string> Unmapped);
+    /// had under the key it opened with, a text's content, and the text or blob ids it names that had no new one.</summary>
+    internal sealed record Resealed(byte[] PathId, byte[] FromPathId, byte[] Blob, string? Content, IReadOnlyList<string> Unmapped)
+    {
+        /// <summary>A blob's bytes when it was opened but not sealed (<c>seal: false</c>): its id under the old key is
+        /// computed from them.</summary>
+        public byte[]? Bytes { get; init; }
+    }
+
+    /// <summary>Every blob id an attachment record names, current and history, mapped to the new key's.</summary>
+    private static AttachmentPayload MapBlobIds(AttachmentPayload p, RekeyIds ids, List<string> unmapped) => p with
+    {
+        Current = MapBlobId(p.Current, ids, unmapped),
+        History = [.. p.History.Select(h => h with { State = MapBlobId(h.State, ids, unmapped) })],
+    };
+
+    /// <summary>
+    /// The one place a sealed reference to a blob is mapped to the new key's id when a vault is re-keyed: whatever comes
+    /// to hold attachment states (records, their trash, checkpoints) maps each state through it.
+    /// </summary>
+    private static AttachmentStatePayload MapBlobId(AttachmentStatePayload state, RekeyIds ids, List<string> unmapped) =>
+        state with { BlobId = Map(state.BlobId, ids.Blobs, unmapped) };
+
+    /// <summary>An id under the old key mapped to the new key's; one not found stays as it is, named in <paramref name="unmapped"/>.</summary>
+    private static string Map(string id, Dictionary<string, byte[]> ids, List<string> unmapped)
+    {
+        if (ids.TryGetValue(id, out var mapped)) return Convert.ToBase64String(mapped);
+        unmapped.Add(id);
+        return id;
+    }
 
     private static T Parse<T>(byte[] plain) => JsonSerializer.Deserialize<T>(plain) ?? throw new InvalidDataException("Empty payload");
 

@@ -36,10 +36,13 @@ public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<st
 /// </summary>
 public sealed partial class VaultCatalog
 {
-    /// <summary>The order of the passes: checkpoint texts first, since checkpoints hold their ids.</summary>
-    private static readonly string[] RekeyOrder = ["checkpoint_texts", "notes", "trash", "moves", "embeddings", "checkpoints"];
+    /// <summary>The order of the passes: checkpoint texts and blobs first, since checkpoints and attachment records hold
+    /// their ids, which the new key changes (<see cref="UnlockedVault.RekeyIds"/>).</summary>
+    private static readonly string[] RekeyOrder =
+        ["checkpoint_texts", "blobs", "notes", "attachments", "trash", "attachment_trash", "moves", "embeddings", "checkpoints"];
 
-    /// <summary>How many documents are read at once in a pass; each read is cut into batches by <see cref="BatchBytes"/>.</summary>
+    /// <summary>At most this many documents are read at once in a pass, and at most <see cref="BatchBytes"/> sealed
+    /// bytes (a larger document is read alone); each read is cut into batches by the same limits.</summary>
     private const int RekeyReadChunk = 100;
 
     /// <summary>A pass reads a collection again after a batch failed; past this many times something keeps changing it.</summary>
@@ -77,6 +80,9 @@ public sealed partial class VaultCatalog
 
     /// <summary>For tests: called after each batch of a run commits, with the vault id, its documents and sealed bytes.</summary>
     internal Action<string, int, long>? RekeyBatchCommitted { get; set; }
+
+    /// <summary>For tests: called after each read of a pass, with the vault id, its documents and sealed bytes.</summary>
+    internal Action<string, int, long>? RekeyChunkRead { get; set; }
 
     /// <summary>For tests: awaited when an API key's or a code's slots were wrapped from the user's (<c>"after-wrap"</c>)
     /// and inside its transaction before the vault keys are checked again (<c>"before-check"</c>).</summary>
@@ -463,14 +469,14 @@ public sealed partial class VaultCatalog
     /// </summary>
     private async Task<(long Documents, long Damaged)> RekeyPassesAsync(UnlockedVault old, UnlockedVault next, CancellationToken ct)
     {
-        var textIds = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var ids = new UnlockedVault.RekeyIds();
         var logged = new HashSet<ObjectId>();
         for (var pass = 0; pass < MaxRekeyPasses; pass++)
         {
             var (changed, documents, damaged) = (0L, 0L, 0L);
             foreach (var name in RekeyOrder)
             {
-                var result = await RekeyCollectionAsync(name, old, next, textIds, logged, ct);
+                var result = await RekeyCollectionAsync(name, old, next, ids, logged, ct);
                 (changed, documents, damaged) = (changed + result.Changed, documents + result.Current, damaged + result.Damaged);
             }
 
@@ -480,6 +486,7 @@ public sealed partial class VaultCatalog
         throw VaultBusyException.Being();
     }
 
+    /// <summary>A collection of sealed documents; blobs have their own type (<see cref="ReadRekeyAsync"/>).</summary>
     private IMongoCollection<SealedDocument> RekeyCollection(string name) => name switch
     {
         "notes" => Notes,
@@ -487,8 +494,71 @@ public sealed partial class VaultCatalog
         "moves" => Moves,
         "embeddings" => Embeddings,
         "checkpoints" => Checkpoints,
-        _ => CheckpointTexts,
+        "checkpoint_texts" => CheckpointTexts,
+        "attachments" => Attachments,
+        "attachment_trash" => AttachmentTrash,
+        _ => throw new ArgumentException($"No sealed documents in {name}", nameof(name)),
     };
+
+    /// <summary>
+    /// The ids of the vault's documents in <paramref name="name"/>, in reads of at most <see cref="RekeyReadChunk"/>
+    /// documents and <see cref="BatchBytes"/> sealed bytes, a larger document alone: a pass over blobs of up to 15 MB
+    /// each never holds a hundred of them at once.
+    /// </summary>
+    private async Task<List<ObjectId[]>> RekeyReadsAsync(string name, string vaultId, CancellationToken ct)
+    {
+        var sizes = await db.GetCollection<BsonDocument>(name).Aggregate()
+            .Match(new BsonDocument("vault", vaultId))
+            .Project(new BsonDocument("size", new BsonDocument("$binarySize", "$blob")))
+            .ToListAsync(ct);
+        var reads = new List<ObjectId[]>();
+        var (chunk, bytes) = (new List<ObjectId>(), 0L);
+        foreach (var (docId, size) in sizes.Select(d => (Id: d["_id"].AsObjectId, Size: d["size"].IsNumeric ? d["size"].ToInt64() : 0)).OrderBy(d => d.Id))
+        {
+            if (chunk.Count > 0 && (chunk.Count >= RekeyReadChunk || bytes + size > BatchBytes))
+            {
+                reads.Add([.. chunk]);
+                (chunk, bytes) = ([], 0);
+            }
+
+            chunk.Add(docId);
+            bytes += size;
+        }
+
+        if (chunk.Count > 0) reads.Add([.. chunk]);
+        return reads;
+    }
+
+    /// <summary>Documents of <paramref name="name"/> by id, in id order; a blob as a sealed document with its <c>bid</c>
+    /// as the pid.</summary>
+    private async Task<List<SealedDocument>> ReadRekeyAsync(string name, IEnumerable<ObjectId> docIds, CancellationToken ct)
+    {
+        if (name != "blobs") return await RekeyCollection(name).Find(Builders<SealedDocument>.Filter.In(d => d.Id, docIds)).SortBy(d => d.Id).ToListAsync(ct);
+        var blobs = await Blobs.Find(Builders<BlobDocument>.Filter.In(d => d.Id, docIds)).SortBy(d => d.Id).ToListAsync(ct);
+        return [.. blobs.Select(AsSealed)];
+    }
+
+    private static SealedDocument AsSealed(BlobDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Blob = d.Blob, At = d.At };
+
+    /// <summary>
+    /// Writes a document's new pid and seal, if it still has the seal that was read. A blob's id names its bytes, which
+    /// never change: the id tells that it is the one read, and the filter doesn't carry up to 15 MB of the old seal.
+    /// </summary>
+    private Task<UpdateResult> WriteRekeyedAsync(string name, IClientSessionHandle session, SealedDocument doc, UnlockedVault.Resealed change, CancellationToken ct)
+    {
+        if (name == "blobs")
+        {
+            var b = Builders<BlobDocument>.Filter;
+            return Blobs.UpdateOneAsync(
+                session, b.Eq(d => d.Id, doc.Id) & b.Eq(d => d.BlobId, doc.PathId),
+                Builders<BlobDocument>.Update.Set(d => d.BlobId, change.PathId).Set(d => d.Blob, change.Blob), cancellationToken: ct);
+        }
+
+        var f = Builders<SealedDocument>.Filter;
+        return RekeyCollection(name).UpdateOneAsync(
+            session, f.Eq(d => d.Id, doc.Id) & f.Eq(d => d.Blob, doc.Blob),
+            Builders<SealedDocument>.Update.Set(d => d.PathId, change.PathId).Set(d => d.Blob, change.Blob), cancellationToken: ct);
+    }
 
     /// <summary>
     /// One pass over one collection. Each document is classified by its seal first and its pid second: under K′ with
@@ -498,9 +568,8 @@ public sealed partial class VaultCatalog
     /// are conditional on the blob that was read; if any of them fails, the collection is read again.
     /// </summary>
     private async Task<(long Changed, long Current, long Damaged)> RekeyCollectionAsync(
-        string name, UnlockedVault old, UnlockedVault next, Dictionary<string, byte[]> textIds, HashSet<ObjectId> logged, CancellationToken ct)
+        string name, UnlockedVault old, UnlockedVault next, UnlockedVault.RekeyIds ids, HashSet<ObjectId> logged, CancellationToken ct)
     {
-        var collection = RekeyCollection(name);
         var id = old.Id;
         long changed = 0;
         for (var attempt = 0; attempt <= MaxRekeyRestarts; attempt++)
@@ -512,16 +581,15 @@ public sealed partial class VaultCatalog
             var failed = false;
 
             // Only the ids first: documents move in the (vault, pid) index as they are resealed, never in _id's.
-            var ids = await collection.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, id)).Project(d => d.Id).ToListAsync(ct);
-            ids.Sort();
-            foreach (var chunk in ids.Chunk(RekeyReadChunk))
+            foreach (var chunk in await RekeyReadsAsync(name, id, ct))
             {
                 // Also in a pass that changes nothing: a deletion waits for one read at most.
                 if (IsDeleted(id)) throw new VaultDeletedException();
-                var docs = await collection.Find(Builders<SealedDocument>.Filter.In(d => d.Id, chunk)).SortBy(d => d.Id).ToListAsync(ct);
+                var docs = await ReadRekeyAsync(name, chunk, ct);
+                RekeyChunkRead?.Invoke(id, docs.Count, docs.Sum(d => (long)d.Blob.Length));
                 foreach (var doc in docs)
                 {
-                    var resealed = Classify(name, doc, old, next, textIds, logged);
+                    var resealed = Classify(name, doc, old, next, ids, logged);
                     if (resealed is null)
                     {
                         damaged++;
@@ -540,7 +608,7 @@ public sealed partial class VaultCatalog
                     // unique index tells which one stays.
                     if (batch.Count > 0 && (batch.Count >= BatchDocuments || batchBytes + change.Blob.Length > BatchBytes || batchPids.Contains(pid)))
                     {
-                        if (!await CommitRekeyBatchAsync(name, collection, batch, batchBytes, old, next, ct)) { failed = true; break; }
+                        if (!await CommitRekeyBatchAsync(name, batch, batchBytes, old, next, ct)) { failed = true; break; }
                         changed += batch.Count;
                         (batch, batchPids, batchBytes) = ([], new HashSet<string>(StringComparer.Ordinal), 0);
                     }
@@ -555,7 +623,7 @@ public sealed partial class VaultCatalog
 
             if (!failed && batch.Count > 0)
             {
-                failed = !await CommitRekeyBatchAsync(name, collection, batch, batchBytes, old, next, ct);
+                failed = !await CommitRekeyBatchAsync(name, batch, batchBytes, old, next, ct);
                 if (!failed) changed += batch.Count;
             }
 
@@ -568,24 +636,26 @@ public sealed partial class VaultCatalog
 
     /// <summary>A document classified: null if damaged, else whether it is current under K′, or what to write.</summary>
     private (bool Unchanged, UnlockedVault.Resealed? New)? Classify(
-        string name, SealedDocument doc, UnlockedVault old, UnlockedVault next, Dictionary<string, byte[]> textIds, HashSet<ObjectId> logged)
+        string name, SealedDocument doc, UnlockedVault old, UnlockedVault next, UnlockedVault.RekeyIds ids, HashSet<ObjectId> logged)
     {
         // Opened and its pid computed, but not sealed: in a confirming pass nearly every document is current.
-        if (next.Reseal(name, doc, next, textIds, seal: false) is { } current)
+        if (next.Reseal(name, doc, next, ids, seal: false) is { } current)
         {
-            if (current.Content is { } text) textIds[Convert.ToBase64String(old.TextId(text))] = next.TextId(text);
+            if (current.Content is { } text) ids.Texts[Convert.ToBase64String(old.TextId(text))] = next.TextId(text);
+            if (current.Bytes is { } bytes) ids.Blobs[Convert.ToBase64String(old.BlobId(bytes))] = current.PathId;
             if (CryptographicOperations.FixedTimeEquals(current.PathId, doc.PathId)) return (true, null);
             log.LogWarning("Document {Id} of vault {VaultId} ({Collection}) is under the new key with another pid; its pid is corrected", doc.Id, doc.Vault, name);
-            return (false, next.Reseal(name, doc, next, textIds));
+            return (false, next.Reseal(name, doc, next, ids));
         }
 
-        if (old.Reseal(name, doc, next, textIds) is not { } resealed)
+        if (old.Reseal(name, doc, next, ids) is not { } resealed)
         {
             if (logged.Add(doc.Id)) log.LogError("Document {Id} of vault {VaultId} ({Collection}) opens under neither key; it is left as it is", doc.Id, doc.Vault, name);
             return null;
         }
 
-        if (resealed.Content is { } content) textIds[Convert.ToBase64String(old.TextId(content))] = next.TextId(content);
+        if (resealed.Content is { } content) ids.Texts[Convert.ToBase64String(old.TextId(content))] = next.TextId(content);
+        if (name == "blobs") ids.Blobs[Convert.ToBase64String(resealed.FromPathId)] = resealed.PathId;
         if (!CryptographicOperations.FixedTimeEquals(resealed.FromPathId, doc.PathId) && logged.Add(doc.Id))
         {
             log.LogWarning("Document {Id} of vault {VaultId} ({Collection}) had a pid that doesn't match what it holds; it gets the one that does", doc.Id, doc.Vault, name);
@@ -593,7 +663,9 @@ public sealed partial class VaultCatalog
 
         if (resealed.Unmapped.Count > 0 && logged.Add(doc.Id))
         {
-            log.LogWarning("Checkpoint {Id} of vault {VaultId} holds {Count} texts that are missing or damaged; they stay so", doc.Id, doc.Vault, resealed.Unmapped.Count);
+            log.LogWarning(
+                "Document {Id} of vault {VaultId} ({Collection}) names {Count} texts or blobs that are missing or damaged; they stay so",
+                doc.Id, doc.Vault, name, resealed.Unmapped.Count);
         }
 
         return (false, resealed);
@@ -606,8 +678,7 @@ public sealed partial class VaultCatalog
     /// texts either) and deletes the other, after logging it.
     /// </summary>
     private async Task<bool> CommitRekeyBatchAsync(
-        string name, IMongoCollection<SealedDocument> collection, List<(SealedDocument Doc, UnlockedVault.Resealed New)> batch, long bytes,
-        UnlockedVault old, UnlockedVault next, CancellationToken ct)
+        string name, List<(SealedDocument Doc, UnlockedVault.Resealed New)> batch, long bytes, UnlockedVault old, UnlockedVault next, CancellationToken ct)
     {
         var vaultId = batch[0].Doc.Vault;
         // Between batches: a deletion of the vault waits for this run at most one batch.
@@ -622,11 +693,7 @@ public sealed partial class VaultCatalog
                 UpdateResult result;
                 try
                 {
-                    result = await collection.UpdateOneAsync(
-                        session,
-                        Builders<SealedDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<SealedDocument>.Filter.Eq(d => d.Blob, doc.Blob),
-                        Builders<SealedDocument>.Update.Set(d => d.PathId, change.PathId).Set(d => d.Blob, change.Blob),
-                        cancellationToken: ct);
+                    result = await WriteRekeyedAsync(name, session, doc, change, ct);
                 }
                 catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
                 {
@@ -649,7 +716,7 @@ public sealed partial class VaultCatalog
             if (duplicate is not null)
             {
                 await AbortAsync(session);
-                await KeepOneAsync(name, collection, duplicate.Value.Doc, duplicate.Value.New, old, next, ct);
+                await KeepOneAsync(name, duplicate.Value.Doc, duplicate.Value.New, old, next, ct);
                 return false;
             }
 
@@ -673,35 +740,57 @@ public sealed partial class VaultCatalog
     }
 
     /// <summary>
-    /// Of two documents that claim one pid, deletes the one with the lower revision (checkpoints: the earlier). The
-    /// one being resealed opened; a holder that opens under neither key never wins over it (it may be a forgery with
-    /// the new key's pid, made to push a note out): it is deleted, and logged as damaged.
+    /// Of two documents that claim one pid, deletes the one with the lower revision (checkpoints: the earlier; texts and
+    /// blobs, which hold what their id names, either). The one being resealed opened; a holder that opens under neither
+    /// key never wins over it (it may be a forgery with the new key's pid, made to push a note out): it is deleted, and
+    /// logged as damaged.
     /// </summary>
     private async Task KeepOneAsync(
-        string name, IMongoCollection<SealedDocument> collection, SealedDocument doc, UnlockedVault.Resealed change, UnlockedVault old, UnlockedVault next, CancellationToken ct)
+        string name, SealedDocument doc, UnlockedVault.Resealed change, UnlockedVault old, UnlockedVault next, CancellationToken ct)
     {
-        var f = Builders<SealedDocument>.Filter;
-        var holder = await collection.Find(f.Eq(d => d.Vault, doc.Vault) & f.Eq(d => d.PathId, change.PathId) & f.Ne(d => d.Id, doc.Id)).FirstOrDefaultAsync(ct);
+        var holder = await HolderAsync(name, doc, change.PathId, ct);
         if (holder is null) return;
-        var none = new Dictionary<string, byte[]>();
+        var none = new UnlockedVault.RekeyIds();
         if (next.Reseal(name, holder, next, none, seal: false) is null && old.Reseal(name, holder, next, none, seal: false) is null)
         {
             log.LogError(
                 "Document {Lost} of vault {VaultId} ({Collection}) opens under neither key and claims the pid of {Kept}, which does; it is deleted",
                 holder.Id, doc.Vault, name, doc.Id);
-            await collection.DeleteOneAsync(f.Eq(d => d.Id, holder.Id) & f.Eq(d => d.Blob, holder.Blob), ct);
+            await DeleteRekeyedAsync(name, holder, ct);
             return;
         }
 
         var keepDoc = name switch
         {
             "checkpoints" => doc.At > holder.At,
-            "checkpoint_texts" => false,
+            "checkpoint_texts" or "blobs" => false,
             _ => doc.Revision > holder.Revision,
         };
         var (kept, lost) = keepDoc ? (doc, holder) : (holder, doc);
         log.LogWarning("Documents {Kept} and {Lost} of vault {VaultId} ({Collection}) claim one pid; the second is deleted", kept.Id, lost.Id, doc.Vault, name);
-        await collection.DeleteOneAsync(f.Eq(d => d.Id, lost.Id) & f.Eq(d => d.Blob, lost.Blob), ct);
+        await DeleteRekeyedAsync(name, lost, ct);
+    }
+
+    /// <summary>Another document of the vault in <paramref name="name"/> with the pid (a blob: the id) <paramref name="pid"/>.</summary>
+    private async Task<SealedDocument?> HolderAsync(string name, SealedDocument doc, byte[] pid, CancellationToken ct)
+    {
+        if (name == "blobs")
+        {
+            var b = Builders<BlobDocument>.Filter;
+            var blob = await Blobs.Find(b.Eq(d => d.Vault, doc.Vault) & b.Eq(d => d.BlobId, pid) & b.Ne(d => d.Id, doc.Id)).FirstOrDefaultAsync(ct);
+            return blob is null ? null : AsSealed(blob);
+        }
+
+        var f = Builders<SealedDocument>.Filter;
+        return await RekeyCollection(name).Find(f.Eq(d => d.Vault, doc.Vault) & f.Eq(d => d.PathId, pid) & f.Ne(d => d.Id, doc.Id)).FirstOrDefaultAsync(ct);
+    }
+
+    /// <summary>Deletes a document if it is still the one read (as <see cref="WriteRekeyedAsync"/> tells it).</summary>
+    private Task DeleteRekeyedAsync(string name, SealedDocument doc, CancellationToken ct)
+    {
+        if (name == "blobs") return Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, doc.PathId), ct);
+        var f = Builders<SealedDocument>.Filter;
+        return RekeyCollection(name).DeleteOneAsync(f.Eq(d => d.Id, doc.Id) & f.Eq(d => d.Blob, doc.Blob), ct);
     }
 
     private static async Task AbortAsync(IClientSessionHandle session)
