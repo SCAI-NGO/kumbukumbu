@@ -213,6 +213,7 @@ app.MapAccountApi();
 app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
+app.MapBoardApi();
 app.MapUploadApi();
 app.MapSyncApi();
 app.MapPairingApi();

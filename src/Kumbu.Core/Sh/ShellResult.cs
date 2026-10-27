@@ -4,10 +4,29 @@ namespace Kumbu.Core.Sh;
 /// <summary>The version token of a note a command read or wrote; sent next to the output, never in it.</summary>
 public sealed record NoteVersion(string Path, string Token);
 
+/// <summary>Why a command failed, for callers that answer with a status; a message is never parsed for it.</summary>
+public enum ShellErrorKind
+{
+    /// <summary>The input is wrong (a name, a date, a missing reason).</summary>
+    Invalid,
+
+    /// <summary>The caller's credential has no right to do it.</summary>
+    Refused,
+
+    /// <summary>What it names (a vault, a board, a card) is not there.</summary>
+    NotFound,
+
+    /// <summary>The state of the vault stands in the way (a definition problem, a name taken, changes that kept racing).</summary>
+    Conflict,
+}
+
 /// <summary>Outcome of a shell command; commands never throw for user input.</summary>
 public sealed record ShellResult(string Output, bool IsError)
 {
     public NoteVersion? Version { get; init; }
+
+    /// <summary>Why an error happened, where the command says; null otherwise.</summary>
+    public ShellErrorKind? Kind { get; init; }
 
     /// <summary>
     /// A line for an empty result, shown only when the command stands alone: right of a pipe or on the left of one,

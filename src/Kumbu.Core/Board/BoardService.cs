@@ -38,7 +38,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
         if (!TryTags(tags, out var tagList, out error)) return error;
         title = title.Normalize(NormalizationForm.FormC);
         var folder = BoardPaths.Folder(vaultPath.Name);
@@ -51,8 +51,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
             if (board is null) return boardError!;
             if (path == board.Definition) return Error($"'{title}' is the board's own note (Board.md); choose another title");
-            if (await store.GetAsync(path, ct) is not null) return Error($"'{title}' exists already ({path.Value}); move or update it instead");
-            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(Tool, path));
+            if (await store.GetAsync(path, ct) is not null) return Error($"'{title}' exists already ({path.Value}); move or update it instead", ShellErrorKind.Conflict);
+            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(Tool, path)) with { Kind = ShellErrorKind.Conflict };
             if (!TryColumn(board, column, out var target, out error)) return error;
             if (target.NeedsReason) return Error($"{target.Name} needs a reason; add '{title}' elsewhere and move it there with one");
 
@@ -78,13 +78,13 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             return Written($"added '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
         }
 
-        return Error($"the board kept changing while adding '{title}'; try again");
+        return Error($"the board kept changing while adding '{title}'; try again", ShellErrorKind.Conflict);
     }
 
     public async Task<ShellResult> MoveAsync(string vault, string card, string column, string? position, string? reason, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
 
         for (var attempt = 0; attempt < Attempts; attempt++)
         {
@@ -125,14 +125,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             return Written($"moved '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
         }
 
-        return Error($"'{card}' kept changing while moving it ({Attempts} tries); try again");
+        return Error($"'{card}' kept changing while moving it ({Attempts} tries); try again", ShellErrorKind.Conflict);
     }
 
     public async Task<ShellResult> UpdateAsync(
         string vault, string card, Optional<DateOnly?> due, Optional<IReadOnlyList<string>?> tags, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
         if (!due.IsGiven && !tags.IsGiven) return Error("update needs due or tags (null removes them)");
         IReadOnlyList<string>? tagList = null;
         if (tags.IsGiven && !TryTags(tags.Value, out tagList, out error)) return error;
@@ -164,7 +164,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             return Written($"updated '{TitleOf(current.Path)}': {string.Join(", ", said)}", next);
         }
 
-        return Error($"'{card}' kept changing while updating it ({Attempts} tries); try again");
+        return Error($"'{card}' kept changing while updating it ({Attempts} tries); try again", ShellErrorKind.Conflict);
     }
 
     /// <summary>Renames a column in <c>Board.md</c> and in every card's <c>column</c> and <c>moved</c>, the archive's included,
@@ -172,7 +172,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> RenameColumnAsync(string vault, string from, string to, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
         var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
         if (board is null) return boardError!;
         if (!TryColumn(board, from, out var column, out error)) return error;
@@ -181,13 +181,13 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         if (name.Length is 0 or > BoardDefinition.MaxNameLength || name.Contains('/'))
             return Error($"'{to}' is not a column name; a name has 1 to {BoardDefinition.MaxNameLength} characters and no '/'");
         if (name == column.Name) return Error($"the column is called {name} already");
-        if (board.Columns.Find(name) is { } other && other != column) return Error($"there is a column '{other.Name}' already; choose another name");
+        if (board.Columns.Find(name) is { } other && other != column) return Error($"there is a column '{other.Name}' already; choose another name", ShellErrorKind.Conflict);
 
         // The columns come from the revision the commit checks, so a Board.md edited since the read can't be overwritten.
         var definition = await store.GetAsync(board.Definition, ct);
         var (current, _) = definition is null ? (null, null) : BoardDefinition.Parse(definition.Content);
         if (definition is null || current is null || current.Find(column.Name) != column)
-            return Error($"{board.Definition.Value} changed meanwhile, so nothing was renamed; try again");
+            return Error($"{board.Definition.Value} changed meanwhile, so nothing was renamed; try again", ShellErrorKind.Conflict);
         var changeset = await writer.ChangesetAsync(board.Definition, ct);
         var columns = current.Columns.Select(c => c == column ? c with { Name = name } : c);
         var batch = new NoteBatch { Changeset = changeset };
@@ -218,7 +218,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
         var conflicts = await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct);
         if (conflicts.Count > 0)
-            return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again");
+            return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again", ShellErrorKind.Conflict);
         return ShellResult.Ok($"{Tool}: renamed column {column.Name} to {name} in Board.md and {Count(cards, "card")}");
 
         static bool DirectlyIn(VaultPath path, VaultPath dir) =>
@@ -231,12 +231,12 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> CreateAsync(string vault, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
         var path = BoardPaths.Definition(vaultPath.Name);
-        if (await store.GetAsync(path, ct) is not null) return Error($"{path.Value} exists already; 'board {Quote(vaultPath)}' shows it");
+        if (await store.GetAsync(path, ct) is not null) return Error($"{path.Value} exists already; 'board {Quote(vaultPath)}' shows it", ShellErrorKind.Conflict);
 
         var result = await writer.WriteAsync(path.Value, BoardTemplate.Text(vaultPath.Name), null, ct);
-        if (result.IsError) return Error(result.Output.StartsWith("write: ", StringComparison.Ordinal) ? result.Output["write: ".Length..] : result.Output);
+        if (result.IsError) return Error(result.Output.StartsWith("write: ", StringComparison.Ordinal) ? result.Output["write: ".Length..] : result.Output, ShellErrorKind.Conflict);
         return ShellResult.Ok($"board: created {path.Value} from the template; 'board {Quote(vaultPath)}' shows it") with { Version = result.Version };
     }
 
@@ -248,8 +248,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         if (board is not null) return (board, null);
         var root = VaultPath.Root.Child(vault);
         return (null, problem == "no board"
-            ? Error($"no board in {root.Value}; the board tool's create makes one when the user asks for it")
-            : Error($"{BoardPaths.Definition(vault).Value} can't be read, so the board can't change: {problem}"));
+            ? Error($"no board in {root.Value}; the board tool's create makes one when the user asks for it", ShellErrorKind.NotFound)
+            : Error($"{BoardPaths.Definition(vault).Value} can't be read, so the board can't change: {problem}", ShellErrorKind.Conflict));
     }
 
     /// <summary>A card by its title (exactly, else ignoring case when that is unique) or its path, directly in the board's folder.</summary>
@@ -262,21 +262,21 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             || !path.IsNote || path == board.Definition)
         {
             return (null, null, card.StartsWith('/')
-                ? Error($"{card} is not a card; cards are the notes directly in {folder.Value}")
-                : Error($"no card '{card}' in {folder.Value} ('board {Quote(VaultPath.Root.Child(board.Definition.Vault!))}' lists them)"));
+                ? Error($"{card} is not a card; cards are the notes directly in {folder.Value}", ShellErrorKind.NotFound)
+                : Error($"no card '{card}' in {folder.Value} ('board {Quote(VaultPath.Root.Child(board.Definition.Vault!))}' lists them)", ShellErrorKind.NotFound));
         }
 
         var note = await store.GetAsync(path, ct);
         if (note is null)
         {
             return (null, null, await store.IsDamagedAsync(path, ct)
-                ? ShellResult.Error(Damage.Message(Tool, path))
-                : Error($"no card '{card}' in {folder.Value} ('board {Quote(VaultPath.Root.Child(board.Definition.Vault!))}' lists them)"));
+                ? ShellResult.Error(Damage.Message(Tool, path)) with { Kind = ShellErrorKind.Conflict }
+                : Error($"no card '{card}' in {folder.Value} ('board {Quote(VaultPath.Root.Child(board.Definition.Vault!))}' lists them)", ShellErrorKind.NotFound));
         }
 
         var read = Frontmatter.Read(note.Content);
         if (read.Problem is not null)
-            return (null, null, Error($"{path.Value}: the frontmatter does not parse, so the board leaves it alone (fix it with edit): {read.Problem}"));
+            return (null, null, Error($"{path.Value}: the frontmatter does not parse, so the board leaves it alone (fix it with edit): {read.Problem}", ShellErrorKind.Conflict));
         return (note, read.Values, null);
     }
 
@@ -317,7 +317,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         }
 
         path = VaultPath.Root;
-        error = Error($"'{vault}' is not a vault (ls / lists them)");
+        error = Error($"'{vault}' is not a vault (ls / lists them)", ShellErrorKind.NotFound);
         return false;
     }
 
@@ -598,7 +598,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
     private static string Quote(VaultPath path) => path.Value.Contains(' ') ? $"\"{path.Value}\"" : path.Value;
 
-    private static ShellResult Error(string message) => ShellResult.Error($"{Tool}: {message}");
+    private static ShellResult Error(string message, ShellErrorKind kind = ShellErrorKind.Invalid) =>
+        ShellResult.Error($"{Tool}: {message}") with { Kind = kind };
 
     private static ShellResult Written(string message, StoredNote note) =>
         ShellResult.Ok($"{Tool}: {message}") with { Version = new NoteVersion(note.Path.Value, note.Version) };
