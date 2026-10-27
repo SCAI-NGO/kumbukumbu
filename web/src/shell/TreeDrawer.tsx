@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
-import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -19,6 +19,9 @@ import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
+
+/** The docked sidebar's id: the top bar's button controls it. */
+export const sidebarId = "file-tree";
 
 export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
@@ -82,8 +85,9 @@ function NoteButton({ path, current, onOpen }: { path: string; current: boolean;
 }
 
 /**
- * The drag handle on the sidebar's right edge (desktop widths only, see the `md:` in the drawer). A separator that is
- * focusable is a window splitter (ARIA): arrows resize, Home and End jump to the limits, a double click resets.
+ * The drag handle on the sidebar's right edge (from `md` widths on: the drawer's `md:`, and the docked sidebar). A
+ * separator that is focusable is a window splitter (ARIA): arrows resize, Home and End jump to the limits, a double
+ * click resets.
  */
 function ResizeHandle({ sidebar, onDragging }: { sidebar: ReturnType<typeof useSidebarWidth>; onDragging(dragging: boolean): void }) {
   const { width, min, max, set, store, reset } = sidebar;
@@ -198,22 +202,40 @@ function AccountRow() {
   );
 }
 
+/** What the drawer adds around the tree below the desktop breakpoint: a modal dialog with a focus trap, and the scrim. */
+function DrawerFrame({ style, className, children, after }: { style: CSSProperties; className: string; children: ReactNode; after: ReactNode }) {
+  const close = () => useEditor.getState().setOverlay("none");
+  const dialog = useDialog<HTMLDivElement>(close);
+  return (
+    <div className="absolute inset-0 z-20 flex">
+      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" data-drawer style={style} className={`k-drawer w-[318px] max-w-[85%] md:w-(--sidebar-width) md:max-w-none ${className}`}>
+        {children}
+      </div>
+      <button type="button" aria-label="Close file tree" onClick={close} className="flex-1 bg-black/55" />
+      {after}
+    </div>
+  );
+}
+
 /**
- * The drawer from the left: the active vault's tree, then the vault switcher and the account row at the bottom. The
- * vault's menu also opens its trash, its activity and its checkpoints (`onVaultSheet`), as sheets over the drawer.
+ * The tree from the left: the active vault's tree, then the vault switcher and the account row at the bottom. The
+ * vault's menu also opens its trash, its activity and its checkpoints (`onVaultSheet`), as sheets over it. Below the
+ * desktop breakpoint a drawer over the note, which a note opened from it closes; from there on (`docked`) a sidebar
+ * beside the note that stays open and is no dialog, so the focus moves freely between it and the note.
  */
 export default function TreeDrawer(props: {
+  docked?: boolean;
+  /** Docked only: collapsed, yet kept in the page, so the top bar's button has something to control. */
+  hidden?: boolean;
   onNewNote(folder: string): void;
   onNewVault(): void;
   onMove(subject: MoveSubject): void;
   onVaultSheet(sheet: { kind: "trash" | "activity" | "checkpoints"; vault: string }): void;
 }) {
-  const { onNewNote, onNewVault, onMove, onVaultSheet } = props;
+  const { docked = false, hidden = false, onNewNote, onNewVault, onMove, onVaultSheet } = props;
   const { activeVault, currentPath, expandedFolders, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
-  const close = () => setOverlay("none");
-  const dialog = useDialog<HTMLDivElement>(close);
   const vaults = useVaults();
   const providers = useEmbeddingProviders();
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
@@ -236,77 +258,94 @@ export default function TreeDrawer(props: {
     ...(embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
   ];
 
-  return (
-    <div className="absolute inset-0 z-20 flex">
-      <div ref={dialog} role="dialog" aria-modal="true" aria-label="File tree" data-drawer
-        style={{ "--sidebar-width": `${sidebar.width}px` } as CSSProperties}
-        className={`k-drawer relative flex h-full w-[318px] max-w-[85%] flex-col border-r border-line bg-surface md:w-(--sidebar-width) md:max-w-none ${resizing ? "select-none" : ""}`}
-      >
-        <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
-          <div className="min-w-0 flex-1">
-            <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
-            <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
-          </div>
-          {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} extra={vaultItems} />}
+  const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
+  const className = `relative flex h-full flex-col border-r border-line bg-surface ${resizing ? "select-none" : ""}`;
+  const panel = (
+    <>
+      <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
+          <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
-          {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
-          {tree.data && (
-            <ul>
-              {rows(tree.data.root, expandedFolders).map((row) => (
-                <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
-                  {row.kind === "folder" ? (
-                    <>
-                      <FolderButton folder={row.folder} count={row.count} open={row.open} onToggle={() => toggleFolder(row.folder.path)} />
-                      <FolderMenu folder={row.folder} onNewNote={onNewNote} onMove={onMove} />
-                    </>
-                  ) : (
-                    <>
-                      <NoteButton
-                        path={row.path}
-                        current={row.path === currentPath}
-                        onOpen={() => {
-                          close();
-                          navigate(noteUrl(row.path));
-                        }}
-                      />
-                      <Menu
-                        label={`Actions for ${titleOf(row.path)}`}
-                        items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
-                        placement="below"
-                        className={menuButtonClass}
-                      >
-                        <Ellipsis size={18} aria-hidden />
-                      </Menu>
-                    </>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {tree.data && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
-            <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
-          )}
-          {!!tree.data?.damaged && (
-            <p className="px-2.5 py-2 text-sm text-muted">
-              {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
-          <VaultSwitcher onNewVault={onNewVault} />
-          <AccountRow />
-        </div>
-        {/* Last in the tab order: the tree and its controls come first. */}
-        <ResizeHandle sidebar={sidebar} onDragging={setResizing} />
+        {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} extra={vaultItems} />}
       </div>
-      <button type="button" aria-label="Close file tree" onClick={close} className="flex-1 bg-black/55" />
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
+        {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
+        {tree.data && (
+          <ul>
+            {rows(tree.data.root, expandedFolders).map((row) => (
+              <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
+                {row.kind === "folder" ? (
+                  <>
+                    <FolderButton folder={row.folder} count={row.count} open={row.open} onToggle={() => toggleFolder(row.folder.path)} />
+                    <FolderMenu folder={row.folder} onNewNote={onNewNote} onMove={onMove} />
+                  </>
+                ) : (
+                  <>
+                    <NoteButton
+                      path={row.path}
+                      current={row.path === currentPath}
+                      onOpen={() => {
+                        if (!docked) setOverlay("none");
+                        navigate(noteUrl(row.path));
+                      }}
+                    />
+                    <Menu
+                      label={`Actions for ${titleOf(row.path)}`}
+                      items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
+                      placement="below"
+                      className={menuButtonClass}
+                    >
+                      <Ellipsis size={18} aria-hidden />
+                    </Menu>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {tree.data && tree.data.root.folders.length + tree.data.root.notes.length === 0 && (
+          <p className="px-2.5 py-2 text-sm text-muted">No notes yet. Make the first with the menu above.</p>
+        )}
+        {!!tree.data?.damaged && (
+          <p className="px-2.5 py-2 text-sm text-muted">
+            {tree.data.damaged === 1 ? "1 note doesn't open, so it isn't shown." : `${tree.data.damaged} notes don't open, so they aren't shown.`}
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
+        <VaultSwitcher onNewVault={onNewVault} />
+        <AccountRow />
+      </div>
+      {/* Last in the tab order: the tree and its controls come first. */}
+      <ResizeHandle sidebar={sidebar} onDragging={setResizing} />
+    </>
+  );
+  // Outside the sidebar's box, which would otherwise hold them: they cover the whole shell, docked or not.
+  const dialogs = (
+    <>
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {choosingEmbeddings && activeVault && embeddings && providers.data && (
         <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
       )}
-    </div>
+    </>
+  );
+
+  if (!docked) {
+    return (
+      <DrawerFrame style={style} className={className} after={dialogs}>
+        {panel}
+      </DrawerFrame>
+    );
+  }
+  return (
+    <>
+      <aside id={sidebarId} aria-label="File tree" hidden={hidden} style={style} className={`w-(--sidebar-width) flex-none ${className}`}>
+        {panel}
+      </aside>
+      {dialogs}
+    </>
   );
 }

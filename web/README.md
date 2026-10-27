@@ -25,7 +25,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - `note/`: note view, Markdown editor and toolbar, `[[` completion, autosave, conflict handling, backlinks, history, the changed-elsewhere bar and the agent banner, line diff; the renderer's plugins (wiki links and embeds, callouts, find in the note), front matter as properties, the outline
 - `routes/`: sign-in, join, forgot password, Access (API keys and app connections), the OAuth consent page, settings; `routes/admin/` users and invitations
 - `search/`: search sheet, mode chips, result cards
-- `shell/`: mobile shell, dock, mode toggle, tree drawer, vault switcher, new vault, rename and move, trash, checkpoints, search-by-meaning provider
+- `shell/`: mobile shell, dock, mode toggle, tree drawer (a docked sidebar from `lg`, 1024 px), vault switcher, new vault, rename and move, trash, checkpoints, search-by-meaning provider
 - `state/`: zustand stores for session and editor
 - `theme/`: colour schemes, applying them, contrast test
 - `upload/`: collecting files and folders, planning the upload, conflict choices

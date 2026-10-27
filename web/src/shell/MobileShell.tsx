@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCreateUntitled, useVaults } from "../api/notes";
@@ -8,7 +8,9 @@ import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
+import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
+import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -17,8 +19,8 @@ import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewVaultDialog from "./NewVaultDialog";
-import TopBar from "./TopBar";
-import TreeDrawer from "./TreeDrawer";
+import TopBar, { sidebarToggleId } from "./TopBar";
+import TreeDrawer, { sidebarId } from "./TreeDrawer";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -113,6 +115,45 @@ export default function MobileShell() {
     () => topDialog()?.dataset.drawer !== undefined && setOverlay("none"),
   );
 
+  // From the desktop breakpoint on, the tree is docked beside the note: collapsed or expanded, never an overlay.
+  const docked = useDesktop();
+  const [collapsed, setCollapsed] = useSidebarCollapsed();
+  const [revealed, setRevealed] = useState(0);
+  const toggleSidebar = useCallback(() => {
+    // Hiding the tree that holds the focus would drop it to the page: it goes to the button that brings the tree back.
+    if (!collapsed && document.getElementById(sidebarId)?.contains(document.activeElement)) document.getElementById(sidebarToggleId)?.focus();
+    setCollapsed(!collapsed);
+  }, [collapsed, setCollapsed]);
+
+  // Docked, whatever opens the drawer (the title, the dock's Files, a vault picked or made) shows the sidebar
+  // instead and takes the focus there, as the drawer would.
+  useEffect(() => {
+    if (!docked || overlay !== "tree") return;
+    setOverlay("none");
+    setCollapsed(false);
+    setRevealed((n) => n + 1);
+  }, [docked, overlay, setOverlay, setCollapsed]);
+  useEffect(() => {
+    if (!revealed) return;
+    const sidebar = document.getElementById(sidebarId);
+    (sidebar?.querySelector<HTMLElement>('[aria-current="page"]') ?? sidebar?.querySelector<HTMLElement>("[data-autofocus]"))?.focus();
+  }, [revealed]);
+
+  // Ctrl+\ (Cmd+\ on a Mac), as in other editors with a sidebar; the note's editor has no shortcut of its own for it.
+  // `code` too, for layouts where `\` needs AltGr. Not while a dialog is open: the sidebar is behind it.
+  useEffect(() => {
+    if (!docked) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.defaultPrevented) return;
+      if (e.key !== "\\" && e.code !== "Backslash") return;
+      if (topDialog()) return;
+      e.preventDefault();
+      toggleSidebar();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [docked, toggleSidebar]);
+
   // The URL says which note is open; the store follows it when it changes (a link, back and forward, a reload).
   // Only then: after signing out, the store is empty while this URL is still shown for a moment.
   useEffect(() => {
@@ -142,37 +183,44 @@ export default function MobileShell() {
     });
   // From the dock: the open note's folder, or the root of the vault the drawer shows.
   const dockFolder = activeVault && (path && vaultOf(path) === activeVault ? folderOf(path) : `/${activeVault}`);
+  const treeProps = { onNewNote: newNote, onNewVault: () => setVaultDialog(true), onMove: setMoving, onVaultSheet: setVaultSheet };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
-      <TopBar path={path} />
+      <TopBar path={path} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
       <InstallHint />
-      <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
-      {createUntitled.isError && (
-        <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
-          {errorText(createUntitled.error)}
-        </p>
-      )}
-      {path && mode === "read" && noteTool === "find" && <FindBar />}
-      {(!path || mode === "read") && !(path && noteTool === "find") && (
-        <Dock
-          newNote={dockFolder ? () => newNote(dockFolder) : null}
-          upload={dockFolder ? () => openUpload(dockFolder) : null}
-          noteActions={
-            path
-              ? [
-                  { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
-                  { label: "History", icon: History, onSelect: () => setHistory(path) },
-                  { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
-                  { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
-                ]
-              : null
-          }
-        />
-      )}
+      {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
+      <div className="flex min-h-0 flex-1">
+        {docked && <TreeDrawer docked hidden={collapsed} {...treeProps} />}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
+          {createUntitled.isError && (
+            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+              {errorText(createUntitled.error)}
+            </p>
+          )}
+          {path && mode === "read" && noteTool === "find" && <FindBar />}
+          {(!path || mode === "read") && !(path && noteTool === "find") && (
+            <Dock
+              newNote={dockFolder ? () => newNote(dockFolder) : null}
+              upload={dockFolder ? () => openUpload(dockFolder) : null}
+              noteActions={
+                path
+                  ? [
+                      { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
+                      { label: "History", icon: History, onSelect: () => setHistory(path) },
+                      { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                      { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
+                    ]
+                  : null
+              }
+            />
+          )}
+        </div>
+      </div>
 
-      {overlay === "tree" && <TreeDrawer onNewNote={newNote} onNewVault={() => setVaultDialog(true)} onMove={setMoving} onVaultSheet={setVaultSheet} />}
+      {!docked && overlay === "tree" && <TreeDrawer {...treeProps} />}
       {overlay === "search" && (
         <LoadBoundary fallback={<SearchLoadFailed onClose={() => setOverlay("none")} />}>
           <Suspense>
