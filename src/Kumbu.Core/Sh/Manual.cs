@@ -81,6 +81,22 @@ public static class Manual
         recoverable (sh: history, restore).
         """;
 
+    public const string BoardDescription = """
+        Change a Kanban board in Kumbu² (a Markdown second brain; read it with the sh tool). The board is the
+        cards (notes) in a vault's Board folder, in the columns that Board.md names. action chooses what to do:
+
+        add: a new card. Needs vault, title and column; text, position, due and tags are optional.
+        move: a card to a column, at a position (top, bottom, before:<card>, after:<card>). Needs vault, card and column; reason is optional.
+        update: a card's due date and tags. Needs vault, card and due, tags, clear_due or clear_tags.
+        create: the board of a vault, from the template. Needs vault only.
+        rename_column: a column, in Board.md and in every card. Needs vault, from and to.
+
+        Read the board first with sh `board <vault>` and follow its Instructions. For what comes next, start with
+        Doing, Today and Backlog; when they run short, look at Ideas. Give a reason when a column asks for one.
+        Create a board only when the user asks for one. A move or update needs no version token and never changes
+        the card's text; change the text with edit.
+        """;
+
     public const string ReplaceDescription = """
         Replace a text in every note below a path in Kumbu² (a Markdown second brain; read it with the sh tool),
         e.g. rename a project everywhere. Two steps:
