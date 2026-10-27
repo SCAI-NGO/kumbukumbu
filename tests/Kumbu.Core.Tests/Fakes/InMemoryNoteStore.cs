@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Tests.Fakes;
 
-public sealed class InMemoryNoteStore : INoteStore
+public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 {
     public static readonly DateTime Seeded = new(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
 
@@ -12,6 +13,9 @@ public sealed class InMemoryNoteStore : INoteStore
     private readonly List<TrashedNote> _trash = [];
     private readonly List<MoveRecord> _moves = [];
     private readonly HashSet<string> _vaults = new(StringComparer.Ordinal);
+    private readonly Dictionary<VaultPath, StoredAttachment> _attachments = [];
+    private readonly List<TrashedAttachment> _attachmentTrash = [];
+    private readonly Dictionary<(string Vault, string BlobId), byte[]> _blobs = [];
 
     public InMemoryNoteStore(params (string Path, string Content)[] notes)
     {
@@ -113,6 +117,21 @@ public sealed class InMemoryNoteStore : INoteStore
             if ((_notes.ContainsKey(target.Path) && !leaving.Contains(target.Path)) || Damaged.Contains(target.Path)) conflicts.Add(target.Path);
         }
 
+        foreach (var current in batch.AttachmentReplaces.Select(r => r.Current).Concat(batch.AttachmentTrashes))
+        {
+            if (!_attachments.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) conflicts.Add(current.Path);
+        }
+
+        var attachmentsLeaving = batch.AttachmentTrashes.Select(t => t.Path).ToHashSet();
+        var gone = batch.AttachmentRestores.Where(r => !_attachmentTrash.Contains(r.Trashed)).Select(r => r.Restored).ToHashSet();
+        foreach (var target in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored)))
+        {
+            if ((_attachments.ContainsKey(target.Path) && !attachmentsLeaving.Contains(target.Path)) || Damaged.Contains(target.Path) || gone.Contains(target))
+            {
+                conflicts.Add(target.Path);
+            }
+        }
+
         if (conflicts.Count > 0) return Task.FromResult<IReadOnlyList<VaultPath>>(conflicts);
 
         Commits++;
@@ -129,6 +148,20 @@ public sealed class InMemoryNoteStore : INoteStore
         {
             _notes[target.Path] = target;
             _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset));
+        }
+
+        foreach (var (current, next) in batch.AttachmentReplaces) _attachments[current.Path] = next;
+        foreach (var current in batch.AttachmentTrashes)
+        {
+            _attachments.Remove(current.Path);
+            _attachmentTrash.Add(new TrashedAttachment(current, by, at, batch.Changeset));
+        }
+
+        foreach (var created in batch.AttachmentCreates) _attachments[created.Path] = created;
+        foreach (var (trashed, restored) in batch.AttachmentRestores)
+        {
+            _attachmentTrash.Remove(trashed);
+            _attachments[restored.Path] = restored;
         }
 
         return Task.FromResult<IReadOnlyList<VaultPath>>([]);
@@ -181,6 +214,31 @@ public sealed class InMemoryNoteStore : INoteStore
         _notes[path] = restored;
         return Task.FromResult<StoredNote?>(restored);
     }
+
+    public Task<StoredAttachment?> GetAttachmentAsync(VaultPath path, CancellationToken ct) =>
+        Task.FromResult(_attachments.GetValueOrDefault(path));
+
+    public Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<StoredAttachment>>([.. _attachments.Values.Where(a => IsBelow(a.Path, folder))]);
+
+    public Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct) =>
+        Task.FromResult<Stream?>(_blobs.TryGetValue((vault, blobId), out var bytes) ? new MemoryStream(bytes, writable: false) : null);
+
+    /// <summary>Blobs keyed by a plain SHA-256: fine for a fake, never for the real store.</summary>
+    public Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    {
+        var id = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes.Span));
+        _blobs.TryAdd((vault, id), bytes.ToArray());
+        return Task.FromResult(id);
+    }
+
+    public Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TrashedAttachment>>(
+        [
+            .. _attachmentTrash
+                .Where(t => path is not { } p || t.Attachment.Path == p || IsBelow(t.Attachment.Path, p))
+                .OrderByDescending(t => t.DeletedAt),
+        ]);
 
     private void Race(VaultPath path)
     {

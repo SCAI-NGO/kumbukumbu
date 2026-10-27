@@ -106,6 +106,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// </summary>
     public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
     {
+        if (batch.HasAttachments) throw new NotSupportedException("Attachments can't be stored yet");
         if (batch.IsEmpty) return [];
         var paths = batch.Paths.ToList();
         if (paths.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));

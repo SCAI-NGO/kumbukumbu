@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Notes;
@@ -83,3 +84,6 @@ public sealed record StoredNote(
 /// <param name="Changeset">The writer's changeset the removal belongs to; null for a restore, or a removal recorded
 /// before trash records carried one.</param>
 public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null);
+
+/// <param name="Changeset">The writer's changeset the removal belongs to; null for a removal without one.</param>
+public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset);
