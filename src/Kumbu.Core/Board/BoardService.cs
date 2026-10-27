@@ -33,9 +33,6 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     private const string Tool = "board";
     private const int Attempts = 3;
 
-    // For Task 5 (archive, rename_column).
-    private readonly NoteMover _mover = mover;
-
     public async Task<ShellResult> AddAsync(
         string vault, string title, string column, string? text, string? position, DateOnly? due, IReadOnlyList<string>? tags,
         CancellationToken ct)
@@ -77,7 +74,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (!await AddRespreadAsync(batch, respread, changeset, ct)) continue;
             if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
 
-            return Written($"added '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}", note);
+            var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, note, ct);
+            return Written($"added '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
         }
 
         return Error($"the board kept changing while adding '{title}'; try again");
@@ -123,7 +121,8 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
             }
 
-            return Written($"moved '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}", next);
+            var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, next, ct);
+            return Written($"moved '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
         }
 
         return Error($"'{card}' kept changing while moving it ({Attempts} tries); try again");
@@ -166,6 +165,60 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         }
 
         return Error($"'{card}' kept changing while updating it ({Attempts} tries); try again");
+    }
+
+    /// <summary>Renames a column in <c>Board.md</c> and in every card's <c>column</c> and <c>moved</c>, the archive's included,
+    /// in one commit: all or nothing.</summary>
+    public async Task<ShellResult> RenameColumnAsync(string vault, string from, string to, CancellationToken ct)
+    {
+        if (!TryVault(vault, out var vaultPath, out var error)) return error;
+        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused;
+        var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
+        if (board is null) return boardError!;
+        if (!TryColumn(board, from, out var column, out error)) return error;
+
+        var name = (to ?? "").Trim().Normalize(NormalizationForm.FormC);
+        if (name.Length is 0 or > BoardDefinition.MaxNameLength || name.Contains('/'))
+            return Error($"'{to}' is not a column name; a name has 1 to {BoardDefinition.MaxNameLength} characters and no '/'");
+        if (name == column.Name) return Error($"{column.Name} is named so already");
+        if (board.Columns.Find(name) is { } other && other != column) return Error($"there is a column '{other.Name}' already; choose another name");
+
+        // The columns come from the revision the commit checks, so a Board.md edited since the read can't be overwritten.
+        var definition = await store.GetAsync(board.Definition, ct);
+        var (current, _) = definition is null ? (null, null) : BoardDefinition.Parse(definition.Content);
+        if (definition is null || current is null || current.Find(column.Name) != column)
+            return Error($"{board.Definition.Value} changed meanwhile, so nothing was renamed; try again");
+        var changeset = await writer.ChangesetAsync(board.Definition, ct);
+        var columns = current.Columns.Select(c => c == column ? c with { Name = name } : c);
+        var batch = new NoteBatch { Changeset = changeset };
+
+        // Cards first: a card changed meanwhile is the likely conflict, and the batch fails as a whole either way.
+        var folder = BoardPaths.Folder(vaultPath.Name);
+        var notes = (await store.ListNotesUnderAsync(folder, ct)).Where(p => p != board.Definition && p.IsNote).Order(Comparer<VaultPath>.Create(
+            (a, b) => string.CompareOrdinal(a.Value, b.Value)));
+        foreach (var path in notes)
+        {
+            if (await store.GetAsync(path, ct) is not { } card) continue;
+            var read = Frontmatter.Read(card.Content);
+            if (read.Problem is not null) continue;
+
+            List<(string Key, string? Yaml)> changes = [];
+            if (read.Values.GetValueOrDefault("column") is string written && Same(written, column.Name)) changes.Add(("column", Scalar(name)));
+            if (read.Values.GetValueOrDefault("moved") is IReadOnlyDictionary<string, object?> moved && moved.Keys.Any(k => Same(k, column.Name)))
+                changes.Add(("moved", Renamed(moved, column.Name, name)));
+            if (changes.Count > 0) batch.Replaces.Add((card, NoteWriter.Next(card, Frontmatter.Set(card.Content, changes), caller.Writer, writer.Now, changeset)));
+        }
+
+        var cards = batch.Replaces.Count;
+        var content = Frontmatter.Set(definition.Content, [("columns", FlowList(columns.Select(ColumnYaml), quote: false))]);
+        batch.Replaces.Add((definition, NoteWriter.Next(definition, content, caller.Writer, writer.Now, changeset)));
+
+        var conflicts = await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct);
+        if (conflicts.Count > 0)
+            return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again");
+        return ShellResult.Ok($"{Tool}: renamed column {column.Name} to {name} in Board.md and {Count(cards, "card")}");
+
+        static bool Same(string written, string column) => string.Equals(written.Trim(), column, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Writes <c>Board.md</c> from the template; only when there is none.</summary>
@@ -401,9 +454,107 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         return FlowMap([.. entries.Select(e => (e.Key, Scalar(e.Value)))]);
     }
 
+    /// <summary>After an add or move into an archivable column: while it holds more than the rule's <c>after</c>, its oldest
+    /// cards by the day they entered it, among those there at least <c>minDays</c>, go to the archive with <c>mv</c> (links
+    /// follow) and get <c>archived</c>. Never fails the add or move: a move that fails stops it and says why.</summary>
+    /// <returns>What to add to the message, and <paramref name="written"/> as it is now (archived, perhaps).</returns>
+    private async Task<(string Message, StoredNote Written)> ArchiveAsync(string vault, BoardColumn column, StoredNote written, CancellationToken ct)
+    {
+        if (!column.Archivable) return ("", written);
+        var (board, _) = await BoardReader.ReadAsync(store, vault, ct);
+        if (board is null) return ("", written);
+        var rule = board.Columns.Archive;
+        var lane = board.Lanes.Single(l => string.Equals(l.Column.Name, column.Name, StringComparison.OrdinalIgnoreCase)).Cards;
+        if (lane.Count <= rule.After) return ("", written);
+
+        var latest = Today.AddDays(-rule.MinDays);
+        var candidates = lane
+            .Select(card => (card, Entered: card.Moved.Where(m => string.Equals(m.Key.Trim(), column.Name, StringComparison.OrdinalIgnoreCase))
+                .Select(m => (DateOnly?)m.Value).Max()))
+            .Where(c => c.Entered is { } day && day <= latest)
+            .OrderBy(c => c.Entered)
+            .Take(lane.Count - rule.After)
+            .Select(c => c.card)
+            .ToList();
+
+        var archived = 0;
+        var stopped = "";
+        foreach (var card in candidates)
+        {
+            var target = await ArchivePathAsync(vault, card.Title, ct);
+            var result = await mover.MoveAsync(card.Path, target, rewriteLinks: true, ct);
+            if (result.IsError)
+            {
+                stopped = $"; archiving stopped at '{card.Title}': {result.Output}";
+                break;
+            }
+
+            archived++;
+            var note = await MarkArchivedAsync(target, ct);
+            if (card.Path == written.Path && note is not null) written = note;
+        }
+
+        var message = archived == 0 ? "" : $"; archived {Count(archived, "card")} to {BoardPaths.Archive(vault).Value}/";
+        return (message + stopped, written);
+    }
+
+    /// <summary><c>/Board/Archive/&lt;Title&gt;.md</c>, or with " 2", " 3", … when that name is taken: nothing is overwritten.</summary>
+    private async Task<VaultPath> ArchivePathAsync(string vault, string title, CancellationToken ct)
+    {
+        var archive = BoardPaths.Archive(vault);
+        for (var n = 1; ; n++)
+        {
+            var path = archive.Child((n == 1 ? title : $"{title} {n}") + ".md");
+            if (await store.GetAsync(path, ct) is null && !await store.IsDamagedAsync(path, ct) && (await store.ListNotesUnderAsync(path, ct)).Count == 0)
+                return path;
+        }
+    }
+
+    /// <summary>Sets <c>archived</c> on the card at its new place, retrying on the new state as a move does.</summary>
+    private async Task<StoredNote?> MarkArchivedAsync(VaultPath path, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < Attempts; attempt++)
+        {
+            if (await store.GetAsync(path, ct) is not { } current || Frontmatter.Read(current.Content).Problem is not null) return null;
+            var next = NoteWriter.Next(current, Frontmatter.Set(current.Content, [("archived", Day(Today))]), caller.Writer, writer.Now,
+                await writer.ChangesetAsync(path, ct));
+            if (await store.TryReplaceAsync(current, next, ct)) return next;
+        }
+
+        return null;
+    }
+
+    /// <summary>A card's <c>moved</c> map with the keys that name <paramref name="from"/> (in any case) renamed; when two keys meet,
+    /// the later day stays.</summary>
+    private static string Renamed(IReadOnlyDictionary<string, object?> moved, string from, string to)
+    {
+        var entries = new List<(string Key, string Value)>();
+        foreach (var (key, value) in moved)
+        {
+            if (value is not string day) continue;
+            var name = string.Equals(key.Trim(), from, StringComparison.OrdinalIgnoreCase) ? to : key;
+            var at = entries.FindIndex(e => e.Key == name);
+            if (at < 0) entries.Add((name, day));
+            else if (string.CompareOrdinal(day, entries[at].Value) > 0) entries[at] = (name, day);
+        }
+
+        return FlowMap([.. entries.Select(e => (e.Key, Scalar(e.Value)))]);
+    }
+
+    /// <summary>A column as <c>Board.md</c> lists it: its name, or <c>{ Name: [flags] }</c>.</summary>
+    private static string ColumnYaml(BoardColumn column)
+    {
+        List<string> flags = [];
+        if (column.Archivable) flags.Add("archivable");
+        if (column.NeedsReason) flags.Add("reason");
+        return flags.Count == 0 ? Scalar(column.Name) : $"{{ {Scalar(column.Name)}: {FlowList(flags)} }}";
+    }
+
+    private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
+
     private static string Day(DateOnly day) => day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    private static string FlowList(IEnumerable<string> items) => $"[{string.Join(", ", items.Select(Scalar))}]";
+    private static string FlowList(IEnumerable<string> items, bool quote = true) => $"[{string.Join(", ", quote ? items.Select(Scalar) : items)}]";
 
     private static string FlowMap(IReadOnlyList<(string Key, string Yaml)> entries) =>
         $"{{ {string.Join(", ", entries.Select(e => $"{Scalar(e.Key)}: {e.Yaml}"))} }}";

@@ -310,4 +310,153 @@ public class BoardServiceTests
         var placed = await Service(store).MoveAsync("Work", "Stray", "Ideas", null, null, Ct);
         Assert.Equal("board: moved 'Stray' to Ideas (2 of 2)", placed.Output);
     }
+
+    private static string Aged(string column, string rank, DateOnly entered) =>
+        $"---\ncolumn: {column}\nrank: {rank}\nmoved: {{ {column.ToLowerInvariant()}: {entered:yyyy-MM-dd} }}\n---\nText\n";
+
+    [Fact]
+    public async Task Thirty_cards_in_Done_stay()
+    {
+        // 30 cards in Done, all at least 20 days there; the 31st pushes the oldest out.
+        var keys = Rank.Spread(30);
+        var cards = Enumerable.Range(0, 30)
+            .Select(i => ($"/Work/Board/Card {i:00}.md", Aged("Done", keys[i], new DateOnly(2026, 10, 7).AddDays(-(i == 17 ? 5 : 0)))))
+            .Append(("/Work/Board/X.md", Card("Doing", "V")))
+            .Append(("/Work/plan.md", "See [[Board/Card 17]].\n"))
+            .ToArray();
+        var store = Store(cards);
+        var service = Service(store);
+
+        var result = await service.MoveAsync("Work", "X", "Done", null, null, Ct);
+
+        Assert.Equal("board: moved 'X' to Done (31 of 31); archived 1 card to /Work/Board/Archive/", result.Output);
+        Assert.Equal(30, (await Lane(store, "Done")).Count());
+        Assert.DoesNotContain("Card 17", await Lane(store, "Done"));
+        Assert.Null(await Content(store, "/Work/Board/Card 17.md"));
+        var archived = await Content(store, "/Work/Board/Archive/Card 17.md");
+        Assert.NotNull(archived);
+        Assert.Contains("archived: 2026-10-27\n", archived);
+        Assert.Contains("column: Done\n", archived);
+        Assert.EndsWith("---\nText\n", archived);
+        Assert.Equal("/Work/Board/X.md", result.Version?.Path);
+    }
+
+    [Fact]
+    public async Task Young_cards_stay_however_many()
+    {
+        var keys = Rank.Spread(40);
+        var cards = Enumerable.Range(0, 40)
+            .Select(i => ($"/Work/Board/Card {i:00}.md", Aged("Done", keys[i], new DateOnly(2026, 10, 24))))
+            .Append(("/Work/Board/Undated.md", Card("Done", "zz")))
+            .ToArray();
+        var store = Store(cards);
+        var service = Service(store);
+
+        var result = await service.AddAsync("Work", "Y", "Done", null, null, null, null, Ct);
+
+        Assert.Equal("board: added 'Y' to Done (42 of 42)", result.Output);
+        Assert.Equal(42, (await Lane(store, "Done")).Count());
+        Assert.Empty(await store.ListNotesUnderAsync(P("/Work/Board/Archive"), Ct));
+    }
+
+    [Fact]
+    public async Task Archived_cards_get_archived_and_links_follow()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Board/Board.md", "---\nkumbu-board: 1\ncolumns: [Doing, { Done: [archivable] }]\narchive: { after: 1, minDays: 14 }\n---\n"),
+            ("/Work/Board/A.md", Aged("Done", "H", new DateOnly(2026, 9, 1))),
+            ("/Work/Board/B.md", Aged("Done", "V", new DateOnly(2026, 9, 2))),
+            ("/Work/Board/Archive/A.md", "---\ncolumn: Done\narchived: 2026-01-01\n---\nAn older A\n"),
+            ("/Work/Board/X.md", Card("Doing", "V")),
+            ("/Work/plan.md", "See [[Board/A]] and [B](Board/B.md).\n"));
+        var service = Service(store);
+
+        var result = await service.MoveAsync("Work", "X", "Done", "top", null, Ct);
+
+        Assert.Equal("board: moved 'X' to Done (1 of 3); archived 2 cards to /Work/Board/Archive/", result.Output);
+        Assert.Equal(["X"], await Lane(store, "Done"));
+        // An existing name is never overwritten: the title gets a number.
+        Assert.Equal("---\ncolumn: Done\narchived: 2026-01-01\n---\nAn older A\n", await Content(store, "/Work/Board/Archive/A.md"));
+        Assert.Contains("archived: 2026-10-27\n", await Content(store, "/Work/Board/Archive/A 2.md"));
+        Assert.Contains("archived: 2026-10-27\n", await Content(store, "/Work/Board/Archive/B.md"));
+        var plan = await Content(store, "/Work/plan.md");
+        Assert.Contains("Archive/A 2", plan);
+        Assert.Contains("Archive/B.md", plan);
+
+        // The archive goes with mv: a move record, and the link rewrites in the history as mv's.
+        Assert.Equal(P("/Work/Board/Archive/B.md"), (await store.FindMoveAsync(P("/Work/Board/B.md"), Ct))?.To);
+        Assert.EndsWith("(mv)", (await store.GetAsync(P("/Work/plan.md"), Ct))!.LastWriter);
+    }
+
+    [Fact]
+    public async Task Rename_column_changes_board_and_cards_in_one_commit()
+    {
+        var store = Store(
+            ("/Work/Board/A.md", "---\ncolumn: doing # mine\nrank: V\nmoved: { Ideas: 2026-10-01, doing: 2026-10-02 }\n---\nA's text\n"),
+            ("/Work/Board/B.md", "---\ncolumn: Done\nrank: V\nmoved: { Doing: 2026-10-03, Done: 2026-10-04 }\n---\nB\n"),
+            ("/Work/Board/C.md", Card("Ideas", "V")),
+            ("/Work/Board/Archive/D.md", "---\ncolumn: Doing\narchived: 2026-10-05\n---\nD\n"));
+        var service = Service(store);
+        var untouched = Card("Ideas", "V");
+
+        var result = await service.RenameColumnAsync("Work", "DOING", "In progress", Ct);
+
+        Assert.Equal("board: renamed column Doing to In progress in Board.md and 3 cards", result.Output);
+        Assert.Equal(1, store.Commits);
+        Assert.Equal(
+            "---\nkumbu-board: 1\ncolumns: [Ideas, In progress, { Done: [archivable] }, { Rejected: [archivable, reason] }]\n---\n# Work\n",
+            await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(
+            "---\ncolumn: In progress\nrank: V\nmoved: { Ideas: 2026-10-01, In progress: 2026-10-02 }\n---\nA's text\n",
+            await Content(store, "/Work/Board/A.md"));
+        Assert.Equal("---\ncolumn: Done\nrank: V\nmoved: { In progress: 2026-10-03, Done: 2026-10-04 }\n---\nB\n", await Content(store, "/Work/Board/B.md"));
+        Assert.Equal(untouched, await Content(store, "/Work/Board/C.md"));
+        Assert.Equal("---\ncolumn: In progress\narchived: 2026-10-05\n---\nD\n", await Content(store, "/Work/Board/Archive/D.md"));
+        Assert.Equal(["A"], await Lane(store, "In progress"));
+
+        // Another case of the same name is a rename too.
+        var recased = await service.RenameColumnAsync("Work", "in progress", "In Progress", Ct);
+        Assert.False(recased.IsError, recased.Output);
+        Assert.Equal("In Progress", (await CardOf(store, "A")).Column);
+    }
+
+    [Fact]
+    public async Task Rename_to_an_existing_name_is_refused()
+    {
+        var store = Store(("/Work/Board/A.md", Card("Doing", "V")));
+        var service = Service(store);
+        var board = await Content(store, "/Work/Board/Board.md");
+
+        Assert.Equal(
+            "board: there is a column 'Ideas' already; choose another name",
+            (await service.RenameColumnAsync("Work", "Doing", "ideas", Ct)).Output);
+        Assert.Equal(
+            "board: there is no column 'Later' (columns: Ideas, Doing, Done, Rejected)",
+            (await service.RenameColumnAsync("Work", "Later", "Soon", Ct)).Output);
+        Assert.True((await service.RenameColumnAsync("Work", "Doing", "a/b", Ct)).IsError);
+        Assert.True((await service.RenameColumnAsync("Work", "Doing", " ", Ct)).IsError);
+        Assert.True((await service.RenameColumnAsync("Work", "Doing", new string('x', 65), Ct)).IsError);
+
+        Assert.Equal(board, await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(Card("Doing", "V"), await Content(store, "/Work/Board/A.md"));
+        Assert.Equal(0, store.Commits);
+    }
+
+    [Fact]
+    public async Task Rename_fails_whole_when_a_card_changed_meanwhile()
+    {
+        var store = Store(("/Work/Board/A.md", Card("Doing", "V")), ("/Work/Board/B.md", Card("Doing", "W")));
+        var service = Service(store);
+        var board = await Content(store, "/Work/Board/Board.md");
+        store.Interfere = n => n with { Content = n.Content.Replace("Text", "Synced text", StringComparison.Ordinal) };
+
+        var result = await service.RenameColumnAsync("Work", "Doing", "Working", Ct);
+
+        Assert.True(result.IsError);
+        Assert.EndsWith("changed meanwhile, so nothing was renamed; try again", result.Output);
+        Assert.Equal(board, await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(0, store.Commits);
+        var cards = new[] { await Content(store, "/Work/Board/A.md"), await Content(store, "/Work/Board/B.md") };
+        Assert.All(cards, c => Assert.Contains("column: Doing\n", c));
+    }
 }
