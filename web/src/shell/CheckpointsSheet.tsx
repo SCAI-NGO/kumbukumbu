@@ -6,7 +6,9 @@ import { useCheckpoints, useCreateCheckpoint, usePreviewCheckpoint, useRemoveChe
 import { checkpointUrl } from "../api/paths";
 import { FormError, inputClass, labelClass, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
-import { checkpointExportUrl, download } from "../data/exportUrl";
+import { PasswordField } from "../components/PasswordField";
+import { checkpointExportUrl } from "../data/exportUrl";
+import { useExport } from "../data/useExport";
 import { ago } from "../note/AgentBanner";
 import { useEditor } from "../state/editor";
 
@@ -18,7 +20,7 @@ const smallButton =
 const dangerButton =
   "min-h-11 flex-1 rounded-[10px] bg-accent px-4 font-medium text-on-accent disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
-type Step = { kind: "list" } | { kind: "restore"; checkpoint: CheckpointEntry } | { kind: "remove"; checkpoint: CheckpointEntry };
+type Step = { kind: "list" } | { kind: "restore"; checkpoint: CheckpointEntry } | { kind: "remove"; checkpoint: CheckpointEntry } | { kind: "export"; checkpoint: CheckpointEntry };
 
 /**
  * The vault's named checkpoints: make one of the whole vault, restore one (after a preview of exactly what it
@@ -44,6 +46,13 @@ export default function CheckpointsSheet({ vault, onClose }: { vault: string; on
       </Sheet>
     );
   }
+  if (step.kind === "export") {
+    return (
+      <Sheet title={`Export ${step.checkpoint.name}?`} onClose={onClose} onBack={back} backLabel="All checkpoints">
+        <ExportStep vault={vault} checkpoint={step.checkpoint} onBack={back} onDone={back} />
+      </Sheet>
+    );
+  }
   if (step.kind === "remove") {
     return (
       <Sheet title={`Remove ${step.checkpoint.name}?`} onClose={onClose} onBack={back} backLabel="All checkpoints">
@@ -61,12 +70,33 @@ export default function CheckpointsSheet({ vault, onClose }: { vault: string; on
   }
   return (
     <Sheet title="Checkpoints" onClose={onClose}>
-      <ListStep vault={vault} onClose={onClose} done={done} onRestore={(checkpoint) => setStep({ kind: "restore", checkpoint })} onRemove={(checkpoint) => setStep({ kind: "remove", checkpoint })} />
+      <ListStep
+        vault={vault}
+        onClose={onClose}
+        done={done}
+        onRestore={(checkpoint) => setStep({ kind: "restore", checkpoint })}
+        onRemove={(checkpoint) => setStep({ kind: "remove", checkpoint })}
+        onExport={(checkpoint) => setStep({ kind: "export", checkpoint })}
+      />
     </Sheet>
   );
 }
 
-function ListStep({ vault, onClose, done, onRestore, onRemove }: { vault: string; onClose(): void; done: string | null; onRestore(c: CheckpointEntry): void; onRemove(c: CheckpointEntry): void }) {
+function ListStep({
+  vault,
+  onClose,
+  done,
+  onRestore,
+  onRemove,
+  onExport,
+}: {
+  vault: string;
+  onClose(): void;
+  done: string | null;
+  onRestore(c: CheckpointEntry): void;
+  onRemove(c: CheckpointEntry): void;
+  onExport(c: CheckpointEntry): void;
+}) {
   const id = useId();
   const navigate = useNavigate();
   const checkpoints = useCheckpoints(vault);
@@ -153,8 +183,8 @@ function ListStep({ vault, onClose, done, onRestore, onRemove }: { vault: string
                 >
                   Open
                 </button>
-                <button type="button" aria-label={`Export ${c.name} as ZIP`} onClick={() => download(checkpointExportUrl(vault, c.name))} className={smallButton}>
-                  Export as ZIP
+                <button type="button" aria-label={`Export ${c.name} as ZIP`} onClick={() => onExport(c)} className={smallButton}>
+                  Export as ZIP…
                 </button>
               </div>
               <div className="flex gap-2">
@@ -257,6 +287,33 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
 
 /** The server's lower-case message as a sentence. */
 const sentence = (message: string) => message[0].toUpperCase() + message.slice(1) + ".";
+
+/** The password first: the ZIP holds the checkpoint's notes as plain text, outside Kumbu²'s encryption. */
+function ExportStep({ vault, checkpoint, onBack, onDone }: { vault: string; checkpoint: CheckpointEntry; onBack(): void; onDone(): void }) {
+  const [password, setPassword] = useState("");
+  const exporting = useExport();
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (password !== "" && (await exporting.start(checkpointExportUrl(vault, checkpoint.name), password))) onDone();
+      }}
+      className="flex flex-col gap-4"
+    >
+      <p className="text-text-body">The ZIP holds the notes as plain text, outside Kumbu²'s encryption: your password confirms it.</p>
+      <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+      {exporting.error && <FormError>{exporting.error}</FormError>}
+      <div className="flex gap-2.5">
+        <button type="button" onClick={onBack} className={`${secondaryButtonClass} flex-1`}>
+          Cancel
+        </button>
+        <button type="submit" disabled={password === "" || exporting.pending} className={dangerButton}>
+          Export
+        </button>
+      </div>
+    </form>
+  );
+}
 
 function RemoveStep({ vault, checkpoint, onBack, onDone }: { vault: string; checkpoint: CheckpointEntry; onBack(): void; onDone(): void }) {
   const remove = useRemoveCheckpoint(vault);

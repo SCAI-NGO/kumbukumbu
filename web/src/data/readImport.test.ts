@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { strToU8, zipSync, type Zippable } from "fflate";
 import { describe, expect, it } from "vitest";
-import { MAX_NOTE_BYTES } from "../upload/planUpload";
+import { MAX_NOTE_BYTES, TOO_LARGE } from "../upload/planUpload";
 import { ImportTooLarge, readImport, versionOf } from "./readImport";
 
 /** A ZIP of these entries; a name ending in "/" is a folder entry. */
@@ -9,6 +9,21 @@ function zip(entries: Record<string, string | Uint8Array>): Uint8Array {
   const files: Zippable = {};
   for (const [name, data] of Object.entries(entries)) files[name] = typeof data === "string" ? strToU8(data) : data;
   return zipSync(files);
+}
+
+/**
+ * Rewrites every uncompressed size the ZIP declares, in the local headers and the central directory, to `size`: a ZIP
+ * that lies about what its entries unpack to. fflate doesn't check the CRC, so nothing else gives the lie away.
+ */
+function declaring(bytes: Uint8Array, size: number): Uint8Array {
+  const out = bytes.slice();
+  const view = new DataView(out.buffer);
+  for (let i = 0; i + 4 <= out.length; i++) {
+    const signature = view.getUint32(i, true);
+    if (signature === 0x04034b50) view.setUint32(i + 22, size, true);
+    else if (signature === 0x02014b50) view.setUint32(i + 24, size, true);
+  }
+  return out;
 }
 
 const shape = (vaults: Awaited<ReturnType<typeof readImport>>) =>
@@ -155,6 +170,33 @@ describe("readImport", () => {
   it("a byte order mark is kept, so the note's version matches the stored one", async () => {
     const vaults = await readImport(zip({ "Work/a.md": new Uint8Array([0xef, 0xbb, 0xbf, 0x41]) }), "export.zip");
     expect(vaults[0].notes[0].content).toBe("\ufeffA");
+  });
+
+  // The budget counts declared sizes (issue #50): it bounds memory only if an entry never unpacks to more than it declares.
+  it("a note that unpacks to more than it declares is cut at the declared size, never grown", async () => {
+    const real = "a".repeat(4 * 1024 * 1024);
+    const lying = declaring(zip({ "Work/a.md": real }), 10);
+
+    const [vault] = await readImport(lying, "export.zip", 100);
+
+    expect(vault.notes.map((n) => n.content.length)).toEqual([10]);
+  });
+
+  it("a note that unpacks to less than it declares is not padded past what it holds", async () => {
+    const lying = declaring(zip({ "Work/a.md": "short" }), 1000);
+
+    const [vault] = await readImport(lying, "export.zip");
+
+    expect(vault.notes.map((n) => n.content)).toEqual(["short"]);
+  });
+
+  it("a stored note that lies about its size is bounded by the ZIP itself and still refused when too large", async () => {
+    const real = "a".repeat(MAX_NOTE_BYTES + 1);
+    const lying = declaring(zipSync({ "Work/a.md": strToU8(real) }, { level: 0 }), 10);
+
+    const [vault] = await readImport(lying, "export.zip", 100);
+
+    expect(shape([vault])).toEqual([{ name: "Work", paths: [], skipped: [{ path: "a.md", reason: TOO_LARGE }] }]);
   });
 
   it("refuses a ZIP whose notes would unpack to more than the budget, before unpacking any", async () => {

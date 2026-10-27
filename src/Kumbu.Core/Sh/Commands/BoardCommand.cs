@@ -33,8 +33,6 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
           board /Work
           board /Work --column Ideas
           board /Work --tag security
-
-        --checkpoint <name> reads the board as it was (board --checkpoint before-cleanup /Work).
         """;
 
     public bool ReadsInput => false;

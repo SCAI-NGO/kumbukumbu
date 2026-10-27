@@ -87,6 +87,7 @@ builder.Services.AddSingleton<WrongKeyLimiter>();
 builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
 builder.Services.AddSingleton<SyncTickets>();
+builder.Services.AddSingleton<ExportTickets>();
 builder.Services.AddSingleton<Pairings>();
 builder.Services.AddSingleton<SyncHub>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());

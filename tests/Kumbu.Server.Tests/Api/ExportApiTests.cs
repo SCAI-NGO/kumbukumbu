@@ -32,6 +32,74 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         return new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
     }
 
+    /// <summary>An export as the web app makes it: a ticket for the password first, then the download with it.</summary>
+    private static async Task<HttpResponseMessage> ExportAsync(RestClient user, string url) =>
+        await user.GetAsync(url + (url.Contains('?') ? "&" : "?") + "ticket=" + Uri.EscapeDataString(await TicketAsync(user)));
+
+    private static async Task<string> TicketAsync(RestClient user, string password = RestClient.Password)
+    {
+        using var response = await user.SendAsync(HttpMethod.Post, "/api/export/ticket", new { password });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await RestClient.JsonAsync(response))["ticket"]!.GetValue<string>();
+    }
+
+    [Fact]
+    public async Task Without_a_ticket_an_export_is_403_and_names_the_way()
+    {
+        var user = await RestClient.NewAsync(Api);
+
+        using var one = await user.GetAsync($"/api/vaults/{user.Vault}/export");
+        using var several = await user.GetAsync($"/api/export?vault={user.Vault}&ticket=kumbu_ext_nonsense");
+
+        Assert.Equal(HttpStatusCode.Forbidden, one.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, several.StatusCode);
+        Assert.Contains("POST /api/export/ticket", await RestClient.ErrorAsync(one), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_wrong_password_gets_no_ticket()
+    {
+        var user = await RestClient.NewAsync(Api);
+
+        using var response = await user.SendAsync(HttpMethod.Post, "/api/export/ticket", new { password = "not the password at all" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("The password is wrong.", await RestClient.ErrorAsync(response));
+    }
+
+    [Fact]
+    public async Task A_ticket_works_once_for_its_own_user()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var other = await RestClient.NewAsync(Api, vault: "Fremd" + Guid.NewGuid().ToString("N")[..6]);
+        var ticket = await TicketAsync(user);
+
+        using var foreign = await other.GetAsync($"/api/vaults/{other.Vault}/export?ticket={ticket}");
+        using var first = await user.GetAsync($"/api/vaults/{user.Vault}/export?ticket={ticket}");
+        using var again = await user.GetAsync($"/api/vaults/{user.Vault}/export?ticket={ticket}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_new_ticket_replaces_the_open_one_and_a_ticket_expires()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var tickets = new ExportTickets(time);
+
+        var first = tickets.Issue("u1").Ticket;
+        var second = tickets.Issue("u1").Ticket;
+        var third = tickets.Issue("u1").Ticket;
+        time.Advance(ExportTickets.Lifetime + TimeSpan.FromSeconds(1));
+
+        Assert.False(tickets.Take("u1", first));
+        Assert.False(tickets.Take("u1", second));
+        Assert.False(tickets.Take("u1", third));
+        Assert.True(tickets.Take("u2", tickets.Issue("u2").Ticket));
+    }
+
     private static string Read(ZipArchiveEntry entry)
     {
         using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
@@ -46,7 +114,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await user.CreateAsync("p/b.md", "b\n");
 
         var before = DateTime.UtcNow;
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/", "Arbeit/a.md", "Arbeit/p/b.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
@@ -66,7 +134,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await user.CreateAsync("p/b.md", "b\n");
 
         // Without a time zone the entries carry UTC (ZIP time has 2-second precision).
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
 
         var bytes = await BytesAsync(response);
         foreach (var path in new[] { "a.md", "p/b.md" })
@@ -84,9 +152,9 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         var written = (await user.ReadAsync("a.md"))["lastWriteAt"]!.GetValue<DateTime>().ToUniversalTime();
         var vienna = TimeZoneInfo.FindSystemTimeZoneById("Europe/Vienna");
 
-        using var inVienna = await user.GetAsync($"/api/vaults/{user.Vault}/export?tz=Europe%2FVienna");
-        using var unknown = await user.GetAsync($"/api/vaults/{user.Vault}/export?tz=Mars%2FOlympus");
-        using var several = await user.GetAsync($"/api/export?vault={user.Vault}&tz=Europe%2FVienna");
+        using var inVienna = await ExportAsync(user, $"/api/vaults/{user.Vault}/export?tz=Europe%2FVienna");
+        using var unknown = await ExportAsync(user, $"/api/vaults/{user.Vault}/export?tz=Mars%2FOlympus");
+        using var several = await ExportAsync(user, $"/api/export?vault={user.Vault}&tz=Europe%2FVienna");
 
         // Read from the header bytes, not through ZipArchive, which would apply the test process's own zone.
         var expected = TimeZoneInfo.ConvertTimeFromUtc(written, vienna);
@@ -126,7 +194,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         var user = await RestClient.NewAsync(Api);
         await user.CreateAsync("Bücher/Ü².md", "u\n");
 
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
 
         var bytes = await response.Content.ReadAsByteArrayAsync(Ct);
         using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
@@ -162,7 +230,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     {
         var user = await RestClient.NewAsync(Api);
 
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/"], zip.Entries.Select(e => e.FullName));
@@ -179,7 +247,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, written.StatusCode);
 
         var before = DateTime.UtcNow;
-        using var response = await user.GetAsync("/api/export?vault=Arbeit&vault=Ideen");
+        using var response = await ExportAsync(user, "/api/export?vault=Arbeit&vault=Ideen");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/", "Arbeit/a.md", "Ideen/", "Ideen/x/c.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
@@ -213,8 +281,8 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         var other = await RestClient.NewAsync(Api, vault: "Fremd" + Guid.NewGuid().ToString("N")[..6]);
         await other.CreateAsync("geheim.md", "secret\n");
 
-        using var one = await user.GetAsync($"/api/vaults/{other.Vault}/export");
-        using var several = await user.GetAsync($"/api/export?vault=Arbeit&vault={other.Vault}");
+        using var one = await ExportAsync(user, $"/api/vaults/{other.Vault}/export");
+        using var several = await ExportAsync(user, $"/api/export?vault=Arbeit&vault={other.Vault}");
 
         Assert.Equal(HttpStatusCode.NotFound, one.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, several.StatusCode);
@@ -227,10 +295,10 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     {
         var user = await RestClient.NewAsync(Api);
 
-        using var none = await user.GetAsync("/api/export");
-        using var twice = await user.GetAsync("/api/export?vault=Arbeit&vault=Arbeit");
+        using var none = await ExportAsync(user, "/api/export");
+        using var twice = await ExportAsync(user, "/api/export?vault=Arbeit&vault=Arbeit");
         // "Bücher" precomposed and decomposed: one vault after NFC.
-        using var spelt = await user.GetAsync("/api/export?vault=B%C3%BCcher&vault=Bu%CC%88cher");
+        using var spelt = await ExportAsync(user, "/api/export?vault=B%C3%BCcher&vault=Bu%CC%88cher");
 
         Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, twice.StatusCode);
@@ -267,7 +335,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await user.CreateAsync("c.md", "c\n");
 
         var before = DateTime.UtcNow;
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/cp/export");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/", "Arbeit/Bücher/Ü².md", "Arbeit/a.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
@@ -285,7 +353,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         var made = await user.ShAsync("mkcp /Arbeit/p cp", write);
         Assert.False(made.IsError, made.Text);
 
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/cp/export");
 
         using var zip = await ZipAsync(response);
         Assert.Equal(["Arbeit/", "Arbeit/p/b.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
@@ -301,7 +369,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         using var list = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints");
         var madeAt = (await RestClient.JsonAsync(list))["checkpoints"]!.AsArray().Single(c => c!["name"]!.GetValue<string>() == "cp")!["createdAt"]!.GetValue<DateTime>().ToUniversalTime();
 
-        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/cp/export");
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/cp/export");
 
         var bytes = await BytesAsync(response);
         foreach (var path in new[] { "a.md", "p/b.md" })
@@ -335,8 +403,8 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         await other.CreateAsync("geheim.md", "secret\n");
         await MakeCheckpointAsync(other, "cp");
 
-        using var foreign = await user.GetAsync($"/api/vaults/{other.Vault}/checkpoints/cp/export");
-        using var unknown = await user.GetAsync($"/api/vaults/{user.Vault}/checkpoints/nope/export");
+        using var foreign = await ExportAsync(user, $"/api/vaults/{other.Vault}/checkpoints/cp/export");
+        using var unknown = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/nope/export");
 
         Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);

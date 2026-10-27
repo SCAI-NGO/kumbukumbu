@@ -215,6 +215,23 @@ public sealed class PairingTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Dropping_a_users_codes_zeroes_their_keys_and_leaves_others_open()
+    {
+        var a = await AccountAsync();
+        var b = await AccountAsync();
+        var copy = (byte[])a.Key.Clone();
+        var mine = Pairings().Create(a.User, copy, a.ReadAt, a.VaultId, "Work", null);
+        var theirs = Code(b);
+
+        Pairings().DropAll(a.User.Id);
+
+        Assert.False(Pairings().IsOpen(mine.Code));
+        Assert.All(copy, x => Assert.Equal(0, x));
+        Assert.True(Pairings().IsOpen(theirs.Code));
+        Assert.Null(await Pairings().RedeemAsync(mine.Code, "Laptop", Ct));
+    }
+
+    [Fact]
     public async Task A_long_vault_name_pairs_with_a_long_device_name()
     {
         var vault = new string('V', 60);
@@ -288,6 +305,53 @@ public sealed class PairingTests(MongoFixture fixture)
         await Assert.ThrowsAsync<ArgumentException>(() => Pairings().RedeemAsync("ZZZZ-ZZZZ", device, Ct));
         await Assert.ThrowsAsync<ArgumentException>(() => Pairings().RedeemAsync(code.Code, device, Ct));
         Assert.True(Pairings().IsOpen(code.Code));
+    }
+
+    /// <summary>
+    /// No code-existence oracle (security §6, issue #47): the key-name check runs only for an open code, so a device name
+    /// that passes the device rules must pass it too, and one that fails them must fail before the lookup. Either way an
+    /// open code and an unknown one get the same kind of answer.
+    /// </summary>
+    [Theory]
+    [InlineData("Laptop")]
+    [InlineData("  Laptop  ")]
+    [InlineData("dev")]
+    [InlineData("seed")]
+    [InlineData("Obsidian")]
+    [InlineData("Lap (top")]
+    [InlineData("\u0301Laptop")]
+    [InlineData("e\u0301")]
+    [InlineData("Phone \U0001F4F1")]
+    [InlineData("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")]
+    [InlineData("–")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("Lap\u200Btop")]
+    [InlineData("Lap\ntop")]
+    [InlineData("(Laptop)")]
+    [InlineData("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD")]
+    public async Task A_device_name_gets_the_same_answer_for_an_open_and_an_unknown_code(string device)
+    {
+        var a = await AccountAsync(new string('V', 60));
+        var code = Code(a, vault: new string('V', 60));
+
+        var unknown = await Answer(() => Pairings().RedeemAsync("ZZZZ-ZZZZ", device, Ct));
+        var open = await Answer(() => Pairings().RedeemAsync(code.Code, device, Ct));
+
+        if (unknown is "null") Assert.Equal("key", open);
+        else Assert.Equal(unknown, open);
+
+        static async Task<string> Answer(Func<Task<RedeemedKey?>> redeem)
+        {
+            try
+            {
+                return await redeem() is null ? "null" : "key";
+            }
+            catch (ArgumentException e)
+            {
+                return e.Message;
+            }
+        }
     }
 
     [Fact]

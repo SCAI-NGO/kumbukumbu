@@ -14,7 +14,8 @@ import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
-import { download, exportUrl } from "../data/exportUrl";
+import { exportUrl } from "../data/exportUrl";
+import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
@@ -242,6 +243,7 @@ export default function TreeDrawer(props: {
   const providers = useEmbeddingProviders();
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
@@ -264,8 +266,7 @@ export default function TreeDrawer(props: {
             ? { label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }
             : { label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) },
           { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
-          // Downloads at once, so no ellipsis: that would promise a dialog.
-          { label: "Export as ZIP", icon: Download, onSelect: () => download(exportUrl([activeVault])) },
+          { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
         ]
       : []),
     ...(embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
@@ -345,6 +346,9 @@ export default function TreeDrawer(props: {
   const dialogs = (
     <>
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
+      {exporting && activeVault && (
+        <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />
+      )}
       {choosingEmbeddings && activeVault && embeddings && providers.data && (
         <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
       )}

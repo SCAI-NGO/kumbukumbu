@@ -11,8 +11,15 @@ const tz = `tz=${encodeURIComponent(browserZone())}`;
 
 const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [{ name: "inbox.md", path: "/Work/inbox.md", size: 10 }] } };
 
-function api() {
+let passwords: string[] = [];
+
+function api(ticket: (password: string) => Response = () => json(200, { ticket: "kumbu_ext_t1", expiresAt: "2026-10-27T10:00:30Z" })) {
   return fakeApi({
+    "POST /api/export/ticket": async (r) => {
+      const { password } = (await r.json()) as { password: string };
+      passwords.push(password);
+      return ticket(password);
+    },
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () =>
       json(200, [
@@ -33,6 +40,7 @@ let downloads: string[] = [];
 
 beforeEach(() => {
   downloads = [];
+  passwords = [];
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
     if (this.hasAttribute("download")) downloads.push(this.getAttribute("href")!);
   });
@@ -47,15 +55,36 @@ afterEach(() => {
 });
 
 describe("Export as ZIP in the vault menu", () => {
-  it("downloads the active vault at once", async () => {
-    api();
+  async function openConfirm() {
     renderApp("/notes/Work/inbox.md");
     await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
     await userEvent.click(await screen.findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Export as ZIP…" }));
+    return screen.findByRole("alertdialog", { name: "Export Work?" });
+  }
 
-    await userEvent.click(screen.getByRole("menuitem", { name: "Export as ZIP" }));
+  it("downloads the active vault after the password", async () => {
+    api();
+    const confirm = await openConfirm();
+    expect(within(confirm).getByRole("button", { name: "Export" })).toBeDisabled();
 
-    expect(downloads).toEqual([`/api/vaults/Work/export?${tz}`]);
+    await userEvent.type(within(confirm).getByLabelText("Your password"), "secret");
+    await userEvent.click(within(confirm).getByRole("button", { name: "Export" }));
+
+    expect(passwords).toEqual(["secret"]);
+    expect(downloads).toEqual([`/api/vaults/Work/export?${tz}&ticket=kumbu_ext_t1`]);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("a wrong password downloads nothing and says so", async () => {
+    api(() => json(400, { error: "The password is wrong." }));
+    const confirm = await openConfirm();
+
+    await userEvent.type(within(confirm).getByLabelText("Your password"), "wrong");
+    await userEvent.click(within(confirm).getByRole("button", { name: "Export" }));
+
+    expect(await within(confirm).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(downloads).toEqual([]);
   });
 });
 
@@ -78,24 +107,29 @@ describe("Export my vaults… in Settings", () => {
     expect(within(dialog).getByText("3 notes")).toBeInTheDocument();
     expect(within(dialog).getByText("1 note")).toBeInTheDocument();
     expect(within(dialog).getByText("0 notes")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Export" })).toBeDisabled();
 
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
     await userEvent.click(within(dialog).getByRole("button", { name: "Export" }));
 
-    expect(downloads).toEqual([`/api/export?vault=Work&vault=My%20Diary&vault=Ideen&${tz}`]);
+    expect(passwords).toEqual(["secret"]);
+    expect(downloads).toEqual([`/api/export?vault=Work&vault=My%20Diary&vault=Ideen&${tz}&ticket=kumbu_ext_t1`]);
     expect(screen.queryByRole("dialog", { name: "Export my vaults" })).not.toBeInTheDocument();
   });
 
   it("leaves out an unticked vault, and a single one uses the vault's own export", async () => {
     const dialog = await openDialog();
     await userEvent.click(await within(dialog).findByRole("checkbox", { name: /My Diary/ }));
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
     await userEvent.click(within(dialog).getByRole("button", { name: "Export" }));
-    expect(downloads).toEqual([`/api/export?vault=Work&vault=Ideen&${tz}`]);
+    expect(downloads).toEqual([`/api/export?vault=Work&vault=Ideen&${tz}&ticket=kumbu_ext_t1`]);
 
     const again = await openDialogAgain();
     await userEvent.click(await within(again).findByRole("checkbox", { name: /Work/ }));
     await userEvent.click(within(again).getByRole("checkbox", { name: /Ideen/ }));
+    await userEvent.type(within(again).getByLabelText("Your password"), "secret");
     await userEvent.click(within(again).getByRole("button", { name: "Export" }));
-    expect(downloads.at(-1)).toBe(`/api/vaults/My%20Diary/export?${tz}`);
+    expect(downloads.at(-1)).toBe(`/api/vaults/My%20Diary/export?${tz}&ticket=kumbu_ext_t1`);
   });
 
   it("can't export with nothing ticked", async () => {

@@ -18,7 +18,7 @@ public sealed record RedeemedKey(string Key, string Vault, string KeyName);
 /// the password (<see cref="ApiKeys.CreateAsync"/>), so a code's record holds a copy of the session's user key. It
 /// lives in this process's memory only: 40 bits guard it well enough for ten minutes online, rate-limited, but not
 /// against an offline guess, so it is never written to MongoDB or a log, and the copy is zeroed when the record goes
-/// (redeemed, expired, replaced, or the process ends).
+/// (redeemed, expired, replaced, dropped with the user's other codes by <see cref="DropAll"/>, or the process ends).
 /// </summary>
 public sealed class Pairings : IDisposable
 {
@@ -92,6 +92,19 @@ public sealed class Pairings : IDisposable
         }
 
         return new PairingCode(Format(raw), record.ExpiresAt);
+    }
+
+    /// <summary>
+    /// Drops every open code of the user, each with its copy of the user key: on sign-out, a password change, a
+    /// recovery, a re-encryption, ending the other sessions, a deactivation or a deletion. Such a code could no longer
+    /// be redeemed anyway (or wasn't meant to be), but its copy of the user key would stay in memory until it expired.
+    /// </summary>
+    public void DropAll(string userId)
+    {
+        foreach (var (code, open) in _records)
+        {
+            if (open.User.Id == userId && _records.TryRemove(code, out var dropped)) dropped.Drop();
+        }
     }
 
     /// <summary>

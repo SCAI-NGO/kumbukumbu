@@ -30,3 +30,6 @@ export function download(href: string) {
   link.click();
   link.remove();
 }
+
+/** The export URL with its one-time ticket (`POST /api/export/ticket`), as the server wants it: `?ticket=`. */
+export const withTicket = (href: string, ticket: string): string => `${href}${href.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`;

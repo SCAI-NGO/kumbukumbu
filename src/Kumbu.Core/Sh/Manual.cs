@@ -34,7 +34,7 @@ public static class Manual
 
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
-        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too.
+        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints).
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
         '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.

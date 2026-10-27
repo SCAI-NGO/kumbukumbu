@@ -186,6 +186,6 @@ public class BoardCommandTests
         var (shell, _, _) = Make();
         var help = (await Run(shell, "help board")).Output;
         Assert.StartsWith("board <vault>", help);
-        Assert.EndsWith("--checkpoint <name> reads the board as it was (board --checkpoint before-cleanup /Work).", help.TrimEnd());
+        Assert.EndsWith("--checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'", help.TrimEnd());
     }
 }

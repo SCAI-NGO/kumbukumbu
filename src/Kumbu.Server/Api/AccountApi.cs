@@ -213,11 +213,12 @@ public static class AccountApi
     /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once. The user key
     /// is rotated in the recovery; the vaults are re-keyed in the background, after the answer, which never waits for them.</summary>
     private static async Task<Ok<RecoveryKeyView>> RecoverAsync(
-        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, Pairings pairings, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
+        pairings.DropAll(user.Id);
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
@@ -225,15 +226,16 @@ public static class AccountApi
     private static Ok<SessionView> Session(RequestCaller caller) =>
         TypedResults.Ok(new SessionView(UserView.From(caller.User!), caller.User!.PreviousSignInAt));
 
-    private static async Task<NoContent> SignOutAsync(HttpContext http, Sessions sessions, CancellationToken ct)
+    private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
     {
         await sessions.EndAsync(http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct);
+        pairings.DropAll(caller.User!.Id);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
     }
 
     private static async Task<Ok<PasswordChangedView>> ChangePasswordAsync(
-        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, CancellationToken ct)
+        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -242,6 +244,7 @@ public static class AccountApi
             throw ApiErrors.BadRequest("The current password is wrong.");
         }
 
+        pairings.DropAll(user.Id);
         ClearSessionCookie(http);
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));
     }
@@ -262,29 +265,33 @@ public static class AccountApi
     /// a new recovery key, shown here once. This session stays signed in; every other one ends.
     /// </summary>
     private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
-        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, AccountLimits limits, Pairings pairings, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var recoveryKey = await rekeying.ReencryptAccountAsync(user, caller.UserKey!, body.Password, http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct)
             ?? throw ApiErrors.BadRequest("The password is wrong.");
+        pairings.DropAll(user.Id);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
     /// <summary>Everything of the account goes, this session too: the cookie is cleared with it.</summary>
     private static async Task<NoContent> DeleteAccountAsync(
-        DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+        DeleteAccountRequest body, HttpContext http, RequestCaller caller, Deletion deletion, AccountLimits limits, Pairings pairings, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw ApiErrors.BadRequest("The password is wrong.");
+        pairings.DropAll(user.Id);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
     }
 
-    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, CancellationToken ct)
+    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
     {
         await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
+        // A code made by one of the sessions ended (perhaps the one that prompted this) goes with them.
+        pairings.DropAll(caller.User!.Id);
         return TypedResults.NoContent();
     }
 
@@ -311,7 +318,7 @@ public static class AccountApi
             .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, u.Vaults, u.BytesStored))
             .ToArray());
 
-    private static async Task<NoContent> UpdateUserAsync(string id, UpdateUserRequest body, RequestCaller caller, Admin admin, CancellationToken ct)
+    private static async Task<NoContent> UpdateUserAsync(string id, UpdateUserRequest body, RequestCaller caller, Admin admin, Pairings pairings, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
@@ -320,6 +327,7 @@ public static class AccountApi
         if (body.Active is false && id == caller.User!.Id) throw new NotPermittedException("You can't deactivate yourself.");
         if (body.Role is { } role && !await admin.SetRoleAsync(caller.User!, id, role, ct)) throw NoSuchUser();
         if (body.Active is { } active && !await admin.SetActiveAsync(caller.User!, id, active, ct)) throw NoSuchUser();
+        if (body.Active is false) pairings.DropAll(id);
         return TypedResults.NoContent();
 
         static ApiException NoSuchUser() => ApiErrors.NotFound("There is no such user.");
@@ -328,11 +336,12 @@ public static class AccountApi
     /// <summary>An admin deletes another user, active or not, in one step, and gets the receipt for their records.</summary>
     private static async Task<Ok<DeletionReceiptView>> DeleteUserAsync(
         string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index,
-        IOptions<KumbuOptions> options, CancellationToken ct)
+        IOptions<KumbuOptions> options, Pairings pairings, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
             ?? throw ApiErrors.NotFound("There is no such user.");
+        pairings.DropAll(deleted.Id);
         return TypedResults.Ok(ReceiptView(deleted, index, options.Value));
     }
 
@@ -343,10 +352,11 @@ public static class AccountApi
     /// <summary>After a restore: every user it brought back is deleted again, one receipt each.</summary>
     private static async Task<Ok<DeletionReceiptView[]>> RepeatDeletionsAsync(
         RepeatDeletionsRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index, IOptions<KumbuOptions> options,
-        CancellationToken ct)
+        Pairings pairings, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var deleted = await deletion.RepeatAsync(caller.User!, caller.UserKey!, body.Password, ct);
+        foreach (var user in deleted) pairings.DropAll(user.Id);
         return TypedResults.Ok(deleted.Select(d => ReceiptView(d, index, options.Value)).ToArray());
     }
 

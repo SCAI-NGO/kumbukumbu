@@ -3,18 +3,25 @@ import { useId, useState } from "react";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
-import { download, exportUrl } from "./exportUrl";
+import { exportUrl } from "./exportUrl";
+import { useExport } from "./useExport";
 
 const notes = (n: number) => `${n} ${n === 1 ? "note" : "notes"}`;
 
-/** Every vault of the user, all ticked; any can be unticked. A vault being re-encrypted can't be exported until it is done. */
+/**
+ * Every vault of the user, all ticked; any can be unticked. A vault being re-encrypted can't be exported until it is
+ * done. The password is asked for every time: an export takes the notes out of their encryption in one go.
+ */
 export default function ExportDialog({ onClose }: { onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
   const vaults = useVaults();
   // The unticked ones, so a vault that appears while the dialog is open starts ticked like the rest.
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
+  const [password, setPassword] = useState("");
+  const exporting = useExport();
   const chosen = (vaults.data ?? []).filter((v) => !v.pending && !unticked.has(v.name)).map((v) => v.name);
 
   const toggle = (name: string) =>
@@ -31,18 +38,17 @@ export default function ExportDialog({ onClose }: { onClose(): void }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          if (chosen.length === 0) return;
-          download(exportUrl(chosen));
-          onClose();
+          if (chosen.length === 0 || password === "") return;
+          if (await exporting.start(exportUrl(chosen), password)) onClose();
         }}
         className="flex max-h-full w-full max-w-sm flex-col gap-4 overflow-y-auto rounded-[14px] border border-line bg-surface-2 p-5"
       >
         <h2 id={`${id}-title`} className="text-lg font-bold text-text">
           Export my vaults
         </h2>
-        <p className="text-text-body">One ZIP with a folder per vault you tick.</p>
+        <p className="text-text-body">One ZIP with a folder per vault you tick, as plain text, outside Kumbu²'s encryption: your password confirms it.</p>
         {vaults.isPending && <p className="text-muted">Loading your vaults…</p>}
         {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
         {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}
@@ -65,11 +71,13 @@ export default function ExportDialog({ onClose }: { onClose(): void }) {
             ))}
           </ul>
         )}
+        <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+        {exporting.error && <FormError>{exporting.error}</FormError>}
         <div className="flex gap-3">
           <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
             Cancel
           </button>
-          <button type="submit" disabled={chosen.length === 0} className={`${primaryButtonClass} flex-1`}>
+          <button type="submit" disabled={chosen.length === 0 || password === "" || exporting.pending} className={`${primaryButtonClass} flex-1`}>
             Export
           </button>
         </div>

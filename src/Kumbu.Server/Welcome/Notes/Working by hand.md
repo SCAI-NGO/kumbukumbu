@@ -32,7 +32,7 @@ A removed note goes to the trash and stays there for 30 days: the vault's ⋯ me
 
 A checkpoint is a named state of a note, a folder or a whole vault that never expires (up to 10 per vault, unless your server allows more): the vault's ⋯ menu → **Checkpoints**. Before restoring one, Kumbu² shows you exactly what will change.
 
-**Open** shows a checkpoint as it was, read only, and **Export as ZIP** downloads it as a folder that opens in Obsidian. Your AI can read a checkpoint too: **Copy for your AI** on one of its notes copies what it needs, with the command (`cat --checkpoint`).
+**Open** shows a checkpoint as it was, read only, and **Export as ZIP…** downloads it, after your password, as a folder that opens in Obsidian. Your AI can read a checkpoint too: **Copy for your AI** on one of its notes copies what it needs, with the command (`cat --checkpoint`).
 
 ## Board
 
