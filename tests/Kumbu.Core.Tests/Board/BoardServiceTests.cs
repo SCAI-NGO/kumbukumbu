@@ -459,4 +459,64 @@ public class BoardServiceTests
         var cards = new[] { await Content(store, "/Work/Board/A.md"), await Content(store, "/Work/Board/B.md") };
         Assert.All(cards, c => Assert.Contains("column: Doing\n", c));
     }
+
+    [Fact]
+    public async Task An_archived_card_whose_archived_key_cannot_be_set_is_reported()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Work/Board/Board.md", "---\nkumbu-board: 1\ncolumns: [Doing, { Done: [archivable] }]\narchive: { after: 1, minDays: 14 }\n---\n"),
+            ("/Work/Board/A.md", Aged("Done", "H", new DateOnly(2026, 9, 1))),
+            ("/Work/Board/X.md", Card("Doing", "V")));
+        var service = Service(store);
+        store.Contended = p => p.Value == "/Work/Board/Archive/A.md";
+
+        var result = await service.MoveAsync("Work", "X", "Done", null, null, Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("board: moved 'X' to Done (2 of 2); 'A' is in the archive but 'archived' could not be set", result.Output);
+        Assert.DoesNotContain("archived:", await Content(store, "/Work/Board/Archive/A.md"));
+        Assert.Equal(["X"], await Lane(store, "Done"));
+    }
+
+    [Fact]
+    public async Task Rename_leaves_notes_in_other_sub_folders_alone()
+    {
+        const string stray = "---\ncolumn: Doing\nmoved: { Doing: 2026-10-01 }\n---\nNot a card\n";
+        var store = Store(
+            ("/Work/Board/A.md", Card("Doing", "V")),
+            ("/Work/Board/Notes/Stray.md", stray),
+            ("/Work/Board/Archive/Old/Deep.md", stray));
+        var service = Service(store);
+
+        var result = await service.RenameColumnAsync("Work", "Doing", "Working", Ct);
+
+        Assert.Equal("board: renamed column Doing to Working in Board.md and 1 card", result.Output);
+        Assert.Equal(stray, await Content(store, "/Work/Board/Notes/Stray.md"));
+        Assert.Equal(stray, await Content(store, "/Work/Board/Archive/Old/Deep.md"));
+        Assert.Contains("column: Working\n", await Content(store, "/Work/Board/A.md"));
+    }
+
+    [Theory]
+    [InlineData("---\nkumbu-board: 1\ncolumns: [Ideas, Doing\n---\n")]
+    [InlineData("---\nkumbu-board: 1\ncolumns: [Ideas, Doing, doing]\n---\n")]
+    public async Task Rename_refuses_while_Board_md_has_a_problem(string definition)
+    {
+        var store = new InMemoryNoteStore(("/Work/Board/Board.md", definition), ("/Work/Board/A.md", Card("Doing", "V")));
+        var service = Service(store);
+
+        var result = await service.RenameColumnAsync("Work", "Doing", "Working", Ct);
+
+        Assert.StartsWith("board: /Work/Board/Board.md can't be read, so the board can't change: ", result.Output);
+        Assert.Equal(definition, await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(Card("Doing", "V"), await Content(store, "/Work/Board/A.md"));
+        Assert.Equal(0, store.Commits);
+    }
+
+    [Fact]
+    public async Task Renaming_a_column_to_its_own_name_is_refused()
+    {
+        var store = Store();
+        Assert.Equal("board: the column is called Doing already", (await Service(store).RenameColumnAsync("Work", "doing", "Doing", Ct)).Output);
+        Assert.Equal(0, store.Commits);
+    }
 }

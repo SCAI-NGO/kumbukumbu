@@ -51,6 +51,9 @@ public sealed class InMemoryNoteStore : INoteStore
     /// <summary>Makes the next compare-and-swap fail once, as if another writer got there first.</summary>
     public Func<StoredNote, StoredNote>? Interfere { get; set; }
 
+    /// <summary>Paths where every compare-and-swap fails, as if another writer always got there first.</summary>
+    public Func<VaultPath, bool>? Contended { get; set; }
+
     public Task<string?> ReadVersionAsync(VaultPath path, string version, CancellationToken ct) =>
         Task.FromResult(_notes.TryGetValue(path, out var n) ? Versions.Find(n, version) : null);
 
@@ -181,6 +184,12 @@ public sealed class InMemoryNoteStore : INoteStore
 
     private void Race(VaultPath path)
     {
+        if (Contended?.Invoke(path) == true && _notes.TryGetValue(path, out var contended))
+        {
+            _notes[path] = contended with { Revision = contended.Revision + 1 };
+            return;
+        }
+
         if (Interfere is not { } interfere || !_notes.TryGetValue(path, out var stored)) return;
         Interfere = null;
         _notes[path] = interfere(stored) with { Revision = stored.Revision + 1 };

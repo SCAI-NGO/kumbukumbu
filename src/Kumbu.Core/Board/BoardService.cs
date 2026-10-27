@@ -180,7 +180,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         var name = (to ?? "").Trim().Normalize(NormalizationForm.FormC);
         if (name.Length is 0 or > BoardDefinition.MaxNameLength || name.Contains('/'))
             return Error($"'{to}' is not a column name; a name has 1 to {BoardDefinition.MaxNameLength} characters and no '/'");
-        if (name == column.Name) return Error($"{column.Name} is named so already");
+        if (name == column.Name) return Error($"the column is called {name} already");
         if (board.Columns.Find(name) is { } other && other != column) return Error($"there is a column '{other.Name}' already; choose another name");
 
         // The columns come from the revision the commit checks, so a Board.md edited since the read can't be overwritten.
@@ -194,8 +194,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
 
         // Cards first: a card changed meanwhile is the likely conflict, and the batch fails as a whole either way.
         var folder = BoardPaths.Folder(vaultPath.Name);
-        var notes = (await store.ListNotesUnderAsync(folder, ct)).Where(p => p != board.Definition && p.IsNote).Order(Comparer<VaultPath>.Create(
-            (a, b) => string.CompareOrdinal(a.Value, b.Value)));
+        // The cards and the archive's notes; a note in another sub-folder is not the board's to change.
+        var archive = BoardPaths.Archive(vaultPath.Name);
+        var notes = (await store.ListNotesUnderAsync(folder, ct))
+            .Where(p => p != board.Definition && p.IsNote && (DirectlyIn(p, folder) || DirectlyIn(p, archive)))
+            .Order(Comparer<VaultPath>.Create((a, b) => string.CompareOrdinal(a.Value, b.Value)));
         foreach (var path in notes)
         {
             if (await store.GetAsync(path, ct) is not { } card) continue;
@@ -217,6 +220,9 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         if (conflicts.Count > 0)
             return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again");
         return ShellResult.Ok($"{Tool}: renamed column {column.Name} to {name} in Board.md and {Count(cards, "card")}");
+
+        static bool DirectlyIn(VaultPath path, VaultPath dir) =>
+            path.Segments.Count == dir.Segments.Count + 1 && path.Value.StartsWith(dir.Value + "/", StringComparison.Ordinal);
 
         static bool Same(string written, string column) => string.Equals(written.Trim(), column, StringComparison.OrdinalIgnoreCase);
     }
@@ -464,8 +470,9 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         var (board, _) = await BoardReader.ReadAsync(store, vault, ct);
         if (board is null) return ("", written);
         var rule = board.Columns.Archive;
-        var lane = board.Lanes.Single(l => string.Equals(l.Column.Name, column.Name, StringComparison.OrdinalIgnoreCase)).Cards;
-        if (lane.Count <= rule.After) return ("", written);
+        // The column may have gone or been renamed since the add or move; then there is nothing to tidy.
+        var found = board.Lanes.SingleOrDefault(l => string.Equals(l.Column.Name, column.Name, StringComparison.OrdinalIgnoreCase));
+        if (found.Cards is not { } lane || lane.Count <= rule.After) return ("", written);
 
         var latest = Today.AddDays(-rule.MinDays);
         var candidates = lane
@@ -478,6 +485,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             .ToList();
 
         var archived = 0;
+        var unmarked = new List<string>();
         var stopped = "";
         foreach (var card in candidates)
         {
@@ -489,12 +497,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 break;
             }
 
-            archived++;
             var note = await MarkArchivedAsync(target, ct);
-            if (card.Path == written.Path && note is not null) written = note;
+            if (note is null) unmarked.Add(card.Title);
+            else archived++;
+            if (card.Path == written.Path) written = note ?? await store.GetAsync(target, ct) ?? written;
         }
 
         var message = archived == 0 ? "" : $"; archived {Count(archived, "card")} to {BoardPaths.Archive(vault).Value}/";
+        message += string.Concat(unmarked.Select(t => $"; '{t}' is in the archive but 'archived' could not be set"));
         return (message + stopped, written);
     }
 
