@@ -44,6 +44,7 @@ All content types accept `annotations` (`audience: ["user"|"assistant"]`, `prior
 | **Claude mobile** | Yes [I]: tool calls go through Claude's backend, so presumably the same as claude.ai; the image delay was reproduced on iOS [R] | as claude.ai [I] | as claude.ai [I] | as claude.ai [I] |
 | **Hermes Agent** (main, read 2026-10-26) | **Yes**, when the model has vision and the route accepts images in tool results: at most 4 per result, downscaled (1568 px, JPEG); otherwise a `MEDIA:` path only [C] | **Not a document**: decoded into a document cache, model gets `[MCP resource saved to <path> … read it with read_file]` [C] | **Not fetched**: text marker pointing at the server's `read_resource` tool [C] | 50 MB per decoded blob; 2,000,000-char hard cap on text, 50K spillover to file [C] |
 | **ChatGPT** (connectors / Apps SDK) | **No**: an image block shows up as `{}`, "not guaranteed to become model-visible vision input" (OpenAI support, 2026-04-22) [C]; in Code Mode "Image output is not supported" since about 2026-09-18, while Codex reads the same image ([codex#46927](https://github.com/openai/codex/issues/46927), open) [R] | [?] | One user says it works ([claude-code#53453](https://github.com/anthropics/claude-code/issues/53453)) [R]; in the newer ChatGPT environment `resources/read` of a `resource_link` fails with `-32002 Unknown resource`, the older one copied the file to `/mnt/data` (2026-10-23) [R] | None documented; a ~3 MiB PNG fails in an Apps SDK component where a ~3 KB one works, cause unknown [R] |
+| **Codex** (OpenAI CLI, main, read 2026-10-27) | **Yes**: becomes an `input_image` in the `function_call_output` sent to the Responses API, detail `high` unless `_meta["codex/imageDetail"]` says otherwise [C] (code) | **Not a document**: unknown content types are serialised as JSON text, so the base64 blob lands in the context as text [C] (code) | Same: JSON text, not fetched [C] (code) | [?] |
 | **Cursor** | Yes, "if the model supports images" [C] (docs, read 2026-10-26); CLI and GPT-model bugs reported [R] | [?] (not documented) | [?] | [?] |
 | **VS Code Copilot** (source, file last changed 2026-06-24) | Yes: becomes a resized data part for the model [C] (code); actual vision depends on the model [I] | **Not a document**: non-image blobs become a *linked resource reference* (the model gets a permalink, not the bytes) [C] (code) | Image MIME: VS Code reads the resource itself and inlines the image [C]; other MIME types: passed as a reference [C] | [?] |
 | **Open WebUI** (v0.12.x) | Yes since PR [#30358](https://github.com/open-webui/open-webui/pull/30358) (merged 2026-09-22) [C] | **Dropped**: becomes the text `[Resource: …] (binary data, mimeType: …)`, bytes gone (maintainer confirmed, 2026-10-24) [C] | [?] | [?] |
@@ -97,7 +98,7 @@ Source: [`tools/mcp_tool_content.py`](https://github.com/NousResearch/hermes-age
 - **resource_link** (added 2026-10-27): a `resource_link` to a 10 MB ZIP (`mcp-file://` URI) used to be copied into the sandbox as `/mnt/data/<name>.zip`; in the newer ChatGPT environment `resources/read` fails with `Mcp error: -32002: Unknown resource`, no file is created. No OpenAI reply ([community thread 1409031](https://community.openai.com/t/regression-mcp-binary-file-materialization-fails-in-the-new-chatgpt-environment/1409031), 2026-10-23). [R] So ChatGPT did fetch resource links into its sandbox at some point, but not reliably now, and a file in the sandbox is not vision input either. [I]
 - **The only documented vision path** is OpenAI's Responses API (`input_image` by URL, base64 data URL or file id), i.e. outside a connector. [C]
 - PDF resources, size limits: [?]
-- **Conclusion (2026-10-27):** a standard MCP `image` part does not reach the ChatGPT model as an image, in two separate ways (`{}` in connectors, "Image output is not supported" in Code Mode), while the same server works in Claude, Codex, Cursor and VS Code. This is a ChatGPT limitation, not a fault of the server's results. [I, from the sources above] A Kumbu² server should therefore not bend its results for ChatGPT, but keep the text block (§5.1) so ChatGPT still gets the name, size and dimensions.
+- **Conclusion (2026-10-27):** a standard MCP `image` part does not reach the ChatGPT model as an image, in two separate ways (`{}` in connectors, "Image output is not supported" in Code Mode), while the same server works in Claude, Cursor, VS Code and OpenAI's own Codex, which hands it to the same models through the Responses API (§2.12). This is a ChatGPT limitation, not a fault of the server's results. [I, from the sources above] A Kumbu² server should therefore not bend its results for ChatGPT, but keep the text block (§5.1) so ChatGPT still gets the name, size and dimensions.
 
 ### 2.7 Cursor
 
@@ -134,6 +135,21 @@ Source: [`packages/api/src/mcp/parsers.ts`](https://github.com/LibreChat-AI/Libr
 ### 2.11 Extra: Anthropic Messages API MCP connector (`mcp_servers`)
 
 Not a chat client, but relevant if anyone wires Kumbu² in through the API: image blocks are replaced with the text `[MCP tool returned an image (format: image/png) but the Anthropic API doesn't currently support image responses]` ([claude-ai-mcp#969](https://github.com/anthropics/claude-ai-mcp/issues/969), 2026-09-01, open). [R]
+
+### 2.12 Codex (OpenAI's coding agent)
+
+Source: `convert_mcp_content_to_items` in [`codex-rs/protocol/src/models.rs`](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs) (last commit 2026-10-17, read 2026-10-27; latest release `rust-v0.164.0`). [C, code]
+
+Codex is the MCP client itself and talks to the Responses API directly, so it decides how a tool result reaches the model:
+
+- `text` → `input_text`. A text part with `_meta["codex/encryptedContent"]: true` is passed on as encrypted content.
+- `image` → `input_image` with a data URL (`data:<mimeType>;base64,<data>`; data that already starts with `data:` is kept as it is) inside the `function_call_output`. The detail level comes from `_meta["codex/imageDetail"]` (`auto`, `low`, `high`, `original`), default `high`.
+- `audio` → `input_audio`, likewise as a data URL.
+- Everything else, including embedded `resource` (with a PDF blob) and `resource_link`, is unknown to this parser and **serialised as JSON text**: an embedded PDF reaches the model as base64 text, the costly case §3 warns about. [C, code; the cost is I]
+
+Why this matters for ChatGPT (§2.6): the model can take images in tool output, and OpenAI's own client delivers them; the reporter of [codex#46927](https://github.com/openai/codex/issues/46927) confirms it hands-on with Codex CLI 0.153.4. What drops the image in ChatGPT is the layer between a connector and the chat (hosted by OpenAI), not the model and not the MCP server. [I, from the code and the report]
+
+For Kumbu² v2.5: `_meta["codex/imageDetail"]: "low"` would make thumbnails cheap on Codex; other clients ignore the key. Do not use embedded resources for anything large, since Codex would put the whole base64 into the context. [I]
 
 ---
 
