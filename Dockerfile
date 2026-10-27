@@ -1,11 +1,11 @@
 # Base images by digest, so a re-tagged image can't change what is built; the tag before the digest says which
 # image it is and is what Dependabot follows (.github/dependabot.yml) when it proposes a new digest.
-# node:22-slim
+# node:26-slim
 FROM node:26-slim@sha256:36793bcbb160a6a16cede1e62b93f84e26b78a972a8a4c0b879c1c12f22761ec AS web
 WORKDIR /src
 COPY web/package.json web/pnpm-lock.yaml web/
-# Corepack reads packageManager from the working directory, which has no package.json, so pin the version here too.
-RUN corepack enable && corepack prepare pnpm@10.32.1 --activate && pnpm -C web install --frozen-lockfile
+# Node 25+ ships no corepack, so pnpm comes from npm, at the version web/package.json's packageManager names.
+RUN npm install -g pnpm@10.32.1 && pnpm -C web install --frozen-lockfile
 COPY web web
 # One version for the app and the server (set by the release workflow, .github/workflows/docker.yml): the web app
 # compares its own with the server's X-Kumbu-Version and reloads into a newer one. 0.0.0-dev turns that off.
