@@ -265,7 +265,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path));
         var linking = notes
             .Where(n => n.Path != path)
-            .Select(n => (n.Path, Count: WikiLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
+            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
             .Where(x => x.Count > 0)
             .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
@@ -348,7 +348,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var found = new List<string>();
         foreach (var note in notes.Where(n => n.Path != created).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
-            foreach (var link in WikiLink.Parse(note.Content))
+            foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var now = after.Resolve(note.Path, link.Target);

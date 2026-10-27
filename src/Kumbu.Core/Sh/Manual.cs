@@ -13,7 +13,7 @@ public static class Manual
           rg [options] <regex> [path...]  search notes, prints path:line:text; no path searches every vault
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections
-          links <path>                    the [[wikilinks]] of a note and the notes they lead to
+          links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
           backlinks <path>                the notes that link to a note, as path:line:text
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
@@ -40,7 +40,7 @@ public static class Manual
         All paths are absolute (e.g. /Work/projects/plan.md); there is no working directory.
         Quote paths with spaces: cat "/Work/Meeting Notes.md". Quote regexes with | ( ) or spaces.
         Sections: cat "/Work/plan.md#Architecture#Gates"; a unique heading works alone (#Gates); duplicates take [2].
-        Follow a [[wikilink]] with 'links <path>'; it resolves like Obsidian (the note whose path ends with it).
+        Links: every form is read, [[wikilinks]] and Markdown links; follow one with 'links <path>'. Write new links as [text](/Folder/Note.md): the path inside the vault, without the vault's name (/Work/projects/plan.md is linked as [plan](/projects/plan.md)), %20 for spaces: unambiguous, survives moving the note it stands in, standard Markdown every tool reads.
         Output is limited to about 8000 tokens per call. A whole note longer than that prints its outline.
         Long notes: 'wc -c' or 'outline' first, then cat "note.md#Section" or rg -n.
 
@@ -55,6 +55,8 @@ public static class Manual
         To replace: pass the version token you got from 'cat' (or from an earlier write or edit). If the note
         changed since, the write fails: cat it again and redo the change, so nobody's edit is lost.
         For small changes, appending or one section, use the edit tool instead; it doesn't resend the whole note.
+
+        Link to other notes as [text](/Folder/Note.md) (the path inside the vault, without the vault's name; %20 for spaces).
 
         Returns the new version token. Earlier versions stay recoverable (sh: history, restore).
         """;
@@ -90,7 +92,7 @@ public static class Manual
         path is a vault, a folder or one note (/Work, /Work/projects, /Work/plan.md). old_text matches
         literally, case-sensitive; with word, only as a whole word (Hecate, not Hecates). A plan is valid for
         one hour and once. Each changed note keeps the state before this session in its history
-        (sh: history, diff, restore). The replace is literal, in [[links]] too: the preview names links that
+        (sh: history, diff, restore). The replace is literal, in links too: the preview names links that
         would lead nowhere afterwards. To rename a note, mv it first (that rewrites its links), then replace.
         """;
 }

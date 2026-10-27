@@ -122,6 +122,19 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal((await VersionsAsync(user))["state"]!.GetValue<string>(), answer["state"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task A_sync_move_leaves_markdown_links_alone()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("source.md", "s\n");
+        await user.CreateAsync("linking.md", "[s](source.md)\n");
+
+        using var mv = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/source.md", to = "/Arbeit/target.md", keepLinks = true });
+
+        Assert.True(mv.IsSuccessStatusCode);
+        Assert.Equal("[s](source.md)\n", (await user.ReadAsync("linking.md"))["content"]!.GetValue<string>());
+    }
+
     [Theory]
     [InlineData(4, true)]
     [InlineData(6, false)]

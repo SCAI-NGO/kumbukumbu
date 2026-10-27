@@ -127,7 +127,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         foreach (var (note, matches) in affected)
         {
             var lineStarts = LineStarts(note.Content);
-            foreach (var link in WikiLink.Parse(note.Content))
+            foreach (var link in NoteLink.Parse(note.Content))
             {
                 var start = lineStarts[link.Line] + link.Start;
                 var inside = matches.Where(m => m >= start && m + oldText.Length <= start + link.Raw.Length).Select(m => m - start).ToList();
@@ -135,7 +135,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
                 inLinks += inside.Count;
 
                 var raw = Replace(link.Raw, inside, oldText.Length, newText);
-                if (WikiLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
+                if (NoteLink.Parse(raw) is not [var changed] || changed.Target == link.Target || changed.Target.Trim().Length == 0) continue;
                 var after = resolver.Resolve(note.Path, changed.Target);
                 var now = resolver.Resolve(note.Path, link.Target);
                 var was = now.Kind == LinkKind.Note ? $"now {now.Target!.Value}" : "now it leads nowhere";

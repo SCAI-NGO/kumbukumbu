@@ -15,13 +15,14 @@ namespace Kumbu.Core.Links;
 /// <param name="Subpath">"#Heading", "#^block" or "".</param>
 /// <param name="Alias">"|alias" or "\|alias" (in tables), separator included, or "".</param>
 public sealed partial record WikiLink(int Line, int Start, string Raw, bool Embed, string Target, string Subpath, string Alias)
+    : NoteLink(Line, Start, Raw, Target, Subpath)
 {
     /// <summary>The same link pointing to <paramref name="target"/>, everything else unchanged.</summary>
     public string WithTarget(string target) => $"{(Embed ? "!" : "")}[[{target}{Subpath}{Alias}]]";
 
     /// <summary>All wikilinks of a note, in order. Fenced code blocks and inline code spans don't count;
     /// frontmatter does, as Obsidian treats links in properties as links.</summary>
-    public static IReadOnlyList<WikiLink> Parse(string content)
+    public static new IReadOnlyList<WikiLink> Parse(string content)
     {
         var lines = Lines.Split(content);
         var code = Outline.CodeLines(lines);
@@ -67,28 +68,6 @@ public sealed partial record WikiLink(int Line, int Start, string Raw, bool Embe
         return new WikiLink(line, m.Index, m.Value, m.Groups[1].Length > 0, inner, subpath, alias);
     }
 
-    /// <summary>Inline code: a run of backticks up to the next run of the same length.</summary>
-    private static List<(int Start, int End)> CodeSpans(string line)
-    {
-        var spans = new List<(int, int)>();
-        var runs = BacktickRegex().Matches(line).ToList();
-        for (var i = 0; i < runs.Count; i++)
-        {
-            for (var j = i + 1; j < runs.Count; j++)
-            {
-                if (runs[j].Length != runs[i].Length) continue;
-                spans.Add((runs[i].Index, runs[j].Index + runs[j].Length));
-                i = j;
-                break;
-            }
-        }
-
-        return spans;
-    }
-
     [GeneratedRegex(@"(!?)\[\[([^\[\]\n]+?)\]\]")]
-    private static partial Regex LinkRegex();
-
-    [GeneratedRegex("`+")]
-    private static partial Regex BacktickRegex();
+    internal static partial Regex LinkRegex();
 }
