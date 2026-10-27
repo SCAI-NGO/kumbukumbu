@@ -50,13 +50,49 @@ public sealed class KumbuOptions
     public SearchOptions Search { get; set; } = new();
 
     public EmbeddingsOptions Embeddings { get; set; } = new();
+
+    public OAuthOptions OAuth { get; set; } = new();
+
+    public PrivacyOptions Privacy { get; set; } = new();
+
+    public DeletionsOptions Deletions { get; set; } = new();
 }
 
-/// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one only when
-/// its owner opts in; every vault starts with the internal model (<see cref="SearchOptions.Model"/>).</summary>
+/// <summary>Where the ids of deleted users are listed, outside the database (<see cref="Accounts.DeletionList"/>).</summary>
+public sealed class DeletionsOptions
+{
+    /// <summary>Optional: a directory of its own (Compose: <c>/deletions</c> on the <c>deletions</c> volume), kept out
+    /// of database restores. Unset, deletions are not listed and a restored user can't be detected.</summary>
+    public string? Path { get; set; }
+}
+
+/// <summary>What the deletion receipt's reply to a privacy request is signed with.</summary>
+public sealed class PrivacyOptions
+{
+    /// <summary>Optional: the deployer's privacy contact (<c>KUMBU_PRIVACY_CONTACT</c>), e.g. <c>privacy@example.org</c>;
+    /// unset, the reply leaves a placeholder.</summary>
+    public string? Contact { get; set; }
+}
+
+public sealed class OAuthOptions
+{
+    /// <summary>How long an app connection's access token lasts (<c>KUMBU_OAUTH_ACCESS_TOKEN_MINUTES</c>).</summary>
+    public int AccessTokenMinutes { get; set; } = 60;
+
+    /// <summary>Test and development only: lets a client metadata document be fetched over http from a loopback address.</summary>
+    public bool AllowLoopbackClients { get; set; }
+}
+
+/// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one when its
+/// owner opts in, or when the admin made it the <see cref="Default"/> and the owner never chose.</summary>
 public sealed class EmbeddingsOptions
 {
     public Dictionary<string, EmbeddingProviderOptions> Providers { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>The provider of every vault whose owner never chose one (<c>KUMBU_EMBEDDINGS_DEFAULT</c>): <c>internal</c>
+    /// (the model on this server, <see cref="SearchOptions.Model"/>) or the name of one of <see cref="Providers"/>.
+    /// Owners can still choose another, the internal model included.</summary>
+    public string Default { get; set; } = Search.EmbeddingProviders.Internal;
 }
 
 /// <summary>One external provider: a protocol (<see cref="Driver"/>), where it is, which model, and how it is described
@@ -102,7 +138,7 @@ public sealed class EmbeddingProviderOptions
 public sealed class SearchOptions
 {
     /// <summary>Search by meaning with the internal model (semsearch); without it, the vaults that use it rank by
-    /// words only. Vaults whose owner opted in to an external provider still search by meaning.</summary>
+    /// words only. Vaults that use an external provider still search by meaning.</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Where the embedding model is kept; downloaded there on the first start.</summary>

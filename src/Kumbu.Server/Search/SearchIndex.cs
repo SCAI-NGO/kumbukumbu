@@ -17,7 +17,7 @@ namespace Kumbu.Server.Search;
 /// MongoDB (<c>embeddings</c>) and held in the vault's working set, so a search is dot products in memory.
 /// A vault catches up when it is unlocked, so nothing written while it was locked, or before a restart, is missed.
 /// Each vault is embedded by its own provider (<see cref="UnlockedVault.EmbeddingProvider"/>): the internal model,
-/// or the external one its owner opted in to.
+/// or an external one its owner opted in to or the instance's default.
 /// </summary>
 public sealed class SearchIndex : BackgroundService
 {
@@ -124,11 +124,14 @@ public sealed class SearchIndex : BackgroundService
     /// if the note is gone.</summary>
     public async Task IndexAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
     {
+        // Not even waiting during a re-keying run: it holds the gate until its finish.
+        if (!MayIndex(vault, path)) return;
         await vault.IndexGate.WaitAsync(ct);
         try
         {
-            // An upsert now would bring back an embedding of a vault that is gone.
-            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+            // An upsert now would bring back an embedding of a vault that is gone, or seal one under a vault key
+            // that a re-keying replaced.
+            if (!MayIndex(vault, path)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             if (!vault.Notes.TryGetValue(path, out var entry))
             {
@@ -149,15 +152,15 @@ public sealed class SearchIndex : BackgroundService
             var known = vault.Embeddings.Values.Where(e => e.Model == model).SelectMany(e => e.Chunks).Where(c => FitsLength(c, driver)).GroupBy(c => c.Hash).ToDictionary(g => g.Key, g => g.First().Vector);
             var hashes = chunks.Select(c => Hash(c.EmbeddingText)).ToList();
             var missing = Enumerable.Range(0, chunks.Count).Where(i => !known.ContainsKey(hashes[i])).DistinctBy(i => hashes[i]).ToList();
-            // A deletion of the vault cancels a call under way: it waits for this gate, and a provider that hangs
-            // with retries would hold it up for minutes.
-            using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.DeletionToken(vault.Id));
+            // A deletion or a re-keying of the vault cancels a call under way: it waits for this gate, and a provider
+            // that hangs with retries would hold it up for minutes.
+            using var embedding = CancellationTokenSource.CreateLinkedTokenSource(ct, _catalog.InterruptToken(vault.Id));
             foreach (var batch in missing.Chunk(Math.Max(1, driver.MaxBatch)))
             {
                 // The owner may have switched the vault meanwhile (back to internal, say): nothing more goes to this
                 // provider, and nothing it answered is kept. The catch-up of the switch embeds the note with the new one.
-                // Nor does anything more of a vault being deleted.
-                if (vault.EmbeddingProvider != provider || vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+                // Nor does anything more of a vault being deleted or re-keyed.
+                if (vault.EmbeddingProvider != provider || !MayIndex(vault, path)) return;
                 float[][] vectors;
                 try
                 {
@@ -175,7 +178,7 @@ public sealed class SearchIndex : BackgroundService
             // Again: embedding takes seconds, and meanwhile the owner may have switched the vault's provider
             // or deleted the vault.
             if (vault.EmbeddingProvider != provider) return;
-            if (vault.Deleted || _catalog.IsDeleted(vault.Id)) return;
+            if (!MayIndex(vault, path)) return;
             await _catalog.Embeddings.UpdateOneAsync(
                 filter,
                 Builders<SealedDocument>.Update
@@ -190,6 +193,18 @@ public sealed class SearchIndex : BackgroundService
         {
             vault.IndexGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="vault"/> may be indexed now (<see cref="VaultCatalog.MayIndex"/>). If not, and another
+    /// object of the vault is current (one made after a re-keying), the note goes to the queue again for that one:
+    /// the queue holds a note once per vault, so the new object's catch-up skipped it while it waited here.
+    /// </summary>
+    private bool MayIndex(UnlockedVault vault, VaultPath path)
+    {
+        if (_catalog.MayIndex(vault)) return true;
+        if (_catalog.Current(vault.Id) is { } current) Enqueue(current, [path]);
+        return false;
     }
 
     /// <summary>Waits until nothing is queued (tests, and a search that wants a fresh index).</summary>

@@ -7,6 +7,7 @@ import type { SearchMode } from "../state/editor";
 
 export type SearchView = components["schemas"]["SearchView"];
 export type SearchResult = components["schemas"]["SearchResultView"];
+export type EarlierResult = components["schemas"]["EarlierResultView"];
 
 export const DEBOUNCE_MS = 200;
 const RESULTS = 20;
@@ -38,5 +39,18 @@ export function useSearch(query: string, mode: SearchMode) {
     waiting: trimmed !== "" && (trimmed !== settled || result.isPending),
     data: trimmed === settled ? result.data : undefined,
     error: trimmed === settled && result.isError ? result.error : null,
+    /** The query once it has rested: what was searched for. */
+    settled,
   };
 }
+
+/**
+ * Sections of earlier versions that hold every word of the (settled) query, newest first; asked only while
+ * `enabled` (the sheet's switch). Words only, sessions only.
+ */
+export const useEarlierSearch = (settled: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ["search", "earlier", settled],
+    queryFn: ({ signal }) => call(api.GET("/api/search/earlier", { params: { query: { q: settled, n: RESULTS } }, signal })),
+    enabled: enabled && settled !== "",
+  });

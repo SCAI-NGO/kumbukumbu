@@ -177,7 +177,7 @@ No new xUnit test: this is test infrastructure; the whole suite is its test.
 
 - [ ] **Step 1: Write the failing tests** in `ConnectionTests.cs` (`[Collection("mongo")]`, service-level like `ApiKeyTests.cs`):
   - `Creates_a_connection_with_rights_and_lists_it_as_waiting` — `State == Waiting`, `Vaults[vaultId] == Write`, `Id.Length == 16`, `Id` matches `^[a-z2-7]{16}$`.
-  - `A_name_is_unique_across_api_keys_and_connections` — key "laptop" then connection "Laptop" → `ConnectionNameTakenException`; connection "cor.energy" then key "COR.ENERGY" → `ApiKeyNameTakenException`; after revoking the connection the key name is free.
+  - `A_name_is_unique_across_api_keys_and_connections` — key "laptop" then connection "Laptop" → `ConnectionNameTakenException`; connection "Work" then key "WORK" → `ApiKeyNameTakenException`; after revoking the connection the key name is free.
   - `Two_concurrent_creations_with_one_name_leave_one` — `Task.WhenAll` of a key and a connection named alike: exactly one succeeds.
   - `Naming_rules_are_the_api_keys_rules` — the user's username, `dev`, `" ("`, a zero-width character: `ArgumentException`.
   - `A_connection_needs_a_vault_of_the_user` — empty map or another user's vault id: `ArgumentException`.
@@ -371,10 +371,10 @@ No new xUnit test: this is test infrastructure; the whole suite is its test.
   - `CallerMiddleware` on `/mcp/c/{id}`: a bearer starting `kumbu_at_` → `ResolveAccessAsync(token, id, OAuthUrls.Resource(origin, id))`; valid → caller; `Known` but invalid → 401 challenge with `invalid_token`, `wrongKeys.Release`; unknown → 401 challenge with `invalid_token`, `wrongKeys.Failed`. Access tokens on `/mcp` and `/api` are never resolved (401 there as any unknown bearer).
   - `POST /oauth/token` (anonymous, CORS): only `application/x-www-form-urlencoded` (else 400 `invalid_request`); `grant_type=authorization_code` with `code`, `redirect_uri`, `client_id`, `code_verifier`, optional `resource`; unknown `grant_type` → `unsupported_grant_type`; JSON answers `{access_token, token_type: "Bearer", expires_in, refresh_token, scope}` or `{error, error_description}` (400; `invalid_client` 401); always `Cache-Control: no-store` and `Pragma: no-cache`; `OAuthLimits.Token*` around failures (429 with `Retry-After`).
 
-- [ ] **Step 1: Write the failing tests** (`[Collection("app")]`, `PublicApi`, a user with vaults `Arbeit` (write) and `Privat` (read) on one connection named `cor.energy`):
+- [ ] **Step 1: Write the failing tests** (`[Collection("app")]`, `PublicApi`, a user with vaults `Arbeit` (write) and `Privat` (read) on one connection named `Work`):
   - `Exchanges_a_code_for_tokens` — 200, `token_type == "Bearer"`, `expires_in == 3600`, prefixes `kumbu_at_`/`kumbu_rt_`, `scope == "kumbu:read kumbu:write"`, `Cache-Control: no-store`; the connection lists as `Connected`.
   - `The_access_token_works_on_its_connection_url` — SDK `McpClient` over `HttpClientTransport` to `https://kumbu.test/mcp/c/{id}` with the bearer: `sh` with `ls /` lists `Arbeit` and `Privat` only.
-  - `Rights_are_exactly_as_consented` — `write` to `Privat/x.md` refused with the read-only error; `write` to `Arbeit/x.md` succeeds; `history` of it shows writer `cor.energy`.
+  - `Rights_are_exactly_as_consented` — `write` to `Privat/x.md` refused with the read-only error; `write` to `Arbeit/x.md` succeeds; `history` of it shows writer `Work`.
   - `The_access_token_is_refused_elsewhere` — on `/mcp` → 401 `Bearer`; on `/api/vaults` → 401; on another connection's URL → 401 `invalid_token`.
   - `Wrong_verifier_resource_client_or_redirect_is_invalid_grant` — each variation on a fresh code → 400 `invalid_grant` (wrong resource: `invalid_target`).
   - `A_code_is_spent_by_the_first_request_that_presents_it` — a wrong verifier first, then the right one → both `invalid_grant` (a code is single-use whatever the outcome, so an intercepted code that is tried burns it).
@@ -470,13 +470,13 @@ No new xUnit test: this is test infrastructure; the whole suite is its test.
 
 UI copy (exact, British English):
 - Section heading "Connections"; intro: "A connection lets an app such as Claude (claude.ai, Desktop and the mobile apps) read or write the vaults you choose. Each connection has its own address."
-- Button "Connect an app"; dialog title "Connect an app"; name field placeholder "e.g. cor.energy"; the first suggestion chip "Claude" fills nothing but the instructions shown afterwards.
+- Button "Connect an app"; dialog title "Connect an app"; name field placeholder "e.g. Work"; the first suggestion chip "Claude" fills nothing but the instructions shown afterwards.
 - Reveal: "Connector URL" with the URL in monospace and a "Copy" button; then the three lines: "1. In claude.ai: Settings → Connectors → Add custom connector." "2. Paste this URL. Leave client ID and secret empty." "3. Tip: name the connector like this connection, e.g. 'Kumbu {name}'." and one generic line: "Other apps: add a remote MCP server with this URL; it signs in with OAuth." Then "The address is not a secret: it only says which connection is meant. Access needs your consent in Kumbu²."
 - List item: name, URL (copy button), client ("Claude · claude.ai", "· self-registered" when `verified` is false), vaults and rights, "Created … · Last used …/Never used · Expires …/Doesn't expire", status text: `waiting` "Waiting for the app", `connected` "Connected", `needs_reconnect` "Needs reconnect: {reason text}", `revoked` "Revoked: {reason text}", `expired` "Expired". Reason texts: `revoked` "you revoked it", `vault_deleted` "its vaults were deleted", `password_changed` "your password was changed", `recovery` "your account was recovered", `deactivated` "your account was deactivated", `refresh_reused` "a token was used twice, which can mean it was stolen", `code_reused` "a sign-in code was used twice", `client_revoked` "the app disconnected", `rights_changed` "its rights were changed", `rekeyed` "a vault was re-encrypted". For `needs_reconnect`: "Use Reconnect in the app." Buttons "Change rights" (dialog with the rights picker; note "The app has to reconnect after this.") and "Revoke" (dialog "Revoke {name}? The app loses access at once. Its address can't be used again; make a new connection instead.").
 - Revoked and expired connections are inside a `<details>` "Revoked and expired ({n})", closed by default.
 
 - [ ] **Step 1: Write the failing tests** (`Connections.test.tsx`, the `api({...})` mock pattern of `Keys.test.tsx`):
-  - `creates a connection and shows its connector URL with instructions` — POST body `{ name: "cor.energy", vaults: { Arbeit: "write" }, expiresInDays: 90 }`; the reveal shows the URL and the three lines; "Copy" writes the URL to `navigator.clipboard`.
+  - `creates a connection and shows its connector URL with instructions` — POST body `{ name: "Work", vaults: { Arbeit: "write" }, expiresInDays: 90 }`; the reveal shows the URL and the three lines; "Copy" writes the URL to `navigator.clipboard`.
   - `lists states with their reasons` — one of each state; texts as above; revoked/expired inside the closed `<details>`.
   - `changing rights says the app has to reconnect` — PUT body; invalidates `["connections"]`.
   - `revoking asks first` — DELETE only after confirming.
@@ -507,7 +507,7 @@ Behaviour and copy:
 - Nothing about the request goes into browser storage; the view's query uses `gcTime: 0`.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `shows exactly what is being connected` — client "Claude · claude.ai", connection "cor.energy", "Arbeit: read and write".
+  - `shows exactly what is being connected` — client "Claude · claude.ai", connection "Work", "Arbeit: read and write".
   - `allow navigates to the redirect` — POST `{ allow: true }`; `window.location.assign` called with the returned URL.
   - `deny navigates with the denial` — POST `{ allow: false }`.
   - `Signs_in_first_and_comes_back_to_the_same_request` — the session query 401s → navigates to `/signin?next=%2Fconsent%3Frequest%3Dr1`; `safeNext("/consent?request=r1") === "/consent?request=r1"`.
@@ -665,7 +665,7 @@ No code, no tests. Written from the code as built after Task 12, not from memory
 - [ ] **Step 1: Diagram.** A Mermaid `sequenceDiagram` in §6 "Connections (OAuth)", participants: User (browser), claude.ai, Kumbu² (MCP `/mcp/c/{id}`), Kumbu² (OAuth), Kumbu² web app, MongoDB. Messages: probe POST → 401 + `resource_metadata`; GET PRM; GET AS metadata; (CIMD) Kumbu² fetches `https://claude.ai/oauth/mcp-oauth-client-metadata`; browser → `/oauth/authorize` (PKCE S256, `resource`, `state`) → 303 `/consent?request=…`; sign-in if needed; consent view; Allow → slots wrapped under the code (TTL 60 s) → redirect with `code`, `state`, `iss`; claude.ai → `/oauth/token` (code + verifier) → refresh and access slots re-wrapped, code slots deleted → tokens; MCP calls with the access token (slots opened per request); refresh → rotation; revoke → slots deleted → 401 → "Reconnect". Under it, a `flowchart` of the connection states (waiting → connected ⇄ needs reconnect; → revoked; → expired) with the reasons on the edges. Check it renders (`npx -y @mermaid-js/mermaid-cli@11.4.2 -i <extracted block> -o /tmp/x.svg` if the network allows; otherwise review the syntax by eye).
 - [ ] **Step 2: Acceptance checklist** in `docs/notes-test-phase10.md`, for Chris on `https://kumbu.tidesson.net` after deploying through Komodo, each item a checkbox with an empty "Result" line:
   1. Before: the deployed image is this PR's build (`/healthz`, `serverInfo.version`); `curl -si https://kumbu.tidesson.net/.well-known/oauth-authorization-server` shows the fields of Task 3; `curl -si -X POST https://kumbu.tidesson.net/mcp/c/<id>` → 401 with `resource_metadata`; `curl -si -X POST https://kumbu.tidesson.net/mcp` → 401 `Bearer` only.
-  2. claude.ai web (work account): Access → Connect an app "cor.energy", vault `cor.energy` read and write, 90 days → copy the URL → claude.ai Settings → Connectors → Add custom connector, URL only → Kumbu²'s consent shows "Claude (claude.ai) … cor.energy: read and write" → Allow → *Connected*; in a chat: list the vault, read a note, edit a section, write a new note; in Kumbu² the history shows writer `cor.energy`; the connection shows "Connected", "Claude · claude.ai", last used today.
+  2. claude.ai web (work account): Access → Connect an app "Work", vault `Work` read and write, 90 days → copy the URL → claude.ai Settings → Connectors → Add custom connector, URL only → Kumbu²'s consent shows "Claude (claude.ai) … Work: read and write" → Allow → *Connected*; in a chat: list the vault, read a note, edit a section, write a new note; in Kumbu² the history shows writer `Work`; the connection shows "Connected", "Claude · claude.ai", last used today.
   3. Deny once (a second connection): claude.ai reports the denial; nothing connected.
   4. Claude Desktop: the same connector is there without adding it; read and write work; sign-in (if asked) opens the system browser.
   5. Phone (iOS/Android Claude app): the connector is listed; a read works; if a sign-in is needed, the in-app browser shows Kumbu²'s sign-in first and then the same consent.

@@ -19,9 +19,10 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         history <path>
           List the versions of a note, newest first: version, time written (UTC), writer, lines.
           The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept. Writes by one
-          writer close together in time form a changeset (it ends after {Changeset.Idle.TotalMinutes} minutes without a write, or
-          after {Changeset.MaxLength.TotalHours} hour), and a changeset gives each note one version, whatever tool wrote it, so
-          the state before a session survives. A restore is a version of its own.
+          writer close together in time form a changeset (it ends after {Changeset.Idle.TotalMinutes} minutes without a write,
+          {Changeset.HumanIdle.TotalMinutes} for a person in the web app or Obsidian, or after {Changeset.MaxLength.TotalHours} hour), and a changeset
+          gives each note one version, whatever tool wrote it, so the state before a session survives. A note's first
+          state and a restore are versions of their own.
           'restore <path> <version>' makes an earlier version current again; to keep a state for longer,
           ask the user about a named checkpoint ('help mkcp').
           The version is computed from the text, so the same version can appear twice (after a restore,

@@ -9,6 +9,12 @@ public sealed record ShellResult(string Output, bool IsError)
 {
     public NoteVersion? Version { get; init; }
 
+    /// <summary>
+    /// A line for an empty result, shown only when the command stands alone: right of a pipe or on the left of one,
+    /// the next command reads the output, and a hint would be taken for data.
+    /// </summary>
+    public string? NoMatchHint { get; init; }
+
     public static ShellResult Ok(string output) => new(output, false);
 
     public static ShellResult Error(string message) => new(message, true);

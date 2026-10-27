@@ -8,7 +8,7 @@ export function AuthScreen({ title, lead, children }: { title: string; lead?: Re
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center gap-6 px-4 py-10">
       <header>
         <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-accent-text">Kumbu²</p>
-        <h1 className="mt-2 text-[28px] leading-tight font-bold text-text">{title}</h1>
+        <h1 className="mt-2 text-[28px] leading-tight font-bold break-words text-text">{title}</h1>
         {lead && <p className="mt-2 text-text-body">{lead}</p>}
       </header>
       {children}

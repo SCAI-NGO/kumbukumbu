@@ -53,6 +53,65 @@ public class LinkCommandsTests
         """,
         (await Run("backlinks /Demo/projects/kumbu.md")).Output);
 
+    private const string MarkdownNote =
+        "[k](/projects/kumbu.md) [m](Meeting%20Notes.md) [w](<welcome.md#Welcome>)\n[p](plan.md) [n](nope.md) [r](report.pdf) [h](#Top) [x](https://x.org)\n";
+
+    // Its own store, so the shared fixtures stay as they are.
+    private static Func<string, Task<ShellResult>> WithMarkdownNote()
+    {
+        var store = new InMemoryNoteStore(
+            ("/Demo/md.md", MarkdownNote),
+            ("/Demo/welcome.md", Welcome),
+            ("/Demo/Meeting Notes.md", Meeting),
+            ("/Demo/projects/kumbu.md", "# Kumbu\n"),
+            ("/Demo/a/plan.md", "a"), ("/Demo/b/plan.md", "b"));
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return line => sh.RunAsync(line, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task MarkdownLinksAreLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Equal(
+            """
+            1: [k](/projects/kumbu.md) → /Demo/projects/kumbu.md
+            1: [m](Meeting%20Notes.md) → /Demo/Meeting Notes.md
+            1: [w](<welcome.md#Welcome>) → /Demo/welcome.md
+            2: [p](plan.md) → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
+            2: [n](nope.md) → not found
+            2: [r](report.pdf) → attachment (not a note)
+            2: [h](#Top) → this note
+            """,
+            (await sh("links /Demo/md.md")).Output);
+    }
+
+    [Fact]
+    public async Task BacklinksFindMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md:1:[k](/projects/kumbu.md) ", (await sh("backlinks /Demo/projects/kumbu.md")).Output);
+    }
+
+    [Fact]
+    public async Task RmCountsMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md", (await sh("rm /Demo/projects/kumbu.md")).Output.Split("now lead nowhere")[0]);
+    }
+
+    [Fact]
+    public async Task LinksOfADirectoryListsBrokenMarkdownLinks()
+    {
+        var sh = WithMarkdownNote();
+
+        Assert.Contains("/Demo/md.md:2: [n](nope.md) → not found", (await sh("links /Demo")).Output);
+    }
+
     [Theory]
     [InlineData("links", "links: missing operand")]
     [InlineData("links /Demo/nope.md", "links: /Demo/nope.md: No such file or directory")]
@@ -132,6 +191,95 @@ public class LinkCommandsTests
         var result = await Run("mv --keep-links /Demo/projects/kumbu.md /Demo/kumbu2.md");
         Assert.Equal("moved /Demo/projects/kumbu.md to /Demo/kumbu2.md; links left as they are (--keep-links)", result.Output);
         Assert.Equal(Welcome, await Content("/Demo/welcome.md"));
+    }
+
+    // Its own store with the shared fixtures and the given notes: the shell and a reader of a note's content.
+    private static (Func<string, Task<ShellResult>> Run, Func<string, Task<string?>> Content) With(params (string Path, string Content)[] notes)
+    {
+        var store = new InMemoryNoteStore([
+            ("/Demo/welcome.md", Welcome),
+            ("/Demo/Meeting Notes.md", Meeting),
+            ("/Demo/projects/kumbu.md", "# Kumbu\n## Goal\n"),
+            ("/Demo/a/plan.md", "a"), ("/Demo/b/plan.md", "b"),
+            .. notes]);
+        var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
+        var sh = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)));
+        return (line => sh.RunAsync(line, CancellationToken.None),
+            path => store.ReadAsync(VaultPath.TryParse(path, out var p) ? p : throw new ArgumentException(path), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task MvRewritesMarkdownLinksToTheMovedNoteAbsolute()
+    {
+        var (run, content) = With(("/Demo/md.md", "[k](projects/kumbu.md) and [K](kumbu#Goal)\n"));
+
+        var result = await run("mv /Demo/projects/kumbu.md /Demo/archive/kumbu-v1.md");
+
+        Assert.Equal("[k](/archive/kumbu-v1.md) and [K](/archive/kumbu-v1.md#Goal)\n", await content("/Demo/md.md"));
+        Assert.Contains("/Demo/md.md", result.Output);
+    }
+
+    [Fact]
+    public async Task MvRewritesARelativeLinkInTheMovedNote()
+    {
+        var (run, content) = With(("/Demo/projects/rel.md", "[k](./kumbu.md) [w](../welcome.md)\n"));
+
+        await run("mv /Demo/projects/rel.md /Demo/deep/er/rel.md");
+
+        Assert.Equal("[k](/projects/kumbu.md) [w](/welcome.md)\n", await content("/Demo/deep/er/rel.md"));
+    }
+
+    [Fact]
+    public async Task MvLeavesAMarkdownLinkItDoesNotHaveToTouch()
+    {
+        const string note = "[m](Meeting%20Notes.md) [x](https://x.org/kumbu.md) [n](nope.md)\n";
+        var (run, content) = With(("/Demo/md.md", note));
+
+        await run("mv /Demo/projects/kumbu.md /Demo/k2.md");
+
+        Assert.Equal(note, await content("/Demo/md.md"));
+    }
+
+    [Fact]
+    public async Task MvKeepsTextHeadingAngleBracketsAndTitle()
+    {
+        var (run, content) = With(("/Demo/md.md", "[My *k*](<projects/kumbu.md#Goal> \"t\")\n"));
+
+        await run("mv /Demo/projects/kumbu.md /Demo/archive/k.md");
+
+        Assert.Equal("[My *k*](</archive/k.md#Goal> \"t\")\n", await content("/Demo/md.md"));
+    }
+
+    [Fact]
+    public async Task MvRewritesMixedLinksOnOneLine()
+    {
+        var (run, content) = With(("/Demo/md.md", "[[kumbu]] [k](kumbu.md) [[kumbu#Goal]]\n"));
+
+        await run("mv /Demo/projects/kumbu.md /Demo/k3.md");
+
+        Assert.Equal("[[k3]] [k](/k3.md) [[k3#Goal]]\n", await content("/Demo/md.md"));
+    }
+
+    [Fact]
+    public async Task MvEncodesWhatNeedsIt()
+    {
+        var (run, content) = With(("/Demo/md.md", "[k](kumbu.md)\n"));
+
+        var result = await run("mv /Demo/projects/kumbu.md \"/Demo/Plan #2 (draft).md\"");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("[k](/Plan%20%232%20%28draft%29.md)\n", await content("/Demo/md.md"));
+        Assert.Equal("1: [k](/Plan%20%232%20%28draft%29.md) → /Demo/Plan #2 (draft).md", (await run("links /Demo/md.md")).Output);
+    }
+
+    [Fact]
+    public async Task KeepLinksLeavesMarkdownLinksAlone()
+    {
+        var (run, content) = With(("/Demo/md.md", "[k](projects/kumbu.md)\n"));
+
+        await run("mv --keep-links /Demo/projects/kumbu.md /Demo/kumbu2.md");
+
+        Assert.Equal("[k](projects/kumbu.md)\n", await content("/Demo/md.md"));
     }
 
     [Fact]

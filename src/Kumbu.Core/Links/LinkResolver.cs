@@ -27,7 +27,8 @@ public sealed record LinkResolution(LinkKind Kind, VaultPath? Target, IReadOnlyL
 /// <summary>
 /// Resolves link paths to notes within one vault, close to Obsidian's rules: case-insensitive; relative
 /// to the source's folder for "./" and "../"; otherwise the note whose path ends with the link path,
-/// preferring the source's own folder when several do. Never guesses beyond that.
+/// preferring for a path with a folder the one below the source's folder, then the one at that path from the
+/// vault's root, and for a bare name the source's own folder. Never guesses beyond that.
 /// </summary>
 public sealed class LinkResolver
 {
@@ -73,9 +74,18 @@ public sealed class LinkResolver
         var path = StripMd(text.TrimStart('/'));
         var name = path[(path.LastIndexOf('/') + 1)..];
         var suffix = "/" + path + ".md";
-        var candidates = _byName.TryGetValue(name, out var named)
-            ? named.Where(n => Matches("/" + string.Join('/', n.Segments.Skip(1)), suffix, exact)).ToList()
-            : [];
+        var named = _byName.GetValueOrDefault(name) ?? [];
+        var candidates = named.Where(n => Matches(InVault(n), suffix, exact)).ToList();
+
+        // A path with a folder ("Work/plan") is, as in Obsidian, first a path below the source's folder,
+        // then a path from the vault's root, and only then a path suffix.
+        if (!exact && path.Contains('/') && candidates.Count > 1)
+        {
+            var folder = string.Join("", source.Segments.Skip(1).SkipLast(1).Select(s => "/" + s));
+            var preferred = named.FirstOrDefault(n => Matches(InVault(n), folder + suffix, true))
+                ?? named.FirstOrDefault(n => Matches(InVault(n), suffix, true));
+            if (preferred is not null) return new LinkResolution(LinkKind.Note, preferred, candidates);
+        }
 
         if (candidates.Count == 1) return new LinkResolution(LinkKind.Note, candidates[0], candidates);
         if (candidates.Count > 1)
@@ -89,6 +99,8 @@ public sealed class LinkResolver
         var looksLikeFile = name.LastIndexOf('.') is var dot and > 0 && dot < name.Length - 1 && !name[(dot + 1)..].Contains(' ');
         return new LinkResolution(looksLikeFile ? LinkKind.Attachment : LinkKind.NotFound, null, []);
     }
+
+    private static string InVault(VaultPath note) => "/" + string.Join('/', note.Segments.Skip(1));
 
     private static bool Matches(string notePath, string suffix, bool exact) =>
         exact ? notePath.Equals(suffix, StringComparison.OrdinalIgnoreCase) : notePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);

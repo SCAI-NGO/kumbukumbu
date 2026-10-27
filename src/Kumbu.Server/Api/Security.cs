@@ -10,6 +10,13 @@ public sealed class SessionOnlyMetadata
     public static readonly SessionOnlyMetadata Instance = new();
 }
 
+/// <summary>Marks an anonymous endpoint that carries its own secret and no ambient credential (pairing's redeem):
+/// the Origin check, which guards cookies against forged requests, doesn't apply to it.</summary>
+public sealed class OriginExemptMetadata
+{
+    public static readonly OriginExemptMetadata Instance = new();
+}
+
 /// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints.</summary>
 public static class Security
 {
@@ -31,7 +38,7 @@ public static class Security
 
     /// <summary>
     /// The security headers, on every response (API, MCP, static files and errors alike), and
-    /// <c>Cache-Control: no-store</c> on the API's. Added when the response
+    /// <c>Cache-Control: no-store</c> and <c>X-Kumbu-Version</c> on the API's. Added when the response
     /// starts, so that a handler clearing the response doesn't drop them. HSTS when the public URL is https or the
     /// request came over https as the app sees it: behind a trusted proxy that is <c>X-Forwarded-Proto</c>
     /// (see Program.cs), otherwise the connection itself, except to a loopback host (as ASP.NET's own UseHsts):
@@ -47,12 +54,17 @@ public static class Security
             {
                 var headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
-                headers["Referrer-Policy"] = "same-origin";
+                headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
                 headers.ContentSecurityPolicy = ContentSecurityPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
-                if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)) headers.CacheControl = "no-store";
+                // The build version on every API answer (errors and 401s too): the web app reloads into a newer one.
+                if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+                {
+                    headers.CacheControl = "no-store";
+                    headers["X-Kumbu-Version"] = BuildVersion.Full;
+                }
                 return Task.CompletedTask;
             });
             return next(context);
@@ -87,11 +99,12 @@ public static class Security
             var caller = context.Features.Get<RequestCaller>();
             if (context.GetEndpoint()?.Metadata.GetMetadata<SessionOnlyMetadata>() is not null && caller?.Kind != CallerKind.Session)
             {
-                await RefuseAsync(context, "This needs a signed-in session; API keys can't manage accounts, keys or users.");
+                await RefuseAsync(context, "This needs a signed-in session: API keys, connected apps and the dev token can't do it.");
                 return;
             }
 
-            if (!IsSafe(context.Request.Method) && caller?.Kind is null or CallerKind.Session)
+            var exempt = caller is null && context.GetEndpoint()?.Metadata.GetMetadata<OriginExemptMetadata>() is not null;
+            if (!IsSafe(context.Request.Method) && (caller?.Kind is null or CallerKind.Session) && !exempt)
             {
                 var origin = context.Request.Headers.Origin.ToString();
                 var own = expected ?? $"{context.Request.Scheme}://{context.Request.Host}";
@@ -128,6 +141,8 @@ public sealed class AccountLimits : IDisposable
     public const int SignInsPerAddress = 20;
     public const int JoinsPerAddress = 5;
     public const int RecoveriesPerAddress = 5;
+    public const int RedeemsPerAddress = 10;
+    public const int RedeemFailuresPerServer = 100;
 
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
@@ -139,6 +154,8 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _passwordCheckByUsername = Limiter(SignInsPerUsername);
     private readonly PartitionedRateLimiter<string> _joinByAddress = Limiter(JoinsPerAddress);
     private readonly PartitionedRateLimiter<string> _recoveryByAddress = Limiter(RecoveriesPerAddress);
+    private readonly PartitionedRateLimiter<string> _redeemByAddress = Limiter(RedeemsPerAddress);
+    private readonly PartitionedRateLimiter<string> _redeemFailures = Limiter(RedeemFailuresPerServer);
 
     /// <summary>Null if the sign-in may go ahead, else how long to wait. The address is asked first, so a client
     /// over its own limit uses up nothing of the username's.</summary>
@@ -153,6 +170,31 @@ public sealed class AccountLimits : IDisposable
     public TimeSpan? Join(HttpContext context) => Take(_joinByAddress, Address(context));
 
     public TimeSpan? Recovery(HttpContext context) => Take(_recoveryByAddress, Address(context));
+
+    /// <summary>Redeeming a pairing code: 10 attempts a minute per address.</summary>
+    public TimeSpan? Redeem(HttpContext context) => Take(_redeemByAddress, Address(context));
+
+    /// <summary>
+    /// Whether the server has seen 100 wrong codes in the last minute. A wrong code can't tell which code it was aimed
+    /// at, so there is no count per code; this bounds a guess spread over many addresses. While it holds every redeem
+    /// is refused, a right code too: the spec's trade-off, an attack delays pairing rather than speeding up guessing.
+    /// </summary>
+    public bool RedeemsBlocked()
+    {
+        using var probe = _redeemFailures.AttemptAcquire(ServerWide, 0);
+        return !probe.IsAcquired;
+    }
+
+    /// <summary>A wrong or expired code, counted towards <see cref="RedeemsBlocked"/>; true for the one that used up the minute's allowance.</summary>
+    public bool RedeemFailed()
+    {
+        using var lease = _redeemFailures.AttemptAcquire(ServerWide);
+        return lease.IsAcquired && RedeemsBlocked();
+    }
+
+    public static readonly TimeSpan RedeemRetryAfter = Window;
+
+    private const string ServerWide = "*";
 
     private static string Address(HttpContext context) => WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
 
@@ -186,5 +228,7 @@ public sealed class AccountLimits : IDisposable
         _passwordCheckByUsername.Dispose();
         _joinByAddress.Dispose();
         _recoveryByAddress.Dispose();
+        _redeemByAddress.Dispose();
+        _redeemFailures.Dispose();
     }
 }

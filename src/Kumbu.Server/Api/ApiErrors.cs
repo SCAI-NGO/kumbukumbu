@@ -49,7 +49,8 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
-        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or PrimaryAdminExistsException or VaultNameTakenException)
+        catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or PrimaryAdminExistsException or VaultNameTakenException
+            or RotationConflictException or RecoveryConflictException or PasswordConflictException)
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
         }
@@ -60,6 +61,17 @@ public static class ApiErrors
         catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
+        }
+        // Only the busy vault of a re-keying: every other VaultUnavailableException keeps its mapping.
+        catch (Kumbu.Server.Vaults.VaultBusyException e)
+        {
+            SetRetryAfter(context.HttpContext, BusyRetryAfter);
+            return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
+        }
+        // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
+        catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
+        {
+            return Result(StatusCodes.Status400BadRequest, e.Message);
         }
         // Exactly ArgumentException: the services throw it for input they refuse, with a sentence meant for the
         // user. Its subclasses (ArgumentNullException, ...) come from bugs and say nothing a user could act on.
@@ -75,6 +87,9 @@ public static class ApiErrors
         foreach (var status in statuses) builder.Produces<ApiError>(status);
         return builder;
     }
+
+    /// <summary>How long a client waits before asking a vault being re-encrypted again.</summary>
+    internal static readonly TimeSpan BusyRetryAfter = TimeSpan.FromSeconds(5);
 
     public static IResult Result(int status, string message) => TypedResults.Json(new ApiError(message), statusCode: status);
 

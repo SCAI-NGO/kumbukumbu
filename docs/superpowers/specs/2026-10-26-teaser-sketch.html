@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kumbu² teaser — style sketch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Nunito:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #fbf8f2; --ink: #4a4553; --graphite: #6d6676; --soft: #8a8394;
+    --a: #cfe3c9; --a-deep: #9cc293;   /* sage */
+    --b: #f8d5c2; --b-deep: #eaa98a;   /* peach */
+    --c: #dcd3f0; --c-deep: #b2a3dc;   /* lavender */
+    --stem: #8fae86;
+  }
+  body[data-palette="spring"] {
+    --paper: #fdfbf6;
+    --a: #f6e7a8; --a-deep: #e3c75e;   /* butter */
+    --b: #f4c7cf; --b-deep: #e293a2;   /* rose */
+    --c: #c9e0f2; --c-deep: #8dbbe0;   /* sky */
+    --stem: #9db48a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 400 19.5px/1.65 Nunito, system-ui, sans-serif;
+    background-image: radial-gradient(rgba(0,0,0,.025) 1px, transparent 1px);
+    background-size: 4px 4px;
+    transition: background-color .6s;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+  .switch { position: fixed; top: 12px; right: 12px; font: 600 13px Nunito; color: var(--soft); }
+  .switch button {
+    font: inherit; border: 1.5px solid var(--graphite); background: transparent; color: var(--ink);
+    padding: 3px 10px; margin-left: 4px; cursor: pointer;
+    border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  }
+  .switch button.on { background: var(--c); }
+
+  header { text-align: center; margin-top: 28px; }
+  h1 {
+    font: 600 clamp(48px, 9vw, 84px)/1 Fraunces, serif; margin: 0; letter-spacing: -.02em;
+    opacity: 0; animation: rise 1s .1s ease-out forwards;
+  }
+  h1 sup { font-size: .45em; color: var(--c-deep); }
+  .tag {
+    font-size: clamp(20px, 3vw, 26px); color: var(--graphite); max-width: 620px; margin: 14px auto 0;
+    opacity: 0; animation: rise 1s .5s ease-out forwards;
+  }
+  .scribble { font: 700 28px Caveat, cursive; color: var(--soft); margin-top: 10px;
+    opacity: 0; animation: rise 1s 3.6s ease-out forwards; }
+
+  svg.garden { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+  .pencil { filter: url(#pencil); }
+  .ground { fill: none; stroke: var(--graphite); stroke-width: 1.6; stroke-linecap: round;
+    stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s .6s ease-out forwards; }
+  .stem { fill: none; stroke: var(--stem); stroke-width: 3; stroke-linecap: round;
+    stroke-dasharray: 400; stroke-dashoffset: 400; animation: draw 1.6s ease-in-out forwards; }
+  .leaf { stroke: var(--graphite); stroke-width: 1.2; fill: var(--a);
+    transform-box: fill-box; transform: scale(0); animation: pop .7s ease-out forwards; }
+  .flower { cursor: pointer; }
+  .flower .bloom { transform-box: fill-box; transform-origin: center; transform: scale(0);
+    animation: pop .9s cubic-bezier(.3,1.6,.5,1) forwards; }
+  .petal { stroke: var(--graphite); stroke-width: 1.2; transition: transform .6s cubic-bezier(.3,1.5,.5,1); transform-box: view-box; }
+  .flower:hover .petal, .flower.open .petal { transform: scale(1.12); }
+  .flower .heart { stroke: var(--graphite); stroke-width: 1.2; }
+  .flower text { font: 700 30px Caveat, cursive; fill: var(--ink); text-anchor: middle; }
+  .flower .sway { animation: sway 6s ease-in-out infinite; transform-box: fill-box; transform-origin: bottom center; }
+  .f1 .petal { fill: var(--b); } .f1 .heart { fill: var(--b-deep); }
+  .f2 .petal { fill: var(--c); } .f2 .heart { fill: var(--c-deep); }
+  .f3 .petal { fill: var(--a); } .f3 .heart { fill: var(--a-deep); }
+  .f4 .petal { fill: #f6e3b4; } .f4 .heart { fill: #e2c27a; }
+
+  .panel { min-height: 120px; }
+  .card {
+    background: rgba(255,255,255,.65); border: 1.6px solid var(--graphite);
+    border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+    padding: 26px 30px; margin: 8px auto 0; max-width: 820px;
+    animation: unfold .6s ease-out;
+  }
+  .card h2 { font: 600 33px/1.2 Fraunces, serif; margin: 0 0 4px; }
+  .card .hand { font: 700 27px Caveat, cursive; color: var(--soft); margin: 0 0 14px; }
+  .moments { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .moment {
+    padding: 14px 16px; border: 1.3px dashed var(--graphite);
+    border-radius: 18px 225px 18px 255px / 255px 18px 225px 18px; background: var(--paper);
+    opacity: 0; animation: settle .5s ease-out forwards;
+  }
+  .moment:nth-child(2) { animation-delay: .12s } .moment:nth-child(3) { animation-delay: .24s }
+  .moment:nth-child(4) { animation-delay: .36s } .moment:nth-child(5) { animation-delay: .48s }
+  .moment { cursor: pointer; transition: transform .35s cubic-bezier(.3,1.4,.5,1), box-shadow .35s, background-color .35s; }
+  .moment:hover { transform: translateY(-3px) rotate(-.4deg); box-shadow: 0 6px 0 -2px var(--c); }
+  .moment .more { display: none; }
+  .veil { position: fixed; inset: 0; background: rgba(251,248,242,.55); backdrop-filter: blur(3px);
+    opacity: 0; transition: opacity .35s; z-index: 10; }
+  .veil.on { opacity: 1; }
+  .moment.pop { position: fixed; z-index: 11; margin: 0; opacity: 1; animation: none; translate: none;
+    background: #fff; cursor: default; padding: 26px 30px; font-size: 1.05em;
+    box-shadow: 0 14px 0 -6px var(--b), 0 18px 40px -18px rgba(74,69,83,.35);
+    max-height: 82vh; overflow: auto; transform-origin: top left; }
+  .moment.pop:hover { transform: none; }
+  .moment.pop b { font: 600 26px/1.25 Fraunces, serif; margin-bottom: 8px; }
+  .moment.pop .more { display: block; }
+  .moment.pop .close { position: absolute; top: 10px; right: 16px; font: 700 26px Caveat, cursive;
+    color: var(--soft); background: none; border: 0; cursor: pointer; }
+  .moment .more p { margin: 10px 0 0; }
+  .moment a { color: var(--ink); background: linear-gradient(transparent 62%, var(--a) 62%); text-decoration: none; }
+  .moment b { display: block; font-weight: 600; margin-bottom: 4px; }
+  .moment span { color: var(--graphite); font-size: 18px; }
+  .moment.ask { background: var(--c); border-style: solid; }
+  code { font-size: 16px; background: var(--a); padding: 1px 6px; border-radius: 6px; }
+  .hint { text-align: center; font: 700 27px Caveat, cursive; color: var(--soft); }
+
+  .links { text-align: center; margin-top: 56px; font: 700 28px Caveat, cursive;
+    opacity: 0; animation: rise 1s 3.8s ease-out forwards; }
+  .links a { color: var(--ink); text-decoration: none; padding: 2px 6px;
+    background: linear-gradient(transparent 62%, var(--b) 62%, var(--b) 90%, transparent 90%); }
+  .links a:hover { background: linear-gradient(transparent 50%, var(--c) 50%); }
+  .links .dot { color: var(--c-deep); margin: 0 14px; }
+  @keyframes settle { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes pop { to { transform: scale(1); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes unfold { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+  @keyframes sway { 0%,100% { transform: rotate(-1.2deg); } 50% { transform: rotate(1.2deg); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01s !important; animation-delay: 0s !important; } }
+</style>
+</head>
+<body data-palette="meadow">
+
+<div class="wrap">
+  <header>
+    <h1>Kumbu<sup>2</sup></h1>
+    <p class="tag">One calm place for your notes — on every device, and for every AI you think with.</p>
+    <p class="scribble">pick a flower ↓</p>
+  </header>
+
+  <svg class="garden" viewBox="0 0 900 380" aria-label="Four flowers to choose from">
+    <defs>
+      <filter id="pencil" x="-5%" y="-5%" width="110%" height="110%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="2" seed="4" result="n"/>
+        <feDisplacementMap in="SourceGraphic" in2="n" scale="2.6"/>
+      </filter>
+      <g id="petals">
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24"/>
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(60)"/>
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(120)"/>
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(180)"/>
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(240)"/>
+        <ellipse class="petal" cx="0" cy="-26" rx="15" ry="24" transform="rotate(300)"/>
+      </g>
+    </defs>
+
+    <g class="pencil">
+      <path class="ground" d="M30 352 C 180 346, 300 358, 450 351 S 720 345, 870 353"/>
+
+      <path class="stem" style="animation-delay:1.0s" d="M140 350 C 130 290, 160 230, 145 165"/>
+      <path class="stem" style="animation-delay:1.25s" d="M350 350 C 362 270, 336 200, 350 105"/>
+      <path class="stem" style="animation-delay:1.5s" d="M560 350 C 548 280, 574 210, 558 130"/>
+      <path class="stem" style="animation-delay:1.75s" d="M765 350 C 775 290, 742 235, 757 175"/>
+
+      <path class="leaf" style="transform-origin:left bottom;animation-delay:2.0s" d="M140 275 C 167 257, 189 261, 197 269 C 177 285, 155 287, 140 275 Z"/>
+      <path class="leaf" style="transform-origin:right bottom;animation-delay:2.2s" d="M347 240 C 320 222, 298 226, 290 234 C 310 250, 332 252, 347 240 Z"/>
+      <path class="leaf" style="transform-origin:left bottom;animation-delay:2.4s" d="M563 255 C 590 237, 612 241, 620 249 C 600 265, 578 267, 563 255 Z"/>
+      <path class="leaf" style="transform-origin:right bottom;animation-delay:2.6s" d="M765 280 C 738 262, 716 266, 708 274 C 728 290, 750 292, 765 280 Z"/>
+    </g>
+
+    <g class="flower f1" data-panel="hurts" onclick="show(this)" tabindex="0" role="button">
+      <g class="sway"><g class="bloom pencil" style="animation-delay:2.4s">
+        <g transform="translate(145 143)"><use href="#petals"/><circle class="heart" r="12"/></g>
+      </g></g>
+      <text x="145" y="79" class="pencil">where it hurts</text>
+    </g>
+    <g class="flower f2" data-panel="helps" onclick="show(this)" tabindex="0" role="button">
+      <g class="sway"><g class="bloom pencil" style="animation-delay:2.65s">
+        <g transform="translate(350 83)"><use href="#petals"/><circle class="heart" r="12"/></g>
+      </g></g>
+      <text x="350" y="19" class="pencil">how Kumbu² helps</text>
+    </g>
+    <g class="flower f4" data-panel="works" onclick="show(this)" tabindex="0" role="button">
+      <g class="sway"><g class="bloom pencil" style="animation-delay:2.9s">
+        <g transform="translate(558 108)"><use href="#petals"/><circle class="heart" r="12"/></g>
+      </g></g>
+      <text x="558" y="44" class="pencil">how it works</text>
+    </g>
+    <g class="flower f3" data-panel="run" onclick="show(this)" tabindex="0" role="button">
+      <g class="sway"><g class="bloom pencil" style="animation-delay:3.15s">
+        <g transform="translate(757 153)"><use href="#petals"/><circle class="heart" r="12"/></g>
+      </g></g>
+      <text x="757" y="89" class="pencil">run your own</text>
+    </g>
+  </svg>
+
+  <div class="panel" id="panel"><p class="hint">(sample text — wording comes later)</p></div>
+
+  <footer class="links">
+    <a href="https://github.com/SCAI-NGO/kumbukumbu" target="_blank" rel="noopener">the code on GitHub</a>
+    <span class="dot">✿</span>
+    <a href="https://scai.world" target="_blank" rel="noopener">made by SCAI</a>
+  </footer>
+</div>
+
+<template id="hurts">
+  <div class="card">
+    <h2>Sound familiar?</h2>
+    <p class="hand">little moments that add up</p>
+    <div class="moments">
+      <div class="moment"><b>Your notes are out of reach.</b><span>On the train, on your phone — the worldbuilding project sits on a server you can't comfortably read from.</span></div>
+      <div class="moment"><b>Copy, paste, explain. Again.</b><span>Every chat starts with pasting in the same notes so the AI knows what you mean.</span></div>
+      <div class="moment"><b>The AI writes — you tidy up.</b><span>It hands you text blocks instead of just updating the note, the way a coding agent edits code.</span></div>
+      <div class="moment"><b>Every tool remembers a little.</b><span>One app knows this, another knows that, and none of them share.</span></div>
+      <div class="moment ask"><b>“But doesn't my AI already remember things?”</b><span>It does — for itself. A Kumbu² vault is yours, and every app and every AI you invite sees the same one.</span></div>
+    </div>
+  </div>
+</template>
+<template id="helps">
+  <div class="card">
+    <h2>One garden for your thoughts</h2>
+    <p class="hand">your notes, wherever you think</p>
+    <div class="moments">
+      <div class="moment"><b>Open it anywhere.</b><span>A friendly web app on laptop and phone. Install it like an app if you like.</span></div>
+      <div class="moment"><b>Your AI works right inside.</b><span>Add Kumbu² to Claude (or another assistant) once. It reads, searches and edits your notes — and you see what it changed.</span></div>
+      <div class="moment"><b>Keep using Obsidian.</b><span>Pair it with a short code; your notes stay in sync both ways.</span></div>
+      <div class="moment"><b>Safe by default.</b><span>Notes are stored encrypted, every change can be undone, and you decide which vault each app may see.</span></div>
+    </div>
+  </div>
+</template>
+<template id="works">
+  <div class="card">
+    <h2>How it works</h2>
+    <p class="hand">a little folder tree in the cloud — that Obsidian would recognise</p>
+    <div class="moments">
+      <div class="moment"><b>Each vault is a folder of notes.</b><span>Laid out the way Obsidian lays out a vault.</span>
+        <div class="more"><div><p>Plain Markdown files in folders, with links between notes and headings inside them. Nothing proprietary: export a vault as a ZIP and Obsidian opens it as it is.</p><p>One vault for work, one for the novel, one for the garden — each with its own keys.</p></div></div></div>
+      <div class="moment"><b>Obsidian plugin.</b><span>Sync with Obsidian, both ways.</span>
+        <div class="more"><div><p>Pair a vault with a short code shown in the web app — no copying of addresses or keys. Laptop and phone stay in step within seconds.</p><p>If both sides changed the same note, nothing is lost: you choose, or keep both.</p></div></div></div>
+      <div class="moment"><b>An editor for on the go.</b><span>No Obsidian at hand? Open the web app.</span>
+        <div class="more"><div><p>Read and write on any phone or laptop, install it like an app, and see exactly what your AI changed since you last looked.</p></div></div></div>
+      <div class="moment"><b>Any AI that speaks MCP.</b><span>Not just one assistant — all of them.</span>
+        <div class="more"><div><p>Claude, Claude Code, <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener">Hermes Agent</a>, <a href="https://teaser.chatsundere.me" target="_blank" rel="noopener">Chatsundere</a> — any app that connects AI to tools through MCP can read, search and edit your vaults.</p><p>So the notes Claude Code wrote this morning are there for the chat on your phone tonight.</p></div></div></div>
+    </div>
+  </div>
+</template>
+<template id="run">
+  <div class="card">
+    <h2>Run your own</h2>
+    <p class="hand">for the folks with a server and a free evening (well — five minutes)</p>
+    <div class="moments">
+      <div class="moment"><b>Free software.</b><span>AGPL-3.0: use it, change it, host it — share your changes if you offer it to others.</span></div>
+      <div class="moment"><b>One compose file.</b><span><code>compose.yaml.example</code>, a <code>.env</code>, <code>docker compose up</code>. The reference install with Komodo took about five minutes.</span></div>
+      <div class="moment"><b>Under the hood.</b><span>.NET, MongoDB, AES-256-GCM at rest, Argon2id, MCP with OAuth. The security architecture is documented in full.</span></div>
+    </div>
+  </div>
+</template>
+
+<script>
+  function show(el) {
+    document.querySelectorAll('.flower').forEach(f => f.classList.toggle('open', f === el));
+    const panel = document.getElementById('panel');
+    panel.replaceChildren(document.getElementById(el.dataset.panel).content.cloneNode(true));
+    panel.querySelectorAll('.moment').forEach(m => m.addEventListener('click', () => popOut(m)));
+  }
+  document.querySelectorAll('.flower').forEach(f => f.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(f); }
+  }));
+  // The card grows from where it sits into a centred sheet over a soft veil (FLIP),
+  // and shrinks back to the same spot when closed.
+  let popped = null;
+  function popOut(m) {
+    if (popped) return;
+    const from = m.getBoundingClientRect();
+    const veil = document.createElement('div'); veil.className = 'veil';
+    const pop = m.cloneNode(true); pop.classList.add('pop');
+    pop.insertAdjacentHTML('afterbegin', '<button class="close" aria-label="Close">close ✕</button>');
+    const w = Math.min(600, innerWidth - 32);
+    pop.style.width = w + 'px'; pop.style.left = (innerWidth - w) / 2 + 'px'; pop.style.top = '0px';
+    document.body.append(veil, pop);
+    const h = pop.offsetHeight;
+    pop.style.top = Math.max(16, (innerHeight - h) / 2) + 'px';
+    const to = pop.getBoundingClientRect();
+    const invert = `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})`;
+    m.style.visibility = 'hidden';
+    requestAnimationFrame(() => veil.classList.add('on'));
+    const opts = { duration: 480, easing: 'cubic-bezier(.3,1.25,.5,1)' };
+    pop.animate([{ transform: invert, opacity: .6 }, { transform: 'none', opacity: 1 }], opts);
+    const close = () => {
+      veil.classList.remove('on');
+      pop.animate([{ transform: 'none', opacity: 1 }, { transform: invert, opacity: .6 }],
+        { duration: 340, easing: 'ease-in', fill: 'forwards' })
+        .finished.then(() => { pop.remove(); veil.remove(); m.style.visibility = ''; popped = null; });
+      removeEventListener('keydown', onKey);
+    };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    veil.addEventListener('click', close);
+    pop.addEventListener('click', e => { if (!e.target.closest('a')) close(); });
+    addEventListener('keydown', onKey);
+    popped = pop;
+  }
+  function pal(name, btn) {
+    document.body.dataset.palette = name;
+    document.querySelectorAll('.switch button').forEach(b => b.classList.toggle('on', b === btn));
+  }
+</script>
+</body>
+</html>

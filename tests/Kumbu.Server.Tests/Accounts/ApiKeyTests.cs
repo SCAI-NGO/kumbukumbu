@@ -41,7 +41,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     private async Task<(User User, byte[] UserKey, Dictionary<string, string> Vaults)> UserWithVaultsAsync(params string[] vaults)
     {
         var users = new UserCatalog(
-            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys, TimeProvider.System, NullLogger<UserCatalog>.Instance);
+            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys, app.Services.GetRequiredService<Connections>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
         await users.CreateAsync(username, Password, Roles.User, Ct);
         var (user, key, _) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
@@ -291,6 +291,50 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Diary"]]);
         Assert.Null(listed.LastUsedAt);
         Assert.Null(listed.RevokedAt);
+    }
+
+    [Fact]
+    public async Task A_device_key_is_listed_as_a_device()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "Work – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+
+        Assert.Equal(ApiKeyKind.Device, created.Kind);
+        Assert.Equal(ApiKeyKind.Device, Assert.Single(await Keys.ListAsync(user, userKey, Ct)).Kind);
+    }
+
+    [Fact]
+    public async Task A_key_made_before_kinds_is_an_agent()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "old", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        // The meta as every key had it before kinds existed: name and vaults only.
+        var oldMeta = Encoding.UTF8.GetBytes($$$"""{"name":"old","vaults":{"{{{vaults["Work"]}}}":"write"}}""");
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id),
+            Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, oldMeta)),
+            cancellationToken: Ct);
+
+        var listed = Assert.Single(await Keys.ListAsync(user, userKey, Ct));
+
+        Assert.Equal("old", listed.Name);
+        Assert.Equal(ApiKeyKind.Agent, listed.Kind);
+    }
+
+    [Fact]
+    public async Task An_agent_keys_meta_has_no_kind()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (_, created) = await Keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct);
+
+        var doc = await KeyDocs.Find(Builders<BsonDocument>.Filter.Eq("_id", created.Id)).SingleAsync(Ct);
+        var plain = Encoding.UTF8.GetString(ApiKeys.OpenMeta(userKey, user.Id, created.Id, doc["meta"].AsByteArray));
+
+        Assert.DoesNotContain("kind", plain, StringComparison.Ordinal);
+        Assert.Equal(ApiKeyKind.Agent, created.Kind);
     }
 
     [Fact]

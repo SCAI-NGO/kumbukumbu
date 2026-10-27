@@ -79,17 +79,27 @@ services:
       # send their own X-Forwarded-For and pick the IP that rate limits count against.
       Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
+      Kumbu__OAuth__AccessTokenMinutes: ${KUMBU_OAUTH_ACCESS_TOKEN_MINUTES:-60}
+      # Optional: the privacy contact the reply to a deletion request is signed with (Admin → Users).
+      Kumbu__Privacy__Contact: ${KUMBU_PRIVACY_CONTACT:-}
+      # The ids of deleted users (no names), outside the database: after a restore, the admins are warned about
+      # users it brought back. Keep this volume out of database restores.
+      Kumbu__Deletions__Path: /deletions
       # The embedding model for semsearch, downloaded here on the first start (about 630 MB for arctic-m, 1.1 GB for arctic-l).
       Kumbu__Search__ModelPath: /models
       Kumbu__Search__Enabled: ${KUMBU_SEARCH:-true}
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
+      # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
+      Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro
       - recovery-keys:/recovery
+      - deletions:/deletions
       - models:/models
 
 volumes:
   mongo-data:
   recovery-keys:
+  deletions:
   models:

@@ -543,29 +543,209 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task An_admin_deletes_a_user_only_once_deactivated()
+    public async Task An_admin_deletes_an_active_user_and_gets_a_receipt()
     {
-        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
-        var username = await NewUserAsync();
-        var id = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value.User.Id;
+        var adminName = await NewUserAsync(Roles.Admin);
+        var admin = await SignInAsync(adminName);
+        var target = await RestClient.NewAsync(Api, "Arbeit");
+        await target.CreateAsync("plan.md", "# Plan\n");
+        var id = target.User.Id;
 
-        using var active = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
-        Assert.Equal(HttpStatusCode.Forbidden, active.StatusCode);
-        using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { active = false }, session: admin);
-        Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
         using var mistyped = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = "someone" }, session: admin);
         Assert.Equal(HttpStatusCode.BadRequest, mistyped.StatusCode);
-        using var wrongPassword = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = NewPassword, confirm = username }, session: admin);
+        using var wrongPassword = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = NewPassword, confirm = target.Username }, session: admin);
         Assert.Equal(HttpStatusCode.BadRequest, wrongPassword.StatusCode);
         Assert.Equal("Your password is wrong.", (await JsonAsync(wrongPassword))["error"]!.GetValue<string>());
 
-        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
+        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = target.Username }, session: admin);
 
-        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
-        using var again = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = username }, session: admin);
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        var json = await JsonAsync(deleted);
+        Assert.Equal(id, json["userId"]!.GetValue<string>());
+        Assert.Equal(target.Username, json["username"]!.GetValue<string>());
+        Assert.Equal(adminName, json["deletedBy"]!.GetValue<string>());
+        Assert.Equal(1, json["vaults"]!.GetValue<int>());
+        Assert.Equal(1, json["notes"]!.GetValue<long>());
+        Assert.Equal(0, json["apiKeys"]!.GetValue<int>());
+        Assert.Equal(0, json["connections"]!.GetValue<int>());
+        Assert.Equal(0, json["invitations"]!.GetValue<int>());
+        Assert.Empty(json["externalProviders"]!.AsArray());
+        Assert.Null(json["privacyContact"]);
+        Assert.False(json["listed"]!.GetValue<bool>());
+        Assert.NotEqual(default, json["deletedAt"]!.GetValue<DateTime>());
+        // The target's own session is gone with them.
+        using var theirs = await target.GetAsync("/api/session");
+        Assert.Equal(HttpStatusCode.Unauthorized, theirs.StatusCode);
+        using var again = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = target.Username }, session: admin);
         Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
         using var list = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
-        Assert.DoesNotContain(username, await list.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        Assert.DoesNotContain(target.Username, await list.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_admin_deleting_themselves_here_is_sent_to_settings()
+    {
+        var adminName = await NewUserAsync(Roles.Admin);
+        var admin = await SignInAsync(adminName);
+        var id = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(adminName, Password, Ct))!.Value.User.Id;
+
+        using var self = await SendAsync(HttpMethod.Post, $"/api/admin/users/{id}/delete", new { password = Password, confirm = adminName }, session: admin);
+
+        Assert.Equal(HttpStatusCode.Forbidden, self.StatusCode);
+        Assert.Equal("Delete your own account in Settings.", (await JsonAsync(self))["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task The_receipt_names_no_vault_or_note()
+    {
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        using var http = Client(logged);
+        var target = await RestClient.NewAsync(logged, "Geheimprojekt");
+        await target.CreateAsync("Plan X.md", "# Plan X\n\nGeheim.\n");
+        var adminName = NewUsername();
+        await logged.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+        using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = adminName, password = Password }, ip: NewIp(), http: http);
+        var admin = SessionOf(signIn);
+
+        using var deleted = await SendAsync(
+            HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: admin, http: http);
+
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        var body = await deleted.Content.ReadAsStringAsync(Ct);
+        Assert.Contains(log.Lines, l => l.Contains($"deleted user {target.User.Id}", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains("deleted user", StringComparison.Ordinal) && l.Contains(target.Username, StringComparison.Ordinal));
+        foreach (var secret in new[] { "Geheimprojekt", "Plan X", "Geheim" })
+        {
+            Assert.DoesNotContain(secret, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(log.Lines, l => l.Contains(secret, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task The_receipt_says_listed_when_the_deletion_list_is_configured()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var configured = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Deletions:Path", dir));
+            using var http = Client(configured);
+            var target = await RestClient.NewAsync(configured);
+            var adminName = NewUsername();
+            await configured.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+            using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = adminName, password = Password }, ip: NewIp(), http: http);
+
+            using var deleted = await SendAsync(
+                HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: SessionOf(signIn), http: http);
+
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            Assert.True((await JsonAsync(deleted))["listed"]!.GetValue<bool>());
+            Assert.Contains(target.User.Id, await File.ReadAllTextAsync(Path.Combine(dir, "deleted-users"), Ct), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>A server with a deletion list in a temporary directory, and a signed-in admin of it.</summary>
+    private async Task<(WebApplicationFactory<Program> Api, HttpClient Http, string AdminSession, string Dir)> WithDeletionListAsync()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
+        var api = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Deletions:Path", dir));
+        var http = Client(api);
+        var adminName = NewUsername();
+        await api.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+        using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = adminName, password = Password }, ip: NewIp(), http: http);
+        return (api, http, SessionOf(signIn), dir);
+    }
+
+    [Fact]
+    public async Task A_restored_user_is_reported_and_deleted_again()
+    {
+        var (api, http, admin, dir) = await WithDeletionListAsync();
+        try
+        {
+            var target = await RestClient.NewAsync(api);
+            var users = api.Services.GetRequiredService<IMongoDatabase>().GetCollection<MongoDB.Bson.BsonDocument>("users");
+            var saved = await users.Find(MongoDB.Bson.BsonDocument.Parse($"{{ _id: '{target.User.Id}' }}")).FirstAsync(Ct);
+            using var deleted = await SendAsync(
+                HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: admin, http: http);
+            Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+            using var none = await SendAsync(HttpMethod.Get, "/api/admin/deletions", session: admin, http: http);
+            Assert.Equal(HttpStatusCode.OK, none.StatusCode);
+            var noneJson = await JsonAsync(none);
+            Assert.True(noneJson["configured"]!.GetValue<bool>());
+            Assert.DoesNotContain(noneJson["restored"]!.AsArray(), u => u!["id"]!.GetValue<string>() == target.User.Id);
+
+            // As a restore would: the user's document is back.
+            await users.InsertOneAsync(saved, cancellationToken: Ct);
+            using var listed = await SendAsync(HttpMethod.Get, "/api/admin/deletions", session: admin, http: http);
+            var restored = (await JsonAsync(listed))["restored"]!.AsArray().Single(u => u!["id"]!.GetValue<string>() == target.User.Id)!;
+            Assert.Equal(target.Username, restored["username"]!.GetValue<string>());
+            Assert.Equal(["display", "id", "username"], restored.AsObject().Select(p => p.Key).Order());
+
+            using var again = await SendAsync(HttpMethod.Post, "/api/admin/deletions/repeat", new { password = Password }, session: admin, http: http);
+
+            Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+            var receipt = Assert.Single((await JsonAsync(again)).AsArray(), r => r!["userId"]!.GetValue<string>() == target.User.Id)!;
+            Assert.Equal(target.Username, receipt["username"]!.GetValue<string>());
+            Assert.True(receipt["listed"]!.GetValue<bool>());
+            using var after = await SendAsync(HttpMethod.Get, "/api/admin/deletions", session: admin, http: http);
+            Assert.DoesNotContain((await JsonAsync(after))["restored"]!.AsArray(), u => u!["id"]!.GetValue<string>() == target.User.Id);
+        }
+        finally
+        {
+            http.Dispose();
+            await api.DisposeAsync();
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Repeat_needs_the_admins_password()
+    {
+        var (api, http, admin, dir) = await WithDeletionListAsync();
+        try
+        {
+            using var wrong = await SendAsync(HttpMethod.Post, "/api/admin/deletions/repeat", new { password = NewPassword }, session: admin, http: http);
+
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+            Assert.Equal("Your password is wrong.", (await JsonAsync(wrong))["error"]!.GetValue<string>());
+        }
+        finally
+        {
+            http.Dispose();
+            await api.DisposeAsync();
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Only_an_admin_sees_the_restored_deletions()
+    {
+        var user = await SignInAsync(await NewUserAsync());
+
+        using var list = await SendAsync(HttpMethod.Get, "/api/admin/deletions", session: user);
+
+        Assert.Equal(HttpStatusCode.Forbidden, list.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_receipt_carries_the_privacy_contact_when_configured()
+    {
+        await using var configured = Api.WithWebHostBuilder(b => b.UseSetting("Kumbu:Privacy:Contact", "privacy@example.org"));
+        using var http = Client(configured);
+        var target = await RestClient.NewAsync(configured);
+        var adminName = NewUsername();
+        await configured.Services.GetRequiredService<UserCatalog>().CreateAsync(adminName, Password, Roles.Admin, Ct);
+        using var signIn = await SendAsync(HttpMethod.Post, "/api/session", new { username = adminName, password = Password }, ip: NewIp(), http: http);
+
+        using var deleted = await SendAsync(
+            HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: SessionOf(signIn), http: http);
+
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        Assert.Equal("privacy@example.org", (await JsonAsync(deleted))["privacyContact"]!.GetValue<string>());
     }
 
     [Fact]

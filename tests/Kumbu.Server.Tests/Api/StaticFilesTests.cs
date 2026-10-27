@@ -21,6 +21,7 @@ public sealed class StaticFilesTests : IDisposable
         File.WriteAllText(Path.Combine(_webRoot, "index.html"), Index);
         Directory.CreateDirectory(Path.Combine(_webRoot, "assets"));
         File.WriteAllText(Path.Combine(_webRoot, "assets", "app-abc123.js"), "console.log(1);");
+        File.WriteAllText(Path.Combine(_webRoot, "manifest.webmanifest"), """{"name":"Kumbu²"}""");
         _web = app.WithWebHostBuilder(b => b.UseWebRoot(_webRoot));
     }
 
@@ -45,6 +46,16 @@ public sealed class StaticFilesTests : IDisposable
         Assert.Equal(Index, await response.Content.ReadAsStringAsync(Ct));
         Assert.Contains("no-cache", response.Headers.CacheControl!.ToString());
         Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
+    public async Task The_manifest_is_served_as_a_manifest_and_revalidated()
+    {
+        using var response = await _web.CreateClient().GetAsync("/manifest.webmanifest", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/manifest+json", response.Content.Headers.ContentType!.MediaType);
+        Assert.Contains("no-cache", response.Headers.CacheControl!.ToString());
     }
 
     [Fact]
