@@ -5843,6 +5843,8 @@ export interface components {
             vaults: number | string;
             /** Format: int64 */
             notes: number | string;
+            /** Format: int64 */
+            attachments: number | string;
             /** Format: int32 */
             apiKeys: number | string;
             /** Format: int32 */

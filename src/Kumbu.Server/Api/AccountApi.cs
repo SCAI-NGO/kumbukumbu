@@ -91,12 +91,13 @@ public sealed record RepeatDeletionsRequest(string Password);
 /// content or a vault or note name. <c>externalProviders</c>: the labels of every external embedding provider this
 /// instance has configured (a vault's choice is sealed with it, so which ones it used can't be read); empty if none.
 /// <c>privacyContact</c>: <c>Kumbu:Privacy:Contact</c>, or null. <c>listed</c>: the id was added to the list of deleted
-/// users kept outside the database. <c>invitations</c>: invitations the user joined with whose note and link to the
+/// users kept outside the database. <c>attachments</c>: files (PDFs, images) in the deleted vaults, as <c>notes</c>
+/// counts notes. <c>invitations</c>: invitations the user joined with whose note and link to the
 /// user were erased (the invitation itself stays as a used one). <c>apiKeys</c> and <c>connections</c> count every
 /// record removed, revoked ones included.
 /// </summary>
 public sealed record DeletionReceiptView(
-    string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, int ApiKeys, int Connections, int Invitations,
+    string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, long Attachments, int ApiKeys, int Connections, int Invitations,
     IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
@@ -361,7 +362,7 @@ public static class AccountApi
     }
 
     internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(
-        deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.ApiKeys,
+        deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.Attachments, deleted.Summary.ApiKeys,
         deleted.Summary.Connections, deleted.Summary.Invitations, index.Providers.All.Where(p => p.External).Select(p => p.Label).ToArray(),
         string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed);
 

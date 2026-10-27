@@ -566,6 +566,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(adminName, json["deletedBy"]!.GetValue<string>());
         Assert.Equal(1, json["vaults"]!.GetValue<int>());
         Assert.Equal(1, json["notes"]!.GetValue<long>());
+        Assert.Equal(0, json["attachments"]!.GetValue<long>());
         Assert.Equal(0, json["apiKeys"]!.GetValue<int>());
         Assert.Equal(0, json["connections"]!.GetValue<int>());
         Assert.Equal(0, json["invitations"]!.GetValue<int>());

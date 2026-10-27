@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Immutable;
 using System.Text.Json;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -19,6 +20,7 @@ public sealed class UnlockedVault
     private readonly byte[] _contentKey;
     private readonly byte[] _pathKey;
     private readonly byte[] _textKey;
+    private readonly byte[] _blobKey;
     private long _lastUsed;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
@@ -31,6 +33,7 @@ public sealed class UnlockedVault
         KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
+        _blobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/blob-id", []);
         Horizon = now;
         Touch(now);
     }
@@ -71,6 +74,12 @@ public sealed class UnlockedVault
 
     public ImmutableList<MoveRecord> Moves { get; set; } = [];
 
+    /// <summary>The attachments' records, small; their bytes stay in MongoDB until a request reads them.</summary>
+    public ImmutableDictionary<VaultPath, (ObjectId Id, StoredAttachment Attachment)> Attachments { get; set; } =
+        ImmutableDictionary<VaultPath, (ObjectId, StoredAttachment)>.Empty;
+
+    public ImmutableList<(ObjectId Id, TrashedAttachment Trashed)> AttachmentTrash { get; set; } = [];
+
     /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
 
@@ -95,9 +104,11 @@ public sealed class UnlockedVault
 
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
-    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included).</summary>
+    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included); of attachments only
+    /// their records, never their bytes.</summary>
     public long ApproxBytes =>
-        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length));
+        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length))
+        + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment));
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
@@ -151,6 +162,53 @@ public sealed class UnlockedVault
         var p = Open<MovePayload>($"move:{Id}:{doc.Id}", doc.Blob);
         return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset());
     }
+
+    /// <summary>An attachment's record, bound to its revision as a note is (<see cref="SealNote"/>).</summary>
+    public byte[] SealAttachment(ObjectId docId, StoredAttachment attachment) =>
+        Seal($"attachment:{Id}:{docId}:{attachment.Revision}", AttachmentPayload.From(attachment));
+
+    /// <summary>Opens an attachment's record and checks its path against the document's path id, as for notes.</summary>
+    public StoredAttachment OpenAttachment(SealedDocument doc)
+    {
+        var attachment = Open<AttachmentPayload>($"attachment:{Id}:{doc.Id}:{doc.Revision}", doc.Blob).ToAttachment(doc.Revision);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PathId(attachment.Path), doc.PathId))
+        {
+            throw new InvalidDataException($"Path id of attachment {doc.Id} does not match its sealed path");
+        }
+
+        return attachment;
+    }
+
+    public byte[] SealAttachmentTrash(ObjectId docId, TrashedAttachment trashed) =>
+        Seal($"attachtrash:{Id}:{docId}", new AttachmentTrashPayload(
+            AttachmentPayload.From(trashed.Attachment), trashed.Attachment.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
+
+    public TrashedAttachment OpenAttachmentTrash(SealedDocument doc)
+    {
+        var p = Open<AttachmentTrashPayload>($"attachtrash:{Id}:{doc.Id}", doc.Blob);
+        return new TrashedAttachment(p.Attachment.ToAttachment(p.Revision), p.DeletedBy, DateTime.SpecifyKind(p.DeletedAt, DateTimeKind.Utc), p.Changeset?.ToChangeset());
+    }
+
+    /// <summary>A keyed hash of an attachment's bytes: the id its blob is stored under. Equal bytes give equal ids
+    /// within the vault, so they are stored once; without the vault key the id can't be matched to known content.</summary>
+    public byte[] BlobId(ReadOnlySpan<byte> bytes) => VaultCrypto.Mac(_blobKey, bytes);
+
+    /// <summary>The bytes as they are, sealed under the blob's id: the context binds them to it and to the vault.</summary>
+    public byte[] SealBlob(byte[] blobId, ReadOnlySpan<byte> bytes) => VaultCrypto.Seal(_contentKey, bytes, BlobContext(blobId));
+
+    /// <summary>Opens a blob and checks the bytes against its id, so bytes changed in the database don't open.</summary>
+    public byte[] OpenBlob(BlobDocument doc)
+    {
+        var bytes = VaultCrypto.Open(_contentKey, doc.Blob, BlobContext(doc.BlobId));
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(BlobId(bytes), doc.BlobId))
+        {
+            throw new InvalidDataException($"Blob {doc.Id} does not match its id");
+        }
+
+        return bytes;
+    }
+
+    private string BlobContext(byte[] blobId) => $"blob:{Id}:{Convert.ToBase64String(blobId)}";
 
     /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
     public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
@@ -323,6 +381,11 @@ public sealed class UnlockedVault
         ?? throw new InvalidDataException($"Empty payload in {context}");
 
     private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length));
+
+    /// <summary>A record's strings and a rough allowance per state for the rest.</summary>
+    private static long Size(StoredAttachment a) => 2L * (a.Path.Value.Length + a.LastWriter.Length) + StateBytes * (1 + a.History.Count);
+
+    private const long StateBytes = 256;
 }
 
 internal sealed record ChangesetPayload(string Id, DateTime Started)
@@ -373,6 +436,31 @@ public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector);
 /// <summary>The embeddings of one note at one version, made by one model (its key): vectors of different models
 /// don't compare.</summary>
 public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks);
+
+internal sealed record AttachmentStatePayload(string MediaType, long Size, int? Width, int? Height, string Version, string BlobId)
+{
+    public static AttachmentStatePayload From(AttachmentState s) => new(s.MediaType, s.Size, s.Width, s.Height, s.Version, s.BlobId);
+
+    public AttachmentState ToState() => new(MediaType, Size, Width, Height, Version, BlobId);
+}
+
+internal sealed record AttachmentVersionPayload(AttachmentStatePayload State, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset);
+
+internal sealed record AttachmentPayload(
+    string Path, AttachmentStatePayload Current, string LastWriter, DateTime LastWriteAt, List<AttachmentVersionPayload> History, ChangesetPayload? Changeset)
+{
+    public static AttachmentPayload From(StoredAttachment a) => new(
+        a.Path.Value, AttachmentStatePayload.From(a.Current), a.LastWriter, a.LastWriteAt,
+        [.. a.History.Select(h => new AttachmentVersionPayload(AttachmentStatePayload.From(h.State), h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset)))],
+        ChangesetPayload.From(a.Changeset));
+
+    public StoredAttachment ToAttachment(long revision) => new(
+        Payload.Path(Path), Current.ToState(), revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
+        [.. History.Select(h => new AttachmentVersion(h.State.ToState(), h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset()))],
+        Changeset?.ToChangeset());
+}
+
+internal sealed record AttachmentTrashPayload(AttachmentPayload Attachment, long Revision, string DeletedBy, DateTime DeletedAt, ChangesetPayload? Changeset);
 
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 

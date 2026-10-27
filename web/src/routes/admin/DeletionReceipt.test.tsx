@@ -11,6 +11,7 @@ const receipt: Receipt = {
   deletedAt: "2026-10-27T10:15:00Z",
   vaults: 2,
   notes: 41,
+  attachments: 6,
   apiKeys: 1,
   connections: 1,
   invitations: 1,
@@ -35,6 +36,7 @@ describe("receiptText", () => {
     expect(t).toContain("Deleted by: chris");
     expect(t).toContain("Vaults: 2");
     expect(t).toContain("Notes: 41");
+    expect(t).toContain("Attachments (PDFs, images): 6");
     expect(t).toContain("API keys (incl. revoked): 1");
     expect(t).toContain("App connections (incl. revoked): 1");
     expect(t).toContain("Invitation they joined with: kept as used, its note and link to them erased (1)");

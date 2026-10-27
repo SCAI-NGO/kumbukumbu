@@ -121,4 +121,21 @@ public class InMemoryAttachmentStoreTests
             [P("/work/x.png")],
             await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "dev", Now, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Attachment_writes_and_removals_keep_the_writers_changeset_open()
+    {
+        var store = new InMemoryNoteStore(("/work/a.md", "a"));
+        var changeset = Changeset.New(Now);
+        var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]) with { LastWriter = "lea (upload)", Changeset = changeset };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea (upload)", Now, CancellationToken.None));
+
+        Assert.Equal((changeset, Now), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
+
+        var removal = Changeset.New(Now.AddMinutes(5));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment }, Changeset = removal }, "lea (rm)", Now.AddMinutes(5), CancellationToken.None));
+
+        Assert.Equal((removal, Now.AddMinutes(5)), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
+        Assert.Null(await store.LatestChangesetAsync("other", "lea", CancellationToken.None));
+    }
 }

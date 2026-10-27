@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using MongoDB.Bson;
@@ -7,12 +8,13 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Vaults;
 
 /// <summary>
-/// <see cref="INoteStore"/> over encrypted vaults, for one credential (one request). Reads come from the
-/// unlocked working set; every write is one MongoDB transaction over sealed documents (compare-and-swap on
-/// the revision), and changes the working set only after MongoDB committed it.
+/// <see cref="INoteStore"/> and <see cref="IAttachmentStore"/> over encrypted vaults, for one credential (one request).
+/// Reads come from the unlocked working set, but for attachments' bytes, which are read from MongoDB on demand; every
+/// write is one MongoDB transaction over sealed documents (compare-and-swap on the revision), and changes the working
+/// set only after MongoDB committed it.
 /// </summary>
 public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null)
-    : INoteStore, Kumbu.Core.Search.ISearchIndex
+    : INoteStore, IAttachmentStore, Kumbu.Core.Search.ISearchIndex
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
 
@@ -57,7 +59,9 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
         await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
-            ? Changeset.Latest(v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, writer)
+            ? Changeset.Latest(
+                v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, writer,
+                v.Attachments.Values.Select(a => a.Attachment), v.AttachmentTrash.Select(t => t.Trashed))
             : null;
 
     /// <summary>A path marked damaged is read from MongoDB again first, so a repair or removal in the database
@@ -99,14 +103,14 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, current.LastWriter, current.LastWriteAt, ct)).Count == 0;
 
     /// <summary>
-    /// One transaction: replaces (compare-and-swap on the revision), notes to the trash, then the sources of all
-    /// moves are deleted (same check) before created notes and move targets are inserted, so a note may move to
-    /// where another one just left. The unique index refuses a target that exists. Any refusal aborts the
-    /// transaction: nothing is written.
+    /// One transaction: replaces (compare-and-swap on the revision), notes and attachments to the trash, restored
+    /// attachments out of it, then the sources of all moves are deleted (same check) before created notes and
+    /// attachments, restored attachments and move targets are inserted, so a note may move to where another one just
+    /// left. The unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
+    /// The blobs the attachments name are put before (<see cref="PutBlobAsync"/>), outside the transaction.
     /// </summary>
     public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
     {
-        if (batch.HasAttachments) throw new NotSupportedException("Attachments can't be stored yet");
         if (batch.IsEmpty) return [];
         var paths = batch.Paths.ToList();
         if (paths.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));
@@ -127,10 +131,50 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 apply.Add(() => vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next)));
             }
 
+            foreach (var (current, next) in batch.AttachmentReplaces)
+            {
+                if (!vault.Attachments.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                var update = Builders<SealedDocument>.Update
+                    .Set(d => d.Revision, next.Revision)
+                    .Set(d => d.Blob, vault.SealAttachment(entry.Id, next));
+                var result = await catalog.Attachments.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), update, cancellationToken: ct);
+                if (result.MatchedCount == 0) return Refuse(current.Path);
+                apply.Add(() => vault.Attachments = vault.Attachments.SetItem(current.Path, (entry.Id, next)));
+            }
+
             foreach (var current in batch.Trashes)
             {
                 if (await TrashInAsync(session, vault, current, by, at, batch.Changeset, ct) is not { } trashed) return Refuse(current.Path);
                 apply.Add(trashed);
+            }
+
+            foreach (var current in batch.AttachmentTrashes)
+            {
+                if (!vault.Attachments.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                var deleted = await catalog.Attachments.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
+                if (deleted.DeletedCount == 0) return Refuse(current.Path);
+
+                var trashed = new TrashedAttachment(current, by, at, batch.Changeset);
+                var trashId = ObjectId.GenerateNewId();
+                await catalog.AttachmentTrash.InsertOneAsync(
+                    session,
+                    new SealedDocument { Id = trashId, Vault = vault.Id, PathId = vault.PathId(current.Path), DeletedAt = at, Blob = vault.SealAttachmentTrash(trashId, trashed) },
+                    cancellationToken: ct);
+                apply.Add(() =>
+                {
+                    vault.Attachments = vault.Attachments.Remove(current.Path);
+                    vault.AttachmentTrash = vault.AttachmentTrash.Add((trashId, trashed));
+                });
+            }
+
+            foreach (var (trashed, restored) in batch.AttachmentRestores)
+            {
+                var entry = vault.AttachmentTrash.FirstOrDefault(t => t.Trashed.Equals(trashed));
+                if (entry.Trashed is null) return Refuse(restored.Path);
+                var removed = await catalog.AttachmentTrash.DeleteOneAsync(
+                    session, F.Eq(d => d.Id, entry.Id) & F.Eq(d => d.PathId, vault.PathId(trashed.Attachment.Path)), cancellationToken: ct);
+                if (removed.DeletedCount == 0) return Refuse(restored.Path);
+                apply.Add(() => vault.AttachmentTrash = vault.AttachmentTrash.Remove(entry));
             }
 
             foreach (var (current, _) in batch.Moves)
@@ -146,6 +190,13 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 var id = ObjectId.GenerateNewId();
                 if (!await InsertNoteAsync(session, vault, id, created, ct)) return Refuse(created.Path);
                 apply.Add(() => vault.Notes = vault.Notes.SetItem(created.Path, (id, created)));
+            }
+
+            foreach (var created in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored)))
+            {
+                var id = ObjectId.GenerateNewId();
+                if (!await InsertAttachmentAsync(session, vault, id, created, ct)) return Refuse(created.Path);
+                apply.Add(() => vault.Attachments = vault.Attachments.SetItem(created.Path, (id, created)));
             }
 
             foreach (var (current, target) in batch.Moves)
@@ -176,6 +227,91 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             conflict = path;
             return null;
         }
+    }
+
+    public async Task<StoredAttachment?> GetAttachmentAsync(VaultPath path, CancellationToken ct) =>
+        await VaultAsync(path, ct) is { } vault && vault.Attachments.TryGetValue(path, out var a) ? a.Attachment : null;
+
+    public async Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct)
+    {
+        IEnumerable<UnlockedVault> vaults = folder.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(folder, ct) is { } v ? [v] : [];
+        var prefix = folder.IsRoot ? "/" : folder.Value + "/";
+        return [.. vaults.SelectMany(v => v.Attachments.Values.Select(a => a.Attachment)).Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal))];
+    }
+
+    public async Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct)
+    {
+        var scope = path ?? VaultPath.Root;
+        IEnumerable<UnlockedVault> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        return [.. vaults
+            .SelectMany(v => v.AttachmentTrash.Select(t => t.Trashed))
+            .Where(t => InScope(scope, t.Attachment.Path))
+            .OrderByDescending(t => t.DeletedAt)];
+    }
+
+    /// <summary>The blob read from MongoDB and opened, one at a time; <see cref="VaultUnavailableException"/> if it
+    /// doesn't open (changed or damaged outside Kumbu²).</summary>
+    public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
+    {
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v || !TryParseBlobId(blobId, out var id)) return null;
+        var doc = await catalog.Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id)).FirstOrDefaultAsync(ct);
+        if (doc is null) return null;
+        try
+        {
+            return new MemoryStream(v.OpenBlob(doc), writable: false);
+        }
+        catch (Exception e) when (e is System.Security.Cryptography.CryptographicException or InvalidDataException)
+        {
+            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+        }
+    }
+
+    /// <summary>
+    /// Stores the bytes sealed under their keyed hash unless the vault holds them already, in which case only their time
+    /// is set to now: a blob that nothing references yet stays for <see cref="BlobSweep.Grace"/> after its last put, so
+    /// the record that will name it can commit. Under the vault's gate, so neither a sweep, a deletion nor a re-keying run
+    /// meets it half way.
+    /// </summary>
+    public async Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct)
+    {
+        if (bytes.Length > AttachmentFormat.MaxBytes) throw new ArgumentException("An attachment holds at most 15 MB.", nameof(bytes));
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
+        var id = v.BlobId(bytes.Span);
+        var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
+
+        catalog.CheckWritable(v);
+        await v.Gate.WaitAsync(ct);
+        try
+        {
+            catalog.CheckWritable(v);
+            var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
+            if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount == 0)
+            {
+                try
+                {
+                    await catalog.Blobs.InsertOneAsync(
+                        new BlobDocument { Id = ObjectId.GenerateNewId(), Vault = v.Id, BlobId = id, Blob = v.SealBlob(id, bytes.Span), At = catalog.Now },
+                        cancellationToken: ct);
+                }
+                catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+                {
+                    // Another process put the same bytes meanwhile.
+                    await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct);
+                }
+            }
+        }
+        finally
+        {
+            v.Gate.Release();
+        }
+
+        return Convert.ToBase64String(id);
+    }
+
+    private static bool TryParseBlobId(string blobId, out byte[] id)
+    {
+        id = new byte[32];
+        return Convert.TryFromBase64String(blobId, id, out var written) && written == id.Length;
     }
 
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
@@ -489,7 +625,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
-            index?.Enqueue(vault, paths);
+            index?.Enqueue(vault, paths.Where(p => !p.IsAttachment));
             await RecordAsync(vault, paths);
             return true;
         }
@@ -550,6 +686,23 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             await catalog.Notes.InsertOneAsync(
                 session,
                 new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(note.Path), Revision = note.Revision, Blob = vault.SealNote(id, note) },
+                cancellationToken: ct);
+            return true;
+        }
+        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Inserts a sealed attachment record; false if one exists at that path (the unique index refuses it).</summary>
+    private async Task<bool> InsertAttachmentAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredAttachment attachment, CancellationToken ct)
+    {
+        try
+        {
+            await catalog.Attachments.InsertOneAsync(
+                session,
+                new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(attachment.Path), Revision = attachment.Revision, Blob = vault.SealAttachment(id, attachment) },
                 cancellationToken: ct);
             return true;
         }

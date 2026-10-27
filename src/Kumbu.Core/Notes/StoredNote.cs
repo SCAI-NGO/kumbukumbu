@@ -46,14 +46,17 @@ public sealed record Changeset(string Id, DateTime Started)
 
     /// <summary>
     /// For <see cref="INoteStore.LatestChangesetAsync"/>: the newest changeset of <paramref name="writer"/> among a
-    /// vault's current note states, moves and trash records, with its time. Moves and removals count, so removing two
-    /// notes in a row is one changeset even without another write.
+    /// vault's current note and attachment states, moves and trash records, with its time. Moves and removals count, so
+    /// removing two notes in a row is one changeset even without another write; notes and attachments share it.
     /// </summary>
     public static (Changeset Changeset, DateTime LastWrite)? Latest(
-        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer) =>
+        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer,
+        IEnumerable<StoredAttachment>? attachments = null, IEnumerable<TrashedAttachment>? attachmentTrash = null) =>
         notes.Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer).Select(n => (n.Changeset!, n.LastWriteAt))
             .Concat(trash.Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
             .Concat(moves.Where(m => m.Changeset is not null && Writers.Identity(m.MovedBy) == writer).Select(m => (m.Changeset!, m.MovedAt)))
+            .Concat((attachments ?? []).Where(a => a.Changeset is not null && Writers.Identity(a.LastWriter) == writer).Select(a => (a.Changeset!, a.LastWriteAt)))
+            .Concat((attachmentTrash ?? []).Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
             .OrderByDescending(x => x.Item2)
             .Select(x => ((Changeset, DateTime)?)x)
             .FirstOrDefault();
