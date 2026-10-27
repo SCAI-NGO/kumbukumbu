@@ -183,7 +183,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     [InlineData("a\\plan.md")]
     public void Dot_segments_are_refused_rather_than_resolved(string path)
     {
-        // HttpClient and Kestrel resolve "/a/../" in a URL before routing; this is the check behind them.
+        // HttpClient and Kestrel resolve "/a/../" in a URL before routing (see DotSegmentTests); this is the check on route values.
         var e = Assert.Throws<ApiException>(() => ApiPaths.Parse("Arbeit", path, note: true));
         Assert.Equal(400, e.Status);
     }

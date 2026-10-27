@@ -47,7 +47,10 @@ export default function Checkpoint() {
 
       {tree.isError && <p className="p-4 text-text">{errorText(tree.error)}</p>}
       {tree.isPending && <p className="p-4 text-sm text-muted">Loading …</p>}
-      {tree.data && !tree.isError && path === null && (
+      {tree.data && !tree.isError && path === null && !holdsNotes(tree.data.root) && (
+        <p className="p-4 text-text">This checkpoint holds no notes.</p>
+      )}
+      {tree.data && !tree.isError && path === null && holdsNotes(tree.data.root) && (
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {rows(tree.data.root, Object.fromEntries(allFolders(tree.data.root).map((p) => [p, !closed[p]]))).map((row) => (
             <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
@@ -86,5 +89,7 @@ export default function Checkpoint() {
     </div>
   );
 }
+
+const holdsNotes = (f: TreeFolder): boolean => f.notes.length > 0 || f.folders.some(holdsNotes);
 
 const allFolders = (f: TreeFolder): string[] => f.folders.flatMap((sub) => [sub.path, ...allFolders(sub)]);

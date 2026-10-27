@@ -10,6 +10,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
@@ -605,12 +606,49 @@ internal static class ApiPaths
         if (!string.IsNullOrEmpty(rest)) segments.AddRange((note ? rest : rest.TrimEnd('/')).Split('/'));
         if (segments.Any(s => s is "" or "." or ".." || s.Contains('\\')))
         {
-            throw ApiErrors.BadRequest("A path may not contain empty, '.' or '..' segments or backslashes.");
+            throw ApiErrors.BadRequest(Refused);
         }
 
         var path = segments.Aggregate(VaultPath.Root, (p, s) => p.Child(s));
         if (note && !path.IsNote) throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md.");
         return path;
+    }
+
+    private const string Refused = "A path may not contain empty, '.' or '..' segments or backslashes.";
+
+    /// <summary>
+    /// Kestrel resolves '.' and '..' segments, also sent as <c>%2E</c>, before routing: <c>/api/notes/V/a/../b.md</c>
+    /// arrives as <c>/api/notes/V/b.md</c>, so <see cref="Parse"/> never sees them over HTTP. This middleware looks at
+    /// the target as the client sent it and refuses an <c>/api</c> URL with such a segment, as Parse would.
+    /// </summary>
+    public static async Task RefuseDotSegmentsAsync(HttpContext context, RequestDelegate next)
+    {
+        if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+            && HasDotSegment(context.Features.Get<IHttpRequestFeature>()?.RawTarget))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new ApiError(Refused));
+            return;
+        }
+
+        await next(context);
+    }
+
+    /// <summary>Whether the path of a request target (origin or absolute form, the query left out) has a '.' or '..'
+    /// segment, percent-encoded or not. An encoded slash separates no segments, for Kestrel neither.</summary>
+    internal static bool HasDotSegment(string? target)
+    {
+        if (string.IsNullOrEmpty(target)) return false;
+        var path = target.Split('?', '#')[0];
+        if (!path.StartsWith('/'))
+        {
+            var scheme = path.IndexOf("://", StringComparison.Ordinal);
+            var slash = scheme < 0 ? -1 : path.IndexOf('/', scheme + 3);
+            if (slash < 0) return false;
+            path = path[slash..];
+        }
+
+        return path.Split('/').Any(s => Uri.UnescapeDataString(s) is "." or "..");
     }
 
     public static string Url(string kind, VaultPath path) => $"/api/{kind}/{string.Join('/', path.Segments.Select(Uri.EscapeDataString))}";
