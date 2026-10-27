@@ -365,7 +365,7 @@ git tag v0.2.0 && git push origin v0.2.0
 
 A new GHCR package is private. For a server to pull it without credentials, make it public once (GitHub, the organisation's Packages, `kumbukumbu`, Package settings, Change visibility).
 
-Images are signed with cosign (keyless, through GitHub's OIDC identity). To verify one, with the tag or digest you pull:
+Images are signed with cosign (keyless, through GitHub's OIDC identity). To verify one, with the tag or digest you pull (cosign 3 or newer: from 0.2.5 on, images are signed in Sigstore's bundle format, which cosign 2 doesn't find; cosign 3 verifies earlier images too):
 
 ```sh
 cosign verify ghcr.io/scai-ngo/kumbukumbu:latest \
