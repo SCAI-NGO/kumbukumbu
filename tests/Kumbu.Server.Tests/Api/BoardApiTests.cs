@@ -166,8 +166,13 @@ public sealed class BoardApiTests(KumbuAppFactory app)
         using var read = await user.GetAsync(Board(user), bearer: reader);
         using var move = await user.SendAsync(HttpMethod.Post, Board(user, "/move"), new { card = "Task", column = "Doing" }, bearer: reader);
 
+        using var add = await user.SendAsync(HttpMethod.Post, Board(user, "/cards"), new { title = "Fresh", column = "Ideas" }, bearer: reader);
+        using var update = await user.SendAsync(HttpMethod.Post, Board(user, "/update"), new { card = "Task", clearDue = true }, bearer: reader);
+        using var rename = await user.SendAsync(HttpMethod.Post, Board(user, "/rename-column"), new { from = "Doing", to = "Active" }, bearer: reader);
+        using var create = await user.SendAsync(HttpMethod.Post, Board(user), bearer: reader);
+
         Assert.Equal(HttpStatusCode.OK, read.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, move.StatusCode);
+        Assert.All([move, add, update, rename, create], r => Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode));
         Assert.Equal(["Task"], Titles(await RestClient.JsonAsync(await user.GetAsync(Board(user))), "Ideas"));
     }
 
