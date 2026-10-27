@@ -26,6 +26,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         const string tool = "replace";
         if (SectionAddress.Split(pathText).Fragment is not null) return ShellResult.Error("replace: works on whole notes; to change one section, use edit");
         if (!VaultPath.TryParse(pathText, out var path)) return ShellResult.Error($"replace: {pathText}: paths must be absolute, e.g. /Work/projects");
+        if (NoteWriter.NotText(tool, path) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         if (path.IsRoot) return ShellResult.Error("replace: works within one vault; give a vault, a folder or a note, e.g. /Work");
         oldText = oldText.Replace("\r\n", "\n", StringComparison.Ordinal);

@@ -16,7 +16,13 @@ public static class NoteNames
     {
         if (path.Segments.Count < 2) return "notes live inside a vault, e.g. /Work/plan.md";
         if (!path.IsNote) return "note names end in .md";
+        return NameProblem(path);
+    }
 
+    /// <summary>Why nothing, note or attachment, can be created at the path because of a name in it; null if
+    /// the names are fine.</summary>
+    public static string? NameProblem(VaultPath path)
+    {
         foreach (var segment in path.Segments)
         {
             if (segment.StartsWith('.')) return $"'{segment}' starts with '.', which hides it in Obsidian";

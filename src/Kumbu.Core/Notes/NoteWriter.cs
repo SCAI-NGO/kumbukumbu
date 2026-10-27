@@ -29,15 +29,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     public static StoredNote Next(
         StoredNote current, string content, string writer, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
     {
-        // A note without history is still in the state it was created with: every later write leaves an entry.
-        var created = current.History.Count == 0;
-        var coalesce = !keepCurrent && !created && changeset is not null && current.Changeset?.Id == changeset.Id;
-        // A state already on top of the history (after a restore, say) is not kept twice.
-        var duplicate = current.History.Count > 0 && current.History[0].Content == current.Content;
-        IReadOnlyList<HistoryEntry> history = coalesce || duplicate
-            ? current.History
-            : [.. new[] { new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset) }
-                .Concat(current.History).Take(HistoryLimit)];
+        var history = HistoryAfterWrite(
+            current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset),
+            current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
         return current with
         {
             Content = content,
@@ -47,6 +41,22 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             History = history,
             Changeset = changeset,
         };
+    }
+
+    /// <summary>
+    /// The rule of <see cref="Next"/> for any kind of history (notes', attachments'): the history after a write in
+    /// <paramref name="changeset"/> replaces the state <paramref name="replaced"/>, whose changeset is
+    /// <paramref name="replacedChangeset"/>. <paramref name="sameState"/> tells whether two entries hold the same state.
+    /// </summary>
+    public static IReadOnlyList<T> HistoryAfterWrite<T>(
+        IReadOnlyList<T> history, T replaced, Changeset? replacedChangeset, Changeset? changeset, bool keepCurrent, Func<T, T, bool> sameState)
+    {
+        // Without history, the current state is the one it was created with: every later write leaves an entry.
+        var created = history.Count == 0;
+        var coalesce = !keepCurrent && !created && changeset is not null && replacedChangeset?.Id == changeset.Id;
+        // A state already on top of the history (after a restore, say) is not kept twice.
+        var duplicate = history.Count > 0 && sameState(history[0], replaced);
+        return coalesce || duplicate ? history : [.. new[] { replaced }.Concat(history).Take(HistoryLimit)];
     }
 
     /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
@@ -64,6 +74,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         if (!TryParse(tool, pathText, out var path, out var error)) return error;
+        if (NotText(tool, path) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         content = Normalize(content);
         if (TooLarge(tool, content) is { } sizeError) return sizeError;
@@ -112,6 +123,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
         var (notePath, fragment) = SectionAddress.Split(pathText);
         if (!TryParse(tool, notePath, out var path, out var error)) return error;
+        if (NotText(tool, path) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         if (replaceSection && fragment is null)
         {
@@ -412,6 +424,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         error = ShellResult.Error($"{tool}: {text}: paths must be absolute, e.g. /Work/plan.md (there is no working directory)");
         return false;
     }
+
+    /// <summary>The refusal of a text tool for an attachment's path: its bytes aren't text to write or edit.</summary>
+    public static ShellResult? NotText(string tool, VaultPath path) =>
+        path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
 
     private static ShellResult? TooLarge(string tool, string content)
     {
