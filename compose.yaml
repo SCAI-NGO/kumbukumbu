@@ -89,6 +89,8 @@ services:
       Kumbu__Search__ModelPath: /models
       Kumbu__Search__Enabled: ${KUMBU_SEARCH:-true}
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
+      # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
+      Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro

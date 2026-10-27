@@ -36,9 +36,9 @@ const workTree = {
 
 const homeTree = { damaged: 0, root: { name: "Home", path: "/Home", folders: [], notes: [note("/Home/garden.md")] } };
 
-const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null };
+const internalProvider = { name: "internal", label: "On this server", description: null, external: false, available: true, reason: null, default: true };
 // The admin wrote the description as a sentence: the dialog doesn't add a second full stop.
-const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention.", external: true, available: true, reason: null };
+const tensorx = { name: "tensorx", label: "TensorX", description: "EU, zero data retention.", external: true, available: true, reason: null, default: false };
 
 function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
   return fakeApi({
@@ -253,6 +253,22 @@ describe("the shell", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Search by meaning in Work" })).not.toBeInTheDocument();
     expect(drawer()).toBeInTheDocument();
+  });
+
+  it("marks the provider that is the server's default", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "tensorx" }]),
+      "GET /api/embeddings": () => json(200, [{ ...internalProvider, default: false }, { ...tensorx, default: true }]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /TensorX/ })).toBeChecked());
+    expect(within(dialog).getByRole("radio", { name: /default on this server/ })).toHaveAttribute("value", "tensorx");
+    expect(dialog).toHaveTextContent("TensorX (now, default on this server)");
   });
 
   it("shows why a choice failed and keeps the dialog open", async () => {

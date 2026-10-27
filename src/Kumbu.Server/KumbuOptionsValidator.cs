@@ -81,6 +81,13 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
 
         foreach (var (providerName, provider) in options.Embeddings.Providers) failures.AddRange(ProviderFailures(providerName, provider));
 
+        var embeddings = options.Embeddings;
+        if (embeddings.Default != EmbeddingProviders.Internal && !embeddings.Providers.ContainsKey(embeddings.Default))
+        {
+            var names = embeddings.Providers.Count == 0 ? "there are none" : string.Join(", ", embeddings.Providers.Keys.Order(StringComparer.Ordinal));
+            failures.Add($"Kumbu:Embeddings:Default (KUMBU_EMBEDDINGS_DEFAULT) must be '{EmbeddingProviders.Internal}' or the name of a provider under Kumbu:Embeddings:Providers ({names})");
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
 

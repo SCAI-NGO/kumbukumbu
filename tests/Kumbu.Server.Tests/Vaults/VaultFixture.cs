@@ -27,9 +27,13 @@ public sealed class VaultWorld
     public static VaultPath P(string s) => VaultPath.TryParse(s, out var p) ? p : throw new ArgumentException(s);
 
     /// <summary>A catalog as one server process has it; a second call is a second process.</summary>
-    public VaultCatalog Catalog(int idleMinutes = 15, int memoryMegabytes = 512, TimeProvider? time = null) => new(
+    public VaultCatalog Catalog(int idleMinutes = 15, int memoryMegabytes = 512, TimeProvider? time = null, string embeddingsDefault = "internal") => new(
         Db,
-        Options.Create(new KumbuOptions { Vaults = new VaultOptions { IdleMinutes = idleMinutes, MemoryLimitMegabytes = memoryMegabytes } }),
+        Options.Create(new KumbuOptions
+        {
+            Vaults = new VaultOptions { IdleMinutes = idleMinutes, MemoryLimitMegabytes = memoryMegabytes },
+            Embeddings = new EmbeddingsOptions { Default = embeddingsDefault },
+        }),
         time ?? TimeProvider.System,
         NullLogger<VaultCatalog>.Instance);
 

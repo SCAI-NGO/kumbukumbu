@@ -83,11 +83,16 @@ public sealed class OAuthOptions
     public bool AllowLoopbackClients { get; set; }
 }
 
-/// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one only when
-/// its owner opts in; every vault starts with the internal model (<see cref="SearchOptions.Model"/>).</summary>
+/// <summary>External embedding providers (<c>Kumbu:Embeddings:Providers:&lt;name&gt;:…</c>). A vault uses one when its
+/// owner opts in, or when the admin made it the <see cref="Default"/> and the owner never chose.</summary>
 public sealed class EmbeddingsOptions
 {
     public Dictionary<string, EmbeddingProviderOptions> Providers { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>The provider of every vault whose owner never chose one (<c>KUMBU_EMBEDDINGS_DEFAULT</c>): <c>internal</c>
+    /// (the model on this server, <see cref="SearchOptions.Model"/>) or the name of one of <see cref="Providers"/>.
+    /// Owners can still choose another, the internal model included.</summary>
+    public string Default { get; set; } = Search.EmbeddingProviders.Internal;
 }
 
 /// <summary>One external provider: a protocol (<see cref="Driver"/>), where it is, which model, and how it is described
@@ -133,7 +138,7 @@ public sealed class EmbeddingProviderOptions
 public sealed class SearchOptions
 {
     /// <summary>Search by meaning with the internal model (semsearch); without it, the vaults that use it rank by
-    /// words only. Vaults whose owner opted in to an external provider still search by meaning.</summary>
+    /// words only. Vaults that use an external provider still search by meaning.</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Where the embedding model is kept; downloaded there on the first start.</summary>
