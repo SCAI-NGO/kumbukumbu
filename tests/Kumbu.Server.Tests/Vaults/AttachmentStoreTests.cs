@@ -144,6 +144,63 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task An_attachment_moves_with_a_note_in_one_transaction_and_is_recorded_as_moved()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, []);
+        Assert.True(await store.TryCreateAsync(note, Ct));
+        var shot = await CreateAsync(store, "/Work/Screens/shot.png", Png(100));
+        var changeset = Changeset.New(T0);
+        var batch = new NoteBatch
+        {
+            Moves = { (note, note with { Path = P("/Work/Trip/a.md"), Revision = 2 }) },
+            AttachmentMoves = { (shot, shot with { Path = P("/Work/Trip/shot.png"), Revision = 2 }) },
+            Changeset = changeset,
+        };
+
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0.AddMinutes(1), Ct));
+
+        var later = Store(world.Catalog(time: _time));
+        Assert.Null(await later.GetAttachmentAsync(P("/Work/Screens/shot.png"), Ct));
+        var moved = await later.GetAttachmentAsync(P("/Work/Trip/shot.png"), Ct);
+        Assert.Equal((shot.Current, 2L), (moved!.Current, moved.Revision));
+        Assert.Equal(VersionToken.Of(Png(100)), moved.Version);
+        // Sync and 'mv' hints read the moves: an attachment's move is recorded as a note's is.
+        var record = await later.FindMoveAsync(P("/Work/Screens/shot.png"), Ct);
+        Assert.Equal((P("/Work/Trip/shot.png"), Writers.Dev, T0.AddMinutes(1), changeset.Id), (record!.To, record.MovedBy, record.MovedAt, record.Changeset?.Id));
+        Assert.Equal(
+            [P("/Work/Trip/a.md"), P("/Work/Trip/shot.png")],
+            (await later.ListMovesAsync(P("/Work"), Ct)).Select(m => m.To).OrderBy(p => p.Value));
+    }
+
+    [Fact]
+    public async Task An_attachment_move_onto_an_existing_attachment_changes_nothing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, []);
+        Assert.True(await store.TryCreateAsync(note, Ct));
+        var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
+        await CreateAsync(store, "/Work/taken.png", Png(200));
+
+        var conflicts = await store.TryCommitAsync(
+            new NoteBatch
+            {
+                Moves = { (note, note with { Path = P("/Work/b.md"), Revision = 2 }) },
+                AttachmentMoves = { (shot, shot with { Path = P("/Work/taken.png"), Revision = 2 }) },
+            },
+            Writers.Dev, T0, Ct);
+
+        Assert.NotEmpty(conflicts);
+        var later = Store(world.Catalog(time: _time));
+        Assert.NotNull(await later.GetAsync(P("/Work/a.md"), Ct));
+        Assert.Null(await later.GetAsync(P("/Work/b.md"), Ct));
+        Assert.NotNull(await later.GetAttachmentAsync(P("/Work/shot.png"), Ct));
+        Assert.Equal(VersionToken.Of(Png(200)), (await later.GetAttachmentAsync(P("/Work/taken.png"), Ct))!.Version);
+        Assert.Empty(await later.ListMovesAsync(P("/Work"), Ct));
+        Assert.Null(await store.FindMoveAsync(P("/Work/a.md"), Ct));
+    }
+
+    [Fact]
     public async Task Identical_bytes_at_two_paths_are_one_blob_and_survive_removing_one()
     {
         var (world, catalog, store) = await WorldAsync();

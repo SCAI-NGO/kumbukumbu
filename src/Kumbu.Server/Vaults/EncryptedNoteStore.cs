@@ -107,9 +107,9 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     /// <summary>
     /// One transaction: replaces (compare-and-swap on the revision), notes and attachments to the trash, restored
-    /// attachments out of it, then the sources of all moves are deleted (same check) before created notes and
-    /// attachments, restored attachments and move targets are inserted, so a note may move to where another one just
-    /// left. The unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
+    /// attachments out of it, then the sources of all moves (notes' and attachments') are deleted (same check) before
+    /// created notes and attachments, restored attachments and move targets are inserted, so a note may move to where
+    /// another one just left. Every move, of a note or an attachment, is recorded in the moves. The unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
     /// The blobs the attachments name are put before (<see cref="PutBlobAsync"/>), outside the transaction.
     /// </summary>
     public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
@@ -188,6 +188,14 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 apply.Add(() => vault.Notes = vault.Notes.Remove(current.Path));
             }
 
+            foreach (var (current, _) in batch.AttachmentMoves)
+            {
+                if (!vault.Attachments.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
+                var deleted = await catalog.Attachments.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
+                if (deleted.DeletedCount == 0) return Refuse(current.Path);
+                apply.Add(() => vault.Attachments = vault.Attachments.Remove(current.Path));
+            }
+
             foreach (var created in batch.Creates)
             {
                 var id = ObjectId.GenerateNewId();
@@ -206,16 +214,22 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             {
                 var id = ObjectId.GenerateNewId();
                 if (!await InsertNoteAsync(session, vault, id, target, ct)) return Refuse(target.Path);
-
-                var move = new MoveRecord(current.Path, target.Path, by, at, batch.Changeset);
-                var moveId = ObjectId.GenerateNewId();
-                await catalog.Moves.InsertOneAsync(
-                    session,
-                    new SealedDocument { Id = moveId, Vault = vault.Id, PathId = vault.PathId(current.Path), At = at, Blob = vault.SealMove(moveId, move) },
-                    cancellationToken: ct);
+                var move = await RecordMoveAsync(session, current.Path, target.Path);
                 apply.Add(() =>
                 {
                     vault.Notes = vault.Notes.SetItem(target.Path, (id, target));
+                    vault.Moves = vault.Moves.Add(move);
+                });
+            }
+
+            foreach (var (current, target) in batch.AttachmentMoves)
+            {
+                var id = ObjectId.GenerateNewId();
+                if (!await InsertAttachmentAsync(session, vault, id, target, ct)) return Refuse(target.Path);
+                var move = await RecordMoveAsync(session, current.Path, target.Path);
+                apply.Add(() =>
+                {
+                    vault.Attachments = vault.Attachments.SetItem(target.Path, (id, target));
                     vault.Moves = vault.Moves.Add(move);
                 });
             }
@@ -229,6 +243,17 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         {
             conflict = path;
             return null;
+        }
+
+        async Task<MoveRecord> RecordMoveAsync(IClientSessionHandle session, VaultPath from, VaultPath to)
+        {
+            var move = new MoveRecord(from, to, by, at, batch.Changeset);
+            var moveId = ObjectId.GenerateNewId();
+            await catalog.Moves.InsertOneAsync(
+                session,
+                new SealedDocument { Id = moveId, Vault = vault.Id, PathId = vault.PathId(from), At = at, Blob = vault.SealMove(moveId, move) },
+                cancellationToken: ct);
+            return move;
         }
     }
 

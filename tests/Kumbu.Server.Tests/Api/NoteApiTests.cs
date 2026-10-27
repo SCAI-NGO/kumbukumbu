@@ -275,7 +275,8 @@ public sealed class NoteApiTests(KumbuAppFactory app)
 
         var links = (await JsonAsync(linksResponse)).AsArray();
         Assert.Equal(["[[kumbu]]", "[[missing]]", "[[a]]", "[[#Top]]", "![[pic.png]]"], Strings(links, "raw"));
-        Assert.Equal(["note", "not_found", "ambiguous", "self", "attachment"], Strings(links, "kind"));
+        // The vault keeps PNGs and holds no pic.png, so the embed leads nowhere.
+        Assert.Equal(["note", "not_found", "ambiguous", "self", "not_found"], Strings(links, "kind"));
         Assert.Equal("/Arbeit/projects/kumbu.md", links[0]!["path"]!.GetValue<string>());
         Assert.Equal(1, links[0]!["line"]!.GetValue<int>());
         Assert.Equal(["/Arbeit/dup/a.md", "/Arbeit/other/a.md"], links[2]!["candidates"]!.AsArray().Select(c => c!.GetValue<string>()));

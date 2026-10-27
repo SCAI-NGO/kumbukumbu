@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -400,12 +401,18 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
                 $"{tool}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
         }
 
-        if ((await store.ListNotesUnderAsync(path, ct)).Count > 0) return ShellResult.Error($"{tool}: {path.Value}: Is a directory");
+        if ((await store.ListNotesUnderAsync(path, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, path, ct)).Count > 0)
+        {
+            return ShellResult.Error($"{tool}: {path.Value}: Is a directory");
+        }
 
         for (var dir = vault; dir.Segments.Count < path.Segments.Count - 1;)
         {
             dir = dir.Child(path.Segments[dir.Segments.Count]);
-            if (await store.ReadAsync(dir, ct) is not null) return ShellResult.Error($"{tool}: {dir.Value}: Not a directory");
+            if (await store.ReadAsync(dir, ct) is not null || await StoreAttachments.GetAsync(store, dir, ct) is not null)
+            {
+                return ShellResult.Error($"{tool}: {dir.Value}: Not a directory");
+            }
         }
 
         return null;

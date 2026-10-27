@@ -30,16 +30,14 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         new(".webp", "image/webp", AttachmentKind.Image),
     ];
 
-    public static AttachmentFormat? ForPath(VaultPath path)
-    {
-        if (path.IsRoot)
-        {
-            return null;
-        }
+    public static AttachmentFormat? ForPath(VaultPath path) => path.IsRoot ? null : ForName(path.Name);
 
+    /// <summary>The format a file name's extension names (case-insensitive); null for any other name.</summary>
+    public static AttachmentFormat? ForName(string name)
+    {
         foreach (var format in All)
         {
-            if (path.Name.EndsWith(format.Extension, StringComparison.OrdinalIgnoreCase))
+            if (name.EndsWith(format.Extension, StringComparison.OrdinalIgnoreCase))
             {
                 return format;
             }

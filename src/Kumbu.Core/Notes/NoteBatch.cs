@@ -22,6 +22,10 @@ public sealed class NoteBatch
     /// <summary>An attachment at <c>Current.Revision</c> becomes <c>Next</c> (same path).</summary>
     public List<(StoredAttachment Current, StoredAttachment Next)> AttachmentReplaces { get; } = [];
 
+    /// <summary>An attachment at <c>Current.Revision</c> moves to <c>Target.Path</c>, as <c>Target</c>; recorded in the
+    /// moves as a note's move is.</summary>
+    public List<(StoredAttachment Current, StoredAttachment Target)> AttachmentMoves { get; } = [];
+
     /// <summary>An attachment at <c>Current.Revision</c> goes to the trash.</summary>
     public List<StoredAttachment> AttachmentTrashes { get; } = [];
 
@@ -37,7 +41,7 @@ public sealed class NoteBatch
     public Changeset? Changeset { get; init; }
 
     public bool HasAttachments =>
-        AttachmentReplaces.Count > 0 || AttachmentTrashes.Count > 0 || AttachmentCreates.Count > 0 || AttachmentRestores.Count > 0;
+        AttachmentReplaces.Count > 0 || AttachmentMoves.Count > 0 || AttachmentTrashes.Count > 0 || AttachmentCreates.Count > 0 || AttachmentRestores.Count > 0;
 
     public bool IsEmpty => Replaces.Count == 0 && Moves.Count == 0 && Trashes.Count == 0 && Creates.Count == 0 && !HasAttachments;
 
@@ -48,6 +52,7 @@ public sealed class NoteBatch
             .Concat(Trashes.Select(t => t.Path))
             .Concat(Creates.Select(c => c.Path))
             .Concat(AttachmentReplaces.Select(r => r.Current.Path))
+            .Concat(AttachmentMoves.SelectMany(m => new[] { m.Current.Path, m.Target.Path }))
             .Concat(AttachmentTrashes.Select(t => t.Path))
             .Concat(AttachmentCreates.Select(c => c.Path))
             .Concat(AttachmentRestores.Select(r => r.Restored.Path))

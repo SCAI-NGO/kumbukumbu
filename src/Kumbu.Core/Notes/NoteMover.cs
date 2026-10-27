@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -6,8 +7,8 @@ using Kumbu.Core.Sh;
 namespace Kumbu.Core.Notes;
 
 /// <summary>
-/// <c>mv</c>: moves one note, or a folder of notes, within a vault and rewrites every link whose target the
-/// move would change. Everything (moves, link rewrites, move records) is one batch: all or nothing.
+/// <c>mv</c>: moves one note or attachment, or a folder of them, within a vault and rewrites every link whose target
+/// the move would change. Everything (moves, link rewrites, move records) is one batch: all or nothing.
 /// </summary>
 public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
@@ -15,38 +16,39 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     {
         if (caller.Refuse("mv", source) is { } refused) return refused;
         var existing = await store.GetAsync(source, ct);
-        if (existing is null)
+        if (existing is null && await StoreAttachments.GetAsync(store, source, ct) is null)
         {
             if (await store.IsDamagedAsync(source, ct)) return ShellResult.Error(Damage.Message("mv", source));
-            return (await store.ListNotesUnderAsync(source, ct)).Count > 0 || source.IsRoot
+            return await IsFolderAsync(source, ct) || source.IsRoot
                 ? ShellResult.Error($"mv: {source.Value}: Is a directory (to move the folder, write {source.Value}/)")
                 : ShellResult.Error($"mv: {source.Value}: No such file or directory{await Moves.HintAsync(store, source, ct)}");
         }
 
-        // A directory as target keeps the note's name.
-        if ((await store.ListNotesUnderAsync(target, ct)).Count > 0 || target.Segments.Count == 1)
+        // A directory as target keeps the name.
+        if (await IsFolderAsync(target, ct) || target.Segments.Count == 1)
         {
             target = target.Child(source.Name);
         }
 
-        if (target == source) return ShellResult.Error($"mv: {source.Value} and {target.Value} are the same note");
+        if (target == source) return ShellResult.Error($"mv: {source.Value} and {target.Value} are the same {(existing is null ? "attachment" : "note")}");
         if (await CheckTargetAsync(source, target, [], ct) is { } problem) return problem;
 
         return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
             $"moved {source.Value} to {target.Value}", ct);
     }
 
-    /// <summary>Moves every note below <paramref name="source"/>, keeping the structure below it. Like Unix mv,
-    /// into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
+    /// <summary>Moves every note and attachment below <paramref name="source"/>, keeping the structure below it. Like
+    /// Unix mv, into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
     public async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
         if (caller.Refuse("mv", source) is { } refused) return refused;
         if (source.Segments.Count < 2) return ShellResult.Error($"mv: {source.Value}/ is a vault; a vault can't be moved");
-        var below = await store.ListNotesUnderAsync(source, ct);
-        if (below.Count == 0)
+        var notes = await store.ListNotesUnderAsync(source, ct);
+        var attachments = (await StoreAttachments.UnderAsync(store, source, ct)).Select(a => a.Path).ToList();
+        if (notes.Count == 0 && attachments.Count == 0)
         {
-            return await store.GetAsync(source, ct) is not null
-                ? ShellResult.Error($"mv: {source.Value}/: Not a directory (to move the note, leave out the '/')")
+            return await ExistsAsync(source, ct)
+                ? ShellResult.Error($"mv: {source.Value}/: Not a directory (to move the {(source.IsAttachment ? "attachment" : "note")}, leave out the '/')")
                 : ShellResult.Error($"mv: {source.Value}/: No such file or directory");
         }
 
@@ -55,24 +57,26 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             return ShellResult.Error($"mv: notes can't move between vaults ({source.Vault} → {target.Vault}); a vault is its own space");
         }
 
-        if ((await store.ListNotesUnderAsync(target, ct)).Count > 0 || target.Segments.Count == 1) target = target.Child(source.Name);
+        if (await IsFolderAsync(target, ct) || target.Segments.Count == 1) target = target.Child(source.Name);
         if (target == source) return ShellResult.Error($"mv: {source.Value}/ and {target.Value}/ are the same folder");
         if (target.Value.StartsWith(source.Value + "/", StringComparison.Ordinal))
         {
             return ShellResult.Error($"mv: {target.Value}/ is inside {source.Value}/; a folder can't move into itself");
         }
 
-        if (await store.GetAsync(target, ct) is not null) return ShellResult.Error($"mv: {target.Value}: Not a directory");
+        if (await ExistsAsync(target, ct)) return ShellResult.Error($"mv: {target.Value}: Not a directory");
 
-        var map = below.ToDictionary(p => p, p => Rebase(p, source, target));
+        var map = notes.Concat(attachments).ToDictionary(p => p, p => Rebase(p, source, target));
         foreach (var (from, to) in map)
         {
             if (await CheckTargetAsync(from, to, map.Keys.ToHashSet(), ct) is { } problem) return problem;
         }
 
-        var count = map.Count == 1 ? "1 note" : $"{map.Count} notes";
+        var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count, "attachment") }.Where(c => c is not null));
         return await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/ ({count})", ct);
     }
+
+    private static string? Count(int n, string what) => n switch { 0 => null, 1 => $"1 {what}", _ => $"{n} {what}s" };
 
     private static VaultPath Rebase(VaultPath path, VaultPath from, VaultPath to)
     {
@@ -80,6 +84,14 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         foreach (var segment in path.Segments.Skip(from.Segments.Count)) result = result.Child(segment);
         return result;
     }
+
+    /// <summary>Whether a note or an attachment is at <paramref name="path"/>.</summary>
+    private async Task<bool> ExistsAsync(VaultPath path, CancellationToken ct) =>
+        await store.GetAsync(path, ct) is not null || await StoreAttachments.GetAsync(store, path, ct) is not null;
+
+    /// <summary>Whether notes or attachments are below <paramref name="path"/>.</summary>
+    private async Task<bool> IsFolderAsync(VaultPath path, CancellationToken ct) =>
+        (await store.ListNotesUnderAsync(path, ct)).Count > 0 || (await StoreAttachments.UnderAsync(store, path, ct)).Count > 0;
 
     /// <summary>Checks a target before anything is written. <paramref name="leaving"/> are paths moving away in
     /// the same batch, which don't count as existing.</summary>
@@ -90,32 +102,44 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             return ShellResult.Error($"mv: notes can't move between vaults ({source.Vault} → {target.Vault}); a vault is its own space");
         }
 
-        if (NoteNames.Problem(target) is { } problem) return ShellResult.Error($"mv: {target.Value}: {problem}");
+        if (AttachmentFormat.ForPath(source) is { } format)
+        {
+            // The bytes don't change, so neither may the type the name gives them (.jpg and .jpeg are one).
+            if (AttachmentFormat.ForPath(target)?.MediaType != format.MediaType)
+            {
+                return ShellResult.Error($"mv: {target.Value}: {source.Name} is {format.MediaType}; its new name must keep its extension");
+            }
+
+            if (NoteNames.NameProblem(target) is { } nameProblem) return ShellResult.Error($"mv: {target.Value}: {nameProblem}");
+        }
+        else if (NoteNames.Problem(target) is { } problem) return ShellResult.Error($"mv: {target.Value}: {problem}");
+
         if (await store.IsDamagedAsync(target, ct)) return ShellResult.Error(Damage.Message("mv", target));
-        if (!leaving.Contains(target) && await store.GetAsync(target, ct) is not null)
+        if (!leaving.Contains(target) && await ExistsAsync(target, ct))
         {
             return ShellResult.Error($"mv: {target.Value} already exists; rm it first, or choose another name");
         }
 
+        // A folder on the way may not be a note or an attachment.
         for (var dir = VaultPath.Root.Child(target.Segments[0]); dir.Segments.Count < target.Segments.Count - 1;)
         {
             dir = dir.Child(target.Segments[dir.Segments.Count]);
-            if (!leaving.Contains(dir) && await store.ReadAsync(dir, ct) is not null) return ShellResult.Error($"mv: {dir.Value}: Not a directory");
+            if (!leaving.Contains(dir) && await ExistsAsync(dir, ct)) return ShellResult.Error($"mv: {dir.Value}: Not a directory");
         }
 
         return null;
     }
 
     /// <summary>Builds one batch: every move, with the moved notes' own link rewrites, and the link rewrites in
-    /// all other notes. A move changes no text, so a note without rewrites keeps its writer; rewritten notes
-    /// get their own history entry, marked "(mv)".</summary>
+    /// all other notes. A move changes no text, so a note or attachment without rewrites keeps its writer; rewritten
+    /// notes get their own history entry, marked "(mv)".</summary>
     private async Task<ShellResult> CommitAsync(
         Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct)
     {
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
-        var rewrites = rewriteLinks ? Rewrites(notes, map) : [];
+        var rewrites = rewriteLinks ? Rewrites(notes, map, await StoreAttachments.PathsUnderAsync(store, vault, ct)) : [];
         var now = time.GetUtcNow().UtcDateTime;
         var writer = caller.Writer;
         var marked = $"{writer} (mv)";
@@ -124,10 +148,19 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var batch = new NoteBatch { Changeset = changeset };
         var links = 0;
         var changed = new List<VaultPath>();
+        NoteVersion? version = null;
 
         foreach (var (from, to) in map)
         {
-            if (await store.GetAsync(from, ct) is not { } current) return Changed(from);
+            if (await store.GetAsync(from, ct) is not { } current)
+            {
+                if (await StoreAttachments.GetAsync(store, from, ct) is not { } attachment) return Changed(from);
+                var movedAttachment = attachment with { Path = to, Revision = attachment.Revision + 1 };
+                batch.AttachmentMoves.Add((attachment, movedAttachment));
+                version = new NoteVersion(to.Value, movedAttachment.Version);
+                continue;
+            }
+
             var moved = current with { Path = to, Revision = current.Revision + 1 };
             if (rewrites.TryGetValue(to, out var own))
             {
@@ -138,6 +171,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             }
 
             batch.Moves.Add((current, moved));
+            version = new NoteVersion(to.Value, moved.Version);
         }
 
         foreach (var (path, list) in rewrites.Where(r => !map.ContainsValue(r.Key)))
@@ -160,8 +194,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         else if (changed.Count == 0) message += "; no links needed rewriting";
         else message += $"; rewrote {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", changed.Order(Comparer<VaultPath>.Create((a, b) => TextOrder.Default.Compare(a.Value, b.Value))).Select(p => p.Value))}";
 
-        var first = batch.Moves[0].Target;
-        return ShellResult.Ok(message) with { Version = map.Count == 1 ? new NoteVersion(first.Path.Value, first.Version) : null };
+        return ShellResult.Ok(message) with { Version = map.Count == 1 ? version : null };
     }
 
     private static ShellResult Changed(VaultPath path) =>
@@ -169,14 +202,17 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
     /// <summary>
     /// For each note (by its path after the move), the links whose target the move changes, with the text to
-    /// put in their place: links to a moved note, and links that would now hit one by a name collision.
+    /// put in their place: links to a moved note or attachment, and links that would now hit one by a name collision.
+    /// <paramref name="map"/> holds notes and attachments; <paramref name="attachments"/> are the vault's attachments
+    /// before the move, null if unknown (links to them then stay as they are).
     /// </summary>
     public static Dictionary<VaultPath, List<(NoteLink Link, string Replacement)>> Rewrites(
-        IReadOnlyList<Note> notes, IReadOnlyDictionary<VaultPath, VaultPath> map)
+        IReadOnlyList<Note> notes, IReadOnlyDictionary<VaultPath, VaultPath> map, IReadOnlyList<VaultPath>? attachments = null)
     {
         var vault = map.Keys.First().Vault!;
-        var before = new LinkResolver(vault, notes.Select(n => n.Path));
-        var after = new LinkResolver(vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)));
+        var before = new LinkResolver(vault, notes.Select(n => n.Path), attachments);
+        var after = new LinkResolver(
+            vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)), attachments?.Select(a => map.GetValueOrDefault(a, a)));
         var result = new Dictionary<VaultPath, List<(NoteLink, string)>>();
         foreach (var note in notes)
         {
@@ -186,11 +222,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(oldPath, link.Target);
-                if (was.Kind != LinkKind.Note) continue;
+                if (!Found(was)) continue;
 
                 var meant = map.GetValueOrDefault(was.Target!, was.Target!);
                 var now = after.Resolve(newPath, link.Target);
-                if (now.Kind == LinkKind.Note && now.Target == meant) continue;
+                if (Found(now) && now.Target == meant) continue;
 
                 if (!result.TryGetValue(newPath, out var list)) result[newPath] = list = [];
                 // A wikilink keeps its form where it can; a Markdown link is written absolute, which never
@@ -206,7 +242,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
     /// <summary>
     /// The link text after the move (decided by Chris, 2026-10-23): keep the author's form, a bare name
-    /// stays a bare name and a path keeps its length, if that resolves uniquely to the meant note. Relative
+    /// stays a bare name and a path keeps its length, if that resolves uniquely to the meant note or attachment (whose
+    /// name keeps its extension). Relative
     /// links, links to other notes caught by a name collision, and forms that would not resolve fall back to
     /// the vault path, which can't be ambiguous.
     /// </summary>
@@ -226,8 +263,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (text.EndsWith(".md", StringComparison.OrdinalIgnoreCase)) kept += ".md";
 
         var resolved = after.Resolve(linking, kept);
-        return resolved.Kind == LinkKind.Note && resolved.Target == meant ? kept : vaultPath;
+        return Found(resolved) && resolved.Target == meant ? kept : vaultPath;
     }
+
+    /// <summary>Whether a link leads to one note or attachment.</summary>
+    private static bool Found(LinkResolution r) => r.Kind is LinkKind.Note or LinkKind.Attachment && r.Target is not null;
 
     /// <summary>Replaces each link at its exact position; null if the text there is no longer that link.</summary>
     public static string? Apply(string content, List<(NoteLink Link, string Replacement)> links)

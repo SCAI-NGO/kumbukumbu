@@ -200,6 +200,17 @@ public class AttachmentWriterTests
     }
 
     [Fact]
+    public async Task Replace_works_in_a_folder_named_like_an_attachment()
+    {
+        var replacer = new Replacer(_store, _time, new Plans(), new FixedCaller(Writers.Dev));
+
+        var preview = await replacer.RunAsync("/Work/d.png", "inside", "outside", false, null, Ct);
+
+        Assert.False(preview.IsError, preview.Output);
+        Assert.Contains("/Work/d.png/n.md", preview.Output);
+    }
+
+    [Fact]
     public async Task Remove_moves_an_attachment_to_the_trash_in_the_writers_changeset()
     {
         var writer = Writer();

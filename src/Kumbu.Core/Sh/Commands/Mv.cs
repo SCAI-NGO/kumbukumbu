@@ -12,7 +12,7 @@ public sealed class Mv(NoteMover mover) : ICommand
 
     public string Usage => "mv [--keep-links] <path> <target>";
 
-    public string Summary => "move or rename a note or a folder (path ending in /); links follow";
+    public string Summary => "move or rename a note, an attachment or a folder (path ending in /); links follow";
 
     public string Help => """
         mv [--keep-links] <path> <target>
@@ -26,14 +26,18 @@ public sealed class Mv(NoteMover mover) : ICommand
           Heading, alias and embed stay. A [Markdown](link.md) the move has to change is written from
           the vault's root, as /Folder/Note%20name.md, its text, heading and title kept. The rest of
           each note stays as it was. The output names the notes it changed.
+          An attachment (an image or a PDF) moves the same way, its links and embeds with it
+          (![[shot.png]], ![alt](/Screens/shot.png)); its new name keeps its extension.
         mv [--keep-links] <folder>/ <target>
-          Move a folder with every note below it, keeping the structure: into <target> if that folder
-          exists, otherwise renamed to <target>. The '/' after the folder is required.
+          Move a folder with every note and attachment below it, keeping the structure: into
+          <target> if that folder exists, otherwise renamed to <target>. The '/' after the folder
+          is required.
           Everything, the moves and the link rewrites, happens at once or not at all.
           --keep-links  move only; leave links as they are (for clients that rewrite them themselves)
 
           mv /Demo/projects/kumbu.md /Demo/projects/kumbu-v2.md
           mv "/Demo/Meeting Notes.md" /Demo/archive/
+          mv /Demo/Screens/shot.png /Demo/archive/
           mv /Demo/projects/ /Demo/archive/2026/
         """;
 

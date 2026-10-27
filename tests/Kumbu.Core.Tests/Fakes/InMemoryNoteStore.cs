@@ -32,6 +32,20 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public void AddVault(string name) => _vaults.Add(name);
 
+    /// <summary>Puts an attachment at <paramref name="path"/> directly, written by the seed, with a PNG's or PDF's
+    /// signature as its bytes.</summary>
+    public StoredAttachment AddAttachment(string path)
+    {
+        if (!VaultPath.TryParse(path, out var parsed) || AttachmentFormat.ForPath(parsed) is not { } format) throw new ArgumentException($"Bad path: {path}");
+        byte[] bytes = format.Kind == AttachmentKind.Pdf ? "%PDF-1.7"u8.ToArray() : [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        var id = PutBlobAsync(parsed.Vault!, bytes, CancellationToken.None).Result;
+        var attachment = new StoredAttachment(
+            parsed, new AttachmentState(format.MediaType, bytes.Length, null, null, VersionToken.Of(bytes), id), 1, Writers.Seed, Seeded, [], null);
+        _attachments[parsed] = attachment;
+        _vaults.Add(parsed.Vault!);
+        return attachment;
+    }
+
     /// <summary>Paths whose stored document doesn't open.</summary>
     public HashSet<VaultPath> Damaged { get; } = [];
 
@@ -118,14 +132,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             if ((_notes.ContainsKey(target.Path) && !leaving.Contains(target.Path)) || Damaged.Contains(target.Path)) conflicts.Add(target.Path);
         }
 
-        foreach (var current in batch.AttachmentReplaces.Select(r => r.Current).Concat(batch.AttachmentTrashes))
+        foreach (var current in batch.AttachmentReplaces.Select(r => r.Current).Concat(batch.AttachmentMoves.Select(m => m.Current)).Concat(batch.AttachmentTrashes))
         {
             if (!_attachments.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) conflicts.Add(current.Path);
         }
 
-        var attachmentsLeaving = batch.AttachmentTrashes.Select(t => t.Path).ToHashSet();
+        var attachmentsLeaving = batch.AttachmentTrashes.Concat(batch.AttachmentMoves.Select(m => m.Current)).Select(t => t.Path).ToHashSet();
         var gone = batch.AttachmentRestores.Where(r => !_attachmentTrash.Any(t => t.IsSameEntry(r.Trashed))).Select(r => r.Restored).ToHashSet();
-        foreach (var target in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored)))
+        foreach (var target in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored)).Concat(batch.AttachmentMoves.Select(m => m.Target)))
         {
             if ((_attachments.ContainsKey(target.Path) && !attachmentsLeaving.Contains(target.Path)) || Damaged.Contains(target.Path) || gone.Contains(target))
             {
@@ -158,7 +172,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             _attachmentTrash.Add(new TrashedAttachment(current, by, at, batch.Changeset));
         }
 
+        foreach (var (current, _) in batch.AttachmentMoves) _attachments.Remove(current.Path);
         foreach (var created in batch.AttachmentCreates) _attachments[created.Path] = created;
+        foreach (var (current, target) in batch.AttachmentMoves)
+        {
+            _attachments[target.Path] = target;
+            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset));
+        }
+
         foreach (var (trashed, restored) in batch.AttachmentRestores)
         {
             _attachmentTrash.RemoveAt(_attachmentTrash.FindIndex(t => t.IsSameEntry(trashed)));

@@ -38,7 +38,7 @@ public class LinkCommandsTests
         """
         2: [[kumbu]] → /Demo/projects/kumbu.md
         2: [[Meeting Notes|the meeting]] → /Demo/Meeting Notes.md
-        3: ![[diagram.png]] → attachment (not a note)
+        3: ![[diagram.png]] → not found
         3: [[nope]] → not found
         3: [[plan]] → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
         3: [[#Welcome]] → this note
@@ -54,7 +54,7 @@ public class LinkCommandsTests
         (await Run("backlinks /Demo/projects/kumbu.md")).Output);
 
     private const string MarkdownNote =
-        "[k](/projects/kumbu.md) [m](Meeting%20Notes.md) [w](<welcome.md#Welcome>)\n[p](plan.md) [n](nope.md) [r](report.pdf) [h](#Top) [x](https://x.org)\n";
+        "[k](/projects/kumbu.md) [m](Meeting%20Notes.md) [w](<welcome.md#Welcome>)\n[p](plan.md) [n](nope.md) [r](report.docx) [h](#Top) [x](https://x.org)\n";
 
     // Its own store, so the shared fixtures stay as they are.
     private static Func<string, Task<ShellResult>> WithMarkdownNote()
@@ -82,7 +82,7 @@ public class LinkCommandsTests
             1: [w](<welcome.md#Welcome>) → /Demo/welcome.md
             2: [p](plan.md) → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
             2: [n](nope.md) → not found
-            2: [r](report.pdf) → attachment (not a note)
+            2: [r](report.docx) → attachment (not a note)
             2: [h](#Top) → this note
             """,
             (await sh("links /Demo/md.md")).Output);
@@ -389,6 +389,7 @@ public class LinkCommandsTests
     [Fact]
     public async Task LinksOfADirectoryListsTheBrokenOnes() => Assert.Equal(
         """
+        /Demo/welcome.md:3: ![[diagram.png]] → not found
         /Demo/welcome.md:3: [[nope]] → not found
         /Demo/welcome.md:3: [[plan]] → ambiguous: /Demo/a/plan.md, /Demo/b/plan.md
         """,

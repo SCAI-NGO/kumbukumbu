@@ -81,7 +81,8 @@ public sealed record MoveRequest(string From, string To, bool KeepLinks = false)
 public sealed record MovedView(string Message, string? Path, string? Version);
 
 /// <summary>A link as written, 1-based <c>line</c>. <c>kind</c>: <c>note</c> (<c>path</c> is where it leads), <c>self</c>
-/// (<c>[[#Heading]]</c>), <c>ambiguous</c> (<c>candidates</c>), <c>attachment</c> or <c>not_found</c>.</summary>
+/// (<c>[[#Heading]]</c>), <c>ambiguous</c> (<c>candidates</c>), <c>attachment</c> (<c>path</c> is the vault's attachment it
+/// leads to; null for a file the vault doesn't keep, e.g. a .docx) or <c>not_found</c>.</summary>
 public sealed record LinkView(int Line, string Raw, string Target, string Kind, string? Path, IReadOnlyList<string> Candidates);
 
 /// <summary>A line linking to the note, 1-based; <c>ambiguous</c>: its link matches several notes, this one among them.</summary>
