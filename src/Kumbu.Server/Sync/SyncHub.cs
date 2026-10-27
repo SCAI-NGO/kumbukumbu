@@ -15,11 +15,18 @@ namespace Kumbu.Server.Sync;
 /// other. A hint is a nudge to ask for the version list, so a lost or doubled one does no harm; per connection and
 /// vault at most one goes out per <see cref="Debounce"/>. Every <see cref="CheckInterval"/> each connection's key is
 /// checked: revoked, expired or its owner deactivated, the socket is closed with 4401; a vault deleted is dropped.
-/// A connection holds no vault open: a hint needs only the vault's id.
+/// A connection holds no vault open: a hint needs only the vault's id. A key holds at most <see cref="MaxPerKey"/>
+/// connections (each costs a MongoDB lookup per check): a new one beyond that closes the key's oldest with
+/// <see cref="Replaced"/>, so a socket the client gave up on, not yet noticed, never locks out its reconnect.
 /// </summary>
 public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub> log) : IHostedService
 {
     public const WebSocketCloseStatus KeyInactive = (WebSocketCloseStatus)4401;
+
+    /// <summary>Closed for a newer connection of the same key.</summary>
+    public const WebSocketCloseStatus Replaced = (WebSocketCloseStatus)4409;
+
+    public const int MaxPerKey = 4;
 
     public static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(500);
 
@@ -33,6 +40,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
     private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ConcurrentDictionary<Connection, byte> _connections = new();
+    private long _opened;
     private readonly CancellationTokenSource _stopping = new();
     private Task? _checks;
 
@@ -55,10 +63,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
     /// <summary>Serves one accepted socket until it closes: hints out, anything the client sends read and ignored.</summary>
     public async Task RunAsync(WebSocket socket, TicketGrant grant, CancellationToken ct)
     {
-        var connection = new Connection(socket, grant);
+        var connection = new Connection(socket, grant, Interlocked.Increment(ref _opened));
         _connections[connection] = 0;
         try
         {
+            var older = _connections.Keys.Where(c => c.Grant.KeyId == grant.KeyId).OrderByDescending(c => c.Number).Skip(MaxPerKey).ToList();
+            foreach (var replaced in older)
+            {
+                // Removed now, so the count is right for the next connection; the close finishes on its own.
+                if (_connections.TryRemove(replaced, out _)) _ = Observed(replaced.CloseAsync(Replaced, "replaced by a newer connection of this key"));
+            }
+
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, connection.Closed);
             var sending = Observed(connection.SendLoopAsync(linked.Token));
             var buffer = new byte[1024];
@@ -86,6 +101,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
             connection.Complete();
         }
     }
+
+    /// <summary>For tests: how many connections are held.</summary>
+    internal int Count => _connections.Count;
 
     /// <summary>One round of the 30-second check, for every connection; the loop runs it, tests call it directly.</summary>
     internal Task CheckAsync(CancellationToken ct) => Task.WhenAll(_connections.Keys.Select(c => CheckAsync(c, ct)));
@@ -135,8 +153,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         foreach (var connection in _connections.Keys) connection.Hint(vaultId);
     }
 
-    private sealed class Connection(WebSocket socket, TicketGrant grant)
+    private sealed class Connection(WebSocket socket, TicketGrant grant, long number)
     {
+        /// <summary>In the order connections opened.</summary>
+        public long Number { get; } = number;
+
         private readonly Channel<string> _out = Channel.CreateBounded<string>(new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.DropOldest });
         private readonly ConcurrentDictionary<string, byte> _waiting = new();
         private readonly SemaphoreSlim _sending = new(1, 1);

@@ -157,6 +157,42 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_key_holds_ten_open_tickets_and_a_new_one_drops_the_oldest()
+    {
+        var user = await NewAsync(Api);
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        var other = await user.KeyAsync("agent", KeyRight.Read);
+        var others = await TicketAsync(user, other);
+
+        var tickets = new List<string>();
+        for (var i = 0; i <= SyncTickets.MaxPerKey; i++) tickets.Add(await TicketAsync(user, key));
+
+        Assert.Equal(SyncTickets.MaxPerKey + 1, Api.Services.GetRequiredService<SyncTickets>().Count);
+        Assert.Null(Api.Services.GetRequiredService<SyncTickets>().Take(tickets[0]));
+        Assert.NotNull(Api.Services.GetRequiredService<SyncTickets>().Take(tickets[^1]));
+        Assert.NotNull(Api.Services.GetRequiredService<SyncTickets>().Take(others));
+    }
+
+    [Fact]
+    public async Task A_fifth_connection_of_a_key_closes_its_oldest()
+    {
+        var user = await NewAsync(Api);
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        var other = await user.KeyAsync("agent", KeyRight.Read);
+        using var others = await ConnectAsync(await TicketAsync(user, other));
+
+        var sockets = new List<WebSocket>();
+        for (var i = 0; i <= SyncHub.MaxPerKey; i++) sockets.Add(await ConnectAsync(await TicketAsync(user, key)));
+
+        Assert.Equal("close 4409", await ReceiveAsync(sockets[0], TimeSpan.FromSeconds(2)));
+        await user.CreateAsync("plan.md", "x\n");
+        Assert.Equal(Changed("Arbeit"), await ReceiveAsync(sockets[^1], TimeSpan.FromSeconds(3)));
+        Assert.Equal(Changed("Arbeit"), await ReceiveAsync(others, TimeSpan.FromSeconds(3)));
+        Assert.Equal(SyncHub.MaxPerKey + 1, Api.Services.GetRequiredService<SyncHub>().Count);
+        foreach (var socket in sockets) socket.Dispose();
+    }
+
+    [Fact]
     public async Task A_revoked_key_is_disconnected()
     {
         var user = await NewAsync(Api);
