@@ -138,4 +138,21 @@ public class InMemoryAttachmentStoreTests
         Assert.Equal((removal, Now.AddMinutes(5)), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
         Assert.Null(await store.LatestChangesetAsync("other", "lea", CancellationToken.None));
     }
+
+    [Fact]
+    public async Task A_restore_names_its_trash_entry_by_value_not_by_instance()
+    {
+        var store = new InMemoryNoteStore(("/work/a.md", "a"));
+        var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment } }, "dev", Now, CancellationToken.None));
+        var listed = Assert.Single(await store.ListAttachmentTrashAsync(null, CancellationToken.None));
+        var copy = listed with { Attachment = listed.Attachment with { History = [.. listed.Attachment.History] } };
+
+        Assert.Empty(await store.TryCommitAsync(
+            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 2 }) } }, "dev", Now, CancellationToken.None));
+
+        Assert.Equal(2, (await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None))!.Revision);
+        Assert.Empty(await store.ListAttachmentTrashAsync(null, CancellationToken.None));
+    }
 }

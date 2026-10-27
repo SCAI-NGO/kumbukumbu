@@ -285,4 +285,46 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
 
         Assert.Equal(bytes, await ReadBlobAsync(store, attachment.Current.BlobId));
     }
+
+    [Fact]
+    public async Task A_restore_names_its_trash_entry_by_value_not_by_instance()
+    {
+        var (world, _, store) = await WorldAsync();
+        var a = await CreateAsync(store, "/Work/a.png", Png(100));
+        var next = a with { Revision = 2, History = [new AttachmentVersion(a.Current, a.LastWriter, a.LastWriteAt, null)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (a, next) } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next } }, Writers.Dev, Now, Ct));
+        var listed = Assert.Single(await store.ListAttachmentTrashAsync(null, Ct));
+        // Equal, but with its own history list: as a request that rebuilt it from what it was shown would have it.
+        var copy = listed with { Attachment = listed.Attachment with { History = [.. listed.Attachment.History] } };
+        Assert.NotEqual(listed, copy);
+
+        Assert.Empty(await store.TryCommitAsync(
+            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 3 }) } }, Writers.Dev, Now, Ct));
+
+        Assert.Equal(3, (await Store(world.Catalog(time: _time)).GetAttachmentAsync(P("/Work/a.png"), Ct))!.Revision);
+    }
+
+    [Fact]
+    public async Task A_damaged_record_is_marked_damaged_until_it_opens_again()
+    {
+        var (world, _, store) = await WorldAsync();
+        await CreateAsync(store, "/Work/a.png", Png(100));
+        var records = Raw(world, "attachments");
+        var original = (await records.Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct))["blob"].AsByteArray;
+        var tampered = original.ToArray();
+        tampered[^1] ^= 1;
+        await records.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("blob", tampered), cancellationToken: Ct);
+
+        var later = Store(world.Catalog(time: _time));
+        Assert.Null(await later.GetAttachmentAsync(P("/Work/a.png"), Ct));
+        Assert.True(await later.IsDamagedAsync(P("/Work/a.png"), Ct));
+        Assert.Equal(1, await later.CountDamagedAsync(P("/Work"), Ct));
+
+        // Repaired in the database: the next read finds it, without a restart.
+        await records.UpdateOneAsync(FilterDefinition<BsonDocument>.Empty, Builders<BsonDocument>.Update.Set("blob", original), cancellationToken: Ct);
+        Assert.NotNull(await later.GetAttachmentAsync(P("/Work/a.png"), Ct));
+        Assert.False(await later.IsDamagedAsync(P("/Work/a.png"), Ct));
+        Assert.Equal(0, await later.CountDamagedAsync(P("/Work"), Ct));
+    }
 }

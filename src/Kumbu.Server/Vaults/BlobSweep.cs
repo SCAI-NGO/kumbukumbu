@@ -67,15 +67,22 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
         vault.AttachmentTrash = vault.AttachmentTrash.RemoveAll(t => t.Trashed.DeletedAt < cutoff);
     }
 
-    /// <summary>The references in the vault's records and trash as MongoDB holds them; null if one of them doesn't open,
-    /// since the blobs it names can't be known then.</summary>
+    /// <summary>
+    /// The references in the vault's records and trash as MongoDB holds them; null if one of them doesn't open, since the
+    /// blobs it names can't be known then. Both collections are read at one point in time (a snapshot session): a
+    /// restore, removal or move commits a record and a trash entry in one transaction, so a state that passes from one
+    /// collection to the other between two plain reads would be missed by both. A commit after the snapshot can only
+    /// name a blob some state named in it already, or one put since, whose time is then past the cutoff the deletion
+    /// filters on.
+    /// </summary>
     private async Task<HashSet<string>?> StoredReferencesAsync(UnlockedVault vault, CancellationToken ct)
     {
         var f = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id);
         try
         {
-            var attachments = (await catalog.Attachments.Find(f).ToListAsync(ct)).Select(vault.OpenAttachment).ToList();
-            var trash = (await catalog.AttachmentTrash.Find(f).ToListAsync(ct)).Select(vault.OpenAttachmentTrash).ToList();
+            using var session = await catalog.StartSnapshotSessionAsync(ct);
+            var attachments = (await catalog.Attachments.Find(session, f).ToListAsync(ct)).Select(vault.OpenAttachment).ToList();
+            var trash = (await catalog.AttachmentTrash.Find(session, f).ToListAsync(ct)).Select(vault.OpenAttachmentTrash).ToList();
             return References(attachments, trash);
         }
         catch (Exception e) when (e is CryptographicException or JsonException or InvalidDataException)

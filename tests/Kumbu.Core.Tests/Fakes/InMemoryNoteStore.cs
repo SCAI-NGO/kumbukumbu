@@ -124,7 +124,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         }
 
         var attachmentsLeaving = batch.AttachmentTrashes.Select(t => t.Path).ToHashSet();
-        var gone = batch.AttachmentRestores.Where(r => !_attachmentTrash.Contains(r.Trashed)).Select(r => r.Restored).ToHashSet();
+        var gone = batch.AttachmentRestores.Where(r => !_attachmentTrash.Any(t => t.IsSameEntry(r.Trashed))).Select(r => r.Restored).ToHashSet();
         foreach (var target in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored)))
         {
             if ((_attachments.ContainsKey(target.Path) && !attachmentsLeaving.Contains(target.Path)) || Damaged.Contains(target.Path) || gone.Contains(target))
@@ -161,7 +161,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         foreach (var created in batch.AttachmentCreates) _attachments[created.Path] = created;
         foreach (var (trashed, restored) in batch.AttachmentRestores)
         {
-            _attachmentTrash.Remove(trashed);
+            _attachmentTrash.RemoveAt(_attachmentTrash.FindIndex(t => t.IsSameEntry(trashed)));
             _attachments[restored.Path] = restored;
         }
 

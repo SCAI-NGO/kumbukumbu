@@ -103,6 +103,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>A session for one transaction over several documents.</summary>
     internal Task<IClientSessionHandle> StartSessionAsync(CancellationToken ct) => db.Client.StartSessionAsync(cancellationToken: ct);
 
+    /// <summary>A session whose reads all see one point in time (snapshot read concern), for reads of several collections
+    /// that must agree with each other.</summary>
+    internal Task<IClientSessionHandle> StartSnapshotSessionAsync(CancellationToken ct) =>
+        db.Client.StartSessionAsync(new ClientSessionOptions { Snapshot = true }, ct);
+
     /// <summary>The vaults <paramref name="secret"/> has a slot for, unlocked. A vault in the cache is used only
     /// for a secret whose slot was found here, so the cache saves work but never replaces authorization.</summary>
     public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(string secret, CancellationToken ct)
@@ -788,7 +793,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// unlocked (in the background; one round at a time).
     /// Keys go with the vault, not zeroed: a request still holding it must not see its key change.
     /// </summary>
-    public void Sweep()
+    public void Sweep() => SweepUntil(CancellationToken.None);
+
+    /// <summary><see cref="Sweep"/>, whose blob sweep stops with <paramref name="ct"/> (the server shutting down).</summary>
+    public void SweepUntil(CancellationToken ct)
     {
         var o = options.Value.Vaults;
         var now = Now;
@@ -830,13 +838,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         if (Interlocked.Exchange(ref _sweepingBlobs, 1) == 0)
         {
             var vaults = _open.Values.ToList();
-            _ = Task.Run(() => SweepBlobsAsync(vaults, now));
+            _ = Task.Run(() => SweepBlobsAsync(vaults, now, ct), CancellationToken.None);
         }
     }
 
     private int _sweepingBlobs;
 
-    private async Task SweepBlobsAsync(IReadOnlyList<UnlockedVault> vaults, DateTime now)
+    private async Task SweepBlobsAsync(IReadOnlyList<UnlockedVault> vaults, DateTime now, CancellationToken ct)
     {
         try
         {
@@ -845,7 +853,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 try
                 {
-                    await sweep.RunAsync(vault, now, CancellationToken.None);
+                    await sweep.RunAsync(vault, now, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
                 }
                 catch (Exception e)
                 {
@@ -903,17 +915,30 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         if (RefreshFaultAt is { } fault) await fault();
         var pathId = vault.PathId(path);
+        var key = Convert.ToBase64String(pathId);
         if (path.IsAttachment)
         {
             var record = await Attachments.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
-            vault.Attachments = record is not null && TryOpen(vault, () => vault.OpenAttachment(record), record) is { } attachment
-                ? vault.Attachments.SetItem(path, (record.Id, attachment))
-                : vault.Attachments.Remove(path);
+            if (record is null)
+            {
+                vault.Attachments = vault.Attachments.Remove(path);
+                vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+            }
+            else if (TryOpen(vault, () => vault.OpenAttachment(record), record) is { } attachment)
+            {
+                vault.Attachments = vault.Attachments.SetItem(path, (record.Id, attachment));
+                vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+            }
+            else
+            {
+                vault.Attachments = vault.Attachments.Remove(path);
+                vault.DamagedPathIds = vault.DamagedPathIds.Add(key);
+            }
+
             return;
         }
 
         var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
-        var key = Convert.ToBase64String(pathId);
         if (doc is null)
         {
             vault.Notes = vault.Notes.Remove(path);
@@ -977,7 +1002,6 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             vault.Notes = notes.ToImmutable();
-            vault.DamagedPathIds = damaged.ToImmutable();
             vault.Trash = [.. (await Trash.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenTrash(d), d)))
                 .Where(t => t.Trashed is not null)
@@ -993,11 +1017,17 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 .Select(d => TryOpen(vault, () => vault.OpenCheckpoint(d), d))
                 .OfType<StoredCheckpoint>()
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
-            // The records only: blobs are read on demand, never held with the vault.
-            vault.Attachments = (await Attachments.Find(n => n.Vault == id).ToListAsync(ct))
-                .Select(d => (d.Id, Attachment: TryOpen(vault, () => vault.OpenAttachment(d), d)))
-                .Where(a => a.Attachment is not null)
-                .ToImmutableDictionary(a => a.Attachment!.Path, a => (a.Id, a.Attachment!));
+            // The records only: blobs are read on demand, never held with the vault. A record that doesn't open is marked
+            // damaged under its path id, as a note is.
+            var attachments = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, Kumbu.Core.Attachments.StoredAttachment)>();
+            foreach (var d in await Attachments.Find(n => n.Vault == id).ToListAsync(ct))
+            {
+                if (TryOpen(vault, () => vault.OpenAttachment(d), d) is { } attachment) attachments[attachment.Path] = (d.Id, attachment);
+                else damaged.Add(Convert.ToBase64String(d.PathId));
+            }
+
+            vault.Attachments = attachments.ToImmutable();
+            vault.DamagedPathIds = damaged.ToImmutable();
             vault.AttachmentTrash = [.. (await AttachmentTrash.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenAttachmentTrash(d), d)))
                 .Where(t => t.Trashed is not null)

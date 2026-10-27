@@ -47,7 +47,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// <summary>Only the marker: <see cref="GetAsync"/>, which every command reads a note with first, already
     /// checked a damaged path against MongoDB again.</summary>
     public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) =>
-        await VaultAsync(path, ct) is { } v && !v.Notes.ContainsKey(path) && v.IsDamaged(path);
+        await VaultAsync(path, ct) is { } v && !v.Notes.ContainsKey(path) && !v.Attachments.ContainsKey(path) && v.IsDamaged(path);
 
     public async Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct)
     {
@@ -69,23 +69,26 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     public async Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct)
     {
         if (await VaultAsync(path, ct) is not { } vault) return null;
-        if (!vault.Notes.ContainsKey(path) && vault.IsDamaged(path))
-        {
-            // The refresh writes the working set: not of an object a re-keying made old, nor during a run.
-            catalog.CheckWritable(vault);
-            await vault.Gate.WaitAsync(ct);
-            try
-            {
-                catalog.CheckWritable(vault);
-                await catalog.RefreshAsync(vault, path, ct);
-            }
-            finally
-            {
-                vault.Gate.Release();
-            }
-        }
-
+        if (!vault.Notes.ContainsKey(path)) await RefreshDamagedAsync(vault, path, ct);
         return vault.Notes.TryGetValue(path, out var n) ? n.Note : null;
+    }
+
+    /// <summary>A note or attachment path marked damaged is read from MongoDB again (<see cref="GetAsync"/>).</summary>
+    private async Task RefreshDamagedAsync(UnlockedVault vault, VaultPath path, CancellationToken ct)
+    {
+        if (!vault.IsDamaged(path)) return;
+        // The refresh writes the working set: not of an object a re-keying made old, nor during a run.
+        catalog.CheckWritable(vault);
+        await vault.Gate.WaitAsync(ct);
+        try
+        {
+            catalog.CheckWritable(vault);
+            await catalog.RefreshAsync(vault, path, ct);
+        }
+        finally
+        {
+            vault.Gate.Release();
+        }
     }
 
     public async Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct)
@@ -122,23 +125,23 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             var apply = new List<Action>();
             foreach (var (current, next) in batch.Replaces)
             {
-                if (!vault.Notes.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
-                var update = Builders<SealedDocument>.Update
-                    .Set(d => d.Revision, next.Revision)
-                    .Set(d => d.Blob, vault.SealNote(entry.Id, next));
-                var result = await catalog.Notes.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), update, cancellationToken: ct);
-                if (result.MatchedCount == 0) return Refuse(current.Path);
+                if (!vault.Notes.TryGetValue(current.Path, out var entry)
+                    || !await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
+                {
+                    return Refuse(current.Path);
+                }
+
                 apply.Add(() => vault.Notes = vault.Notes.SetItem(current.Path, (entry.Id, next)));
             }
 
             foreach (var (current, next) in batch.AttachmentReplaces)
             {
-                if (!vault.Attachments.TryGetValue(current.Path, out var entry)) return Refuse(current.Path);
-                var update = Builders<SealedDocument>.Update
-                    .Set(d => d.Revision, next.Revision)
-                    .Set(d => d.Blob, vault.SealAttachment(entry.Id, next));
-                var result = await catalog.Attachments.UpdateOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), update, cancellationToken: ct);
-                if (result.MatchedCount == 0) return Refuse(current.Path);
+                if (!vault.Attachments.TryGetValue(current.Path, out var entry)
+                    || !await ReplaceAtRevisionAsync(session, catalog.Attachments, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealAttachment(entry.Id, next), ct))
+                {
+                    return Refuse(current.Path);
+                }
+
                 apply.Add(() => vault.Attachments = vault.Attachments.SetItem(current.Path, (entry.Id, next)));
             }
 
@@ -169,7 +172,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
             foreach (var (trashed, restored) in batch.AttachmentRestores)
             {
-                var entry = vault.AttachmentTrash.FirstOrDefault(t => t.Trashed.Equals(trashed));
+                var entry = vault.AttachmentTrash.FirstOrDefault(t => t.Trashed.IsSameEntry(trashed));
                 if (entry.Trashed is null) return Refuse(restored.Path);
                 var removed = await catalog.AttachmentTrash.DeleteOneAsync(
                     session, F.Eq(d => d.Id, entry.Id) & F.Eq(d => d.PathId, vault.PathId(trashed.Attachment.Path)), cancellationToken: ct);
@@ -229,8 +232,13 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
     }
 
-    public async Task<StoredAttachment?> GetAttachmentAsync(VaultPath path, CancellationToken ct) =>
-        await VaultAsync(path, ct) is { } vault && vault.Attachments.TryGetValue(path, out var a) ? a.Attachment : null;
+    /// <summary>As <see cref="GetAsync"/>, a damaged path is read from MongoDB again first.</summary>
+    public async Task<StoredAttachment?> GetAttachmentAsync(VaultPath path, CancellationToken ct)
+    {
+        if (await VaultAsync(path, ct) is not { } vault) return null;
+        if (!vault.Attachments.ContainsKey(path)) await RefreshDamagedAsync(vault, path, ct);
+        return vault.Attachments.TryGetValue(path, out var a) ? a.Attachment : null;
+    }
 
     public async Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct)
     {
@@ -678,15 +686,20 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
     }
 
-    /// <summary>Inserts a sealed note; false if one exists at that path (the unique index refuses it).</summary>
-    private async Task<bool> InsertNoteAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredNote note, CancellationToken ct)
+    private Task<bool> InsertNoteAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredNote note, CancellationToken ct) =>
+        InsertAtPathAsync(session, catalog.Notes, vault, id, note.Path, note.Revision, vault.SealNote(id, note), ct);
+
+    private Task<bool> InsertAttachmentAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredAttachment attachment, CancellationToken ct) =>
+        InsertAtPathAsync(session, catalog.Attachments, vault, id, attachment.Path, attachment.Revision, vault.SealAttachment(id, attachment), ct);
+
+    /// <summary>Inserts a sealed note or attachment record; false if one exists at that path (the unique index refuses it).</summary>
+    private static async Task<bool> InsertAtPathAsync(
+        IClientSessionHandle session, IMongoCollection<SealedDocument> collection, UnlockedVault vault, ObjectId id, VaultPath path, long revision, byte[] blob, CancellationToken ct)
     {
         try
         {
-            await catalog.Notes.InsertOneAsync(
-                session,
-                new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(note.Path), Revision = note.Revision, Blob = vault.SealNote(id, note) },
-                cancellationToken: ct);
+            await collection.InsertOneAsync(
+                session, new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(path), Revision = revision, Blob = blob }, cancellationToken: ct);
             return true;
         }
         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
@@ -695,21 +708,14 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
     }
 
-    /// <summary>Inserts a sealed attachment record; false if one exists at that path (the unique index refuses it).</summary>
-    private async Task<bool> InsertAttachmentAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredAttachment attachment, CancellationToken ct)
+    /// <summary>Replaces a sealed note or attachment record if it is still at <paramref name="revision"/> (compare-and-swap);
+    /// false if it changed.</summary>
+    private static async Task<bool> ReplaceAtRevisionAsync(
+        IClientSessionHandle session, IMongoCollection<SealedDocument> collection, UnlockedVault vault, ObjectId id, VaultPath path, long revision, long nextRevision, byte[] blob,
+        CancellationToken ct)
     {
-        try
-        {
-            await catalog.Attachments.InsertOneAsync(
-                session,
-                new SealedDocument { Id = id, Vault = vault.Id, PathId = vault.PathId(attachment.Path), Revision = attachment.Revision, Blob = vault.SealAttachment(id, attachment) },
-                cancellationToken: ct);
-            return true;
-        }
-        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
-        {
-            return false;
-        }
+        var update = Builders<SealedDocument>.Update.Set(d => d.Revision, nextRevision).Set(d => d.Blob, blob);
+        return (await collection.UpdateOneAsync(session, AtRevision(id, revision, vault.PathId(path)), update, cancellationToken: ct)).MatchedCount > 0;
     }
 
     /// <summary>

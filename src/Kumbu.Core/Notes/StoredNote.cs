@@ -89,4 +89,11 @@ public sealed record StoredNote(
 public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null);
 
 /// <param name="Changeset">The writer's changeset the removal belongs to; null for a removal without one.</param>
-public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset);
+public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset)
+{
+    /// <summary>Whether <paramref name="other"/> names the same trash entry: same path, state and removal time. Record
+    /// equality won't do, since it compares the history list by reference.</summary>
+    public bool IsSameEntry(TrashedAttachment other) =>
+        Attachment.Path == other.Attachment.Path && Attachment.Revision == other.Attachment.Revision
+        && Attachment.Version == other.Attachment.Version && DeletedAt == other.DeletedAt;
+}
