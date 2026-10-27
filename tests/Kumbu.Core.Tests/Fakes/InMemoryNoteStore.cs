@@ -89,6 +89,9 @@ public sealed class InMemoryNoteStore : INoteStore
         return Task.FromResult(true);
     }
 
+    /// <summary>How many batches <see cref="TryCommitAsync"/> wrote.</summary>
+    public int Commits { get; private set; }
+
     public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
     {
         var existing = batch.Replaces.Select(r => r.Current).Concat(batch.Moves.Select(m => m.Current)).Concat(batch.Trashes).ToList();
@@ -109,6 +112,7 @@ public sealed class InMemoryNoteStore : INoteStore
 
         if (conflicts.Count > 0) return Task.FromResult<IReadOnlyList<VaultPath>>(conflicts);
 
+        Commits++;
         foreach (var (current, next) in batch.Replaces) _notes[current.Path] = next;
         foreach (var current in batch.Trashes)
         {
