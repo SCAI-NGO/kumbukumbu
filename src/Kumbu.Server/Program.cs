@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
@@ -114,6 +115,7 @@ builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNo
 builder.Services.AddScoped<NoteWriter>();
 builder.Services.AddScoped<NoteMover>();
 builder.Services.AddScoped<Replacer>();
+builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
@@ -130,7 +132,7 @@ builder.Services.AddMcpServer(o =>
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
     })
     .WithHttpTransport()
-    .WithTools([typeof(ShTool), typeof(WriteTools)]);
+    .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
 
 var app = builder.Build();
 
@@ -212,6 +214,7 @@ app.MapAccountApi();
 app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
+app.MapBoardApi();
 app.MapUploadApi();
 app.MapSyncApi();
 app.MapPairingApi();

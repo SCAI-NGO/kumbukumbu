@@ -34,6 +34,10 @@ A checkpoint is a named state of a note, a folder or a whole vault that never ex
 
 **Open** shows a checkpoint as it was, read only, and **Export as ZIP…** downloads it, after your password, as a folder that opens in Obsidian. Your AI can read a checkpoint too: **Copy for your AI** on one of its notes copies what it needs, with the command (`cat --checkpoint`).
 
+## Board
+
+A vault can have a Kanban board: the vault's ⋯ menu → **Create board** makes one and opens it; from then on the menu says **Board**. Each card is a note in the vault's Board folder, so it has history, links and search like any note; tap a card to open it. Move a card with its ⋯ menu → **Move to…**, or on a laptop by dragging it. A card can have a due date and tags. Rejecting a card asks for a reason, and Done and Rejected tidy themselves into the Archive folder once they hold many cards. Board.md in the Board folder names the columns and holds the board's instructions for your AI.
+
 ## Bringing notes in
 
 Upload Markdown files or whole folders with **Upload here** in the drawer's menu (or **Upload** at the bottom of the screen).
