@@ -212,5 +212,13 @@ Proposed on 2026-10-27 (idea from a ChatGPT session). Metadata and an honest-sou
 2. Let the client fetch it through the attachment-read tool, then ask the model for the code.
 3. Pass = the exact code. A wrong or refused code means the model did not get the pixels, whatever it says about the image.
 
-Run it per client (claude.ai, Desktop, Claude Code, ChatGPT connector and Code Mode, Le Chat, Cursor, VS Code), with a small image and one near the size limit, and record the results here. Generate a new code for every run, so an earlier answer in the context can't give it away.
+Run it per client (claude.ai, Desktop, Claude Code, ChatGPT connector and Code Mode, Le Chat, Cursor, VS Code) and record the results here. Generate a new code for every run, so an earlier answer in the context can't give it away.
+
+**Size steps** (added 2026-10-27). The limits are counted in different units, and how an image counts against them is not documented:
+
+- Claude Code: 25,000 **tokens** (`MAX_MCP_OUTPUT_TOKENS`) apply to results with images too; the 50,000-**character** file threshold applies only to results "with no image content" (MCP docs, read 2026-10-27). How Claude Code counts an image's tokens: [?]. It used to count the base64 as text (§2.3), which no image survives.
+- claude.ai / Desktop: ~150,000 **characters** per tool result. Whether base64 image data counts: [?]. If it did, a 1536 px JPEG of ~200 KB (~270,000 base64 characters) would not fit, although claude.ai allows 10 MB per image.
+- What the model actually pays is visual tokens, ⌈w/28⌉×⌈h/28⌉ capped at 1,568 (§3), whatever the file size. A sensible client counts that, not the base64 length. [I]
+
+So run the test with the same picture as JPEG at about **50 KB, 200 KB and 1 MB** (same dimensions, different quality), and on Claude Code also with several images in one result. Record per client and step: the code read correctly, refused, or the result rejected, truncated or written to a file. The step at which a client fails tells whether it counts base64 characters or visual tokens, and gives v2.5 its server-side size target.
 
