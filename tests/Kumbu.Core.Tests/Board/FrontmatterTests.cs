@@ -22,6 +22,15 @@ public class FrontmatterTests
     }
 
     [Fact]
+    public void A_duplicate_top_level_key_is_a_problem()
+    {
+        var read = Frontmatter.Read("---\ncolumns: [A]\ncolumns: [B]\n---\n");
+
+        Assert.NotNull(read.Problem);
+        Assert.Empty(read.Values);
+    }
+
+    [Fact]
     public void No_frontmatter_reads_as_empty()
     {
         var read = Frontmatter.Read("# Title\n\ncolumn: Doing\n");

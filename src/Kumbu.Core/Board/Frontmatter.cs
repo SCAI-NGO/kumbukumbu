@@ -23,7 +23,7 @@ public static class Frontmatter
         var yaml = string.Join('\n', lines.Skip(1).Take(end - 2));
         try
         {
-            var root = new DeserializerBuilder().Build().Deserialize<object?>(yaml);
+            var root = new DeserializerBuilder().WithDuplicateKeyChecking().Build().Deserialize<object?>(yaml);
             return root switch
             {
                 null => new FrontmatterValues(NoValues, null),
