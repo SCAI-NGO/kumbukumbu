@@ -15,6 +15,7 @@ public static class Manual
           semsearch <query> [path]        ranked search by words and meaning; finds the best sections
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
           backlinks <path>                the notes that link to a note, as path:line:text
+          board <vault>                   the vault's board: instructions, then each column's cards
           head [-n N] [path]              first lines (default 10)
           tail [-n N|+N] [path]           last lines (default 10), or from line N on
           wc [-l|-w|-m|-c] [path]         count lines, words, characters, bytes

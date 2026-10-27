@@ -28,13 +28,15 @@ public sealed class Shell
     // Insertion order is the order of the help list.
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
     private readonly Checkpoints _checkpoints;
+    private readonly Func<DateTime> _now;
 
     public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null)
     {
+        _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         ICommand[] commands =
         [
-            .. ReadingCommands(notes),
+            .. ReadingCommands(notes, _now),
             new Semsearch(notes, search ?? new Search.NoSearchIndex()),
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints),
             new Mv(mover), new Rm(writer), new Trash(notes),
@@ -47,13 +49,13 @@ public sealed class Shell
         }
     }
 
-    private static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "head", "tail", "wc", "sort"];
+    private static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now) =>
     [
         new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
-        new LinksCommand(notes), new Backlinks(notes),
+        new LinksCommand(notes), new Backlinks(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
 
@@ -169,7 +171,7 @@ public sealed class Shell
             }
         }
 
-        var command = ReadingCommands(view).Single(c => c.Name == name);
+        var command = ReadingCommands(view, _now).Single(c => c.Name == name);
         var result = await command.RunAsync(args, null, ct);
         if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
         return result with { Version = null };
