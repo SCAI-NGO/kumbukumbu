@@ -52,6 +52,28 @@ public class HelpTests
         Assert.Equal(ShellResult.Ok("/W/a.md:1:use --help"), await shell.RunAsync("rg -- --help /W", CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("help links")]
+    [InlineData("links --help")]
+    [InlineData("help sort")]
+    public async Task ReadersPointToTheCheckpointTopic(string line)
+    {
+        var result = await Run(line);
+        Assert.EndsWith("--checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'", result.Output);
+    }
+
+    [Fact]
+    public async Task OtherCommandsDont() => Assert.DoesNotContain("help checkpoints", (await Run("help mv")).Output);
+
+    [Fact]
+    public async Task CheckpointTopicNamesEveryReader()
+    {
+        var result = await Run("help checkpoints");
+        Assert.False(result.IsError);
+        Assert.StartsWith("checkpoints", result.Output);
+        Assert.Contains("ls, cat, outline, rg, links, backlinks, head, tail, wc, sort", result.Output);
+    }
+
     [Fact]
     public async Task UnknownTopic() =>
         Assert.Equal(ShellResult.Error("help: no such command: grep — try 'help'"), await Run("help grep"));

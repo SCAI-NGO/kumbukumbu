@@ -47,7 +47,7 @@ public sealed class Shell
         }
     }
 
-    private static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "head", "tail", "wc", "sort"];
+    internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
     private static ICommand[] ReadingCommands(INoteReader notes) =>
@@ -86,7 +86,7 @@ public sealed class Shell
 
             var args = stage.Skip(1).ToList();
             // "rg -- --help" searches for "--help"; only an option before "--" asks for help.
-            if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(command.Help);
+            if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(Help.Of(command));
             else if (command is not (DiffCommand or Restore) && TakeCheckpoint(name, args, out var checkpoint, out var rest, out var optionError))
             {
                 result = optionError ?? await RunInCheckpointAsync(name, checkpoint!, rest, input, ct);
@@ -133,7 +133,7 @@ public sealed class Shell
     /// </summary>
     private async Task<ShellResult> RunInCheckpointAsync(string name, string checkpoint, List<string> args, string? input, CancellationToken ct)
     {
-        if (!Readers.Contains(name)) return ShellResult.Error($"{name}: --checkpoint works with {string.Join(", ", Readers)}, diff and restore");
+        if (!Readers.Contains(name)) return ShellResult.Error($"{name}: --checkpoint works with {string.Join(", ", Readers)}, diff and restore (see 'help checkpoints')");
 
         if (input is not null) return ShellResult.Error($"{name}: --checkpoint reads notes from a checkpoint; right of a pipe there are none to read");
         if (args.Any(a => a == "--version" || a.StartsWith("--version=", StringComparison.Ordinal)))

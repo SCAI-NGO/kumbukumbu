@@ -12,7 +12,35 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
     string ICommand.Help => """
         help [command]
           List the commands, or show the options and examples of one. 'cmd --help' does the same.
+          'help checkpoints' explains reading, comparing and restoring named checkpoints.
         """;
+
+    /// <summary>Topics that are not commands: explained once here, so each reader's help only points to them.</summary>
+    private static readonly Dictionary<string, string> Topics = new(StringComparer.Ordinal)
+    {
+        ["checkpoints"] = $"""
+            checkpoints
+              A checkpoint is a named state of a note, a folder or a whole vault ('mkcp'), kept until
+              'rmcp' removes it; 'lscp' lists them. Every reader works on it as on the current state:
+                {string.Join(", ", Shell.Readers)}
+              take --checkpoint <name> (or --checkpoint=<name>) with a path in the checkpoint's vault, and
+              then see the notes as the checkpoint holds them; links resolve among the checkpoint's notes.
+              A checkpoint holds one version of each note, so --checkpoint doesn't go with --version, and
+              it reads notes itself, so it doesn't work right of a pipe (it can start one).
+              diff --checkpoint <name> <path> shows what changed since; restore --checkpoint <name> <path>
+              goes back to it (see 'help diff', 'help restore').
+
+              lscp /Demo
+              ls --checkpoint before-cleanup /Demo/projects/
+              cat --checkpoint before-cleanup /Demo/plan.md | rg -n TODO
+              links --checkpoint before-cleanup /Demo/welcome.md
+            """,
+    };
+
+    /// <summary>A command's help; a reader's ends with a pointer to the checkpoint topic.</summary>
+    public static string Of(ICommand command) => Shell.Readers.Contains(command.Name)
+        ? command.Help.TrimEnd() + "\n  --checkpoint <name>: as a checkpoint holds it; see 'help checkpoints'"
+        : command.Help;
 
     public bool ReadsInput => false;
 
@@ -23,8 +51,9 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
 
         if (args.Count == 1)
         {
+            if (Topics.TryGetValue(args[0], out var topic)) return Task.FromResult(ShellResult.Ok(topic));
             return Task.FromResult(commands.TryGetValue(args[0], out var command)
-                ? ShellResult.Ok(command.Help)
+                ? ShellResult.Ok(Of(command))
                 : ShellResult.Error($"help: no such command: {args[0]} — try 'help'"));
         }
 
@@ -36,7 +65,8 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
             {list}
 
             '|' pipes the output of one command into the next; right of a pipe only {filters} work.
-            All paths are absolute (there is no working directory). Run 'help <command>' for details.
+            All paths are absolute (there is no working directory). Run 'help <command>' for details,
+            'help checkpoints' for reading a checkpoint.
             """));
     }
 }
