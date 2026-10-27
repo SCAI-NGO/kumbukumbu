@@ -336,18 +336,27 @@ describe("checkpoints", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       if (this.hasAttribute("download")) downloads.push(this.getAttribute("href")!);
     });
-    const fetch = api({
+    const passwords: unknown[] = [];
+    api({
       "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [checkpoint] }),
       "GET /api/vaults/Work/checkpoints/before-cleanup/tree": () =>
         json(200, { checkpoint: { name: "before-cleanup", createdAt: checkpoint.createdAt, notes: 3 }, root: { name: "Work", path: "/Work", folders: [], notes: [] } }),
+      "POST /api/export/ticket": async (r) => {
+        passwords.push(((await r.json()) as { password: string }).password);
+        return json(200, { ticket: "kumbu_ext_t1", expiresAt: "2026-10-27T10:00:30Z" });
+      },
     });
     await openVaultMenu("Checkpoints");
-    const dialog = sheet("Checkpoints");
 
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Export before-cleanup as ZIP" }));
-    expect(downloads).toEqual([checkpointExportUrl("Work", "before-cleanup")]);
-    expect(fetch.mock.calls.every(([r]) => (r as Request).method === "GET")).toBe(true);
+    await userEvent.click(await within(sheet("Checkpoints")).findByRole("button", { name: "Export before-cleanup as ZIP" }));
+    const step = sheet("Export before-cleanup?");
+    expect(within(step).getByRole("button", { name: "Export" })).toBeDisabled();
+    await userEvent.type(within(step).getByLabelText("Your password"), "secret");
+    await userEvent.click(within(step).getByRole("button", { name: "Export" }));
+    expect(passwords).toEqual(["secret"]);
+    expect(downloads).toEqual([`${checkpointExportUrl("Work", "before-cleanup")}&ticket=kumbu_ext_t1`]);
 
+    const dialog = await screen.findByRole("dialog", { name: "Checkpoints" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Open before-cleanup" }));
     expect(await screen.findByRole("region", { name: "Checkpoint" })).toHaveTextContent("Checkpoint before-cleanup");
     expect(screen.queryByRole("dialog")).toBeNull();
