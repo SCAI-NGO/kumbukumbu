@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronRight, FileText, Folder } from "lucide-react";
+import { ChevronRight, FileText, Folder, SquareKanban } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import type { TreeFolder } from "../api/notes";
+import { findFolder, type TreeFolder } from "../api/notes";
 import { useCheckpointTree } from "../api/history";
-import { checkpointUrl, crumbOf, pathFromRoute, titleOf } from "../api/paths";
+import { boardUrl, checkpointUrl, crumbOf, pathFromRoute, titleOf } from "../api/paths";
 import { timeText } from "../components/Sheet";
 import CheckpointNote from "../note/CheckpointNote";
 import { rows } from "../shell/TreeDrawer";
@@ -50,6 +50,12 @@ export default function Checkpoint() {
       {tree.data && !tree.isError && path === null && !holdsNotes(tree.data.root) && (
         <p className="p-4 text-text">This checkpoint holds no notes.</p>
       )}
+      {tree.data && !tree.isError && path === null && holdsBoard(tree.data.root, vault) && (
+        <Link to={boardUrl(vault, name)} className={`${linkClass} mx-2 mt-2 flex-none border border-line bg-surface-2 px-3`}>
+          <SquareKanban size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+          Show the board
+        </Link>
+      )}
       {tree.data && !tree.isError && path === null && holdsNotes(tree.data.root) && (
         <ul className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {rows(tree.data.root, Object.fromEntries(allFolders(tree.data.root).map((p) => [p, !closed[p]]))).map((row) => (
@@ -89,6 +95,9 @@ export default function Checkpoint() {
     </div>
   );
 }
+
+/** Whether the checkpoint holds the vault's board definition, `/<Vault>/Board/Board.md`. */
+const holdsBoard = (root: TreeFolder, vault: string) => !!findFolder(root, `/${vault}/Board`)?.notes.some((n) => n.name === "Board.md");
 
 const holdsNotes = (f: TreeFolder): boolean => f.notes.length > 0 || f.folders.some(holdsNotes);
 

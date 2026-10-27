@@ -13,6 +13,10 @@ export const checkpointUrl = (vault: string, name: string, path?: string) =>
   `/checkpoints/${encodeURIComponent(vault)}/${encodeURIComponent(name)}` +
   (path ? `/${inVault(path).split("/").map(encodeURIComponent).join("/")}` : "");
 
+/** The app's URL of a vault's board, or of a checkpoint's board as it was. */
+export const boardUrl = (vault: string, checkpoint?: string) =>
+  `/board/${encodeURIComponent(vault)}` + (checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "");
+
 export const vaultOf = (path: string) => path.split("/")[1];
 
 export const folderOf = (path: string) => path.slice(0, path.lastIndexOf("/"));

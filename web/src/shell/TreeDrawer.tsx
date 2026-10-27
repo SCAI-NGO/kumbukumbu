@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
 import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useBoardAction } from "../api/board";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
-import { noteUrl, titleOf } from "../api/paths";
+import { findFolder, useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
+import { boardUrl, noteUrl, titleOf } from "../api/paths";
+import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -243,6 +245,13 @@ export default function TreeDrawer(props: {
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
+  const createBoard = useBoardAction(activeVault ?? "");
+  const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
+  // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
+  const openBoard = (vault: string) => {
+    setOverlay("none");
+    navigate(boardUrl(vault));
+  };
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
   const vaultItems: MenuItem[] = [
     ...(activeVault
@@ -250,6 +259,10 @@ export default function TreeDrawer(props: {
           { label: "Trash", icon: Trash2, onSelect: () => onVaultSheet({ kind: "trash", vault: activeVault }) },
           { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
+          // Made from the template at once, so no ellipsis: that would promise a dialog.
+          hasBoard
+            ? { label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }
+            : { label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) },
           { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
           // Downloads at once, so no ellipsis: that would promise a dialog.
           { label: "Export as ZIP", icon: Download, onSelect: () => download(exportUrl([activeVault])) },
@@ -269,6 +282,11 @@ export default function TreeDrawer(props: {
         </div>
         {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} extra={vaultItems} />}
       </div>
+      {createBoard.isError && (
+        <div className="flex-none px-[18px] pb-2.5">
+          <FormError>{errorText(createBoard.error)}</FormError>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
