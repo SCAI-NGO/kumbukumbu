@@ -265,7 +265,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         Dictionary<VaultPath, string> Back,
         Dictionary<VaultPath, (StoredNote Now, string Then)> Moved,
         List<StoredNote> Trash,
-        Dictionary<VaultPath, List<(Links.WikiLink Link, string Replacement)>> Rewrites,
+        Dictionary<VaultPath, List<(Links.NoteLink Link, string Replacement)>> Rewrites,
         List<string> Broken)
     {
         public bool IsEmpty => Changed.Count == 0 && Back.Count == 0 && Moved.Count == 0 && Trash.Count == 0;
@@ -298,7 +298,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var leaving = moved.Values.Select(m => m.Now.Path).ToHashSet();
         var trash = now.Values.Where(n => !then.ContainsKey(n.Path) && !leaving.Contains(n.Path)).ToList();
 
-        var rewrites = new Dictionary<VaultPath, List<(Links.WikiLink, string)>>();
+        var rewrites = new Dictionary<VaultPath, List<(Links.NoteLink, string)>>();
         var broken = new List<string>();
         var vault = VaultPath.Root.Child(scope.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
@@ -320,7 +320,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
-            foreach (var link in Links.WikiLink.Parse(content))
+            foreach (var link in Links.NoteLink.Parse(content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(note.Path, link.Target);

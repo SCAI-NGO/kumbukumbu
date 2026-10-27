@@ -10,7 +10,9 @@ namespace Kumbu.Server.Vaults;
 
 /// <summary>
 /// An unlocked vault: its keys and its decrypted working set (concept §7). Reads use immutable snapshots;
-/// writes take <see cref="Gate"/>, change MongoDB first and the snapshot after.
+/// writes take <see cref="Gate"/>, change MongoDB first and the snapshot after. The gates are the vault's, not the
+/// object's (<see cref="VaultCatalog.LocksFor"/>): every object of one vault id, an older one a request still holds
+/// included, waits on the same pair, so a re-keying run that holds them excludes them all.
 /// </summary>
 public sealed class UnlockedVault
 {
@@ -19,16 +21,32 @@ public sealed class UnlockedVault
     private readonly byte[] _textKey;
     private long _lastUsed;
 
-    public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now)
+    public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
     {
         Id = id;
         Name = name;
+        Gate = locks.Gate;
+        IndexGate = locks.IndexGate;
         _contentKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []);
         KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
+        Horizon = now;
         Touch(now);
     }
+
+    /// <summary>
+    /// Since when <see cref="ChangedAt"/> knows every change: this object's creation. A sync client's cursor from
+    /// before it (a restart, the vault locked and unlocked, re-keyed) gets the full list instead (sync spec §5).
+    /// </summary>
+    public DateTime Horizon { get; }
+
+    /// <summary>
+    /// When each path last changed by a commit through this object (or, for a request still holding an older one, by
+    /// that commit: <see cref="EncryptedNoteStore"/> records it here too). Set under <see cref="Gate"/>, after the
+    /// commit, so a time is never earlier than the change it stands for became visible.
+    /// </summary>
+    public ImmutableDictionary<VaultPath, DateTime> ChangedAt { get; set; } = ImmutableDictionary<VaultPath, DateTime>.Empty;
 
     public string Id { get; }
 
@@ -37,7 +55,14 @@ public sealed class UnlockedVault
 
     public string Name { get; }
 
-    public SemaphoreSlim Gate { get; } = new(1, 1);
+    /// <summary>Writes of the vault, one at a time.</summary>
+    public SemaphoreSlim Gate { get; }
+
+    /// <summary>
+    /// A placeholder of a vault in its two-key period (rekeying design §3): named, with its embedding provider, but
+    /// no working set. The name lists keep it; every other path refuses it (<see cref="VaultCatalog.CheckWritable"/>).
+    /// </summary>
+    public bool Pending { get; init; }
 
     public ImmutableDictionary<VaultPath, (ObjectId Id, StoredNote Note)> Notes { get; set; } =
         ImmutableDictionary<VaultPath, (ObjectId, StoredNote)>.Empty;
@@ -50,14 +75,14 @@ public sealed class UnlockedVault
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
 
     /// <summary>
-    /// The embedding provider the owner chose for this vault (<see cref="Search.EmbeddingProviders.Internal"/> unless
-    /// they opted in to an external one). Sealed in the vault's meta: someone who can write to the database can't
-    /// point a vault at a provider and have its notes sent there.
+    /// The embedding provider of this vault: the one its owner chose, or the instance's default
+    /// (<see cref="EmbeddingsOptions.Default"/>) if they never chose. The choice is sealed in the vault's meta: someone
+    /// who can write to the database can't point a vault at a provider and have its notes sent there.
     /// </summary>
     public string EmbeddingProvider { get; set; } = Search.EmbeddingProviders.Internal;
 
     /// <summary>One note is indexed at a time per vault, so two updates of a note can't overtake each other.</summary>
-    public SemaphoreSlim IndexGate { get; } = new(1, 1);
+    public SemaphoreSlim IndexGate { get; }
 
     /// <summary>The named checkpoints; their notes' content stays in MongoDB until a command reads it.</summary>
     public ImmutableList<StoredCheckpoint> Checkpoints { get; set; } = [];
@@ -105,26 +130,26 @@ public sealed class UnlockedVault
         return note;
     }
 
-    /// <summary>The vault's name and embedding provider, as <see cref="VaultCatalog"/> seals them at creation.</summary>
-    public byte[] SealMeta(string embeddingProvider) =>
-        Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider == Search.EmbeddingProviders.Internal ? null : embeddingProvider));
+    /// <summary>The vault's name and the embedding provider its owner chose. An explicit <c>internal</c> is kept as
+    /// such, so that the vault stays on this server whatever the instance's default.</summary>
+    public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider));
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
-        Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt));
+        Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
 
     public TrashedNote OpenTrash(SealedDocument doc)
     {
         var p = Open<TrashPayload>($"trash:{Id}:{doc.Id}", doc.Blob);
-        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt);
+        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt, p.Changeset?.ToChangeset());
     }
 
     public byte[] SealMove(ObjectId docId, MoveRecord move) =>
-        Seal($"move:{Id}:{docId}", new MovePayload(move.From.Value, move.To.Value, move.MovedBy, move.MovedAt));
+        Seal($"move:{Id}:{docId}", new MovePayload(move.From.Value, move.To.Value, move.MovedBy, move.MovedAt, ChangesetPayload.From(move.Changeset)));
 
     public MoveRecord OpenMove(SealedDocument doc)
     {
         var p = Open<MovePayload>($"move:{Id}:{doc.Id}", doc.Blob);
-        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt);
+        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset());
     }
 
     /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
@@ -201,6 +226,95 @@ public sealed class UnlockedVault
         return content;
     }
 
+    /// <summary>
+    /// For a re-keying run (<see cref="VaultCatalog"/>, rekeying design §3): opens a document of
+    /// <paramref name="collection"/> under this object's key, with the AAD its clear fields give and without checking its
+    /// <c>pid</c>, and seals what it holds under <paramref name="to"/>'s key, keeping <c>_id</c> and <c>rev</c>. The pid
+    /// is computed under <paramref name="to"/> from what is sealed inside, whatever the stored one says; where the AAD
+    /// holds the pid (embeddings, texts), the new seal has the new one. A checkpoint sealed under another key than
+    /// <paramref name="to"/>'s gets its text ids through <paramref name="textIds"/> (base64 of the old id → new id);
+    /// one not found there stays as it is, and is named in <c>Unmapped</c>. Null if the document doesn't open.
+    /// </summary>
+    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, IReadOnlyDictionary<string, byte[]> textIds, bool seal = true)
+    {
+        var context = collection switch
+        {
+            "notes" => $"note:{Id}:{doc.Id}:{doc.Revision}",
+            "trash" => $"trash:{Id}:{doc.Id}",
+            "moves" => $"move:{Id}:{doc.Id}",
+            "embeddings" => $"embeddings:{Id}:{Convert.ToBase64String(doc.PathId)}",
+            "checkpoints" => $"checkpoint:{Id}:{doc.Id}",
+            "checkpoint_texts" => $"cptext:{Id}:{Convert.ToBase64String(doc.PathId)}",
+            _ => throw new ArgumentException($"No sealed documents in {collection}", nameof(collection)),
+        };
+        byte[] plain;
+        try
+        {
+            plain = VaultCrypto.Open(_contentKey, doc.Blob, context);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+
+        try
+        {
+            switch (collection)
+            {
+                case "notes":
+                    return Same(Payload.Path(Parse<NotePayload>(plain).Path));
+                case "trash":
+                    return Same(Payload.Path(Parse<TrashPayload>(plain).Note.Path));
+                case "moves":
+                    return Same(Payload.Path(Parse<MovePayload>(plain).From));
+                case "embeddings":
+                {
+                    var path = Payload.Path(Parse<EmbeddingsPayload>(plain).Path);
+                    var pid = to.PathId(path);
+                    return new Resealed(pid, PathId(path), SealPlain($"embeddings:{Id}:{Convert.ToBase64String(pid)}"), null, []);
+                }
+
+                case "checkpoints":
+                {
+                    var p = Parse<CheckpointPayload>(plain);
+                    var (pid, from) = (to.NameId(p.Name), NameId(p.Name));
+                    if (ReferenceEquals(this, to)) return new Resealed(pid, from, SealPlain(context), null, []);
+                    var unmapped = new List<string>();
+                    var notes = p.Notes.Select(n =>
+                    {
+                        if (textIds.TryGetValue(n.TextId, out var mapped)) return n with { TextId = Convert.ToBase64String(mapped) };
+                        unmapped.Add(n.TextId);
+                        return n;
+                    }).ToList();
+                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes }) : [], null, unmapped);
+                }
+
+                default:
+                {
+                    var content = Parse<TextPayload>(plain).Content;
+                    var pid = to.TextId(content);
+                    return new Resealed(pid, TextId(content), SealPlain($"cptext:{Id}:{Convert.ToBase64String(pid)}"), content, []);
+                }
+            }
+        }
+        catch (Exception e) when (e is JsonException or InvalidDataException or NullReferenceException)
+        {
+            // It opened, but what it holds can't be read: no pid can be computed for it.
+            return null;
+        }
+
+        Resealed Same(VaultPath path) => new(to.PathId(path), PathId(path), SealPlain(context), null, []);
+
+        // Without seal (only the pids are wanted), the blob stays empty.
+        byte[] SealPlain(string newContext) => seal ? VaultCrypto.Seal(to._contentKey, plain, newContext) : [];
+    }
+
+    /// <summary>What <see cref="Reseal"/> made of a document: its pid and blob under the new key, the pid it should have
+    /// had under the key it opened with, a text's content, and the text ids of a checkpoint that had no new one.</summary>
+    internal sealed record Resealed(byte[] PathId, byte[] FromPathId, byte[] Blob, string? Content, IReadOnlyList<string> Unmapped);
+
+    private static T Parse<T>(byte[] plain) => JsonSerializer.Deserialize<T>(plain) ?? throw new InvalidDataException("Empty payload");
+
     private byte[] Seal<T>(string context, T payload) =>
         VaultCrypto.Seal(_contentKey, JsonSerializer.SerializeToUtf8Bytes(payload), context);
 
@@ -231,11 +345,19 @@ internal sealed record NotePayload(
         SeedContent, Changeset?.ToChangeset());
 }
 
-internal sealed record TrashPayload(NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt);
+/// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
+internal sealed record TrashPayload(
+    NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
 
-internal sealed record MovePayload(string From, string To, string MovedBy, DateTime MovedAt);
+/// <remarks>Changeset as in <see cref="TrashPayload"/>.</remarks>
+internal sealed record MovePayload(
+    string From, string To, string MovedBy, DateTime MovedAt,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
 
-/// <remarks>Embeddings: the vault's embedding provider; missing (vaults before the overnight round) or null is the internal model.</remarks>
+/// <remarks>Embeddings: the embedding provider the owner chose; missing (vaults before the overnight round, or never
+/// chosen) or null is the instance's default (<see cref="EmbeddingsOptions.Default"/>). Up to 0.2.2 an explicit
+/// <c>internal</c> was stored as null too.</remarks>
 internal sealed record VaultMeta(
     string Name,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null);

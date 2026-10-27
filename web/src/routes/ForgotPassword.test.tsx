@@ -31,7 +31,7 @@ describe("ForgotPassword", () => {
 
     expect(await screen.findByText(newKey)).toBeInTheDocument();
     expect(screen.getByText(/old recovery key no longer works/)).toBeInTheDocument();
-    expect(screen.getByText(/all your API keys were revoked/)).toBeInTheDocument();
+    expect(screen.getByText(/all your API keys were revoked and your apps disconnected: agents using them will need new keys, and apps will need to reconnect/)).toBeInTheDocument();
     expect(await fetch.mock.calls[0][0].json()).toEqual({ username: "ada", recoveryKey: "ABCD-EFGH", newPassword: "a brand new passphrase" });
 
     await userEvent.click(screen.getByRole("button", { name: "Copy" }));

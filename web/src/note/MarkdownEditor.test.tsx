@@ -369,6 +369,17 @@ describe("A session that ends mid-edit", () => {
     expect(useEditor.getState().draft).toBeNull();
   });
 
+  it("leaves Write mode behind on the sign-in screen, with the text kept", async () => {
+    editorApi([sessionGone, ok], undefined, signInAs());
+    await openInWrite().then(({ u }) => u.type(editorBox(), " mine"));
+    await wait(800);
+    await waitFor(() => expect(useEditor.getState().draft).not.toBeNull());
+
+    expect(await screen.findByText("Your session has ended. Please sign in again.")).toBeInTheDocument();
+    expect(useEditor.getState().mode).toBe("read");
+    expect(useEditor.getState().draft?.text).toBe(`${source} mine`);
+  });
+
   it("shows the conflict toast when the note changed meanwhile, with the text kept", async () => {
     const puts = editorApi([sessionGone, conflict(theirs, "v7")], undefined, signInAs());
     const { u, router } = await openInWrite();

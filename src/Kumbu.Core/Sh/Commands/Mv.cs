@@ -23,8 +23,9 @@ public sealed class Mv(NoteMover mover) : ICommand
           pointed before, in the form its author used: a bare name stays a bare name, a path keeps as
           many folders as it had, a path from the vault's root (/…) stays one; only where that form
           would be ambiguous, the most specific one ([[projects/archive/kumbu]]).
-          Heading, alias and embed stay. The rest of each note stays as it was. The output names the
-          notes it changed.
+          Heading, alias and embed stay. A [Markdown](link.md) the move has to change is written from
+          the vault's root, as /Folder/Note%20name.md, its text, heading and title kept. The rest of
+          each note stays as it was. The output names the notes it changed.
         mv [--keep-links] <folder>/ <target>
           Move a folder with every note below it, keeping the structure: into <target> if that folder
           exists, otherwise renamed to <target>. The '/' after the folder is required.

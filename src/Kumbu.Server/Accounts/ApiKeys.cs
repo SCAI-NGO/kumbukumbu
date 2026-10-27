@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Globalization;
-using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Kumbu.Core.Crypto;
-using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
@@ -31,14 +28,22 @@ public static class KeyRights
     };
 }
 
+/// <summary>Who holds a key (spec §5a): an agent, or one of the user's own devices, paired from Obsidian. A device's
+/// writes are the user's own in the web app's views.</summary>
+public enum ApiKeyKind
+{
+    Agent,
+    Device,
+}
+
 /// <summary>An API key as its owner sees it in a list; never the key itself, which is shown once at creation.
 /// <c>ExpiresAt</c> is null for a key that doesn't expire.</summary>
 public sealed record ApiKeyInfo(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt = null);
+    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent);
 
-/// <summary>A key that was presented and checked: whose it is, and the name its writes carry.</summary>
-public sealed record ResolvedApiKey(User User, string Id, string Name);
+/// <summary>A key that was presented and checked: whose it is, the name its writes carry, and whether a device holds it.</summary>
+public sealed record ResolvedApiKey(User User, string Id, string Name, ApiKeyKind Kind = ApiKeyKind.Agent);
 
 /// <summary>
 /// API keys (accounts design, "API keys"): <c>kumbu_</c> and 32 random bytes in Base62, shown once. Each key has
@@ -49,21 +54,14 @@ public sealed record ResolvedApiKey(User User, string Id, string Name);
 /// </summary>
 public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvider time, ILogger<ApiKeys> log)
 {
+    /// <summary>Followed by 32 random bytes in Base62, 43 characters (<see cref="Secrets"/>).</summary>
     public const string KeyPrefix = "kumbu_";
 
-    private const int SecretBytes = 32;
-
-    /// <summary>62^43 > 2^256 > 62^42: every 32 bytes fit in 43 digits.</summary>
-    private const int Base62Length = 43;
-
     private const int PrefixLength = 8;
-    private const int MaxNameLength = 64;
 
-    private const string Base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     private const string LookupLabel = "kumbu/v1/api-key-lookup";
     private const string WriterLabel = "kumbu/v1/api-key-writer";
     private const string MetaLabel = "kumbu/v1/api-key-meta";
-    private const string NameIdLabel = "kumbu/v1/api-key-name-id";
 
     /// <summary>The lifetimes a key can be given at creation, in days; without one it never expires.</summary>
     public static readonly IReadOnlySet<int> ExpiryDays = new HashSet<int> { 30, 90, 365 };
@@ -73,7 +71,9 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     private volatile bool _ready;
 
-    private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>("api_keys");
+    internal const string CollectionName = "api_keys";
+
+    private IMongoCollection<ApiKeyDocument> Keys { get; } = db.GetCollection<ApiKeyDocument>(CollectionName);
 
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -86,13 +86,14 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// revoked has that name (compared case-insensitively), and <see cref="CredentialsChangedException"/> if the
     /// user's credentials changed at or after <paramref name="credentialReadAt"/> (when the session's password was
     /// read) or the user is inactive. With <paramref name="expiresInDays"/> (one of <see cref="ExpiryDays"/>, else
-    /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one.
+    /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one. The
+    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards.
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null)
+        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent)
     {
-        var clean = CheckName(user, name);
+        var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
         if (expiresInDays is { } days && !ExpiryDays.Contains(days))
         {
@@ -102,20 +103,23 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         await EnsureReadyAsync(ct);
 
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
-        var key = KeyPrefix + EncodeBase62(RandomNumberGenerator.GetBytes(SecretBytes));
-        var slots = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
-        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)));
+        var key = Secrets.New(KeyPrefix);
+        var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
+        // Written for devices only: an agent key's meta stays what every key's was before kinds existed.
+        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null);
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
+        // The meta and name id are sealed under this user key: it must still be the one in force (UserKeyRotation).
+        var keyId = UserCatalog.KeyId(userKey, user.Id);
         var doc = new ApiKeyDocument
         {
             Id = id,
             User = user.Id,
             Lookup = Lookup(key),
             Prefix = key.Substring(KeyPrefix.Length, PrefixLength),
-            NameId = NameId(userKey, user.Id, clean),
+            NameId = WriterNames.NameId(userKey, user.Id, clean),
             Meta = VaultCrypto.Seal(MetaKey(userKey, user.Id), JsonSerializer.SerializeToUtf8Bytes(meta), MetaContext(id)),
-            Writer = VaultCrypto.Seal(WriterKey(key), Encoding.UTF8.GetBytes(clean), WriterContext(id, expiresAt)),
+            Writer = VaultCrypto.Seal(WriterKey(key), Encoding.UTF8.GetBytes(clean), WriterContext(id, expiresAt, kind)),
             CreatedAt = Now,
             ExpiresAt = expiresAt,
         };
@@ -135,10 +139,20 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                     {
                         var current = await Users.UpdateOneAsync(
                             s,
-                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt),
+                            u => u.Id == user.Id && u.Active && (u.CredentialsChangedAt == null || u.CredentialsChangedAt < credentialReadAt) && u.KeyId == keyId,
                             Builders<UserDocument>.Update.Inc(u => u.KeysCreated, 1),
                             cancellationToken: token);
                         if (current.MatchedCount == 0) throw new CredentialsChangedException();
+                        // Names are unique across keys and connections. A connection made at the same time with
+                        // this name writes the user document too: one of the two conflicts and, retried, sees the other.
+                        if (await Connections.NameTakenAsync(s, db, user.Id, doc.NameId, Now, token)) throw new ApiKeyNameTakenException(clean);
+                        // The slots were wrapped before the transaction: a vault deleted since is seen here, or its
+                        // deletion conflicts on the user document written above, so no slot outlives its vault.
+                        await catalog.RequireVaultsAsync(s, [.. vaults.Keys], "An API key", token);
+                        // A re-keying of a vault that started or finished since its key was opened: the slot would
+                        // carry the old key. Its start and finish write the user document (a rise of vaultsRekeyed),
+                        // which conflicts with the rise of keysCreated above, so a retry reads them.
+                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys, token);
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);
@@ -273,7 +287,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// </summary>
     public async Task<ResolvedApiKey?> ResolveAsync(string presented, CancellationToken ct)
     {
-        if (!IsWellFormed(presented)) return null;
+        if (!Secrets.IsWellFormed(presented, KeyPrefix)) return null;
         await EnsureReadyAsync(ct);
         var lookup = Lookup(presented);
         var doc = await Keys.Find(k => k.Lookup == lookup).FirstOrDefaultAsync(ct);
@@ -288,17 +302,29 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var user = await Users.Find(u => u.Id == doc.User).FirstOrDefaultAsync(ct);
         if (user is null || !user.Active) return null;
 
-        string name;
-        try
+        // The expiry and the kind are bound into this seal: changed or removed in the database, the name doesn't open.
+        // The meta's kind is sealed under the user key, which a request with the key doesn't have.
+        string? name = null;
+        var kind = ApiKeyKind.Agent;
+        foreach (var candidate in (ApiKeyKind[])[ApiKeyKind.Agent, ApiKeyKind.Device])
         {
-            // The expiry is bound into this seal: changed or removed in the database, the name doesn't open.
-            name = Encoding.UTF8.GetString(VaultCrypto.Open(WriterKey(presented), doc.Writer, WriterContext(doc.Id, doc.ExpiresAt)));
+            try
+            {
+                name = Encoding.UTF8.GetString(VaultCrypto.Open(WriterKey(presented), doc.Writer, WriterContext(doc.Id, doc.ExpiresAt, candidate)));
+                kind = candidate;
+                break;
+            }
+            catch (CryptographicException)
+            {
+            }
         }
-        catch (CryptographicException)
+
+        if (name is null)
         {
             log.LogWarning("API key {KeyId} matched but its name does not open", doc.Id);
             return null;
         }
+
         if (doc.LastUsedAt is not { } lastUsed || now - lastUsed >= LastUsedGranularity)
         {
             // Conditional, so of concurrent requests only one writes.
@@ -309,54 +335,31 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                 cancellationToken: ct);
         }
 
-        return new ResolvedApiKey(user.ToUser(), doc.Id, name);
+        return new ResolvedApiKey(user.ToUser(), doc.Id, name, kind);
+    }
+
+    /// <summary>Whether the key may still be used: not revoked, not expired, its owner active. For a WebSocket held
+    /// open past the request that made its ticket (<see cref="Sync.SyncHub"/>).</summary>
+    public async Task<bool> IsActiveAsync(string keyId, CancellationToken ct)
+    {
+        var doc = await Keys.Find(k => k.Id == keyId).FirstOrDefaultAsync(ct);
+        if (doc is null || doc.RevokedAt is not null || Now >= doc.ExpiresAt) return false;
+        return await Users.Find(u => u.Id == doc.User && u.Active).AnyAsync(ct);
+    }
+
+    /// <summary>
+    /// Inside a connection's creation: whether a key of the user that is neither revoked nor expired has the name
+    /// with <paramref name="nameId"/>. An expired key's name is free even before it is retired.
+    /// </summary>
+    internal static Task<bool> NameTakenAsync(IClientSessionHandle session, IMongoDatabase db, string userId, byte[]? nameId, DateTime now, CancellationToken ct)
+    {
+        var f = Builders<ApiKeyDocument>.Filter;
+        return db.GetCollection<ApiKeyDocument>(CollectionName)
+            .Find(session, f.Eq(k => k.User, userId) & f.Eq(k => k.NameId, nameId) & f.Eq(k => k.RevokedAt, null) & (f.Eq(k => k.ExpiresAt, null) | f.Gt(k => k.ExpiresAt, now)))
+            .AnyAsync(ct);
     }
 
     public static bool LooksLikeKey(string presented) => presented.StartsWith(KeyPrefix, StringComparison.Ordinal);
-
-    private static bool IsWellFormed(string presented) =>
-        presented.Length == KeyPrefix.Length + Base62Length && LooksLikeKey(presented) && presented.AsSpan(KeyPrefix.Length).IndexOfAnyExcept(Base62) < 0;
-
-    /// <summary>
-    /// The name, trimmed. Its writes carry it as their writer label, so it must stay apart from the other labels:
-    /// not the user's own username (their writes in the web app) nor <c>dev</c> or <c>seed</c>, and without
-    /// <c>" ("</c>, which the history puts between a writer and the tool ("laptop (mv)").
-    /// </summary>
-    private static string CheckName(User user, string name)
-    {
-        var clean = name.Normalize(NormalizationForm.FormC).Trim();
-        if (clean.Length is 0 or > MaxNameLength) throw new ArgumentException($"An API key's name has 1 to {MaxNameLength} characters.", nameof(name));
-        // Format characters (zero-width, bidi overrides) are invisible too: "chris\u200B" would show as "chris".
-        if (clean.Any(c => char.IsControl(c) || char.GetUnicodeCategory(c) == UnicodeCategory.Format))
-        {
-            throw new ArgumentException("An API key's name can't contain control or invisible formatting characters.", nameof(name));
-        }
-        if (clean.Contains(" (", StringComparison.Ordinal)) throw new ArgumentException("An API key's name can't contain \" (\".", nameof(name));
-        if (string.Equals(clean, user.Username, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("An API key can't be named like you: its writes would look like your own.", nameof(name));
-        }
-
-        if (clean.Equals(Writers.Dev, StringComparison.OrdinalIgnoreCase) || clean.Equals(Writers.Seed, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException($"'{clean}' is reserved for the server's own writes.", nameof(name));
-        }
-
-        return clean;
-    }
-
-    private static string EncodeBase62(byte[] bytes)
-    {
-        var value = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
-        var digits = new char[Base62Length];
-        for (var i = Base62Length - 1; i >= 0; i--)
-        {
-            value = BigInteger.DivRem(value, 62, out var digit);
-            digits[i] = Base62[(int)digit];
-        }
-
-        return new string(digits);
-    }
 
     private static ApiKeyInfo Info(ApiKeyDocument doc, ApiKeyMeta meta) => new(
         doc.Id,
@@ -366,7 +369,10 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         doc.CreatedAt,
         doc.LastUsedAt,
         doc.RevokedAt,
-        doc.ExpiresAt);
+        doc.ExpiresAt,
+        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent);
+
+    private const string DeviceKind = "device";
 
     /// <summary>Finds the key without storing it; HKDF suffices, as the key is random.</summary>
     private static byte[] Lookup(string key) => VaultCrypto.Derive(key, LookupLabel, []);
@@ -375,15 +381,19 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
 
     private static byte[] MetaKey(byte[] userKey, string userId) => VaultCrypto.Derive(userKey, MetaLabel, Encoding.UTF8.GetBytes(userId));
 
-    /// <summary>A keyed hash of the lower-cased name, so MongoDB keeps a user's key names unique without seeing one.</summary>
-    private static byte[] NameId(byte[] userKey, string userId, string name) =>
-        VaultCrypto.Mac(VaultCrypto.Derive(userKey, NameIdLabel, Encoding.UTF8.GetBytes(userId)), name.ToLowerInvariant());
-
     private static string MetaContext(string keyId) => $"api-key:{keyId}:meta";
 
-    /// <summary>A key without expiry keeps the context every key had before expiry existed.</summary>
-    private static string WriterContext(string keyId, DateTime? expiresAt) =>
-        expiresAt is { } at ? $"api-key:{keyId}:writer:{new DateTimeOffset(at.Ticks, TimeSpan.Zero).ToUnixTimeMilliseconds()}" : $"api-key:{keyId}:writer";
+    /// <summary>For tests: a meta sealed as <see cref="CreateAsync"/> seals it.</summary>
+    internal static byte[] SealMeta(byte[] userKey, string userId, string keyId, byte[] plain) => VaultCrypto.Seal(MetaKey(userKey, userId), plain, MetaContext(keyId));
+
+    /// <summary>For tests: a meta's plaintext.</summary>
+    internal static byte[] OpenMeta(byte[] userKey, string userId, string keyId, byte[] sealedMeta) => VaultCrypto.Open(MetaKey(userKey, userId), sealedMeta, MetaContext(keyId));
+
+    /// <summary>A key without expiry keeps the context every key had before expiry existed, and an agent's the one every
+    /// key had before kinds existed. A device key paired before then reads as an agent's here (only its changesets differ).</summary>
+    private static string WriterContext(string keyId, DateTime? expiresAt, ApiKeyKind kind) =>
+        (expiresAt is { } at ? $"api-key:{keyId}:writer:{new DateTimeOffset(at.Ticks, TimeSpan.Zero).ToUnixTimeMilliseconds()}" : $"api-key:{keyId}:writer")
+        + (kind == ApiKeyKind.Device ? ":device" : "");
 
     private static DateTime Milliseconds(DateTime t) => new(t.Ticks - (t.Ticks % TimeSpan.TicksPerMillisecond), DateTimeKind.Utc);
 
@@ -409,9 +419,41 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         _ready = true;
     }
 
+    /// <summary>
+    /// For a rotation of the user key (<see cref="UserKeyRotation"/>): every key of the user, revoked and expired ones
+    /// included, with its meta sealed again under <paramref name="newUserKey"/> and its name id recomputed where it is
+    /// set. A meta that doesn't open is logged and kept as it is (new values equal to the old). Writes nothing.
+    /// Static, on the collection, so that <see cref="UserKeyRotation"/> needs neither this class nor its <see cref="VaultCatalog"/>,
+    /// as <see cref="ConnectionRevocation"/> does.
+    /// </summary>
+    internal static async Task<IReadOnlyList<MetaReseal>> PrepareResealAsync(
+        IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, ILogger log, CancellationToken ct)
+    {
+        var (oldKey, newKey) = (MetaKey(oldUserKey, userId), MetaKey(newUserKey, userId));
+        var result = new List<MetaReseal>();
+        foreach (var doc in await db.GetCollection<ApiKeyDocument>(CollectionName).Find(k => k.User == userId).ToListAsync(ct))
+        {
+            try
+            {
+                var plain = VaultCrypto.Open(oldKey, doc.Meta, MetaContext(doc.Id));
+                var name = JsonSerializer.Deserialize<ApiKeyMeta>(plain)!.Name;
+                result.Add(new MetaReseal(
+                    doc.Id, doc.Meta, doc.NameId, VaultCrypto.Seal(newKey, plain, MetaContext(doc.Id)), doc.NameId is null ? null : WriterNames.NameId(newUserKey, userId, name)));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("API key {KeyId} of user {UserId} does not open with the user key; it is left as it is", doc.Id, userId);
+                result.Add(new MetaReseal(doc.Id, doc.Meta, doc.NameId, doc.Meta, doc.NameId));
+            }
+        }
+
+        return result;
+    }
+
     private sealed record ApiKeyMeta(
         [property: JsonPropertyName("name")] string Name,
-        [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults);
+        [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
+        [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
 }
 
 /// <summary>An API key (collection <c>api_keys</c>). Nothing here is the key; name and vaults are sealed.</summary>
@@ -458,7 +500,7 @@ public sealed class ApiKeyDocument
     public DateTime? ExpiresAt { get; set; }
 }
 
-public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key named '{name}'.");
+public sealed class ApiKeyNameTakenException(string name) : Exception($"You already have an API key or connection named '{name}'.");
 
 /// <summary>The session that asked is older than the user's last password change or recovery, or the user was
 /// deactivated meanwhile: it may not make anything that outlives it.</summary>

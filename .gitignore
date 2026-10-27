@@ -486,3 +486,15 @@ $RECYCLE.BIN/
 .env
 /src/Kumbu.Server/wwwroot/
 .claude/worktrees/
+
+# Obsidian vault state (settings stay tracked)
+obisdian/.obsidian/workspace.json
+obisdian/.obsidian/workspace-mobile.json
+obisdian/.obsidian/cache
+obisdian/.trash/
+
+# Brainstorming companion and agent scratch
+.superpowers/
+
+# The embedding model a local `dotnet run` downloads (e.g. for pnpm -C web gen:api)
+src/Kumbu.Server/models/

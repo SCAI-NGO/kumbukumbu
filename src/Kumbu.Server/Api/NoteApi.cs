@@ -10,18 +10,31 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
 
-/// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to,
-/// <c>internal</c> (the model on this server) unless its owner chose an external one.</summary>
-public sealed record VaultView(string Name, int Notes, string Embeddings);
+/// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to: the one its
+/// owner chose, or the server's default (<c>internal</c>, the model on this server, unless the admin set another). <c>pending</c>: the vault is being
+/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>canWrite</c>:
+/// whether the caller may write to it (an API key or connection with only <c>read</c> may not).</summary>
+public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite);
+
+/// <summary>What would lose access if the vault were re-encrypted: the names of the API keys with access to it and of
+/// the connected apps that list it.</summary>
+public sealed record VaultAccessView(string[] ApiKeys, string[] Connections);
+
+/// <summary>Re-encrypting one vault: the owner's current password.</summary>
+public sealed record RekeyVaultRequest(string Password);
+
+/// <summary>How many API keys were revoked and apps disconnected because they had the vault.</summary>
+public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps);
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
-/// switched off, or failing).</summary>
-public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason);
+/// switched off, or failing). <c>default</c>: the provider of every vault whose owner never chose one.</summary>
+public sealed record EmbeddingProviderView(string Name, string Label, string? Description, bool External, bool Available, string? Reason, bool Default);
 
 /// <summary><c>provider</c>: the name of one of <c>GET /api/embeddings</c>, <c>internal</c> for the model on this server.</summary>
 public sealed record SetEmbeddingsRequest(string Provider);
@@ -43,10 +56,12 @@ public sealed record TreeNote(string Name, string Path, int Size);
 
 /// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
 /// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
-/// can't go on top of), with the writer and time of that version in <c>lastWriter</c> and <c>lastWriteAt</c>.</summary>
-public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt, bool Current)
+/// can't go on top of), with the writer and time of that version in <c>lastWriter</c> and <c>lastWriteAt</c>.
+/// <c>lastWriterKind</c>, for sessions only: <c>user</c>, <c>device</c>, <c>agent</c>, <c>server</c>, or null.</summary>
+public sealed record NoteView(string Path, string Content, string Version, string LastWriter, DateTime LastWriteAt, bool Current, string? LastWriterKind = null)
 {
-    public static NoteView From(StoredNote note) => new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt, Current: true);
+    public static async Task<NoteView> FromAsync(StoredNote note, WriterKinds kinds, CancellationToken ct) =>
+        new(note.Path.Value, note.Content, note.Version, note.LastWriter, note.LastWriteAt, Current: true, await kinds.OfAsync(note.LastWriter, ct));
 }
 
 /// <summary>Without <c>version</c> a note is created; with it, the note is overwritten if it is still at that version.</summary>
@@ -73,8 +88,8 @@ public sealed record LinkView(int Line, string Raw, string Target, string Kind, 
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
 /// <summary>A version of a note, newest first; <c>size</c> in bytes (UTF-8), <c>changeset</c> the short id of its
-/// changeset, if it is in one.</summary>
-public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset);
+/// changeset, if it is in one. <c>writerKind</c>, for sessions only, as <c>lastWriterKind</c> on a note.</summary>
+public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -86,7 +101,13 @@ public sealed record SearchResultView(string Path, string Address, int StartLine
 /// all with <c>mode=meaning</c>). <c>notice</c>: a sentence when the ranking isn't what was asked for.</summary>
 public sealed record SearchView(IReadOnlyList<SearchResultView> Results, int NotIndexed, string? Notice);
 
-/// <summary>A note whose last write is by one of the user's API keys (<c>writer</c>, the key's name).</summary>
+/// <summary>A section of an earlier version: <c>version</c> opens with <c>?version=</c> on the note; lines as a search
+/// result's. <c>before</c>: the version before it, null when there was none or it is no longer kept (<c>beforeLost</c>).
+/// <c>writer</c> without the tool ("liz", not "liz (mv)"), <c>writerKind</c> as on a note.</summary>
+public sealed record EarlierResultView(
+    string Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before, bool BeforeLost, string? WriterKind);
+
+/// <summary>A note whose last write is by one of the user's agents (<c>writer</c>, the API key's or connection's name).</summary>
 public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version);
 
 /// <summary>
@@ -105,41 +126,47 @@ public static class NoteApi
     public static void MapNoteApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/vaults", ListVaultsAsync).Errors(401);
+        api.MapGet("/vaults", ListVaultsAsync).Errors(401, 503);
         api.MapPost("/vaults", CreateVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 409);
         api.MapPost("/vaults/{vault}/delete", DeleteVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429);
-        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404);
-        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
-        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401);
+        api.MapGet("/vaults/{vault}/access", AccessAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPost("/vaults/{vault}/rekey", RekeyVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
+        api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
-        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404);
-        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413);
-        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409);
-        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409);
+        api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
+        api.MapPut("/notes/{vault}/{**path}", WriteAsync).Errors(400, 401, 403, 404, 413, 503);
+        api.MapDelete("/notes/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
 
-        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404);
-        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404);
-        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404);
+        api.MapGet("/links/{vault}/{**path}", LinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/backlinks/{vault}/{**path}", BacklinksAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
-        api.MapGet("/search", SearchAsync).Errors(400, 401, 404);
-        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403);
+        api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
+        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
-    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, CancellationToken ct)
+    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, RequestCaller caller, CancellationToken ct)
     {
-        var providers = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.EmbeddingProvider, StringComparer.Ordinal);
+        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
-            views.Add(new VaultView(name, (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count, providers[name]));
+            // A vault being re-encrypted has no notes to count yet; it is listed all the same.
+            var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
+            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider, vaults[name].Pending, caller.CanWrite(name)));
         }
 
         return TypedResults.Ok(views.ToArray());
     }
 
-    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index) =>
+    private static Ok<EmbeddingProviderView[]> ListEmbeddingProviders(SearchIndex index, VaultCatalog catalog) =>
         TypedResults.Ok(index.Providers.All
-            .Select(p => new EmbeddingProviderView(p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason))
+            .Select(p => new EmbeddingProviderView(
+                p.Name, p.Label, p.Description, p.External, p.Driver.State == SemanticState.Ready, p.Driver.Reason, p.Name == catalog.DefaultEmbeddingProvider))
             .ToArray());
 
     /// <summary>
@@ -148,7 +175,7 @@ public static class NoteApi
     /// words. Choosing an external provider is what sends the vault's text there, so the web app asks first.
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
-        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, CancellationToken ct)
+        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
@@ -158,13 +185,13 @@ public static class NoteApi
             throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
         }
 
-        if (unlocked.EmbeddingProvider != body.Provider)
+        if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider)
         {
             await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
             index.CatchUp(unlocked);
         }
 
-        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider));
+        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending, caller.CanWrite(unlocked.Name)));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -175,8 +202,8 @@ public static class NoteApi
         // A vault is the top folder of its notes, so its name follows the rules of every other path segment.
         if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
 
-        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, EmbeddingProviders.Internal));
+        await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
@@ -190,46 +217,82 @@ public static class NoteApi
             : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
 
+    /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding.</summary>
+    private static async Task<Ok<VaultAccessView>> AccessAsync(string vault, RequestCaller caller, Rekeying rekeying, CancellationToken ct)
+    {
+        var (keys, connections) = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
+            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        return TypedResults.Ok(new VaultAccessView(keys, connections));
+    }
+
+    /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps
+    /// that list it disconnected: they can't be given the new key without their owner.</summary>
+    private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
+        string vault, RekeyVaultRequest body, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+    {
+        // The same budget as the other password checks behind a session.
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct)
+            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));
+    }
+
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await RequireVaultAsync(store, root, ct);
         var notes = await store.ReadNotesUnderAsync(root, ct);
-        return TypedResults.Ok(new TreeView(Folder(root, notes), await store.CountDamagedAsync(root, ct)));
+        return TypedResults.Ok(new TreeView(TreeOf(root, notes), await store.CountDamagedAsync(root, ct)));
+    }
 
-        static TreeFolder Folder(VaultPath dir, IEnumerable<Note> below)
-        {
-            var depth = dir.Segments.Count;
-            var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
-            var folders = groups.GetValueOrDefault(true, [])
-                .GroupBy(n => n.Path.Segments[depth], StringComparer.Ordinal)
-                .OrderBy(g => g.Key, TextOrder.Default)
-                .Select(g => Folder(dir.Child(g.Key), g))
-                .ToList();
-            var files = groups.GetValueOrDefault(false, [])
-                .OrderBy(n => n.Path.Name, TextOrder.Default)
-                .Select(n => new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content)))
-                .ToList();
-            return new TreeFolder(dir.Name, dir.Value, folders, files);
-        }
+    /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
+    internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> below)
+    {
+        var depth = dir.Segments.Count;
+        var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
+        var folders = groups.GetValueOrDefault(true, [])
+            .GroupBy(n => n.Path.Segments[depth], StringComparer.Ordinal)
+            .OrderBy(g => g.Key, TextOrder.Default)
+            .Select(g => TreeOf(dir.Child(g.Key), g))
+            .ToList();
+        var files = groups.GetValueOrDefault(false, [])
+            .OrderBy(n => n.Path.Name, TextOrder.Default)
+            .Select(n => new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content)))
+            .ToList();
+        return new TreeFolder(dir.Name, dir.Value, folders, files);
     }
 
     /// <summary><c>version</c>: a token from the note's history, to read that version instead of the current one
-    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner.</summary>
-    private static async Task<Ok<NoteView>> ReadAsync(string vault, string? path, string? version, INoteStore store, CancellationToken ct)
+    /// (as <c>cat --version</c>); the web app diffs against it for the agent banner and the Activity sheet. A version
+    /// of a note at this path that is in the trash now is found there too (never <c>current</c>), for a session only: the
+    /// trash is the owner's, and keys never read a removed note's text.</summary>
+    private static async Task<Ok<NoteView>> ReadAsync(
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
-        var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        if (version is null) return TypedResults.Ok(NoteView.From(note));
+        var note = await store.GetAsync(notePath, ct);
+        if (version is null) return TypedResults.Ok(await NoteView.FromAsync(note ?? throw await MissingAsync(store, notePath, ct), kinds, ct));
 
         // The same lookup as INoteReader.ReadVersionAsync (Versions.Find), with the version's writer and time.
-        var found = NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version)
-            ?? throw ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
-        return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current));
+        var found = note is null ? null : NoteHistory.Versions(note).FirstOrDefault(v => v.Version == version);
+        if (found is null && caller.Kind == CallerKind.Session)
+        {
+            found = (await store.ListTrashAsync(notePath, ct))
+                .Where(t => t.Note.Path == notePath)
+                .SelectMany(t => NoteHistory.Versions(t.Note))
+                .FirstOrDefault(v => v.Version == version) is { } trashed ? trashed with { Current = false } : null;
+        }
+
+        if (found is null)
+        {
+            throw note is null ? await MissingAsync(store, notePath, ct) : ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
+        }
+
+        return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, found.Writer, found.WrittenAt, found.Current, await kinds.OfAsync(found.Writer, ct)));
     }
 
     private static async Task<Results<Created<NoteView>, Ok<NoteView>, Conflict<ConflictView>>> WriteAsync(
-        string vault, string? path, PutNoteRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
+        string vault, string? path, PutNoteRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await RequireVaultAsync(store, notePath, ct);
@@ -255,7 +318,7 @@ public static class NoteApi
             throw ApiErrors.BadRequest(result.Output);
         }
 
-        var view = NoteView.From(now!);
+        var view = await NoteView.FromAsync(now!, kinds, ct);
         return existing is null ? TypedResults.Created(ApiPaths.Url("notes", notePath), view) : TypedResults.Ok(view);
     }
 
@@ -265,15 +328,26 @@ public static class NoteApi
             : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
         new CurrentNoteView(current.Content, current.Version)));
 
-    private static async Task<NoContent> DeleteAsync(string vault, string? path, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
+    /// <summary><c>version</c>: trash the note only if it is still at that version, else 409 with the note as it is
+    /// now (as a stale <c>PUT</c>). Without it, whatever version the note is at.</summary>
+    private static async Task<Results<NoContent, Conflict<ConflictView>>> DeleteAsync(
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         await RequireVaultAsync(store, notePath, ct);
         Refuse(caller, "rm", notePath);
         if (await store.GetAsync(notePath, ct) is null) throw await MissingAsync(store, notePath, ct);
 
-        var result = await writer.RemoveAsync(notePath, ct);
-        return result.IsError ? throw new ApiException(StatusCodes.Status409Conflict, result.Output) : TypedResults.NoContent();
+        var result = await writer.RemoveAsync(notePath, ct, version);
+        if (!result.IsError) return TypedResults.NoContent();
+        if (version is not null)
+        {
+            // Changed since the version the caller saw (checked on the state that would have been trashed), or meanwhile.
+            if (await store.GetAsync(notePath, ct) is { } now && now.Version != version) return Conflict(now, version);
+            if (await store.GetAsync(notePath, ct) is null) throw await MissingAsync(store, notePath, ct);
+        }
+
+        throw new ApiException(StatusCodes.Status409Conflict, result.Output);
     }
 
     private static async Task<Ok<MovedView>> MoveAsync(MoveRequest body, RequestCaller caller, INoteStore store, NoteMover mover, CancellationToken ct)
@@ -316,15 +390,19 @@ public static class NoteApi
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var content = await store.ReadAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        return TypedResults.Ok((await NoteLinks.OfAsync(store, notePath, content, ct)).Select(l => new LinkView(
+        return TypedResults.Ok(await LinkViewsAsync(store, notePath, content, ct));
+    }
+
+    /// <summary>The links of a note, resolved against <paramref name="notes"/>: the vault, or a checkpoint's view of it.</summary>
+    internal static async Task<LinkView[]> LinkViewsAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct) =>
+        (await NoteLinks.OfAsync(notes, path, content, ct)).Select(l => new LinkView(
             l.Link.Line + 1,
             l.Link.Raw,
             l.Link.Target,
             KindText(l.Resolution.Kind),
             l.Resolution.Target?.Value,
             l.Resolution.Kind == LinkKind.Ambiguous ? [.. l.Resolution.Candidates.Select(c => c.Value).Order(TextOrder.Default)] : []))
-            .ToArray());
-    }
+            .ToArray();
 
     private static string KindText(LinkKind kind) => kind switch
     {
@@ -344,13 +422,18 @@ public static class NoteApi
             .ToArray());
     }
 
-    private static async Task<Ok<HistoryEntryView[]>> HistoryAsync(string vault, string? path, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<HistoryEntryView[]>> HistoryAsync(string vault, string? path, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, note: true);
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
-        return TypedResults.Ok(NoteHistory.Versions(note)
-            .Select(v => new HistoryEntryView(v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short))
-            .ToArray());
+        var entries = new List<HistoryEntryView>();
+        foreach (var v in NoteHistory.Versions(note))
+        {
+            entries.Add(new HistoryEntryView(
+                v.Version, v.WrittenAt, v.Writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short, await kinds.OfAsync(v.Writer, ct)));
+        }
+
+        return TypedResults.Ok(entries.ToArray());
     }
 
     /// <summary>
@@ -358,6 +441,43 @@ public static class NoteApi
     /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
     /// <c>path</c> narrows the search to a vault, folder or note; <c>n</c> results, 1 to 50, default 10.
     /// </summary>
+    /// <summary>
+    /// Search in earlier versions: the sections of the notes' history (not their current text) that hold every word of
+    /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
+    /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
+    /// </summary>
+    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    {
+        var query = q?.Trim() ?? "";
+        if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
+        var max = n ?? DefaultResults;
+        if (max is < 1 or > MaxResults) throw ApiErrors.BadRequest($"n is 1 to {MaxResults}.");
+        var scope = VaultPath.Root;
+        if (path is not null && (!VaultPath.TryParse(path, out scope) || path.Contains('\\')))
+        {
+            throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
+        }
+
+        var notes = new List<StoredNote>();
+        if (!scope.IsRoot && await store.GetAsync(scope, ct) is { } single) notes.Add(single);
+        else
+        {
+            if (!scope.IsRoot) await RequireVaultAsync(store, scope, ct);
+            foreach (var p in await store.ListNotesUnderAsync(scope, ct))
+            {
+                if (await store.GetAsync(p, ct) is { } note) notes.Add(note);
+            }
+        }
+
+        var views = new List<EarlierResultView>();
+        foreach (var h in EarlierSearch.Find(notes, query, max, ct))
+        {
+            views.Add(new EarlierResultView(h.Path.Value, h.Version, h.WrittenAt, h.Writer, h.StartLine, h.EndLine, h.Snippet, h.Before, h.BeforeLost, await kinds.OfAsync(h.Writer, ct)));
+        }
+
+        return TypedResults.Ok(views.ToArray());
+    }
+
     private static async Task<Ok<SearchView>> SearchAsync(string? q, string? mode, string? path, int? n, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
@@ -436,21 +556,20 @@ public static class NoteApi
     }
 
     /// <summary>
-    /// The agent banner: notes in the caller's vaults whose last write is by one of the user's API keys (revoked
-    /// ones too: their writes stay theirs), after <paramref name="since"/>, newest first. A key's name is its writer
-    /// label and never equals a username, so the user's own writes can't count. The names are sealed under the user
-    /// key, hence sessions only.
+    /// The agent banner: notes in the caller's vaults whose last write is by one of the user's agents, API keys or
+    /// connections (revoked ones too: their writes stay theirs), after <paramref name="since"/>, newest first. A
+    /// device's writes are the user's own (spec §5a) and don't count. The names are sealed under the user key, hence
+    /// sessions only.
     /// </summary>
-    private static async Task<Ok<ChangeView[]>> ChangesAsync(DateTimeOffset since, RequestCaller caller, INoteStore store, ApiKeys keys, CancellationToken ct)
+    private static async Task<Ok<ChangeView[]>> ChangesAsync(DateTimeOffset since, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
-        var names = (await keys.ListAsync(caller.User!, caller.UserKey!, ct)).Select(k => k.Name).ToHashSet(StringComparer.Ordinal);
         var from = since.UtcDateTime;
         var changes = new List<ChangeView>();
         foreach (var path in await store.ListNotesUnderAsync(VaultPath.Root, ct))
         {
             if (await store.GetAsync(path, ct) is not { } note || note.LastWriteAt <= from) continue;
             var writer = Writers.Identity(note.LastWriter);
-            if (names.Contains(writer)) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
+            if (await kinds.OfAsync(writer, ct) == WriterKinds.Agent) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
         }
 
         return TypedResults.Ok(changes.OrderByDescending(c => c.LastWriteAt).ThenBy(c => c.Path, TextOrder.Default).ToArray());
@@ -488,12 +607,49 @@ internal static class ApiPaths
         if (!string.IsNullOrEmpty(rest)) segments.AddRange((note ? rest : rest.TrimEnd('/')).Split('/'));
         if (segments.Any(s => s is "" or "." or ".." || s.Contains('\\')))
         {
-            throw ApiErrors.BadRequest("A path may not contain empty, '.' or '..' segments or backslashes.");
+            throw ApiErrors.BadRequest(Refused);
         }
 
         var path = segments.Aggregate(VaultPath.Root, (p, s) => p.Child(s));
         if (note && !path.IsNote) throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md.");
         return path;
+    }
+
+    private const string Refused = "A path may not contain empty, '.' or '..' segments or backslashes.";
+
+    /// <summary>
+    /// Kestrel resolves '.' and '..' segments, also sent as <c>%2E</c>, before routing: <c>/api/notes/V/a/../b.md</c>
+    /// arrives as <c>/api/notes/V/b.md</c>, so <see cref="Parse"/> never sees them over HTTP. This middleware looks at
+    /// the target as the client sent it and refuses an <c>/api</c> URL with such a segment, as Parse would.
+    /// </summary>
+    public static async Task RefuseDotSegmentsAsync(HttpContext context, RequestDelegate next)
+    {
+        if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+            && HasDotSegment(context.Features.Get<IHttpRequestFeature>()?.RawTarget))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new ApiError(Refused));
+            return;
+        }
+
+        await next(context);
+    }
+
+    /// <summary>Whether the path of a request target (origin or absolute form, the query left out) has a '.' or '..'
+    /// segment, percent-encoded or not. An encoded slash separates no segments, for Kestrel neither.</summary>
+    internal static bool HasDotSegment(string? target)
+    {
+        if (string.IsNullOrEmpty(target)) return false;
+        var path = target.Split('?', '#')[0];
+        if (!path.StartsWith('/'))
+        {
+            var scheme = path.IndexOf("://", StringComparison.Ordinal);
+            var slash = scheme < 0 ? -1 : path.IndexOf('/', scheme + 3);
+            if (slash < 0) return false;
+            path = path[slash..];
+        }
+
+        return path.Split('/').Any(s => Uri.UnescapeDataString(s) is "." or "..");
     }
 
     public static string Url(string kind, VaultPath path) => $"/api/{kind}/{string.Join('/', path.Segments.Select(Uri.EscapeDataString))}";

@@ -6,6 +6,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AccountScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
 
@@ -22,31 +23,41 @@ export default function Keys() {
   // The new key lives here, in component state only, until the reveal is done.
   const [created, setCreated] = useState<{ name: string; key: string } | null>(null);
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
+  // While a connector URL is shown, it has the page to itself, as a new key has.
+  const [revealing, setRevealing] = useState(false);
 
   if (created) {
     return (
-      <AccountScreen title="API keys">
+      <AccountScreen title="Access">
         <KeyReveal name={created.name} value={created.key} onDone={() => setCreated(null)} />
       </AccountScreen>
     );
   }
 
   return (
-    <AccountScreen title="API keys">
-      <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
-      <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
-        New key
-      </button>
+    <AccountScreen title="Access">
+      {!revealing && (
+        <section aria-labelledby="keys-title" className="flex min-w-0 flex-col gap-6">
+          <h2 id="keys-title" className="text-[22px] font-bold text-text">
+            API keys
+          </h2>
+          <p className="text-text-body">An API key lets an agent such as Claude Code read or write the vaults you give it, through MCP.</p>
+          <button type="button" onClick={() => setCreating(true)} className={primaryButtonClass}>
+            New key
+          </button>
 
-      {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
-      {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
-      {keys.data && keys.data.length > 0 && (
-        <ul className="flex flex-col gap-3">
-          {keys.data.map((key) => (
-            <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
-          ))}
-        </ul>
+          {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
+          {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
+          {keys.data && keys.data.length > 0 && (
+            <ul className="flex flex-col gap-3">
+              {keys.data.map((key) => (
+                <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
+              ))}
+            </ul>
+          )}
+        </section>
       )}
+      <Connections onRevealChange={setRevealing} />
 
       {creating && (
         <NewKeyDialog
@@ -75,7 +86,10 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
   return (
     <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked || expired ? " opacity-75" : ""}`}>
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="min-w-0 font-medium break-words text-text">{apiKey.name}</h2>
+        <h2 className="min-w-0 font-medium break-words text-text">
+          {apiKey.name}
+          {apiKey.kind === "device" && <span className="ml-2 rounded-full border border-line px-2 py-0.5 text-[12px] font-normal text-muted">Obsidian device</span>}
+        </h2>
         <span className="font-mono text-sm text-muted">{apiKey.prefix}…</span>
       </div>
       <ul className="flex flex-col text-sm text-text-body">

@@ -22,12 +22,16 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// <summary>
     /// The note after a write in <paramref name="changeset"/>. The state it replaces goes into the history,
     /// unless it belongs to the same changeset: then it was an intermediate step of the same session.
+    /// The state a note was created with is the exception, a version of its own even within the changeset (a
+    /// conflict copy's first state is the evidence of the conflict).
     /// Without a changeset (a restore), the new state joins none, so it stays a version of its own.
     /// </summary>
     public static StoredNote Next(
         StoredNote current, string content, string writer, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
     {
-        var coalesce = !keepCurrent && changeset is not null && current.Changeset?.Id == changeset.Id;
+        // A note without history is still in the state it was created with: every later write leaves an entry.
+        var created = current.History.Count == 0;
+        var coalesce = !keepCurrent && !created && changeset is not null && current.Changeset?.Id == changeset.Id;
         // A state already on top of the history (after a restore, say) is not kept twice.
         var duplicate = current.History.Count > 0 && current.History[0].Content == current.Content;
         IReadOnlyList<HistoryEntry> history = coalesce || duplicate
@@ -47,7 +51,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
     /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
     public Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
-        Changeset.ForAsync(store, path.Segments[0], caller.Writer, Now, ct);
+        Changeset.ForAsync(store, path.Segments[0], caller.Writer, caller.ChangesetIdle, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
     public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct)
@@ -233,7 +237,12 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     }
 
     /// <summary>Moves a note to the trash. Needs no version: it can be undone with <see cref="RestoreAsync"/>.</summary>
-    public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct)
+    /// <summary>
+    /// With <paramref name="version"/>, only while the note is at that version (a sync client removing what it saw):
+    /// the check is on the very state the store then trashes at its revision, so a write in
+    /// between makes the trash fail rather than be lost.
+    /// </summary>
+    public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct, string? version = null)
     {
         if (caller.Refuse("rm", path) is { } refused) return refused;
         var existing = await store.GetAsync(path, ct);
@@ -245,18 +254,25 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
                 : ShellResult.Error($"rm: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
         }
 
+        if (version is not null && existing.Version != version)
+        {
+            return ShellResult.Error($"rm: {path.Value} has changed since version {version} (it is now {existing.Version})");
+        }
+
         // Asked before removing: once the note is gone, its backlinks can't be asked for any more.
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
         var resolver = new LinkResolver(path.Segments[0], notes.Select(n => n.Path));
         var linking = notes
             .Where(n => n.Path != path)
-            .Select(n => (n.Path, Count: WikiLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
+            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
             .Where(x => x.Count > 0)
             .OrderBy(x => x.Path.Value, TextOrder.Default)
             .ToList();
 
-        if (!await store.TryTrashAsync(existing, caller.Writer, Now, ct))
+        // A batch rather than a plain trash, so the trash record joins the writer's changeset.
+        var batch = new NoteBatch { Trashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
+        if ((await store.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
         {
             return ShellResult.Error($"rm: {path.Value} changed while removing it; try again");
         }
@@ -332,7 +348,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         var found = new List<string>();
         foreach (var note in notes.Where(n => n.Path != created).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
-            foreach (var link in WikiLink.Parse(note.Content))
+            foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var now = after.Resolve(note.Path, link.Target);

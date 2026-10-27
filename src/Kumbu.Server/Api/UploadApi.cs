@@ -44,7 +44,7 @@ public static class UploadApi
         app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter)
             .MapPost("/upload/{vault}/{**folder}", UploadAsync)
             .WithMetadata(new RequestSizeLimitAttribute(MaxBody))
-            .Errors(400, 401, 403, 404, 409, 413);
+            .Errors(400, 401, 403, 404, 409, 413, 503);
     }
 
     private static async Task<Ok<UploadResultView>> UploadAsync(

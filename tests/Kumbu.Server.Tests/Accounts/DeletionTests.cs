@@ -12,7 +12,7 @@ using static Kumbu.Server.Tests.Vaults.VaultWorld;
 
 namespace Kumbu.Server.Tests.Accounts;
 
-/// <summary>Deleting a vault, one's own account, or a deactivated user: everything of it, nothing else, in one go.</summary>
+/// <summary>Deleting a vault, one's own account, or any user by an admin: everything of it, nothing else, in one go.</summary>
 [Collection("mongo")]
 public sealed class DeletionTests(MongoFixture fixture)
 {
@@ -34,13 +34,22 @@ public sealed class DeletionTests(MongoFixture fixture)
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
     private UserCatalog Users() =>
-        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), _time, NullLogger<UserCatalog>.Instance);
+        new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<UserCatalog>.Instance);
 
     private Sessions Sessions() => new(_db, _time);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private string? _listPath;
+
+    private DeletionList List() =>
+        new(Options.Create(new KumbuOptions { Deletions = new DeletionsOptions { Path = _listPath } }), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<DeletionList>());
+
+    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+
+    private RestoredDeletions Restored() => new(_db, List());
+
+    private string TempListPath() => _listPath = Path.Combine(Path.GetTempPath(), "kumbu-deletions-" + Guid.NewGuid().ToString("N"));
 
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
@@ -403,7 +412,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task An_admin_deletes_only_a_deactivated_user_with_the_username_typed()
+    public async Task An_admin_deletes_a_user_only_with_their_password_and_the_username_typed()
     {
         var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
         var (bob, bobKey, _) = await SignedInAsync("bob");
@@ -411,8 +420,6 @@ public sealed class DeletionTests(MongoFixture fixture)
         var (lea, key, _) = await SignedInAsync("lea");
         var diary = await FilledVaultAsync(lea, key, "Tagebuch");
 
-        await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
-        Assert.True(await Admin().SetActiveAsync(anna, lea.Id, false, Ct));
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(bob, bobKey, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "le", Ct));
         var wrong = await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, "not anna's password at all", lea.Id, "lea", Ct));
@@ -420,15 +427,257 @@ public sealed class DeletionTests(MongoFixture fixture)
         // Anna's password, but the target's user key: it must open the admin's own.
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, key, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, chris.Id, "chris", Ct));
-        Assert.False(await Deletion().DeleteUserAsync(anna, annaKey, Password, "no-such-user", "x", Ct));
+        Assert.Null(await Deletion().DeleteUserAsync(anna, annaKey, Password, "no-such-user", "x", Ct));
         await AssertIntactAsync(diary.Id);
 
-        Assert.True(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "LEA", Ct));
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "LEA", Ct));
 
         Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
         Assert.Equal(0, await CountAsync("user_slots", "user", lea.Id));
         await AssertGoneAsync(diary.Id);
-        Assert.False(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+        Assert.Null(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+    }
+
+    [Fact]
+    public async Task A_deactivated_user_can_still_be_deleted()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        Assert.True(await Admin().SetActiveAsync(anna, lea.Id, false, Ct));
+
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+
+        Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task An_admin_deletes_an_active_user_in_one_step()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea", Roles.Admin);
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        await Keys().CreateAsync(lea, key, Now, "agent", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Write }, Ct);
+
+        var result = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.NotNull(result);
+        Assert.Equal(lea.Id, result.Id);
+        Assert.Equal("lea", result.Username);
+        Assert.Equal(lea.Display, result.Display);
+        Assert.Equal("anna", result.DeletedBy);
+        Assert.Equal(Now, result.DeletedAt);
+        Assert.Equal(1, result.Summary.Vaults);
+        Assert.Equal(1, result.Summary.Notes);
+        Assert.Equal(1, result.Summary.ApiKeys);
+        Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task An_admin_cant_delete_themselves_here()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var diary = await FilledVaultAsync(anna, annaKey, "Tagebuch");
+
+        var refused = await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, anna.Id, "anna", Ct));
+
+        Assert.Equal("Delete your own account in Settings.", refused.Message);
+        Assert.Equal(1, await CountAsync("users", "_id", anna.Id));
+        await AssertIntactAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task Deleting_an_active_user_ends_their_session_and_writes()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, session) = await SignedInAsync("lea");
+        var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+        // A request of lea's that opened her vault before the deletion and writes after it.
+        var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
+        Assert.Contains("Tagebuch", await store.ListVaultsAsync(Ct));
+
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+
+        Assert.Null(await Sessions().ResolveAsync(session, Ct));
+        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
+        await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Spät", lea.Id, key, Ct));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task Both_deletions_list_the_id()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, _, _) = await SignedInAsync("lea");
+            var (bob, bobKey, _) = await SignedInAsync("bob");
+
+            var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+            Assert.True(await Deletion().DeleteOwnAccountAsync(bob, bobKey, Password, "bob", Ct));
+
+            Assert.True(deleted!.Listed);
+            Assert.Equal(new HashSet<string> { lea.Id, bob.Id }, await List().ReadAsync(Ct));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task An_unwritable_list_never_blocks_a_deletion()
+    {
+        // The path is a file, not a directory: nothing can be written below it.
+        var file = Path.GetTempFileName();
+        _listPath = file;
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, key, _) = await SignedInAsync("lea");
+            var diary = await FilledVaultAsync(lea, key, "Tagebuch");
+
+            var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+            Assert.NotNull(deleted);
+            Assert.False(deleted.Listed);
+            Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+            await AssertGoneAsync(diary.Id);
+            Assert.Contains(_log.Lines, l => l.StartsWith("Error", StringComparison.Ordinal) && l.Contains(lea.Id, StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public async Task A_restored_user_is_found_and_deleted_again_but_never_the_admin_themselves()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+            var (lea, key, _) = await SignedInAsync("lea");
+            var (bob, _, _) = await SignedInAsync("bob");
+            await FilledVaultAsync(lea, key, "Tagebuch");
+            var leaDoc = await Raw("users").Find(Builders<BsonDocument>.Filter.Eq("_id", lea.Id)).FirstAsync(Ct);
+            Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+            Assert.Empty(await Restored().FindAsync(Ct));
+            // A backup restore brings lea back, and with her an id the list names that the admin holds now (anna's
+            // own, listed by hand here; a restore after anna deleted herself would do the same).
+            await Raw("users").InsertOneAsync(leaDoc, cancellationToken: Ct);
+            Assert.True(await List().AddAsync(anna.Id, Ct));
+
+            Assert.Equal(["anna", "lea"], (await Restored().FindAsync(Ct)).Select(u => u.Username).Order());
+            // Anna doesn't see herself: she can't delete herself here, so she isn't offered it.
+            Assert.Equal(["lea"], (await Restored().ListAsync(anna, Ct)).Select(u => u.Username));
+            await Assert.ThrowsAsync<ArgumentException>(() => Deletion().RepeatAsync(anna, annaKey, "not anna's password at all", Ct));
+            var again = await Deletion().RepeatAsync(anna, annaKey, Password, Ct);
+
+            var deleted = Assert.Single(again);
+            Assert.Equal(lea.Id, deleted.Id);
+            Assert.Equal("anna", deleted.DeletedBy);
+            Assert.True(deleted.Listed);
+            Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+            Assert.Equal(1, await CountAsync("users", "_id", anna.Id));
+            Assert.Equal(1, await CountAsync("users", "_id", bob.Id));
+            Assert.Equal(["anna"], (await Restored().FindAsync(Ct)).Select(u => u.Username));
+            Assert.Empty(await Restored().ListAsync(anna, Ct));
+            // Nothing new on the list: lea's id is there once, as before.
+            Assert.Single(await File.ReadAllLinesAsync(Path.Combine(dir, "deleted-users"), Ct), l => l == lea.Id);
+            Assert.Contains(_log.Lines, l => l.Contains($"anna deleted user {lea.Id} again after a restore", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task At_start_the_log_warns_about_restored_users_by_id_only()
+    {
+        var dir = TempListPath();
+        try
+        {
+            var (lea, _, _) = await SignedInAsync("lea");
+            Assert.True(await List().AddAsync(lea.Id, Ct));
+            using var check = new RestoredDeletionsCheck(Restored(), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<RestoredDeletionsCheck>());
+
+            await check.StartAsync(Ct);
+            await check.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+
+            var warning = Assert.Single(_log.Lines, l => l.Contains("deleted users are back after a restore", StringComparison.Ordinal));
+            Assert.StartsWith("Warning", warning, StringComparison.Ordinal);
+            Assert.Contains("1 deleted users are back after a restore; an admin can delete them again on the users page", warning, StringComparison.Ordinal);
+            Assert.Contains(lea.Id, warning, StringComparison.Ordinal);
+            Assert.DoesNotContain("lea", warning.Replace(lea.Id, "", StringComparison.Ordinal).Replace("RestoredDeletions", "", StringComparison.Ordinal), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Only_an_admin_repeats_a_deletion()
+    {
+        var (bob, bobKey, _) = await SignedInAsync("bob");
+
+        await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().RepeatAsync(bob, bobKey, Password, Ct));
+        await Assert.ThrowsAsync<NotPermittedException>(() => Restored().ListAsync(bob, Ct));
+    }
+
+    [Fact]
+    public async Task Without_a_list_the_receipt_says_it_is_not_listed()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, _, _) = await SignedInAsync("lea");
+
+        var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.False(deleted!.Listed);
+    }
+
+    [Fact]
+    public async Task Deleting_a_user_erases_the_note_and_link_of_the_invitation_they_joined_with()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+        var (code, joinedWith) = await invitations.CreateAsync(anna, Roles.User, "Lea Müller, lea@example.org", null, Ct);
+        var (_, other) = await invitations.CreateAsync(anna, Roles.User, "for Max", null, Ct);
+        var (lea, _) = await invitations.RedeemAsync(code, "lea", Password, Ct);
+
+        var deleted = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.Equal(1, deleted!.Summary.Invitations);
+        var record = (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == joinedWith.Id);
+        Assert.Null(record.Note);
+        Assert.Null(record.UsedBy);
+        Assert.NotNull(record.UsedAt);
+        Assert.Equal(InvitationState.Used, record.State);
+        Assert.Equal(0, await CountAsync("invitations", "usedBy", lea.Id));
+        // Another invitation, not theirs, keeps its note.
+        Assert.Equal("for Max", (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == other.Id).Note);
+    }
+
+    [Fact]
+    public async Task The_own_deletion_erases_the_invitation_they_joined_with_too()
+    {
+        var (anna, _, _) = await SignedInAsync("anna", Roles.Admin);
+        var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+        var (code, joinedWith) = await invitations.CreateAsync(anna, Roles.User, "Lea Müller", null, Ct);
+        await invitations.RedeemAsync(code, "lea", Password, Ct);
+        var (signedIn, key, _) = (await Users().TrySignInAsync("lea", Password, Ct))!.Value;
+
+        Assert.True(await Deletion().DeleteOwnAccountAsync(signedIn, key, Password, "lea", Ct));
+
+        var record = (await invitations.ListAsync(anna, Ct)).Single(i => i.Id == joinedWith.Id);
+        Assert.Null(record.Note);
+        Assert.Null(record.UsedBy);
     }
 
     [Fact]
@@ -443,13 +692,15 @@ public sealed class DeletionTests(MongoFixture fixture)
 
         await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
         await Deletion().DeleteOwnAccountAsync(bob, bobKey, Password, "bob", Ct);
-        await Admin().SetActiveAsync(anna, lea.Id, false, Ct);
         await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
 
         var log = string.Join("\n", _log.Lines);
         Assert.Contains(diary.Id, log, StringComparison.Ordinal);
         Assert.Contains("deleted their account", log, StringComparison.Ordinal);
-        Assert.Contains("anna deleted user lea", log, StringComparison.Ordinal);
+        Assert.Contains($"anna deleted user {lea.Id}", log, StringComparison.Ordinal);
+        // The lines of the account deletions name the erased people by id only, not by their usernames.
+        Assert.All(_log.Lines.Where(l => l.Contains("deleted user", StringComparison.Ordinal) || l.Contains("deleted their account", StringComparison.Ordinal)),
+            l => Assert.DoesNotMatch(@"\b(lea|bob)\b", l));
         foreach (var secret in new[] { "Tagebuch", "Arbeit", "Projekte", "Acme", "plan.md", Password })
         {
             Assert.DoesNotContain(secret, log, StringComparison.Ordinal);

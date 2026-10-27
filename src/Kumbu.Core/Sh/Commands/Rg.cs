@@ -37,6 +37,7 @@ public sealed class Rg(INoteReader notes) : ICommand
           Without a path, search every vault. Prints path:line:text, sorted by path; context lines
           print as path-line-text, and '--' separates groups that are not adjacent.
           Right of a pipe, rg filters the piped lines instead and prints them without a prefix.
+          If nothing matches in the text but note names do, a hint line lists them (not when piped).
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
 
@@ -147,7 +148,37 @@ public sealed class Rg(INoteReader notes) : ICommand
             foreach (var note in below) found.TryAdd(note.Path, note);
         }
 
-        return SearchContents(search, options, found.Values);
+        var result = SearchContents(search, options, found.Values);
+        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, found.Keys) };
+    }
+
+    private const int HintedPaths = 5;
+
+    /// <summary>
+    /// For a search that found nothing in the text: the notes in its scope whose path matches the pattern, since a
+    /// note's title is often only its file name. Null if none does.
+    /// </summary>
+    private static string? NameHint(Search search, Options options, IEnumerable<VaultPath> scope)
+    {
+        var names = scope.Select(p => p.Value).Where(search.IsMatch).Order(TextOrder.Default).ToList();
+        if (names.Count == 0) return null;
+
+        var shown = string.Join(", ", names.Take(HintedPaths));
+        var more = names.Count > HintedPaths ? $" and {names.Count - HintedPaths} more" : "";
+        var flags = string.Concat(options.Has("ignore-case") ? "-i " : "", options.Has("fixed-strings") ? "-F " : "", options.Has("word-regexp") ? "-w " : "");
+        var explicitPatterns = options.Values("regexp");
+        var patterns = explicitPatterns.Count > 0
+            ? string.Join(' ', explicitPatterns.Select(p => $"-e {Quote(p)}"))
+            : Quote(options.Operands[0]);
+        var command = $"rg --files | rg {flags}{patterns}";
+        return $"no match in the text; {names.Count} note name{(names.Count == 1 ? "" : "s")} match{(names.Count == 1 ? "es" : "")}: {shown}{more} ({command} lists them)";
+    }
+
+    /// <summary>The pattern as the shell reads it back: bare if it is plain, else quoted.</summary>
+    private static string Quote(string pattern)
+    {
+        if (pattern.Length > 0 && pattern.All(c => char.IsLetterOrDigit(c) || c is '_' or '-' or '.' or '/')) return pattern;
+        return pattern.Contains('\'') ? $"\"{pattern}\"" : $"'{pattern}'";
     }
 
     private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found)
@@ -273,6 +304,8 @@ public sealed class Rg(INoteReader notes) : ICommand
     /// <summary>Selects matching lines with their context and renders them in ripgrep's layout.</summary>
     private sealed class Search(Regex regex, bool invert, int? max, int before, int after)
     {
+        public bool IsMatch(string text) => regex.IsMatch(text);
+
         public bool HasContext => before > 0 || after > 0;
 
         /// <summary>Indexes of the selected lines, at most <c>max</c> of them.</summary>

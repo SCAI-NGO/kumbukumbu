@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useId, useState, type FormEvent, type ReactNode } from "react";
-import { api, call } from "../api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
+import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
+import { useDialog } from "../hooks/useDialog";
+import ExportDialog from "../data/ExportDialog";
+import ImportDialog from "../data/ImportDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { setAutoRefresh, storedAutoRefresh } from "../note/autoRefresh";
 import { applyScheme, storedScheme } from "../theme/apply";
 import { schemes, type Scheme, type Tokens } from "../theme/schemes";
+import { isStandalone } from "../update/InstallHint";
+import { useUpdate } from "../update/store";
+import { appVersion, parseVersion } from "../update/version";
 
 export default function Settings() {
   return (
@@ -21,17 +28,21 @@ export default function Settings() {
       <ElsewhereSection />
       <PasswordSection />
       <RecoverySection />
+      <ReencryptSection />
       <SessionsSection />
       <VaultsSection />
+      <YourDataSection />
       <DeleteAccountSection />
+      <InstallSection />
+      <AboutSection />
     </AccountScreen>
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, id: anchor, children }: { title: string; id?: string; children: ReactNode }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-4">
+    <section id={anchor} aria-labelledby={id} className="flex flex-col gap-4 rounded-[14px] border border-line bg-surface p-4">
       <h2 id={id} className="text-lg font-bold text-text">
         {title}
       </h2>
@@ -164,10 +175,10 @@ function PasswordSection() {
               aria-describedby={`${revokeId}-hint`}
               className="size-5 shrink-0 accent-accent"
             />
-            Also revoke all API keys
+            Also revoke all API keys and disconnect apps
           </label>
           <p id={`${revokeId}-hint`} className="pl-8 text-sm text-text-body">
-            Agents using them will need new keys.
+            Agents using them will need new keys, and apps will need to reconnect.
           </p>
         </div>
         {change.isError && <FormError>{errorText(change.error)}</FormError>}
@@ -231,14 +242,88 @@ function RecoverySection() {
   );
 }
 
+/**
+ * New keys for the account and every vault. The server rotates the user key and revokes every API key and app before
+ * it answers; the vaults are re-encrypted in the background, each showing as such in the vault list until it is done.
+ */
+function ReencryptSection() {
+  const queryClient = useQueryClient();
+  const [password, setPassword] = useState("");
+  // As for a new recovery key: the key lives in component state only, until the reveal is done.
+  const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const reencrypt = useMutation({
+    mutationFn: () => call(api.POST("/api/account/reencrypt", { body: { password } })),
+    // The result carries the new recovery key: never in the client-wide mutation cache.
+    gcTime: 0,
+    onSuccess: (view) => {
+      setPassword("");
+      setDone(false);
+      setRecoveryKey(view.recoveryKey);
+      void Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    },
+  });
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    reencrypt.mutate();
+  };
+
+  return (
+    <Section title="Re-encrypt my vaults">
+      {recoveryKey ? (
+        <RecoveryKeyReveal
+          value={recoveryKey}
+          onContinue={() => {
+            reencrypt.reset();
+            setRecoveryKey(null);
+            setDone(true);
+          }}
+        />
+      ) : (
+        <>
+          <p className="text-text-body">
+            New keys for your account and every vault. API keys and connected apps lose access and need to be set up or reconnected; you get a new
+            recovery key. If you think your password leaked, change it too.
+          </p>
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
+            {reencrypt.isError && (
+              <FormError>
+                {errorText(reencrypt.error)}
+                {/* A refusal (wrong password, a conflict, too many tries) changed nothing. A fault or a lost connection
+                    may have come after the new keys were in place, with the new recovery key lost on the way: the old
+                    one no longer works then. */}
+                {!(reencrypt.error instanceof HttpError && reencrypt.error.status < 500) &&
+                  ' The re-encryption may have gone through even so: make a new recovery key under "Recovery key" above, since the old one may no longer work.'}
+              </FormError>
+            )}
+            {done && <Done>Your vaults are being re-encrypted with new keys, and your new recovery key is in place. The vault list shows each until it is done.</Done>}
+            <button type="submit" disabled={reencrypt.isPending || !password} className={secondaryButtonClass}>
+              {reencrypt.isPending ? "Re-encrypting…" : "Re-encrypt my vaults"}
+            </button>
+          </form>
+        </>
+      )}
+    </Section>
+  );
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
 /** Deleting a vault, with its name typed: the one place in the app that removes notes beyond the trash. */
 function VaultsSection() {
   const vaults = useVaults();
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [rekeying, setRekeying] = useState<string | null>(null);
+  const [rekeyed, setRekeyed] = useState<string | null>(null);
   return (
     <Section title="Vaults">
       <p className="text-text-body">
         Deleting a vault removes it for good, with every note in it, their history, the trash and the checkpoints. API keys keep their other vaults; a key that had only this one is revoked.
+      </p>
+      <p className="text-text-body">
+        Re-encrypting a vault gives it a new key. API keys and connected apps with access to it lose it and need to be set up or reconnected.
       </p>
       {vaults.isError && <FormError>{errorText(vaults.error)}</FormError>}
       {vaults.data?.length === 0 && <p className="text-muted">You have no vault yet.</p>}
@@ -247,9 +332,18 @@ function VaultsSection() {
           {vaults.data.map((vault) => (
             <li key={vault.name} className="flex items-center gap-3">
               <span className="min-w-0 flex-1 break-words text-text">{vault.name}</span>
-              <span className="shrink-0 text-sm text-muted">
-                {vault.notes} {vault.notes === 1 ? "note" : "notes"}
-              </span>
+              <span className="shrink-0 text-sm text-muted">{vault.pending ? "Being re-encrypted" : plural(Number(vault.notes), "note", "notes")}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setRekeyed(null);
+                  setRekeying(vault.name);
+                }}
+                aria-label={`Re-encrypt ${vault.name}`}
+                className={`${secondaryButtonClass} shrink-0`}
+              >
+                Re-encrypt
+              </button>
               <button type="button" onClick={() => setDeleting(vault.name)} aria-label={`Delete ${vault.name}`} className={`${secondaryButtonClass} shrink-0`}>
                 Delete
               </button>
@@ -257,8 +351,123 @@ function VaultsSection() {
           ))}
         </ul>
       )}
+      {rekeyed && <Done>{rekeyed}</Done>}
       {deleting !== null && <DeleteVaultDialog vault={deleting} onClose={() => setDeleting(null)} />}
+      {rekeying !== null && <RekeyVaultDialog vault={rekeying} onDone={setRekeyed} onClose={() => setRekeying(null)} />}
     </Section>
+  );
+}
+
+/** Taking one's notes out (and, later, bringing them in): rarely used, so it lives here and not in the menus. */
+export function YourDataSection() {
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  return (
+    <Section title="Your data">
+      <p className="text-text-body">
+        The export is a ZIP with a folder of Markdown notes for each vault; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
+        Importing such a ZIP makes a vault of each folder, or merges into the vault of that name.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <button type="button" onClick={() => setExporting(true)} className={secondaryButtonClass}>
+          Export my vaults…
+        </button>
+        <button type="button" onClick={() => setImporting(true)} className={secondaryButtonClass}>
+          Import vaults…
+        </button>
+      </div>
+      {exporting && <ExportDialog onClose={() => setExporting(false)} />}
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
+    </Section>
+  );
+}
+
+/** What loses access is listed first; only then is the password asked. The answer waits for the vault to be done. */
+function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(message: string): void; onClose(): void }) {
+  const id = useId();
+  const queryClient = useQueryClient();
+  const dialog = useDialog<HTMLFormElement>(onClose);
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  const access = useQuery({
+    queryKey: ["vault-access", vault],
+    queryFn: () => call(api.GET("/api/vaults/{vault}/access", { params: { path: { vault } } })),
+    // Always as it is now: a key made a moment ago must be on the list.
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const rekey = useMutation({
+    mutationFn: () => call(api.POST("/api/vaults/{vault}/rekey", { params: { path: { vault } }, body: { password } })),
+    onSuccess: async (view) => {
+      setPassword("");
+      const keys = Number(view.revokedApiKeys);
+      const apps = Number(view.disconnectedApps);
+      onDone(
+        keys + apps === 0
+          ? `${vault} is re-encrypted.`
+          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`,
+      );
+      await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+      onClose();
+    },
+  });
+  const lists = access.data;
+  const nothing = lists && lists.apiKeys.length === 0 && lists.connections.length === 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
+      <form
+        ref={dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        aria-busy={rekey.isPending}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (lists && password) rekey.mutate();
+        }}
+        className="flex max-h-full w-full max-w-sm flex-col gap-4 overflow-y-auto rounded-[14px] border border-line bg-surface-2 p-5"
+      >
+        <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
+          Re-encrypt {vault}?
+        </h2>
+        <p className="text-text-body">The vault gets a new key. What has access to it now loses it and needs to be set up or reconnected.</p>
+        {access.isPending && <p className="text-muted">Looking up what has access…</p>}
+        {access.isError && <FormError>{errorText(access.error)}</FormError>}
+        {nothing && <p className="text-text-body">No API key or connected app has access to it.</p>}
+        {lists && lists.apiKeys.length > 0 && <AccessList title="API keys" names={lists.apiKeys} />}
+        {lists && lists.connections.length > 0 && <AccessList title="Connected apps" names={lists.connections} />}
+        {lists && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
+        {rekey.isPending && <p className="text-muted">Re-encrypting; this can take a while for a large vault.</p>}
+        {rekey.isError && <FormError>{errorText(rekey.error)}</FormError>}
+        <div className="flex gap-3">
+          <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+            Cancel
+          </button>
+          <button type="submit" disabled={!lists || !password || rekey.isPending} className={`${primaryButtonClass} flex-1`}>
+            Re-encrypt vault
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AccessList({ title, names }: { title: string; names: string[] }) {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 id={id} className={labelClass}>
+        {title}
+      </h3>
+      <ul aria-labelledby={id} className="list-disc pl-5 text-text">
+        {names.map((name) => (
+          <li key={name} className="break-words">
+            {name}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -363,6 +572,72 @@ function SessionsSection() {
       <button type="button" disabled={endOthers.isPending} onClick={() => endOthers.mutate()} className={secondaryButtonClass}>
         Sign out other sessions
       </button>
+    </Section>
+  );
+}
+
+/** Without a service worker there is no install banner: the browser's own menu installs it (spec §1). */
+function InstallSection() {
+  const { hash } = useLocation();
+  const section = useRef<HTMLDivElement>(null);
+  // The phone's hint links here (`/settings#install`); a navigation within the app doesn't scroll to it by itself.
+  useEffect(() => {
+    if (hash === "#install") section.current?.scrollIntoView?.({ block: "start" });
+  }, [hash]);
+
+  return (
+    <div ref={section}>
+      <Section title="Install as an app" id="install">
+        {isStandalone() ? (
+          <p className="text-text-body">Kumbu² is installed as an app on this device.</p>
+        ) : (
+          <>
+            <p className="text-text-body">Kumbu² gets an icon of its own and opens in its own window. Updates still arrive by themselves.</p>
+            <InstallSteps title="Android (Chrome)">
+              <li>Open the menu ⋮.</li>
+              <li>
+                Tap <b>Install app</b> (or <b>Add to Home screen</b>).
+              </li>
+            </InstallSteps>
+            <InstallSteps title="iPhone and iPad (Safari)">
+              <li>
+                Tap <b>Share</b>.
+              </li>
+              <li>
+                Tap <b>Add to Home Screen</b>.
+              </li>
+            </InstallSteps>
+            <InstallSteps title="On the desktop (Chrome or Edge)">
+              <li>Click the install icon at the right of the address bar,</li>
+              <li>
+                or open the menu and choose <b>Install Kumbu²</b>.
+              </li>
+            </InstallSteps>
+          </>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function InstallSteps({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="font-medium text-text">{title}</h3>
+      <ol className="list-decimal pl-5 text-text-body">{children}</ol>
+    </div>
+  );
+}
+
+/** This app's build, and the server's when it differs (an update not taken yet). */
+function AboutSection() {
+  const app = parseVersion(appVersion);
+  const server = parseVersion(useUpdate((s) => s.server));
+  const differs = app && server && (app.semver !== server.semver || app.sha !== server.sha);
+  return (
+    <Section title="About">
+      <p className="text-text-body">{app ? `Kumbu² ${app.semver} (${app.sha})` : "Kumbu² development build"}</p>
+      {differs && <p className="text-text-body">{`Server: ${server.semver} (${server.sha})`}</p>}
     </Section>
   );
 }

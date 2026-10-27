@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Reflection;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sh;
@@ -10,7 +9,9 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
 using Kumbu.Server.Notes;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
@@ -57,18 +58,37 @@ builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
+// Re-keys vaults in the background, one at a time; a hosted service so that it is there to hear of pending vaults.
+builder.Services.AddSingleton<RekeyRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
 
 builder.Services.AddSingleton(_ => new Argon2Kdf());
 builder.Services.AddSingleton<UserCatalog>();
+builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddSingleton<Connections>();
+builder.Services.AddClientMetadataFetcher();
+builder.Services.AddSingleton<OAuthClients>();
+builder.Services.AddSingleton<AuthorizationRequests>();
+builder.Services.AddSingleton<OAuthTokens>();
 builder.Services.AddSingleton<ServerSecret>();
 builder.Services.AddSingleton<Invitations>();
 builder.Services.AddSingleton<Admin>();
+builder.Services.AddSingleton<DeletionList>();
+builder.Services.AddSingleton<RestoredDeletions>();
+builder.Services.AddHostedService<RestoredDeletionsCheck>();
 builder.Services.AddSingleton<Deletion>();
+builder.Services.AddSingleton<Kumbu.Server.Welcome.WelcomeVault>();
+builder.Services.AddSingleton<Rekeying>();
 builder.Services.AddSingleton<BootstrapAdmin>();
 builder.Services.AddSingleton<WrongKeyLimiter>();
+builder.Services.AddSingleton<OAuthLimits>();
 builder.Services.AddSingleton<AccountLimits>();
+builder.Services.AddSingleton<SyncTickets>();
+builder.Services.AddSingleton<Pairings>();
+builder.Services.AddSingleton<SyncHub>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
 // body that can't be bound throws, so ApiErrors answers it as {"error": ...} like every other refusal.
@@ -87,6 +107,7 @@ builder.Services.AddScoped(RequestCaller.Current);
 builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
 builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
+builder.Services.AddScoped<WriterKinds>();
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
@@ -103,7 +124,7 @@ builder.Services.AddScoped<Shell>();
 // Without an explicit ServerInfo the SDK reports the entry assembly's name (the test host's, under tests).
 builder.Services.AddMcpServer(o =>
     {
-        o.ServerInfo = new Implementation { Name = "kumbu", Version = ServerVersion() };
+        o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
     })
@@ -151,6 +172,8 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
 var publicUrl = app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.PublicUrl is { Length: > 0 } url ? url : null;
 app.UseSecurityHeaders(publicUrl);
 app.Use(ApiErrors.BadRequestsAsync);
+// Dot segments in an /api URL are refused as the client sent them: Kestrel resolves them before routing.
+app.Use(ApiPaths.RefuseDotSegmentsAsync);
 
 // The web app (web/, built into wwwroot): index.html changes with every build and must be revalidated, the
 // hashed files under /assets never change. Before routing: static files need no caller.
@@ -166,17 +189,32 @@ var webApp = new StaticFileOptions
 app.UseDefaultFiles();
 app.UseStaticFiles(webApp);
 
+// The sync hints (GET /api/ws); the server pings every 30 s, so proxies and phones keep the connection.
+// A peer that answers no ping within a minute (a phone that went away) is dropped, not kept until TCP gives up.
+app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterval, KeepAliveTimeout = TimeSpan.FromSeconds(60) });
+
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
+app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
 app.MapGet("/healthz", () => "ok").AllowAnonymous().ExcludeFromDescription();
+// Anonymous, so a tab on the sign-in screen can ask too: the web app compares it with its own when it becomes visible.
+app.MapGet("/api/version", () => TypedResults.Ok(new VersionView(BuildVersion.Full))).AllowAnonymous();
 app.MapMcp("/mcp");
+// One URL per connection (Ruling 18): CallerMiddleware answers for an unknown id and, until a token is valid, 401.
+app.MapMcp("/mcp/c/{id}");
+app.MapDiscovery();
+app.MapOAuthEndpoints();
 app.MapOpenApi("/api/openapi.json").AllowAnonymous();
 app.MapAccountApi();
+app.MapConnectionApi();
 app.MapNoteApi();
 app.MapHistoryApi();
 app.MapUploadApi();
+app.MapSyncApi();
+app.MapPairingApi();
+app.MapExportApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.
@@ -190,13 +228,5 @@ app.MapFallbackToFile("{**path}", "index.html", webApp).AllowAnonymous();
 
 app.Run();
 return 0;
-
-static string ServerVersion()
-{
-    var informational = typeof(KumbuOptions).Assembly
-        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-    // Strip SourceLink's "+<commit sha>" suffix; the commit is not something a client needs.
-    return string.IsNullOrEmpty(informational) ? "0.1.0" : informational.Split('+')[0];
-}
 
 public partial class Program;

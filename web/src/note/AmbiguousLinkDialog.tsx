@@ -6,7 +6,18 @@ import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 
 /** The notes a link could mean, each with its folder to tell them apart; following one closes the dialog. */
-export default function AmbiguousLinkDialog({ target, candidates, onClose }: { target: string; candidates: string[]; onClose(): void }) {
+export default function AmbiguousLinkDialog({
+  target,
+  candidates,
+  onClose,
+  hrefOf = noteUrl,
+}: {
+  target: string;
+  candidates: string[];
+  onClose(): void;
+  /** Where a candidate is opened; a checkpoint's links stay inside it. */
+  hrefOf?: (path: string) => string;
+}) {
   const dialog = useDialog<HTMLDivElement>(onClose);
   // Not inside the note's text: a dialog there would sit in a paragraph.
   return createPortal(
@@ -25,7 +36,7 @@ export default function AmbiguousLinkDialog({ target, candidates, onClose }: { t
           {candidates.map((path) => (
             <li key={path}>
               <Link
-                to={noteUrl(path)}
+                to={hrefOf(path)}
                 onClick={onClose}
                 className="flex min-h-11 min-w-0 flex-col justify-center rounded-[8px] px-2 py-1 focus-visible:outline-2 focus-visible:outline-accent"
               >

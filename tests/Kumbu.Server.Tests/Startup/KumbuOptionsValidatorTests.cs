@@ -49,6 +49,42 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Equal(["Kumbu:Mongo:ConnectionString must be set"], result.Failures);
     }
 
+    [Theory]
+    [InlineData(4, false)]
+    [InlineData(5, true)]
+    [InlineData(60, true)]
+    [InlineData(1440, true)]
+    [InlineData(1441, false)]
+    public void Access_token_minutes_are_validated(int minutes, bool valid)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.OAuth.AccessTokenMinutes = minutes;
+
+        var result = Validate(options);
+
+        if (valid) Assert.False(result.Failed);
+        else Assert.Equal(["Kumbu:OAuth:AccessTokenMinutes must be between 5 and 1440"], result.Failures);
+    }
+
+    [Theory]
+    [InlineData("Production", false)]
+    [InlineData("Development", true)]
+    [InlineData("Staging", true)]
+    public void Loopback_clients_are_refused_in_production(string environment, bool valid)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.OAuth.AllowLoopbackClients = true;
+        var host = new Microsoft.Extensions.Hosting.Internal.HostingEnvironment { EnvironmentName = environment };
+
+        var result = new KumbuOptionsValidator(host).Validate(null, options);
+
+        if (valid) Assert.False(result.Failed);
+        else Assert.Equal([KumbuOptionsValidator.LoopbackClientsMessage], result.Failures);
+        // Off, it is fine anywhere.
+        options.OAuth.AllowLoopbackClients = false;
+        Assert.False(new KumbuOptionsValidator(host).Validate(null, options).Failed);
+    }
+
     [Fact]
     public void UnknownSearchModelFails()
     {
@@ -149,6 +185,21 @@ public sealed class KumbuOptionsValidatorTests
         var options = Options(KumbuAppFactory.Token, ValidMongo);
         options.Embeddings.Providers[name] = provider;
         return [.. Validate(options).Failures ?? []];
+    }
+
+    [Fact]
+    public void The_default_embedding_provider_is_internal_or_a_configured_one()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Embeddings.Default = "tensorx";
+        Assert.Equal(
+            "Kumbu:Embeddings:Default (KUMBU_EMBEDDINGS_DEFAULT) must be 'internal' or the name of a provider under Kumbu:Embeddings:Providers (there are none)",
+            Assert.Single(Validate(options).Failures!));
+
+        options.Embeddings.Providers["tensorx"] = Provider();
+        Assert.True(Validate(options).Succeeded);
+        options.Embeddings.Default = "openai";
+        Assert.Contains("(tensorx)", Assert.Single(Validate(options).Failures!), StringComparison.Ordinal);
     }
 
     [Fact]

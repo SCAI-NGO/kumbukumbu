@@ -107,6 +107,33 @@ public sealed class EmbeddingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(["internal", "remote"], list.Select(p => p!["name"]!.GetValue<string>()));
         Assert.Equal((false, true), (list[0]!["external"]!.GetValue<bool>(), list[1]!["external"]!.GetValue<bool>()));
         Assert.Equal(("Remote AI", "EU, zero data retention", true), (list[1]!["label"]!.GetValue<string>(), list[1]!["description"]!.GetValue<string>(), list[1]!["available"]!.GetValue<bool>()));
+        Assert.Equal((true, false), (list[0]!["default"]!.GetValue<bool>(), list[1]!["default"]!.GetValue<bool>()));
+    }
+
+    [Fact]
+    public async Task With_an_external_default_the_list_marks_it_and_a_new_vault_uses_it()
+    {
+        var keyFile = Path.Combine(Directory.CreateTempSubdirectory("kumbu-key-").FullName, "key");
+        await File.WriteAllTextAsync(keyFile, "sk-test-not-a-real-key", Ct);
+        var handler = new EightValues();
+        await using var api = app.PublicApi.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:Driver", "openai-compatible");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:BaseUrl", "https://embeddings.example.org/v1");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:Model", "test-model");
+            b.UseSetting("Kumbu:Embeddings:Providers:wire:ApiKeyFile", keyFile);
+            b.UseSetting("Kumbu:Embeddings:Default", "wire");
+            b.ConfigureServices(services => services.AddHttpClient(EmbeddingDrivers.HttpClientName("wire")).ConfigurePrimaryHttpMessageHandler(() => handler));
+        });
+        var user = await RestClient.NewAsync(api, "Wire");
+
+        using var providers = await user.GetAsync("/api/embeddings");
+        var list = (await JsonAsync(providers)).AsArray();
+        Assert.Equal([("internal", false), ("wire", true)], list.Select(p => (p!["name"]!.GetValue<string>(), p["default"]!.GetValue<bool>())));
+
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Garten" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("wire", (await JsonAsync(created))["embeddings"]!.GetValue<string>());
     }
 
     [Fact]

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient } from "@tanstack/react-query";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
+import { tryReload } from "../update/apply";
+import { useUpdate } from "../update/store";
 import { summaryText } from "./UploadSheet";
 
 afterEach(() => {
@@ -152,6 +154,27 @@ describe("the upload", () => {
 
     await userEvent.click(within(sheet).getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("dialog", { name: "Upload" })).not.toBeInTheDocument();
+  });
+
+  it("holds an update's reload while the upload runs", async () => {
+    let open!: () => void;
+    uploadApi([], { gate: new Promise<void>((ok) => (open = ok)) });
+    renderApp("/notes/Work/inbox.md");
+    act(() => useUpdate.setState({ available: { semver: "0.2.0", sha: "a6362ec" } }));
+    const reload = vi.fn();
+    try {
+      const sheet = await openFromDock();
+      await pickVault(sheet, bulk.concat("Vault/a.md"));
+      expect(await within(sheet).findByText("Batch 1 of 2")).toBeInTheDocument();
+
+      expect(await act(() => tryReload("auto", reload))).toBe(false);
+      open();
+      await userEvent.click(await within(sheet).findByRole("button", { name: "Done" }));
+      expect(await act(() => tryReload("auto", reload))).toBe(true);
+    } finally {
+      act(() => useUpdate.setState({ available: null }));
+      sessionStorage.clear();
+    }
   });
 
   it("replaces all, or skips all, as the user says", async () => {

@@ -37,11 +37,14 @@ export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
  * The version the user last saw, roughly: the newest one before the agents' writes since the previous sign-in,
- * i.e. written before it or by the user. Null when there is none: an agent wrote the note from the start.
+ * i.e. written before it, by the user, or by one of their devices (Obsidian). Null when there is none: an agent
+ * wrote the note from the start.
  */
 export function lastSeen(history: HistoryEntry[], since: string, username: string): string | null {
   const from = Date.parse(since);
-  return history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || writerOf(v.writer) === username))?.version ?? null;
+  return (
+    history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || writerOf(v.writer) === username || v.writerKind === "device"))?.version ?? null
+  );
 }
 
 /**

@@ -48,6 +48,26 @@ public class FolderMoveTests
     }
 
     [Fact]
+    public async Task AFolderMoveRewritesMarkdownLinksAbsoluteAndKeepsInnerRelativeOnes()
+    {
+        _store.AddVault("W");
+        await Seed("/W/p/a.md", "[b](./b.md) [o](../o.md)\n");
+        await Seed("/W/p/b.md", "b\n");
+        await Seed("/W/o.md", "o\n");
+        await Seed("/W/x.md", "[a](p/a.md)\n");
+
+        var result = await Run("mv /W/p/ /W/q/");
+
+        Assert.False(result.IsError, result.Output);
+        // ./b.md moves along with a.md and ../o.md is still one folder up: both still reach the same notes.
+        Assert.Equal("[b](./b.md) [o](../o.md)\n", await Content("/W/q/a.md"));
+        Assert.Equal("[a](/q/a.md)\n", await Content("/W/x.md"));
+    }
+
+    private Task Seed(string path, string content) =>
+        _store.TryCreateAsync(new StoredNote(P(path), content, 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+
+    [Fact]
     public async Task MovesIntoAnExistingFolder()
     {
         var result = await Run("mv /Demo/projects/ /Demo/archive/");

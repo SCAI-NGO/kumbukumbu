@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useId, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCheckpoints, useCreateCheckpoint, usePreviewCheckpoint, useRemoveCheckpoint, useRestoreCheckpoint, type CheckpointEntry, type RestorePreview } from "../api/history";
+import { checkpointUrl } from "../api/paths";
 import { FormError, inputClass, labelClass, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
+import { checkpointExportUrl, download } from "../data/exportUrl";
 import { ago } from "../note/AgentBanner";
+import { useEditor } from "../state/editor";
 
 /** As the server's rule: letters, digits, '.', '-' and '_', starting with a letter or digit, at most 64. */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,63}$/u;
@@ -57,13 +61,14 @@ export default function CheckpointsSheet({ vault, onClose }: { vault: string; on
   }
   return (
     <Sheet title="Checkpoints" onClose={onClose}>
-      <ListStep vault={vault} done={done} onRestore={(checkpoint) => setStep({ kind: "restore", checkpoint })} onRemove={(checkpoint) => setStep({ kind: "remove", checkpoint })} />
+      <ListStep vault={vault} onClose={onClose} done={done} onRestore={(checkpoint) => setStep({ kind: "restore", checkpoint })} onRemove={(checkpoint) => setStep({ kind: "remove", checkpoint })} />
     </Sheet>
   );
 }
 
-function ListStep({ vault, done, onRestore, onRemove }: { vault: string; done: string | null; onRestore(c: CheckpointEntry): void; onRemove(c: CheckpointEntry): void }) {
+function ListStep({ vault, onClose, done, onRestore, onRemove }: { vault: string; onClose(): void; done: string | null; onRestore(c: CheckpointEntry): void; onRemove(c: CheckpointEntry): void }) {
   const id = useId();
+  const navigate = useNavigate();
   const checkpoints = useCheckpoints(vault);
   const create = useCreateCheckpoint(vault);
   const [name, setName] = useState("");
@@ -84,7 +89,7 @@ function ListStep({ vault, done, onRestore, onRemove }: { vault: string; done: s
   return (
     <>
       <p className="text-sm text-text-body">
-        A checkpoint keeps the state of every note in {vault} under a name, until you remove it. Unlike the history, it never runs out.
+        A checkpoint keeps the state of every note in {vault} under a name, until you remove it. Unlike the history, it never runs out. Open one to read it as it was, or export it as a ZIP.
       </p>
       {done && (
         <p role="status" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
@@ -135,6 +140,23 @@ function ListStep({ vault, done, onRestore, onRemove }: { vault: string; done: s
               <p className="text-sm text-muted">
                 {c.scope} · {Number(c.notes) === 1 ? "1 note" : `${c.notes} notes`} · {timeText(c.createdAt)} by {c.createdBy}
               </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  aria-label={`Open ${c.name}`}
+                  onClick={() => {
+                    onClose();
+                    useEditor.getState().setOverlay("none");
+                    navigate(checkpointUrl(vault, c.name));
+                  }}
+                  className={smallButton}
+                >
+                  Open
+                </button>
+                <button type="button" aria-label={`Export ${c.name} as ZIP`} onClick={() => download(checkpointExportUrl(vault, c.name))} className={smallButton}>
+                  Export as ZIP
+                </button>
+              </div>
               <div className="flex gap-2">
                 <button type="button" aria-label={`Restore ${c.name}`} onClick={() => onRestore(c)} className={smallButton}>
                   Restore…

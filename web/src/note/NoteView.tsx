@@ -15,7 +15,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
-import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
+import { BarButton, ChangeText, deviceOf, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";
@@ -23,6 +23,8 @@ import { OutlineSheet } from "./NoteTools";
 import { outline } from "./outline";
 import { parseProperties, splitFrontmatter } from "./properties";
 import { taskToggle } from "./taskToggle";
+import { createdPath } from "./wikiLinks";
+import { registerScrollTop, takeRestore } from "../update/apply";
 
 // Write mode (the editor, its toolbar and the [[ list) is loaded apart from reading; fetched ahead once a note is
 // shown, so switching to Write rarely waits.
@@ -54,7 +56,7 @@ const CONFLICT_NOTICE = "Changed elsewhere — showing the newer version; tap ag
  * Whether the body opens with its own H1, ATX (`# Title`) or setext (`Title` over `===`). The frontmatter's lines
  * are empty in it; leading blank lines go, but not indentation: four spaces make a code block, not a heading.
  */
-const startsWithH1 = (body: string) => {
+export const startsWithH1 = (body: string) => {
   const first = body.replace(/^(?:[ \t]*\r?\n)+/, "");
   return /^ {0,3}#(?:[ \t]|$)/.test(first.split("\n", 1)[0]) || /^ {0,3}\S.*\r?\n {0,3}=+[ \t]*\r?$/.test(first.split("\n").slice(0, 2).join("\n"));
 };
@@ -84,7 +86,8 @@ export default function NoteView({ path }: { path: string }) {
   const username = useSession((s) => s.user?.username);
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
-  const [updatedBy, setUpdatedBy] = useState<string | null>(null);
+  // A writer's name, or the user's own device (Obsidian) by its name.
+  const [updatedBy, setUpdatedBy] = useState<string | { device: string } | null>(null);
   // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
   const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
@@ -115,6 +118,7 @@ export default function NoteView({ path }: { path: string }) {
       if (refreshing.current || !note.data) return;
       refreshing.current = true;
       const writer = writerOf(newer.lastWriter);
+      const device = newer.lastWriterKind === "device";
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
       for (const embedded of new Set(links.data?.filter((l) => l.raw.startsWith("!") && l.kind === "note" && l.path && l.path !== path).map((l) => l.path!))) {
@@ -127,11 +131,39 @@ export default function NoteView({ path }: { path: string }) {
       setRefreshFailed(null);
       if (fresh.data.version === note.data.version) return;
       keepScroll.current = top;
-      setRefreshed({ lines: changedLines(before, fresh.data.content), writer, version: fresh.data.version });
-      setUpdatedBy(auto ? writer : null);
+      // The tint names who wrote, as the bar does: the user's own device is "you", not the key's name.
+      setRefreshed({ lines: changedLines(before, fresh.data.content), writer: device ? `you, in Obsidian (${deviceOf(writer)})` : writer, version: fresh.data.version });
+      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : writer) : null);
     },
     [note, links.data, path, queryClient],
   );
+  // A reload into a new release (update/apply.ts) asks where the reader is, and finds them there again afterwards:
+  // the mode, and how far down the note (Read mode's page, or Write mode's source). Once, when the note is shown.
+  // For the editor once, when it next mounts: back in Write mode later, it starts at the top as usual.
+  const editorScroll = useRef<number | undefined>(undefined);
+  const takeEditorScroll = useCallback(() => {
+    const top = editorScroll.current;
+    editorScroll.current = undefined;
+    return top;
+  }, []);
+  useEffect(() => {
+    registerScrollTop(() => (useEditor.getState().mode === "write" ? document.getElementById("markdown-source") : scroller.current)?.scrollTop ?? 0);
+    return () => registerScrollTop(null);
+  }, []);
+  const restored = useRef(false);
+  useLayoutEffect(() => {
+    if (restored.current || !note.data) return;
+    restored.current = true;
+    const restore = takeRestore();
+    if (!restore) return;
+    if (restore.mode === "write") {
+      editorScroll.current = restore.scrollTop;
+      useEditor.getState().setMode("write");
+    } else if (scroller.current) {
+      scroller.current.scrollTop = restore.scrollTop;
+    }
+  }, [note.data]);
+
   useLayoutEffect(() => {
     if (keepScroll.current === null || !scroller.current) return;
     scroller.current.scrollTop = keepScroll.current;
@@ -197,7 +229,7 @@ export default function NoteView({ path }: { path: string }) {
 
   const createMissing = useCallback(
     (target: string) => {
-      const created = `${folderOf(path)}/${target.endsWith(".md") ? target : `${target}.md`}`;
+      const created = createdPath(path, target);
       createNote.mutate(created, {
         onSuccess: () => {
           openNote(created, "write");
@@ -214,10 +246,10 @@ export default function NoteView({ path }: { path: string }) {
       return (
         <LoadBoundary fallback={<EditorLoadFailed />}>
           {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} />
+            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
           ) : (
             <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} />
+              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
             </Suspense>
           )}
         </LoadBoundary>
@@ -271,7 +303,11 @@ export default function NoteView({ path }: { path: string }) {
         updatedBy &&
         !(note.data && sameWrite(note.data)) && (
           <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
-            {updatedBy === username ? "Updated: you changed this note elsewhere" : `Updated by ${updatedBy}`}
+            {typeof updatedBy === "object"
+              ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
+              : updatedBy === username
+                ? "Updated: you changed this note elsewhere"
+                : `Updated by ${updatedBy}`}
           </p>
         )
       )}
@@ -313,7 +349,7 @@ export default function NoteView({ path }: { path: string }) {
  * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
  * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
  */
-function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
+export function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
   const props = useMemo(() => parseProperties(yaml), [yaml]);
   const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
   if (!props) {

@@ -28,6 +28,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, vaults),
     "GET /api/keys": () => json(200, [revoked, listed]),
+    "GET /api/connections": () => json(200, []),
     ...overrides,
   });
 }
@@ -72,6 +73,14 @@ describe("Keys", () => {
     const old = screen.getByText("Old phone").closest("li")!;
     expect(old).toHaveTextContent("Revoked 2 Oct 2026");
     expect(within(old).queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
+  });
+
+  it("marks a key paired from Obsidian as an Obsidian device", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, kind: "agent" }, { ...listed, id: "k5", name: "Work – Obsidian Laptop", kind: "device" }]) });
+    renderApp("/keys");
+    const device = (await screen.findByText("Work – Obsidian Laptop")).closest("li")!;
+    expect(device).toHaveTextContent("Obsidian device");
+    expect(screen.getByText("Laptop").closest("li")!).not.toHaveTextContent("Obsidian device");
   });
 
   it("revokes a key only after confirming", async () => {

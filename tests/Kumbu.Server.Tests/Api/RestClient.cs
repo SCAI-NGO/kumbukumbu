@@ -9,6 +9,9 @@ using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -60,17 +63,45 @@ public sealed class RestClient
         return new RestClient(api, username, session, user, userKey, vault);
     }
 
+    /// <summary>A new session of this user, e.g. after a test moved the clock past the old one's timeout.</summary>
+    public async Task<RestClient> SignInAgainAsync()
+    {
+        using var signIn = await SendAsync(_api, HttpMethod.Post, "/api/session", new { username = Username, password = Password }, session: null, bearer: null);
+        Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
+        var cookie = signIn.Headers.GetValues("Set-Cookie").First(v => v.StartsWith(CallerMiddleware.SessionCookie + "=", StringComparison.Ordinal));
+        return new RestClient(_api, Username, cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0], User, UserKey, Vault);
+    }
+
     /// <summary>An API key of this user for its vault, with <paramref name="right"/>.</summary>
-    public async Task<string> KeyAsync(string name, KeyRight right)
+    public async Task<string> KeyAsync(string name, KeyRight right, ApiKeyKind kind = ApiKeyKind.Agent)
     {
         var vault = (await _api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(User.Id, UserKey, Ct)).Single(v => v.Name == Vault);
-        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct);
+        var (key, _) = await _api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            User, UserKey, DateTime.UtcNow, name, new Dictionary<string, KeyRight> { [vault.Id] = right }, Ct, kind: kind);
         return key;
     }
 
+    /// <summary>One shell command over MCP as <paramref name="bearer"/>, on this client's own factory: for folder
+    /// checkpoints (there is no REST route to make one) and for pinning what the web app tells people to run.</summary>
+    public async Task<(bool IsError, string Text)> ShAsync(string command, string bearer)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(_api.Server.BaseAddress, "mcp"),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" },
+            },
+            _api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: Ct);
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct);
+        return (result.IsError ?? false, Assert.IsType<TextContentBlock>(result.Content[0]).Text);
+    }
+
     /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead.</summary>
-    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null) =>
-        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer);
+    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null, IReadOnlyDictionary<string, string>? headers = null) =>
+        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer, headers);
 
     public Task<HttpResponseMessage> GetAsync(string path, string? bearer = null) => SendAsync(HttpMethod.Get, path, bearer: bearer);
 
@@ -100,9 +131,10 @@ public sealed class RestClient
         (await JsonAsync(response))["error"]!.GetValue<string>();
 
     private static async Task<HttpResponseMessage> SendAsync(
-        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer)
+        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer, IReadOnlyDictionary<string, string>? headers = null)
     {
         using var request = new HttpRequestMessage(method, path);
+        foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.TryAddWithoutValidation(name, value);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         if (session is not null) request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
         if (bearer is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);

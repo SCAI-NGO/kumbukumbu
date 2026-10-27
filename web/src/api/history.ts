@@ -9,6 +9,8 @@ export type TrashEntry = components["schemas"]["TrashEntryView"];
 export type CheckpointEntry = components["schemas"]["CheckpointEntryView"];
 export type RestorePreview = components["schemas"]["RestorePreviewView"];
 export type NoteVersion = components["schemas"]["NoteVersionView"];
+export type CheckpointTree = components["schemas"]["CheckpointTreeView"];
+export type CheckpointNote = components["schemas"]["CheckpointNoteView"];
 
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
@@ -103,3 +105,27 @@ export function useRemoveCheckpoint(vault: string) {
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ["checkpoints", vault] }),
   });
 }
+
+/**
+ * A checkpoint's tree as it was. Default staleness on purpose: a checkpoint removed and made again under the same
+ * name must not show the old one's notes, and the keys stay out of `vaultChanged` (a checkpoint never changes).
+ */
+export const useCheckpointTree = (vault: string, name: string) =>
+  useQuery({
+    queryKey: ["checkpoint-tree", vault, name],
+    queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/tree", { params: { path: { vault, name } } })),
+    refetchOnWindowFocus: false,
+    retry: false,
+    gcTime: 0,
+  });
+
+/** One note of a checkpoint, `path` from the root of the tree; its links are resolved inside the checkpoint. */
+export const useCheckpointNote = (vault: string, name: string, path: string) =>
+  useQuery({
+    queryKey: ["checkpoint-note", vault, name, path],
+    queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/notes/{path}", { params: { path: { vault, name, path: inVault(path) } } })),
+    refetchOnWindowFocus: false,
+    retry: false,
+    // Kept only while shown: a checkpoint removed and made again under the name must not show the old notes.
+    gcTime: 0,
+  });

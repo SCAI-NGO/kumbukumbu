@@ -120,8 +120,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var writer = caller.Writer;
         var marked = $"{writer} (mv)";
         // Link rewrites join the writer's changeset like any write.
-        var changeset = await Changeset.ForAsync(store, vault.Segments[0], writer, now, ct);
-        var batch = new NoteBatch();
+        var changeset = await Changeset.ForAsync(store, vault.Segments[0], writer, caller.ChangesetIdle, now, ct);
+        var batch = new NoteBatch { Changeset = changeset };
         var links = 0;
         var changed = new List<VaultPath>();
 
@@ -171,18 +171,18 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// For each note (by its path after the move), the links whose target the move changes, with the text to
     /// put in their place: links to a moved note, and links that would now hit one by a name collision.
     /// </summary>
-    public static Dictionary<VaultPath, List<(WikiLink Link, string Replacement)>> Rewrites(
+    public static Dictionary<VaultPath, List<(NoteLink Link, string Replacement)>> Rewrites(
         IReadOnlyList<Note> notes, IReadOnlyDictionary<VaultPath, VaultPath> map)
     {
         var vault = map.Keys.First().Vault!;
         var before = new LinkResolver(vault, notes.Select(n => n.Path));
         var after = new LinkResolver(vault, notes.Select(n => map.GetValueOrDefault(n.Path, n.Path)));
-        var result = new Dictionary<VaultPath, List<(WikiLink, string)>>();
+        var result = new Dictionary<VaultPath, List<(NoteLink, string)>>();
         foreach (var note in notes)
         {
             var oldPath = note.Path;
             var newPath = map.GetValueOrDefault(oldPath, oldPath);
-            foreach (var link in WikiLink.Parse(note.Content))
+            foreach (var link in NoteLink.Parse(note.Content))
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(oldPath, link.Target);
@@ -193,7 +193,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
                 if (now.Kind == LinkKind.Note && now.Target == meant) continue;
 
                 if (!result.TryGetValue(newPath, out var list)) result[newPath] = list = [];
-                list.Add((link, link.WithTarget(NewTarget(link.Target, newPath, meant, map.ContainsKey(was.Target!), after))));
+                // A wikilink keeps its form where it can; a Markdown link is written absolute, which never
+                // depends on where the linking note is or on other names in the vault.
+                list.Add((link, link is WikiLink w
+                    ? w.WithTarget(NewTarget(w.Target, newPath, meant, map.ContainsKey(was.Target!), after))
+                    : ((MarkdownLink)link).WithPath(meant)));
             }
         }
 
@@ -226,7 +230,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     }
 
     /// <summary>Replaces each link at its exact position; null if the text there is no longer that link.</summary>
-    public static string? Apply(string content, List<(WikiLink Link, string Replacement)> links)
+    public static string? Apply(string content, List<(NoteLink Link, string Replacement)> links)
     {
         var lines = Lines.Split(content).ToArray();
         foreach (var group in links.GroupBy(l => l.Link.Line))

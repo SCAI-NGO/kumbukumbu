@@ -81,7 +81,9 @@ export default function EmbeddingsDialog({
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="font-medium text-text">
                   {p.label}
-                  {p.name === current && <span className="text-muted"> (now)</span>}
+                  {(p.name === current || p.default) && (
+                    <span className="text-muted">{` (${[p.name === current && "now", p.default && "default on this server"].filter(Boolean).join(", ")})`}</span>
+                  )}
                 </span>
                 <span className="text-sm text-muted">{p.external ? p.description || "An external service." : "Nothing leaves this server."}</span>
                 {!p.available && p.reason && <span className="text-sm text-muted">Not available right now: {sentence(p.reason)}</span>}
