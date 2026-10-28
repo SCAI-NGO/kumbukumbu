@@ -27,6 +27,9 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
     public const string MetricsUrlMessage =
         "Kumbu:Metrics:Url must be an http URL with a host and a port and no path, e.g. http://127.0.0.1:9464";
 
+    public const string PdfUrlMessage =
+        "Kumbu:Pdf:Url must be empty or an absolute http URL without credentials, e.g. http://pdf:8090";
+
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
         var failures = new List<string>();
@@ -101,6 +104,12 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         if (options.Metrics.Enabled && !IsUsableMetricsUrl(options.Metrics.Url))
         {
             failures.Add(MetricsUrlMessage);
+        }
+
+        if (options.Pdf.Url != ""
+            && !(Uri.TryCreate(options.Pdf.Url, UriKind.Absolute, out var pdf) && pdf.Scheme is "http" or "https" && pdf.Host != "" && pdf.UserInfo == ""))
+        {
+            failures.Add(PdfUrlMessage);
         }
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);

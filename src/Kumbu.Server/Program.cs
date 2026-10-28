@@ -6,6 +6,7 @@ using Kumbu.Core.Sh;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
@@ -60,6 +61,9 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
+// The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit.
+builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2) });
 builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());

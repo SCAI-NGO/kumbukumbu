@@ -208,6 +208,39 @@ public sealed class KumbuOptionsValidatorTests
         Assert.True(Validate(options).Succeeded);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("http://pdf:8090")]
+    [InlineData("https://pdf.internal:8443/")]
+    public void Accepts_no_pdf_url_or_an_absolute_http_one(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Pdf.Url = url;
+
+        Assert.True(Validate(options).Succeeded);
+    }
+
+    [Theory]
+    [InlineData("pdf:8090")]
+    [InlineData("ftp://pdf:21")]
+    [InlineData("/pdf")]
+    [InlineData("http://user:secret@pdf:8090")]
+    public void Rejects_a_pdf_url_that_isnt_an_absolute_http_url(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Pdf.Url = url;
+
+        Assert.Equal([KumbuOptionsValidator.PdfUrlMessage], Validate(options).Failures);
+    }
+
+    [Fact]
+    public void Pdf_options_default_to_no_sidecar_and_its_limits()
+    {
+        var pdf = new KumbuOptions().Pdf;
+
+        Assert.Equal(("", 30, 10), (pdf.Url, pdf.AnalysisSeconds, pdf.RenderSeconds));
+    }
+
     /// <summary>A key file of its own per test; the validator reads it.</summary>
     private static string KeyFile(string content = "sk-test-key")
     {
