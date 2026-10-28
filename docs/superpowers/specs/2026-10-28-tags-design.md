@@ -10,7 +10,7 @@ The Kanban design left this out on purpose ("a general tag search over all notes
 
 ## Goals
 
-- Tags are read from the frontmatter (`tags`, and the older `tag`) and from the text (`#tag`), by Obsidian's rules (below).
+- Tags are read from the frontmatter (`tags`) and from the text (`#tag`), by Obsidian's rules (below).
 - Nested tags as in Obsidian: `#project/kumbu` is a tag of its own, and asking for `#project` finds it too.
 - Tags match ignoring case, as in Obsidian.
 - `tags` in `sh`: the tags below a path with their counts, or the notes with one tag.
@@ -37,19 +37,19 @@ The Kanban design left this out on purpose ("a general tag search over all notes
 
 ### In the frontmatter
 
-- The keys `tags` and `tag` (Obsidian reads both; `tags` is the property it writes).
+- The key `tags`. The older `tag` was deprecated in Obsidian 1.4 and is no longer read since 1.9 (Obsidian's help, "Properties", "Deprecated properties"), so Kumbu² doesn't read it either.
 - A YAML list (`tags: [a, b]` or a block list with `- a`), or a string of tags separated by commas or spaces (`tags: a, b` or `tags: a b`), as older notes have it.
-- A leading `#` in a value is dropped (`tags: ["#a"]`).
+- A leading `#` in a value is dropped (`tags: ["#a"]`); a value that isn't a tag by the rules below (`2026`) is left out.
 - A frontmatter that doesn't parse yields no tags and no error: the note is still read for its inline tags. The parser of `Kumbu.Core/Board/Frontmatter.cs` is reused.
 
 ### In the text
 
 - `#` followed by at least one tag character, at the start of a line or after whitespace. `word#tag` is no tag; `##tag` and `# heading` are none.
-- Tag characters: Unicode letters and digits, `_`, `-` and `/`. The tag ends at the first other character, so `#tag.` and `#tag,` are `tag`.
+- Tag characters: Unicode letters and digits, `_`, `-` and `/`, and, as Obsidian's help says, "commonly accepted Unicode characters, including emojis and other symbols" (`#🚀launch`). The tag ends at whitespace, at ASCII punctuation other than `_`, `-` and `/`, and at the general punctuation of Unicode (`…`, `—`), so `#tag.`, `#tag,` and `#tag's` are `tag`.
 - At least one character that isn't a digit: `#123` and `#2026` are no tags, `#v2` and `#2026-plan` are.
-- Not inside fenced code blocks (``` and ~~~), indented code blocks, inline code, HTML comments (`<!-- -->`) or Obsidian comments (`%% %%`), nor in the frontmatter (read as above).
+- Not inside fenced code blocks (``` and ~~~), indented code blocks (outside a list: there the same indent is a nested item), inline code, HTML comments (`<!-- -->`), Obsidian comments (`%% %%`), wikilinks or HTML tags (`<span style="color: #fff">`), nor in the frontmatter (read as above).
 - A trailing `/` is dropped (`#project/` is `project`).
-- The plan checks these rules against Obsidian's behaviour (its documentation, and a vault opened in Obsidian where unsure) and records the cases tested; where Obsidian and this list disagree, Obsidian wins and the list is corrected.
+- Checked against Obsidian's help vault ("Tags", "Properties") and its API's `getAllTags` and `parseFrontMatterTags`; the cases are the rows of `TagReaderTests`. Changed after that check: the `tag` key isn't read, and emoji and symbols are tag characters.
 
 ### Matching
 
@@ -103,7 +103,7 @@ tags <tag> [path]
 
 ## Testing
 
-- The extractor, table-driven: every rule above with a case that is a tag and one that isn't (heading, URL fragment, code block, inline code, comments, `#123`, `word#tag`, Unicode `#Grüße`, nested, trailing `/`, frontmatter list, flow list, comma string, space string, `tag` key, `#` in a value, broken frontmatter).
+- The extractor, table-driven: every rule above with a case that is a tag and one that isn't (heading, URL fragment, code block, inline code, comments, `#123`, `word#tag`, Unicode `#Grüße`, nested, trailing `/`, frontmatter list, flow list, comma string, space string, the `tag` key not read, `#` in a value, broken frontmatter).
 - `tags` with and without a tag, nested and case, unknown tag, `--checkpoint`, in a pipe.
 - `rg --tag` and `semsearch --tag`: narrowing, several tags, unknown tag.
 - `board --tag` with a nested tag.
