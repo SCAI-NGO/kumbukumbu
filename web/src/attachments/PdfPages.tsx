@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { api } from "../api/client";
+import { fetchFile } from "../api/notes";
+import type { FileAt } from "../api/paths";
 import { openPdf, pageLinks, type PageLink } from "./pdf";
 
 /** What the lightbox shows of a PDF: the page in view, how many there are, the zoom. */
@@ -25,14 +26,18 @@ type Failure = "unreadable" | "damaged";
 export default function PdfPages({
   vault,
   path,
+  at = {},
   onStatus,
   onSwipe,
 }: {
   vault: string;
   path: string;
+  /** An earlier version, or a checkpoint's state, instead of today's. */
+  at?: FileAt;
   onStatus(status: PdfStatus): void;
   onSwipe(swipe: "next" | "previous"): void;
 }) {
+  const { version, checkpoint } = at;
   const [pdf, setPdf] = useState<PDFDocumentProxy>();
   const [failure, setFailure] = useState<Failure>();
   const [ratio, setRatio] = useState(1.414);
@@ -52,13 +57,14 @@ export default function PdfPages({
     let ended = false;
     const controller = new AbortController();
     void (async () => {
-      const { data, response } = await api
-        .GET("/api/files/{vault}/{path}", { params: { path: { vault, path } }, parseAs: "arrayBuffer", signal: controller.signal })
-        .catch(() => ({ data: undefined, response: undefined }));
+      const { data, response } = await fetchFile(vault, path, { version, checkpoint }, "arrayBuffer", controller.signal).catch(() => ({
+        data: undefined,
+        response: undefined,
+      }));
       if (ended) return;
       if (!response?.ok || !data) return setFailure("unreadable");
       try {
-        task = await openPdf(data);
+        task = await openPdf(data as ArrayBuffer);
       } catch {
         // pdf.js itself didn't load (its chunk comes over the network): the PDF is not to blame.
         if (!ended) setFailure("unreadable");
@@ -81,7 +87,7 @@ export default function PdfPages({
       controller.abort();
       void task?.destroy();
     };
-  }, [vault, path]);
+  }, [vault, path, version, checkpoint]);
 
   useEffect(() => {
     if (pdf) status.current({ page, pages: pdf.numPages, zoom });

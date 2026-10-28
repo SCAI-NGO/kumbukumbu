@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { countsText, useActivity, writerText, type ActivityFile, type ActivityRow } from "../api/activity";
 import { errorText } from "../api/error-text";
-import { folderOf, inVault } from "../api/paths";
+import { fileKindOf, folderOf, inVault, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
 import { ago } from "../note/AgentBanner";
+import { useEditor } from "../state/editor";
 import CompareVersions from "./CompareVersions";
 
 const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -15,17 +18,30 @@ const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 const renameText = (from: string, to: string) =>
   folderOf(from) === folderOf(to) ? `${nameOf(from)} → ${nameOf(to)}` : `${inVault(from)} → ${inVault(to)}`;
 
+/** What the file is: the server's `fileKind`, else (an older server) its extension's. */
+const kindOf = (f: ActivityFile): FileKind => (f.fileKind === "image" || f.fileKind === "pdf" || f.fileKind === "note" ? f.fileKind : fileKindOf(f.path));
+
 const spanText = (row: ActivityRow) => (row.from === row.to || timeText(row.from) === timeText(row.to) ? timeText(row.to) : `${timeText(row.from)} – ${timeText(row.to)}`);
 
 /**
  * The vault's changesets, newest first: who, when and how many notes of each kind; a row opens into its notes, and a
- * note into a side-by-side comparison inside the same sheet. Says plainly that older changes may be incomplete.
+ * note into a side-by-side comparison inside the same sheet; an image or PDF opens in the lightbox, at the version the
+ * change left. Says plainly that older changes may be incomplete.
  */
 export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: string; onClose(): void; onOpenTrash(): void }) {
   const activity = useActivity(vault);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [chosen, setChosen] = useState<ActivityFile | null>(null);
   const rows = activity.data?.pages.flatMap((p) => p.rows) ?? [];
+  const navigate = useNavigate();
+
+  const choose = (f: ActivityFile) => {
+    // An attachment's state is looked at full screen; one deleted in the change has none left to show.
+    if (kindOf(f) === "note" || f.kind === "deleted" || f.version === null) return setChosen(f);
+    onClose();
+    useEditor.getState().setOverlay("none");
+    navigate(viewUrl(f.path, { version: f.version }), { state: { paths: [f.path] } satisfies LightboxState });
+  };
 
   // One dialog for both steps, so the focus stays in it on the way to a note and back.
   if (chosen) {
@@ -88,21 +104,25 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
                 </button>
                 {expanded && (
                   <ul aria-label="Files" className="flex flex-col border-t border-line py-1">
-                    {row.files.map((f, j) => (
-                      <li key={`${j}-${f.path}`}>
-                        <button
-                          type="button"
-                          onClick={() => setChosen(f)}
-                          className="flex min-h-11 w-full items-baseline gap-2 px-3.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
-                        >
-                          <span className="min-w-0 flex-1 truncate text-text">{f.kind === "renamed" && f.from ? renameText(f.from, f.to ?? f.path) : inVault(f.path)}</span>
-                          <span className="flex-none font-mono text-[11px] text-dim">
-                            {f.kind}
-                            {f.trashed && f.kind !== "deleted" ? " · in the trash" : ""}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
+                    {row.files.map((f, j) => {
+                      const Icon = fileKindIcon[kindOf(f)];
+                      return (
+                        <li key={`${j}-${f.path}`} data-file-kind={kindOf(f)}>
+                          <button
+                            type="button"
+                            onClick={() => choose(f)}
+                            className="flex min-h-11 w-full items-center gap-2 px-3.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
+                          >
+                            <Icon size={16} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />
+                            <span className="min-w-0 flex-1 truncate text-text">{f.kind === "renamed" && f.from ? renameText(f.from, f.to ?? f.path) : inVault(f.path)}</span>
+                            <span className="flex-none font-mono text-[11px] text-dim">
+                              {f.kind}
+                              {f.trashed && f.kind !== "deleted" ? " · in the trash" : ""}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </li>
@@ -115,7 +135,7 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
           Load more
         </button>
       )}
-      <p className="text-sm text-muted">Older changes may be incomplete: Kumbu² keeps the last 10 versions of each note.</p>
+      <p className="text-sm text-muted">Older changes may be incomplete: Kumbu² keeps the last 10 versions of each note and file.</p>
     </Sheet>
   );
 }

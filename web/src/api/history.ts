@@ -43,6 +43,8 @@ export function useRestoreNote() {
     onSuccess: (restored) => {
       // The restored note itself is what came back.
       if ("content" in restored) queryClient.setQueryData(["note", restored.path], restored);
+      // A restored attachment's size, dimensions and version are its info's (the lightbox's).
+      else void queryClient.invalidateQueries({ queryKey: ["version", restored.path] });
       vaultChanged(queryClient, vaultOf(restored.path), { notes: false });
     },
   });
@@ -112,10 +114,11 @@ export function useRemoveCheckpoint(vault: string) {
  * A checkpoint's tree as it was. Default staleness on purpose: a checkpoint removed and made again under the same
  * name must not show the old one's notes, and the keys stay out of `vaultChanged` (a checkpoint never changes).
  */
-export const useCheckpointTree = (vault: string, name: string) =>
+export const useCheckpointTree = (vault: string, name: string, enabled = true) =>
   useQuery({
     queryKey: ["checkpoint-tree", vault, name],
     queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/tree", { params: { path: { vault, name } } })),
+    enabled,
     refetchOnWindowFocus: false,
     retry: false,
     gcTime: 0,

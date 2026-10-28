@@ -17,8 +17,8 @@ const INBOX = "/Work/inbox.md";
 const tree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [{ name: "inbox.md", path: INBOX, size: 10 }] } };
 const noteView = { path: INBOX, content: "# Inbox\n", version: "i1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z", current: true };
 
-type File = { path: string; kind: string; from?: string | null; to?: string | null; version?: string | null; before?: string | null; beforeLost?: boolean; trashed?: boolean };
-const file = (f: File) => ({ from: null, to: null, version: "v2", before: "v1", beforeLost: false, trashed: false, ...f });
+type File = { path: string; kind: string; fileKind?: string; from?: string | null; to?: string | null; version?: string | null; before?: string | null; beforeLost?: boolean; trashed?: boolean };
+const file = (f: File) => ({ from: null, to: null, version: "v2", before: "v1", beforeLost: false, trashed: false, fileKind: "note", ...f });
 const row = (writer: string, writerKind: string | null, files: File[], to = "2026-10-26T09:10:00Z", from = "2026-10-26T09:00:00Z", restore = false) => ({
   id: `${writer}-${to}`,
   key: `c:${writer}-${to}`,
@@ -142,7 +142,7 @@ describe("the vault's activity", () => {
     api(() => json(200, { rows: [row("liz", "agent", [{ path: "/Work/plan.md", kind: "changed" }])], more: false }));
     const dialog = await openActivity();
 
-    expect(await within(dialog).findByText("Older changes may be incomplete: Kumbu² keeps the last 10 versions of each note.")).toBeInTheDocument();
+    expect(await within(dialog).findByText("Older changes may be incomplete: Kumbu² keeps the last 10 versions of each note and file.")).toBeInTheDocument();
   });
 
   it("opens a file's comparison and goes back to the list", async () => {
@@ -193,5 +193,38 @@ describe("the vault's activity", () => {
 
     const [first] = await rowsOf(dialog);
     expect(first).toHaveTextContent("You · restore");
+  });
+
+  it("activity opens an image in the lightbox", async () => {
+    const { createObjectURL, revokeObjectURL } = URL;
+    URL.createObjectURL = vi.fn(() => "blob:file");
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const versions: (string | null)[] = [];
+      api(() => json(200, { rows: [row("liz", "agent", [{ path: "/Work/shots/shot.png", kind: "renamed", from: "/Work/shot.png", fileKind: "image" }])], more: false }), {
+        "GET /api/files/Work/shots/shot.png": (r) => {
+          versions.push(new URL(r.url).searchParams.get("version"));
+          return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "Content-Type": "image/png" } });
+        },
+        "GET /api/history/Work/shots/shot.png": () => json(200, []),
+      });
+      const dialog = await openActivity();
+      const [first] = await rowsOf(dialog);
+      await userEvent.click(within(first).getByRole("button", { expanded: false }));
+      const entry = within(within(first).getByRole("list", { name: "Files" })).getByRole("listitem");
+      expect(entry).toHaveAttribute("data-file-kind", "image");
+      await userEvent.click(within(entry).getByRole("button", { name: /shot\.png/ }));
+
+      // The lightbox, at the version the change left: never a note's route.
+      expect(await screen.findByRole("main", { name: "shot.png" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(await screen.findByRole("img", { name: "shot.png" })).toHaveAttribute("src", "blob:file");
+      expect(versions).toEqual(["v2"]);
+      expect(screen.getByText("Earlier version · read only")).toBeInTheDocument();
+    } finally {
+      cleanup();
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+    }
   });
 });

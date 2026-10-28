@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ArrowLeft, Check, Download, FileText, Folder, FolderInput, Image as ImageIcon, ListChecks, Trash2, Upload, X } from "lucide-react";
+import { ArrowLeft, Check, Download, Folder, FolderInput, Image as ImageIcon, ListChecks, Trash2, Upload, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useAttachmentUrl, useDeleteFile, useTree, type TreeFolder } from "../api/notes";
-import { fileKindOf, folderOf, inVault, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { useDeleteFile, useTree, type TreeFolder } from "../api/notes";
+import { fileKindOf, folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { folderOrder, textOrder } from "../api/textOrder";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
@@ -17,7 +16,7 @@ import { useEditor } from "../state/editor";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { downloadFile, downloadZip, maxZipFiles, preferencesQuery, zipFrameError } from "./downloadFiles";
 import MoveFilesDialog from "./MoveFilesDialog";
-import { openPdf } from "./pdf";
+import { FileThumb, ScrollRoot, useNear } from "./Thumbnail";
 import { useLongPress, useSelection } from "./useSelection";
 
 export type GalleryOrder = "date" | "folder" | "name";
@@ -363,27 +362,6 @@ function Tiles(props: {
   );
 }
 
-/** The gallery's scrolling list, which the tiles are near to or far from (they scroll inside it, not the page). */
-const ScrollRoot = createContext<HTMLElement | null>(null);
-
-/**
- * Within about a screen's height of the gallery's visible part (above or below): only then does a tile hold its
- * picture. A screen ahead loads before it is reached; further away the picture goes again, which bounds what a phone
- * holds (iOS Safari above all) at the price of fetching it anew on the way back.
- */
-function useNear(element: RefObject<HTMLElement>) {
-  const root = useContext(ScrollRoot);
-  const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
-  useEffect(() => {
-    const target = element.current;
-    if (!target || !root || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => setNear(entry.isIntersecting), { root, rootMargin: "100% 0px" });
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [element, root]);
-  return near;
-}
-
 const Tile = memo(function Tile({
   vault,
   file,
@@ -401,7 +379,6 @@ const Tile = memo(function Tile({
 }) {
   const box = useRef<HTMLButtonElement>(null);
   const near = useNear(box);
-  const pdf = fileKindOf(file.path) === "pdf";
   return (
     <button
       ref={box}
@@ -414,8 +391,9 @@ const Tile = memo(function Tile({
         isSelected ? "ring-3 ring-accent ring-inset" : ""
       }`}
     >
-      {/* Far from the screen a tile holds nothing: its image's object URL is revoked, its PDF canvas emptied. */}
-      {near && (pdf ? <PdfTile vault={vault} path={file.path} version={file.version} /> : <ImageTile vault={vault} path={file.path} version={file.version} />)}
+      {/* Far from the screen a tile holds nothing: its image's object URL is revoked, its PDF canvas emptied. At the
+          version the tree lists: a file changed meanwhile is fetched anew, not shown as it was. */}
+      {near && <FileThumb vault={vault} path={file.path} at={{ version: file.version }} />}
       <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-0.5 text-left text-[10px] text-white">
         {file.name}
       </span>
@@ -430,86 +408,6 @@ const Tile = memo(function Tile({
     </button>
   );
 });
-
-function Placeholder({ pdf }: { pdf: boolean }) {
-  const Icon = pdf ? FileText : ImageIcon;
-  return <Icon size={28} aria-hidden className="absolute inset-0 m-auto text-dim" />;
-}
-
-/** The image itself, scaled by the browser (there are no thumbnails on the server in this part). */
-function ImageTile({ vault, path, version }: { vault: string; path: string; version?: string }) {
-  // At the version the tree lists: a file changed meanwhile is fetched anew, not shown as it was.
-  const url = useAttachmentUrl(vault, inVault(path), version);
-  const [broken, setBroken] = useState(false);
-  if (!url || broken) return <Placeholder pdf={false} />;
-  return <img src={url} alt="" draggable={false} decoding="async" onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />;
-}
-
-/** A canvas never larger than this many pixels, whatever the screen's density. */
-const maxTilePixels = 1_000_000;
-
-/**
- * A PDF's first page at the tile's size, drawn by pdf.js; the document is let go of as soon as it is drawn, and the
- * canvas emptied when the tile leaves (browsers cap what all canvases together may hold, iOS Safari above all).
- */
-function PdfTile({ vault, path, version }: { vault: string; path: string; version?: string }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const [drawn, setDrawn] = useState(false);
-
-  useEffect(() => {
-    let task: Awaited<ReturnType<typeof openPdf>> | undefined;
-    let render: { cancel(): void } | undefined;
-    let ended = false;
-    const controller = new AbortController();
-    const target = canvas.current;
-    void (async () => {
-      try {
-        const { data, response } = await api.GET("/api/files/{vault}/{path}", {
-          params: { path: { vault, path: inVault(path) }, query: version ? { version } : {} },
-          parseAs: "arrayBuffer",
-          signal: controller.signal,
-        });
-        if (ended || !response.ok || !data || !target) return;
-        task = await openPdf(data);
-        if (ended) return;
-        const page = await (await task.promise).getPage(1);
-        if (ended) return;
-        const base = page.getViewport({ scale: 1 });
-        const wanted = ((target.clientWidth || 160) / base.width) * (window.devicePixelRatio || 1);
-        const viewport = page.getViewport({ scale: Math.min(wanted, Math.sqrt(maxTilePixels / (base.width * base.height))) });
-        target.width = Math.floor(viewport.width);
-        target.height = Math.floor(viewport.height);
-        const drawing = page.render({ canvas: target, viewport });
-        render = drawing;
-        await drawing.promise;
-        if (!ended) setDrawn(true);
-      } catch {
-        // Not readable, not a PDF pdf.js opens, or let go of for another: the tile keeps its icon.
-      } finally {
-        // Drawn (or not): the document and its worker go; the canvas keeps the pixels.
-        void task?.destroy();
-        task = undefined;
-      }
-    })();
-    return () => {
-      ended = true;
-      controller.abort();
-      render?.cancel();
-      void task?.destroy();
-      if (target) {
-        target.width = 0;
-        target.height = 0;
-      }
-    };
-  }, [vault, path, version]);
-
-  return (
-    <>
-      {!drawn && <Placeholder pdf />}
-      <canvas ref={canvas} aria-hidden className="absolute inset-0 size-full bg-white object-cover object-top" style={{ visibility: drawn ? "visible" : "hidden" }} />
-    </>
-  );
-}
 
 /** The frame the ZIP's form posts into (`postZip`); it stays out of sight and out of the tab order. */
 const zipFrame = "kumbu-zip";

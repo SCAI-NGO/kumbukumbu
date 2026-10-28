@@ -38,11 +38,23 @@ export const fileUrl = (vault: string, path: string, version?: string) =>
   `/api/files/${encodeURIComponent(vault)}/${path.split("/").map(encodeURIComponent).join("/")}` +
   (version ? `?version=${encodeURIComponent(version)}` : "");
 
+/** Which state of an attachment: an earlier `version` from its history (or the trash), or as `checkpoint` held it; else today's. */
+export type FileAt = { version?: string; checkpoint?: string };
+
+/** The API's URL of an attachment's bytes at `at`: today's or a version (`fileUrl`), or a checkpoint's. */
+export const fileAtUrl = (vault: string, path: string, at: FileAt = {}) =>
+  at.checkpoint
+    ? `/api/vaults/${encodeURIComponent(vault)}/checkpoints/${encodeURIComponent(at.checkpoint)}/files/${path.split("/").map(encodeURIComponent).join("/")}`
+    : fileUrl(vault, path, at.version);
+
 /**
- * The app's URL of an attachment in the lightbox (`/view/:vault/*`). It is opened with the paths to page through
- * as router state (`LightboxState`): a folder's attachments from the tree, a note's from its chips.
+ * The app's URL of an attachment in the lightbox (`/view/:vault/*`), read only at an earlier version or a checkpoint
+ * (`?version=`, `?checkpoint=`). It is opened with the paths to page through as router state (`LightboxState`): a
+ * folder's attachments from the tree, a note's from its chips.
  */
-export const viewUrl = (path: string) => `/view/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
+export const viewUrl = (path: string, at: FileAt = {}) =>
+  `/view/${path.split("/").slice(1).map(encodeURIComponent).join("/")}` +
+  (at.checkpoint ? `?checkpoint=${encodeURIComponent(at.checkpoint)}` : at.version ? `?version=${encodeURIComponent(at.version)}` : "");
 
 /** The lightbox's router state: the attachments (paths from the root of the tree) in the order it pages through. */
 export type LightboxState = { paths: string[] };

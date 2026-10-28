@@ -2,7 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, call } from "./client";
-import { folderOf, inVault, isAttachment, untitledName, vaultOf } from "./paths";
+import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
 import type { components } from "./schema";
 
 export type TreeFolder = components["schemas"]["TreeFolder"];
@@ -215,28 +215,33 @@ export function useDeleteNote() {
 }
 
 /**
- * An attachment's bytes (`path` within `vault`, at `version` if given) as an object URL for an `img` or pdf.js:
- * fetched with the session, as the server serves files to signed-in users only. Undefined while they load, null if
- * they can't be read; the URL is revoked when the component unmounts or asks for another file.
+ * An attachment's bytes (`path` within `vault`) at `at`: today's, an earlier version's or a checkpoint's; with the
+ * session, as the server serves files to signed-in users only.
  */
-export function useAttachmentUrl(vault: string, path: string, version?: string): string | null | undefined {
-  const key = `${vault}\n${path}\n${version ?? ""}`;
+export function fetchFile<As extends "blob" | "arrayBuffer">(vault: string, path: string, at: FileAt, parseAs: As, signal: AbortSignal) {
+  return at.checkpoint
+    ? api.GET("/api/vaults/{vault}/checkpoints/{name}/files/{path}", { params: { path: { vault, name: at.checkpoint, path } }, parseAs, signal })
+    : api.GET("/api/files/{vault}/{path}", { params: { path: { vault, path }, query: at.version ? { version: at.version } : {} }, parseAs, signal });
+}
+
+/**
+ * An attachment's bytes (`path` within `vault`, at `version` if given, or as `checkpoint` held it) as an object URL
+ * for an `img` or pdf.js. Undefined while they load, null if they can't be read; the URL is revoked when the
+ * component unmounts or asks for another file.
+ */
+export function useAttachmentUrl(vault: string, path: string, version?: string, checkpoint?: string): string | null | undefined {
+  const key = `${vault}\n${path}\n${version ?? ""}\n${checkpoint ?? ""}`;
   // Kept with the file it was made for, and dropped when its fetch ends: after a change of file (also back to one
   // shown before) the old URL, revoked by then, is never answered.
   const [made, setMade] = useState<{ key: string; url: string | null }>();
   useEffect(() => {
     const controller = new AbortController();
     let url: string | undefined;
-    api
-      .GET("/api/files/{vault}/{path}", {
-        params: { path: { vault, path }, query: version ? { version } : {} },
-        parseAs: "blob",
-        signal: controller.signal,
-      })
+    fetchFile(vault, path, { version, checkpoint }, "blob", controller.signal)
       .then(({ data, response }) => {
         if (controller.signal.aborted) return;
         if (!response.ok || !data) return setMade({ key, url: null });
-        url = URL.createObjectURL(data);
+        url = URL.createObjectURL(data as Blob);
         setMade({ key, url });
       })
       // The network failed: no URL. Aborted: another file, or none, is wanted now.
@@ -246,13 +251,13 @@ export function useAttachmentUrl(vault: string, path: string, version?: string):
       if (url) URL.revokeObjectURL(url);
       setMade(undefined);
     };
-  }, [key, vault, path, version]);
+  }, [key, vault, path, version, checkpoint]);
   return made?.key === key ? made.url : undefined;
 }
 
 /** An attachment as it is, without its bytes (`GET /api/version`): size, dimensions, version and last write. */
-export const useFileInfo = (path: string) =>
-  useQuery({ queryKey: ["version", path], queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })) });
+export const useFileInfo = (path: string, enabled = true) =>
+  useQuery({ queryKey: ["version", path], queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })), enabled });
 
 /**
  * Moves an attachment to the vault's trash, only if it is still at `version` (else a 409: it changed meanwhile).

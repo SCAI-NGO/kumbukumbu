@@ -2,7 +2,7 @@
 import { useMemo, useState } from "react";
 import { errorText } from "../api/error-text";
 import { useCheckpointNote } from "../api/history";
-import { checkpointUrl, titleOf } from "../api/paths";
+import { checkpointUrl, isAttachment, titleOf, viewUrl } from "../api/paths";
 import { secondaryButtonClass } from "../components/form";
 import { aiPrompt } from "./copyForAi";
 import MarkdownView from "./MarkdownView";
@@ -20,7 +20,8 @@ export default function CheckpointNote({ vault, name, createdAt, path }: { vault
   const note = useCheckpointNote(vault, name, path);
   const parts = useMemo(() => splitFrontmatter(note.data?.content ?? ""), [note.data?.content]);
   const [copy, setCopy] = useState<"copied" | "failed" | null>(null);
-  const checkpointLink = useMemo(() => (p: string) => checkpointUrl(vault, name, p), [vault, name]);
+  // A note it holds opens in it; an image or PDF in the lightbox, as the checkpoint held it.
+  const checkpointLink = useMemo(() => (p: string) => (isAttachment(p) ? viewUrl(p, { checkpoint: name }) : checkpointUrl(vault, name, p)), [vault, name]);
 
   // A missing clipboard (plain http, no permission) counts as a refusal: never claim a copy that did not happen.
   const copyForAi = async () => {

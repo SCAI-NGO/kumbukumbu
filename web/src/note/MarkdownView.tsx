@@ -90,8 +90,8 @@ interface Props {
   path?: string;
   /** Inside an embedded note: its headings carry no `data-line`, which names lines of the note shown. */
   nested?: boolean;
-  /** Inside a checkpoint: where a note it holds is opened. Its links stay in it, an embed stays a link, and a
-   * note it lacks cannot be created. Without it, the note is today's. */
+  /** Inside a checkpoint: where a note or attachment it holds is opened. Its links stay in it, an embed stays a
+   * link, and a note it lacks cannot be created. Without it, the note is today's. */
   checkpointLink?: (path: string) => string;
 }
 
@@ -169,7 +169,7 @@ const missingClass = "text-muted underline decoration-dim decoration-dashed unde
 /**
  * A link or embed to an attachment of the vault (`![[shot.png]]`, `[[report.pdf]]`): a chip with its kind's icon
  * and its name, never the bytes, which open in the lightbox with the note's other attachments to page through. In a
- * checkpoint the chip only names it.
+ * checkpoint, they open as the checkpoint held them (`checkpointLink`).
  */
 function AttachmentChip({ path }: { path: string }) {
   const { attachments, checkpointLink } = useContext(NoteContext);
@@ -183,10 +183,9 @@ function AttachmentChip({ path }: { path: string }) {
     </>
   );
   const chip = "inline-flex max-w-full items-center gap-1 rounded-[6px] border border-line bg-surface-2 px-1.5 align-bottom font-mono text-[0.85em]";
-  if (checkpointLink) return <span className={`${chip} text-text-body`}>{content}</span>;
   return (
     <Link
-      to={viewUrl(path)}
+      to={checkpointLink ? checkpointLink(path) : viewUrl(path)}
       state={{ paths: attachments } satisfies LightboxState}
       aria-label={`Open the ${kind === "pdf" ? "PDF" : "image"} ${name}`}
       className={`${chip} text-accent-text focus-visible:outline-2 focus-visible:outline-accent`}

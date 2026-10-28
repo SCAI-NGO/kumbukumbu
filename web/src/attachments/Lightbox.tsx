@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronLeft, ChevronRight, Download, Ellipsis, FolderInput, Info, Link2, Trash2, X, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { findFolder, useAttachmentUrl, useFileInfo, useTree, type TreeView } from "../api/notes";
-import { fileKindOf, fileUrl, folderOf, inVault, isAttachment, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { ChevronLeft, ChevronRight, Download, Ellipsis, FolderInput, History, Info, Link2, Trash2, X, type LucideIcon } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useCheckpointTree } from "../api/history";
+import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useTree, type TreeFolder } from "../api/notes";
+import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, isAttachment, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
 import { Menu } from "../components/Menu";
 import { sizeText, timeText } from "../components/Sheet";
 import { topDialog } from "../hooks/useDialog";
@@ -11,6 +12,8 @@ import MoveDialog from "../shell/MoveDialog";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { useZoomPan } from "./gestures";
 import PdfPages, { type PdfStatus } from "./PdfPages";
+
+const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
 // The lightbox is black in every colour scheme, as a photo viewer is: its controls use these, the Kumbu scheme's
 // text colours (theme/schemes.ts), which read on black; the dialogs it opens keep the scheme's own.
@@ -21,9 +24,9 @@ const badgeClass = "rounded-[6px] bg-[#232328cc] px-2 py-0.5 font-mono text-[12p
 /** The router state as the lightbox keeps it: `back` once it knows whether closing goes back to its opener. */
 type State = LightboxState & { back?: boolean };
 
-/** Without an order to page through: the attachments of the file's folder, as the tree lists them. */
-function folderOrder(tree: TreeView | undefined, path: string): string[] | null {
-  const folder = tree && findFolder(tree.root, folderOf(path));
+/** Without an order to page through: the attachments of the file's folder, as the tree (today's or a checkpoint's) lists them. */
+function folderOrder(root: TreeFolder | undefined, path: string): string[] | null {
+  const folder = root && findFolder(root, folderOf(path));
   const paths = folder?.notes.filter((n) => isAttachment(n.path)).map((n) => n.path) ?? [];
   return paths.includes(path) ? paths : null;
 }
@@ -33,24 +36,41 @@ function folderOrder(tree: TreeView | undefined, path: string): string[] | null 
  * the paths of its router state (a folder's attachments from the tree, a note's from its chips), else the file's
  * folder: swipe, the arrow keys or the side buttons. Top: close, the name, info, a menu; bottom: download, move,
  * copy a link to paste into a note, delete. Escape, or a swipe down on an image, closes it.
+ *
+ * With `?version=` (from the history or the activity) it shows that earlier version, with `?checkpoint=` the file as
+ * that checkpoint held it: read only, so only the download is left of the actions.
  */
 export default function Lightbox() {
   const { vault = "", "*": rest = "" } = useParams();
   const path = `/${vault}/${rest}`;
   const location = useLocation();
   const navigate = useNavigate();
+  const [search] = useSearchParams();
+  const version = search.get("version") ?? undefined;
+  const checkpoint = search.get("checkpoint") ?? undefined;
+  const source = useMemo<FileAt>(() => (checkpoint ? { checkpoint } : version ? { version } : {}), [checkpoint, version]);
+  const readOnly = !!(checkpoint || version);
   const state = location.state as State | null;
   const given = state?.paths?.includes(path) ? state.paths : null;
-  const tree = useTree(given ? null : vault);
-  const paths = given ?? folderOrder(tree.data, path) ?? [path];
-  // Opened from within the app, closing goes back there; opened from outside (a bookmark), to the vaults.
+  // An earlier version is shown on its own; a checkpoint's file pages through its folder as the checkpoint held it.
+  const tree = useTree(given || readOnly ? null : vault);
+  const checkpointTree = useCheckpointTree(vault, checkpoint ?? "", !!checkpoint);
+  const paths = given ?? (version ? null : folderOrder((checkpoint ? checkpointTree.data : tree.data)?.root, path)) ?? [path];
+  // Opened from within the app, closing goes back there; opened from outside (a bookmark), to the vaults, or to
+  // the checkpoint.
   const back = state?.back ?? location.key !== "default";
-  const info = useFileInfo(path);
+  const info = useFileInfo(path, !readOnly);
+  const history = useHistory(path, !!version);
+  const shownVersion = version ? history.data?.find((v) => v.version === version) : undefined;
+  const checkpointRoot = checkpoint ? checkpointTree.data?.root : undefined;
+  const checkpointFile = checkpointRoot && findFolder(checkpointRoot, folderOf(path))?.notes.find((n) => n.path === path);
   const kind = fileKindOf(path);
   const name = titleOf(path);
 
   const [showInfo, setShowInfo] = useState(false);
-  const [dialog, setDialog] = useState<"move" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"move" | "delete" | "history" | null>(null);
+  // Counts restores from the history: each shows the file anew, as it is now.
+  const [restores, setRestores] = useState(0);
   const [copy, setCopy] = useState<"copied" | "failed" | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pdf, setPdf] = useState<PdfStatus | null>(null);
@@ -65,17 +85,20 @@ export default function Lightbox() {
     setZoom(1);
     setPdf(null);
     setCopy(null);
-  }, [path]);
+  }, [path, source]);
 
   const at = paths.indexOf(path);
   const previous = at > 0 ? paths[at - 1] : undefined;
   const next = at >= 0 && at < paths.length - 1 ? paths[at + 1] : undefined;
 
   const show = useCallback(
-    (to: string, order = paths) => navigate(viewUrl(to), { replace: true, state: { paths: order, back } satisfies State }),
-    [navigate, paths, back],
+    (to: string, order = paths) => navigate(viewUrl(to, source), { replace: true, state: { paths: order, back } satisfies State }),
+    [navigate, paths, back, source],
   );
-  const close = useCallback(() => (back ? navigate(-1) : navigate("/", { replace: true })), [back, navigate]);
+  const close = useCallback(
+    () => (back ? navigate(-1) : navigate(checkpoint ? checkpointUrl(vault, checkpoint) : "/", { replace: true })),
+    [back, navigate, checkpoint, vault],
+  );
   const swipe = useCallback(
     (to: "next" | "previous" | "close") => {
       if (to === "close") return close();
@@ -110,26 +133,46 @@ export default function Lightbox() {
     }
   };
 
-  const downloadUrl = `${fileUrl(vault, inVault(path))}?download=1`;
+  const fileHref = fileAtUrl(vault, inVault(path), source);
+  const downloadUrl = `${fileHref}${fileHref.includes("?") ? "&" : "?"}download=1`;
   // Deleted only at the version shown, so not before it is known.
-  const version = info.data?.version;
+  const current = info.data?.version;
   const actions: { label: string; icon: LucideIcon; onSelect(): void; disabled?: boolean }[] = [
     { label: "Download", icon: Download, onSelect: () => download.current?.click() },
-    { label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") },
-    { label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
-    { label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !version },
+    ...(readOnly
+      ? []
+      : [
+          { label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") },
+          { label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
+          { label: "History", icon: History, onSelect: () => setDialog("history") },
+          { label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current },
+        ]),
   ];
 
   const width = info.data?.width;
   const height = info.data?.height;
   const extent = kind === "pdf" ? (pdf ? `${pdf.pages} ${pdf.pages === 1 ? "page" : "pages"}` : null) : width && height ? `${width} × ${height}` : null;
+  // What is known of the state shown: today's from its info, an earlier one from the history, a checkpoint's from its tree.
+  const facts = info.data
+    ? { size: info.data.size, date: info.data.lastWriteAt, writer: info.data.lastWriter }
+    : shownVersion
+      ? { size: shownVersion.size, date: shownVersion.writtenAt, writer: shownVersion.writer }
+      : checkpointFile
+        ? { size: checkpointFile.size, date: checkpointFile.writtenAt ?? undefined, writer: undefined }
+        : null;
+  const readOnlyText = checkpoint
+    ? `Checkpoint ${checkpoint} · read only`
+    : version
+      ? `${shownVersion ? `Version of ${timeText(shownVersion.writtenAt)}` : "Earlier version"} · read only`
+      : null;
+  const stageKey = `${path}\n${checkpoint ?? ""}\n${version ?? ""}\n${restores}`;
 
   return (
     <main aria-label={name} className="fixed inset-0 z-50 overflow-hidden bg-black text-[#eceae4]">
       {kind === "pdf" ? (
-        <PdfPages key={path} vault={vault} path={inVault(path)} onStatus={setPdf} onSwipe={swipe} />
+        <PdfPages key={stageKey} vault={vault} path={inVault(path)} at={source} onStatus={setPdf} onSwipe={swipe} />
       ) : (
-        <ImageStage key={path} vault={vault} path={path} name={name} onSwipe={swipe} onZoom={setZoom} />
+        <ImageStage key={stageKey} vault={vault} path={path} at={source} name={name} onSwipe={swipe} onZoom={setZoom} />
       )}
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col gap-2 bg-gradient-to-b from-black/80 to-transparent px-2 pt-[max(8px,env(safe-area-inset-top))] pb-6">
@@ -147,7 +190,8 @@ export default function Lightbox() {
             <Ellipsis size={20} aria-hidden />
           </Menu>
         </div>
-        <div className="flex justify-end">
+        <div className="flex items-start justify-between gap-2">
+          {readOnlyText ? <p className={`${badgeClass} min-w-0 [overflow-wrap:anywhere]`}>{readOnlyText}</p> : <span />}
           {kind === "pdf" && pdf ? (
             <span className={badgeClass}>
               Page {pdf.page} / {pdf.pages}
@@ -161,11 +205,11 @@ export default function Lightbox() {
           <dl aria-label="Info" className="pointer-events-auto ml-auto grid w-full max-w-xs grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[12px] bg-[#1a1a1ee6] p-3 text-[13px]">
             <InfoRow label="Folder">{folderOf(path).slice(1).split("/").join(" / ")}</InfoRow>
             {extent && <InfoRow label={kind === "pdf" ? "Pages" : "Dimensions"}>{extent}</InfoRow>}
-            {info.data && (
+            {facts && (
               <>
-                <InfoRow label="Size">{sizeText(Number(info.data.size))}</InfoRow>
-                <InfoRow label="Date">{timeText(info.data.lastWriteAt)}</InfoRow>
-                <InfoRow label="Writer">{info.data.lastWriter}</InfoRow>
+                <InfoRow label="Size">{sizeText(Number(facts.size))}</InfoRow>
+                {facts.date && <InfoRow label="Date">{timeText(facts.date)}</InfoRow>}
+                {facts.writer && <InfoRow label="Writer">{facts.writer}</InfoRow>}
               </>
             )}
             {info.isError && <dd className="col-span-2 text-[#a09d96]">The rest couldn't be loaded.</dd>}
@@ -199,15 +243,19 @@ export default function Lightbox() {
           <a ref={download} href={downloadUrl} download={name} aria-label="Download" className={controlClass}>
             <Download size={20} aria-hidden />
           </a>
-          <button type="button" aria-label="Rename or move" onClick={() => setDialog("move")} className={controlClass}>
-            <FolderInput size={20} aria-hidden />
-          </button>
-          <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
-            <Link2 size={20} aria-hidden />
-          </button>
-          <button type="button" aria-label="Delete" disabled={!version} onClick={() => setDialog("delete")} className={controlClass}>
-            <Trash2 size={20} aria-hidden />
-          </button>
+          {!readOnly && (
+            <>
+              <button type="button" aria-label="Rename or move" onClick={() => setDialog("move")} className={controlClass}>
+                <FolderInput size={20} aria-hidden />
+              </button>
+              <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
+                <Link2 size={20} aria-hidden />
+              </button>
+              <button type="button" aria-label="Delete" disabled={!current} onClick={() => setDialog("delete")} className={controlClass}>
+                <Trash2 size={20} aria-hidden />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -218,10 +266,22 @@ export default function Lightbox() {
           onMoved={(to) => show(to, paths.map((p) => (p === path ? to : p)))}
         />
       )}
-      {dialog === "delete" && version && (
+      {dialog === "history" && (
+        <Suspense fallback={null}>
+          <HistorySheet
+            path={path}
+            onClose={() => setDialog(null)}
+            onRestored={() => {
+              setDialog(null);
+              setRestores((n) => n + 1);
+            }}
+          />
+        </Suspense>
+      )}
+      {dialog === "delete" && current && (
         <DeleteFileDialog
           path={path}
-          version={version}
+          version={current}
           onClose={() => setDialog(null)}
           onDeleted={() => {
             setDialog(null);
@@ -249,8 +309,22 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
  * An image, fitted to the screen: pinch, wheel and double tap zoom it, a finger or the mouse moves it while zoomed,
  * and without zoom a swipe pages or closes (`useZoomPan`).
  */
-function ImageStage({ vault, path, name, onSwipe, onZoom }: { vault: string; path: string; name: string; onSwipe(to: "next" | "previous" | "close"): void; onZoom(scale: number): void }) {
-  const url = useAttachmentUrl(vault, inVault(path));
+function ImageStage({
+  vault,
+  path,
+  at,
+  name,
+  onSwipe,
+  onZoom,
+}: {
+  vault: string;
+  path: string;
+  at: FileAt;
+  name: string;
+  onSwipe(to: "next" | "previous" | "close"): void;
+  onZoom(scale: number): void;
+}) {
+  const url = useAttachmentUrl(vault, inVault(path), at.version, at.checkpoint);
   const stage = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [broken, setBroken] = useState(false);
