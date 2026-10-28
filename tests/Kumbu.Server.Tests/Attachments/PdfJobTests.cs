@@ -203,4 +203,117 @@ public sealed class PdfJobTests(KumbuAppFactory app)
         Assert.Equal(1, await JobsAsync(vault.Id));
         Assert.Equal(0, await AnalysesAsync(vault.Id));
     }
+
+    /// <summary>A sweep as at <paramref name="now"/>, with the grace period of new blobs long over.</summary>
+    private static Task SweepAsync(WebApplicationFactory<Program> host, UnlockedVault vault, DateTime now) =>
+        new BlobSweep(host.Services.GetRequiredService<VaultCatalog>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance).RunAsync(vault, now, Ct);
+
+    [Fact]
+    public async Task Trashing_a_pdf_and_its_trash_expiring_take_its_analysis_and_job_along()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("analysed.pdf", Pdf("analysed, then trashed"));
+        var vault = await VaultAsync(host, user);
+        await EventuallyAsync(async () => await AnalysesAsync(vault.Id) == 1 && await JobsAsync(vault.Id) == 0, "the analysis is stored");
+        sidecar.Down = true;
+        await user.CreateFileAsync("pending.pdf", Pdf("queued, then trashed"));
+        Assert.Equal(1, await JobsAsync(vault.Id));
+        foreach (var name in new[] { "analysed.pdf", "pending.pdf" })
+        {
+            using var removed = await user.SendAsync(HttpMethod.Delete, user.Url(name, "files"));
+            Assert.True(removed.IsSuccessStatusCode);
+        }
+
+        // In the trash, the blobs are still referenced: everything stays.
+        await SweepAsync(host, vault, DateTime.UtcNow.AddHours(1));
+        Assert.Equal((1, 1), (await AnalysesAsync(vault.Id), await JobsAsync(vault.Id)));
+
+        await SweepAsync(host, vault, DateTime.UtcNow + Kumbu.Core.Notes.NoteWriter.TrashRetention + TimeSpan.FromHours(1));
+
+        Assert.Equal(0, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
+        Assert.Equal(0, await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
+        Assert.Equal(0, await JobsAsync(vault.Id));
+    }
+
+    [Fact]
+    public async Task A_sweep_deletes_analyses_and_jobs_whose_blob_is_gone_and_keeps_the_others()
+    {
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("kept.pdf", Pdf("still here"));
+        var vault = await VaultAsync(host, user);
+        await EventuallyAsync(async () => await AnalysesAsync(vault.Id) == 1 && await JobsAsync(vault.Id) == 0, "the analysis is stored");
+        // Left behind by a process that stopped half way, say.
+        var orphan = new BsonBinaryData(new byte[32]);
+        await Raw("pdf_analyses").InsertOneAsync(new BsonDocument { ["vault"] = vault.Id, ["bid"] = orphan, ["part"] = 0, ["blob"] = new BsonBinaryData([1]), ["at"] = DateTime.UtcNow }, cancellationToken: Ct);
+        await Raw("pdf_jobs").InsertOneAsync(new BsonDocument { ["vault"] = vault.Id, ["bid"] = orphan, ["at"] = DateTime.UtcNow, ["tries"] = 0 }, cancellationToken: Ct);
+
+        await SweepAsync(host, vault, DateTime.UtcNow);
+
+        // Part 0 and the text part of the analysis left.
+        Assert.Equal(2, await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
+        Assert.Equal(0, await JobsAsync(vault.Id));
+        var state = await StateAsync(host, user, "kept.pdf");
+        Assert.NotNull(await host.Services.GetRequiredService<PdfAnalyses>().HeaderAsync(vault, Convert.FromBase64String(state.BlobId), Ct));
+    }
+
+    [Fact]
+    public async Task Deleting_the_vault_deletes_its_analyses_and_jobs()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("analysed.pdf", Pdf("analysed, then the vault goes"));
+        var vault = await VaultAsync(host, user);
+        await EventuallyAsync(async () => await AnalysesAsync(vault.Id) == 1 && await JobsAsync(vault.Id) == 0, "the analysis is stored");
+        sidecar.Down = true;
+        await user.CreateFileAsync("pending.pdf", Pdf("queued, then the vault goes"));
+
+        Assert.NotNull(await host.Services.GetRequiredService<Kumbu.Server.Accounts.Deletion>().DeleteVaultAsync(user.User, user.UserKey, user.Vault, RestClient.Password, user.Vault, Ct));
+
+        Assert.Equal(0, await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
+        Assert.Equal(0, await JobsAsync(vault.Id));
+    }
+
+    [Fact]
+    public async Task Rekeying_reseals_the_analysis_under_the_new_key_and_the_blobs_new_id_and_requeues_jobs()
+    {
+        var sidecar = new FakePdfSidecar { Analysis = _ => FakePdfSidecar.Canned(120, n => $"Seite {n}: " + new string('x', 30_000)) };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("analysed.pdf", Pdf("analysed before the re-keying"));
+        var before = await VaultAsync(host, user);
+        await EventuallyAsync(async () => await AnalysesAsync(before.Id) == 1 && await JobsAsync(before.Id) == 0, "the analysis is stored");
+        sidecar.Down = true;
+        await user.CreateFileAsync("pending.pdf", Pdf("queued before the re-keying"));
+        var (analysed, pending) = (await StateAsync(host, user, "analysed.pdf"), await StateAsync(host, user, "pending.pdf"));
+        var parts = await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", before.Id), cancellationToken: Ct);
+        Assert.True(parts > 2);
+
+        await host.Services.GetRequiredService<VaultCatalog>().RekeyAsync(before.Id, user.User.Id, user.UserKey, Ct);
+
+        var after = await VaultAsync(host, user);
+        var (analysedNow, pendingNow) = (await StateAsync(host, user, "analysed.pdf"), await StateAsync(host, user, "pending.pdf"));
+        Assert.NotEqual(analysed.BlobId, analysedNow.BlobId);
+        var analyses = host.Services.GetRequiredService<PdfAnalyses>();
+        var header = await analyses.HeaderAsync(after, Convert.FromBase64String(analysedNow.BlobId), Ct);
+        Assert.Equal(120, header!.PageCount);
+        Assert.Equal(["Seite 77: " + new string('x', 30_000)], await analyses.TextAsync(after, Convert.FromBase64String(analysedNow.BlobId), 77, 77, Ct));
+        var docs = await Raw("pdf_analyses").Find(new BsonDocument("vault", before.Id)).ToListAsync(Ct);
+        Assert.Equal(parts, docs.Count);
+        Assert.All(docs, d => Assert.Equal(analysedNow.BlobId, Convert.ToBase64String(d["bid"].AsByteArray)));
+        // The old key opens none of it any more.
+        Assert.Null(await analyses.ReadAsync(before, Convert.FromBase64String(analysedNow.BlobId), Ct));
+        Assert.Null(await analyses.ReadAsync(before, Convert.FromBase64String(analysed.BlobId), Ct));
+
+        // The job of the PDF not analysed yet is queued again under its blob's new id.
+        await EventuallyAsync(
+            async () => (await Raw("pdf_jobs").Find(new BsonDocument("vault", before.Id)).ToListAsync(Ct)) is [var job] && Convert.ToBase64String(job["bid"].AsByteArray) == pendingNow.BlobId,
+            "the job is queued under the new id");
+        sidecar.Down = false;
+        host.Services.GetRequiredService<PdfAnalysisRunner>().Wake();
+        await EventuallyAsync(async () => await AnalysesAsync(before.Id) == 2 && await JobsAsync(before.Id) == 0, "the second analysis is stored");
+    }
 }

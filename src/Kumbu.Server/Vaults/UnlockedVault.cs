@@ -310,7 +310,8 @@ public sealed class UnlockedVault
     /// <paramref name="collection"/> under this object's key, with the AAD its clear fields give and without checking its
     /// <c>pid</c>, and seals what it holds under <paramref name="to"/>'s key, keeping <c>_id</c> and <c>rev</c>. The pid
     /// is computed under <paramref name="to"/> from what is sealed inside, whatever the stored one says; where the AAD
-    /// holds the pid (embeddings, texts, blobs), the new seal has the new one; a blob's <c>bid</c> stands in for its pid.
+    /// holds the pid (embeddings, texts, blobs, analyses), the new seal has the new one; a blob's <c>bid</c> stands in for
+    /// its pid, and an analysis's too, its part number for the revision (the blob's new id comes from <paramref name="ids"/>).
     /// A checkpoint or an attachment record sealed under another key than <paramref name="to"/>'s gets its text or blob
     /// ids through <paramref name="ids"/>; one not found there stays as it is, and is named in <c>Unmapped</c>. Null if
     /// the document doesn't open.
@@ -328,6 +329,7 @@ public sealed class UnlockedVault
             "attachments" => $"attachment:{Id}:{doc.Id}:{doc.Revision}",
             "attachment_trash" => $"attachtrash:{Id}:{doc.Id}",
             "blobs" => BlobContext(doc.PathId),
+            "pdf_analyses" => PdfAnalysisContext(doc.PathId, (int)doc.Revision),
             _ => throw new ArgumentException($"No sealed documents in {collection}", nameof(collection)),
         };
         byte[] plain;
@@ -392,6 +394,15 @@ public sealed class UnlockedVault
                 {
                     var pid = to.BlobId(plain);
                     return new Resealed(pid, BlobId(plain), SealPlain(to.BlobContext(pid)), null, []) { Bytes = seal ? null : plain };
+                }
+
+                case "pdf_analyses":
+                {
+                    // Bound to its blob's id, which only the blobs' pass can map; the part number stays.
+                    if (ReferenceEquals(this, to)) return new Resealed(doc.PathId, doc.PathId, SealPlain(context), null, []);
+                    var unmapped = new List<string>();
+                    var pid = Convert.FromBase64String(Map(Convert.ToBase64String(doc.PathId), ids.Blobs, unmapped));
+                    return new Resealed(pid, doc.PathId, SealPlain(to.PdfAnalysisContext(pid, (int)doc.Revision)), null, unmapped);
                 }
 
                 default:
