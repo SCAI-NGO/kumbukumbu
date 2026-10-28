@@ -40,6 +40,8 @@ public sealed class ToolMetricsTests(KumbuAppFactory app)
 
         var stale = await client.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Ideas/zz-tool-metrics.md", ["content"] = "two\n", ["version"] = "stale" }, cancellationToken: Ct);
         var missing = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "cat /Nope/x.md" }, cancellationToken: Ct);
+        // Other tests list the sample vault: leave it as it was.
+        await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "rm /Ideas/zz-tool-metrics.md" }, cancellationToken: Ct);
 
         Assert.True(stale.IsError);
         Assert.True(missing.IsError);

@@ -87,22 +87,37 @@ public static class KumbuMetrics
     private static readonly Counter OAuthTokens = Prometheus.Metrics.CreateCounter(
         "kumbu_oauth_tokens_issued_total", "Token pairs issued by the OAuth token endpoint, by grant.", new CounterConfiguration { LabelNames = ["grant"] });
 
-    // A test process builds many hosts: the latest one is read, and held weakly so that a disposed host can be collected.
-    private static WeakReference<SearchIndex>? _index;
-    private static WeakReference<VaultCatalog>? _catalog;
-    private static int _scrapeHooked;
+    // A test process builds many hosts: each is held weakly, so that a disposed host can be collected, and the gauges
+    // add up the live ones.
+    private static readonly List<(WeakReference<SearchIndex> Index, WeakReference<VaultCatalog> Catalog)> Hosts = [];
+    private static bool _scrapeHooked;
 
     /// <summary>The gauges of this process's search index and vault catalog are read at each scrape. The callback is registered once;
-    /// a later call (another host in one process) only changes what it reads.</summary>
+    /// each call (another host in one process) adds the host to what it sums.</summary>
     public static void ReadOnScrape(SearchIndex index, VaultCatalog catalog)
     {
-        _index = new WeakReference<SearchIndex>(index);
-        _catalog = new WeakReference<VaultCatalog>(catalog);
-        if (Interlocked.Exchange(ref _scrapeHooked, 1) == 1) return;
+        lock (Hosts)
+        {
+            Hosts.Add((new WeakReference<SearchIndex>(index), new WeakReference<VaultCatalog>(catalog)));
+            if (_scrapeHooked) return;
+            _scrapeHooked = true;
+        }
+
         Prometheus.Metrics.DefaultRegistry.AddBeforeCollectCallback(() =>
         {
-            EmbeddingBacklog.Set(_index is { } i && i.TryGetTarget(out var idx) ? idx.Queued : 0);
-            VaultsUnlocked.Set(_catalog is { } c && c.TryGetTarget(out var cat) ? cat.UnlockedCount : 0);
+            double backlog = 0, unlocked = 0;
+            lock (Hosts)
+            {
+                Hosts.RemoveAll(h => !h.Index.TryGetTarget(out _) && !h.Catalog.TryGetTarget(out _));
+                foreach (var (i, c) in Hosts)
+                {
+                    if (i.TryGetTarget(out var idx)) backlog += idx.Queued;
+                    if (c.TryGetTarget(out var cat)) unlocked += cat.UnlockedCount;
+                }
+            }
+
+            EmbeddingBacklog.Set(backlog);
+            VaultsUnlocked.Set(unlocked);
         });
     }
 

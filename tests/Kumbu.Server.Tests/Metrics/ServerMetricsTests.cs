@@ -71,6 +71,8 @@ public sealed class ServerMetricsTests(KumbuAppFactory app)
         await client.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = "/Ideas/zz-server-metrics.md", ["content"] = "Something to embed.\n" }, cancellationToken: Ct);
 
         await app.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        // Other tests list the sample vault: leave it as it was.
+        await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "rm /Ideas/zz-server-metrics.md" }, cancellationToken: Ct);
 
         var after = await Scrape.TextAsync(app);
         Assert.True(Scrape.Value(after, series) >= before + 1);

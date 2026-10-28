@@ -170,10 +170,12 @@ public sealed class SearchIndex : BackgroundService
                 try
                 {
                     vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, embedding.Token);
-                    KumbuMetrics.EmbeddingBatchDone(kind, Stopwatch.GetElapsedTime(started));
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
+                    // An interrupt (the vault is being deleted or re-keyed) is no failure; a cancellation neither token
+                    // asked for is the provider's own timeout.
+                    if (!embedding.Token.IsCancellationRequested) KumbuMetrics.EmbeddingFailed(kind);
                     return;
                 }
                 catch (Exception e) when (e is not OperationCanceledException)
@@ -183,6 +185,7 @@ public sealed class SearchIndex : BackgroundService
                 }
 
                 for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];
+                KumbuMetrics.EmbeddingBatchDone(kind, Stopwatch.GetElapsedTime(started));
             }
 
             var embeddings = new NoteEmbeddings(model, note.Version, [.. chunks.Select((c, i) => new EmbeddedChunk(c.StartLine, hashes[i], known[hashes[i]]))]);
