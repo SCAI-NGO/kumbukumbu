@@ -141,9 +141,10 @@ export function SkippedList({ skipped }: { skipped: Skipped[] }) {
  * notes writes nothing, and the user decides about those notes before anything of that batch is written. Images and
  * PDFs go one `PUT` each, only to a free path at first: one that exists is asked about with the notes, and replaced
  * only at the version the server reported. An image over 15 MB is offered for shrinking first. An image pasted
- * (Ctrl/Cmd+V) gets a name the user can change. `folder`: `/Work/projects`.
+ * (Ctrl/Cmd+V) gets a name the user can change. `folder`: `/Work/projects`. It is the notes view's overlay unless
+ * `onClose` is given, as the gallery does, which keeps it open over itself.
  */
-export default function UploadSheet({ folder, dropped }: { folder: string; dropped: Picked[] | null }) {
+export default function UploadSheet({ folder, dropped, onClose }: { folder: string; dropped: Picked[] | null; onClose?: () => void }) {
   const setOverlay = useEditor((s) => s.setOverlay);
   const queryClient = useQueryClient();
   const [view, setView] = useState<View>({ kind: "pick" });
@@ -157,7 +158,9 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
   // A reload into a new release would cut the upload off between batches: it waits.
   useHoldUpdates(busy);
   const close = () => {
-    if (!busy) setOverlay("none");
+    if (busy) return;
+    if (onClose) onClose();
+    else setOverlay("none");
   };
   const dialog = useDialog<HTMLDivElement>(close);
 

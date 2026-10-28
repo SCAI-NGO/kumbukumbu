@@ -47,6 +47,11 @@ describe("readImport", () => {
     ]);
   });
 
+  it("an export's MISSING.txt at the root belongs to no vault and is left out", async () => {
+    const vaults = await readImport(zip({ "Work/": new Uint8Array(), "Work/a.md": "A", "MISSING.txt": "Kumbu² couldn't read …" }), "Work 2026-10-28.zip");
+    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md"], skipped: [] }]);
+  });
+
   it("names with characters beyond ASCII come through as they are", async () => {
     const vaults = await readImport(zip({ "Bücher/Ü²/ö.md": "x" }), "export.zip");
     expect(shape(vaults)).toEqual([{ name: "Bücher", paths: ["Ü²/ö.md"], skipped: [] }]);
