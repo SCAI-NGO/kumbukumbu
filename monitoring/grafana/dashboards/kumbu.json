@@ -137,16 +137,17 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket{endpoint!=\"/api/ws\"}[5m]) unless rate(http_request_duration_seconds_bucket{endpoint=~\"/mcp.*\",method=\"GET\"}[5m])))",
           "legendFormat": "{{endpoint}}",
           "range": true
         }
-      ]
+      ],
+      "description": "Without the long-lived streams (the sync socket /api/ws and the MCP event stream, GET on /mcp), which last as long as the client stays connected."
     },
     {
       "type": "timeseries",
       "id": 4,
-      "title": "HTTP errors and rate limits",
+      "title": "HTTP errors and rate limits per hour",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -159,7 +160,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "reqps",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -189,7 +190,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (code) (rate(http_requests_received_total{code=~\"4xx|5xx\"}[5m]))",
+          "expr": "sum by (code) (increase(http_requests_received_total{code=~\"4xx|5xx\"}[1h]))",
           "legendFormat": "{{code}}",
           "range": true
         },
@@ -199,11 +200,12 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (endpoint) (rate(kumbu_http_rate_limited_total[5m]))",
+          "expr": "sum by (endpoint) (increase(kumbu_http_rate_limited_total[1h]))",
           "legendFormat": "429 {{endpoint}}",
           "range": true
         }
-      ]
+      ],
+      "description": "Requests answered 4xx or 5xx, and those answered 429 by route template, in the hour before each point."
     },
     {
       "type": "timeseries",
@@ -699,12 +701,12 @@
           "range": true
         }
       ],
-      "description": "Notes waiting to be indexed or being indexed."
+      "description": "Notes waiting to be indexed or being indexed. With the internal model off (Kumbu:Search:Enabled=false), the notes of vaults on the internal provider wait here for good."
     },
     {
       "type": "timeseries",
       "id": 16,
-      "title": "Embedding errors by provider kind",
+      "title": "Embedding errors per hour by provider kind",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -717,7 +719,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -747,11 +749,12 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (provider_kind) (rate(kumbu_embedding_errors_total[5m]))",
+          "expr": "sum by (provider_kind) (increase(kumbu_embedding_errors_total[1h]))",
           "legendFormat": "{{provider_kind}}",
           "range": true
         }
-      ]
+      ],
+      "description": "Embedding batches that failed, in the hour before each point."
     },
     {
       "type": "row",
@@ -821,7 +824,7 @@
     {
       "type": "timeseries",
       "id": 19,
-      "title": "Unlocks and locks",
+      "title": "Unlocks and locks per hour",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -834,7 +837,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -864,7 +867,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum(rate(kumbu_vault_unlocks_total[5m]))",
+          "expr": "sum(increase(kumbu_vault_unlocks_total[1h]))",
           "legendFormat": "unlocks",
           "range": true
         },
@@ -874,17 +877,17 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (reason) (rate(kumbu_vault_locks_total[5m]))",
+          "expr": "sum by (reason) (increase(kumbu_vault_locks_total[1h]))",
           "legendFormat": "locked: {{reason}}",
           "range": true
         }
       ],
-      "description": "Locks by the sweeper: idle (the TTL ran out) or memory."
+      "description": "Vaults unlocked, and locked by the sweeper: idle (the TTL ran out) or memory; in the hour before each point."
     },
     {
       "type": "timeseries",
       "id": 20,
-      "title": "Write conflicts by way in",
+      "title": "Write conflicts per hour by way in",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -897,7 +900,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -927,17 +930,30 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (via) (rate(kumbu_write_conflicts_total[5m]))",
+          "expr": "sum by (via) (increase(kumbu_write_conflicts_total[1h]))",
           "legendFormat": "{{via}}",
           "range": true
         }
       ],
-      "description": "Writes refused as a conflict: a stale version, a name already taken."
+      "description": "Every write refused as a conflict (a stale version, a name already taken), in the hour before each point."
+    },
+    {
+      "type": "row",
+      "id": 29,
+      "title": "Auth",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      }
     },
     {
       "type": "timeseries",
       "id": 21,
-      "title": "Sign-ins by outcome",
+      "title": "Sign-ins per hour by outcome",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -946,11 +962,11 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 52
+        "y": 53
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -980,16 +996,17 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (outcome) (rate(kumbu_sign_ins_total[5m]))",
+          "expr": "sum by (outcome) (increase(kumbu_sign_ins_total[1h]))",
           "legendFormat": "{{outcome}}",
           "range": true
         }
-      ]
+      ],
+      "description": "Password sign-ins, in the hour before each point."
     },
     {
       "type": "timeseries",
       "id": 22,
-      "title": "OAuth tokens issued by grant",
+      "title": "OAuth tokens issued per hour by grant",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -998,11 +1015,11 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 52
+        "y": 53
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ops",
+          "unit": "short",
           "min": 0,
           "custom": {
             "drawStyle": "line",
@@ -1032,11 +1049,12 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (grant) (rate(kumbu_oauth_tokens_issued_total[5m]))",
+          "expr": "sum by (grant) (increase(kumbu_oauth_tokens_issued_total[1h]))",
           "legendFormat": "{{grant}}",
           "range": true
         }
-      ]
+      ],
+      "description": "Token pairs issued by the OAuth token endpoint, in the hour before each point."
     },
     {
       "type": "row",
@@ -1048,7 +1066,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 60
+        "y": 61
       }
     },
     {
@@ -1063,7 +1081,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 61
+        "y": 62
       },
       "fieldConfig": {
         "defaults": {
@@ -1116,7 +1134,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 61
+        "y": 62
       },
       "fieldConfig": {
         "defaults": {
@@ -1168,7 +1186,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 61
+        "y": 62
       },
       "fieldConfig": {
         "defaults": {
@@ -1220,7 +1238,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 69
+        "y": 70
       },
       "fieldConfig": {
         "defaults": {
@@ -1282,7 +1300,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 69
+        "y": 70
       },
       "fieldConfig": {
         "defaults": {

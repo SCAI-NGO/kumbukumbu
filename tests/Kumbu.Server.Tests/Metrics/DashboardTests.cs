@@ -26,8 +26,8 @@ public sealed partial class DashboardTests(KumbuAppFactory app)
         var dashboard = JsonNode.Parse(await File.ReadAllTextAsync(file, Ct))!;
         var queried = Expressions(dashboard).SelectMany(e => Metric().Matches(e)).Select(m => m.Value).ToHashSet(StringComparer.Ordinal);
 
-        // The labelled kumbu_ series appear only once something has counted (a vault lock, an OAuth token), so they
-        // are checked against the metrics KumbuMetrics defines; the others against a scrape after an HTTP request and a sh call.
+        // kumbu_http_rate_limited_total appears only after a 429 (its endpoint values are known to the running app alone), so the
+        // kumbu_ series are checked against the metrics KumbuMetrics defines; the others against a scrape after an HTTP request and a sh call.
         await using (var client = await app.ConnectAsync())
         {
             await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "ls /" }, cancellationToken: Ct);
