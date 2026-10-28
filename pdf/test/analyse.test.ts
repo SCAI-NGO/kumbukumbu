@@ -4,9 +4,14 @@ import { ANALYSER, type PageAnalysis, analyse } from "../src/analyse.js";
 import {
   A4,
   CHART_BARS,
+  CROPPED_BOX,
+  CROP_BOX,
   ROTATED_BOX,
   chartPage,
+  cropBoxPage,
   emptyPage,
+  encryptedPdf,
+  hugeImagePage,
   logoPage,
   rotatedPage,
   scanPage,
@@ -85,6 +90,27 @@ describe("analyse", () => {
     ]);
   });
 
+  it("measures a page from its CropBox", async () => {
+    const p = await onlyPage(await cropBoxPage());
+    expect(p.width).toBe(CROP_BOX.width);
+    expect(p.height).toBe(CROP_BOX.height);
+    expect(p.regions).toEqual([
+      {
+        kind: "drawing",
+        x: CROPPED_BOX.x - CROP_BOX.x,
+        y: CROP_BOX.y + CROP_BOX.height - (CROPPED_BOX.y + CROPPED_BOX.height),
+        w: CROPPED_BOX.width,
+        h: CROPPED_BOX.height,
+      },
+    ]);
+  });
+
+  it("drops an image over the pixel limit instead of decoding it", async () => {
+    const p = await onlyPage(await hugeImagePage());
+    expect(p).toMatchObject({ type: "text", images: 0, imageCoverage: 0 });
+    expect(p.text).toContain("Text next to a huge image");
+  });
+
   it("calls an empty page text", async () => {
     const p = await onlyPage(await emptyPage());
     expect(p).toMatchObject({ type: "text", chars: 0, text: "", textCoverage: 0, imageCoverage: 0, vectorCoverage: 0, images: 0 });
@@ -116,6 +142,18 @@ describe("analyse", () => {
     const a = await analyse(await emptyPage(), 2000);
     expect(a.title).toBeNull();
     expect(a.author).toBeNull();
+  });
+
+  it("takes maxPages as a whole number of at least one", async () => {
+    const bytes = await threePages();
+    expect((await analyse(bytes, 0)).analysedPages).toBe(1);
+    expect((await analyse(bytes, 2.7)).analysedPages).toBe(2);
+    expect((await analyse(bytes, Infinity)).analysedPages).toBe(3);
+    await expect(analyse(bytes, Number.NaN)).rejects.toMatchObject({ code: "bad_request" });
+  });
+
+  it("refuses a password-protected PDF", async () => {
+    await expect(analyse(await encryptedPdf(), 2000)).rejects.toMatchObject({ code: "encrypted" });
   });
 
   it("refuses bytes that are not a PDF", async () => {

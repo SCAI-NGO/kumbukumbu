@@ -2,6 +2,12 @@
 
 // Page types from measured boxes. Pure and deterministic: the same boxes give the same answer, so
 // a stored analysis stays valid until RULES_VERSION changes.
+//
+// The rules beyond the plan's thresholds, all in analyse.ts's measurement:
+// - each subpath of a path gets its own box, so a table grid drawn as one path stays thin rules;
+// - paths that only set a clip are ignored (they paint nothing);
+// - fill-only paths in pure white are ignored as the paper (many generators paint a background);
+// - annotations are not measured (form fields and stamps are not the page's content).
 
 export type Box = { x: number; y: number; w: number; h: number }; // displayed points, top-left origin
 export type PageMeasure = { width: number; height: number; textBoxes: Box[]; imageBoxes: Box[]; pathBoxes: Box[] };
@@ -30,6 +36,8 @@ export const MERGE_PT = 6;
 export const MIN_FIGURE = 0.01;
 /** Coverage is sampled on a GRID × GRID raster over the page. */
 export const GRID = 200;
+/** Above this many path boxes clustering (quadratic) is skipped: they make one drawing. */
+export const MAX_CLUSTERED = 20_000;
 
 export function classify(page: PageMeasure): Classified {
   const { width, height } = page;
@@ -41,14 +49,18 @@ export function classify(page: PageMeasure): Classified {
   const text = within(page.textBoxes);
   const images = within(page.imageBoxes);
   const paths = within(page.pathBoxes).filter((b) => Math.min(b.w, b.h) >= THIN_PT);
-  const figures = cluster(paths).filter((b) => b.w * b.h >= MIN_FIGURE * area);
+  // A page of tens of thousands of path pieces (a map, outlined text) would take too long to
+  // cluster; its pieces count as they are, and their bounding box is its one drawing.
+  const many = paths.length > MAX_CLUSTERED;
+  const figures = (many ? [bounds(paths)] : cluster(paths)).filter((b) => b.w * b.h >= MIN_FIGURE * area);
+  const drawn = many ? paths : figures;
 
   const cover = (boxes: Box[]) => coverage(boxes, width, height);
   const imageCoverage = cover(images);
-  const vectorCoverage = cover(figures);
+  const vectorCoverage = cover(drawn);
   const type: PageType = images.some((b) => (b.w * b.h) / area >= FULL_PAGE_IMAGE)
     ? "image"
-    : cover([...images, ...figures]) >= MIXED
+    : cover([...images, ...drawn]) >= MIXED
       ? "mixed"
       : "text";
 
@@ -66,6 +78,17 @@ function clip(b: Box, width: number, height: number): Box | null {
   const x1 = Math.min(width, b.x + b.w);
   const y1 = Math.min(height, b.y + b.h);
   return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+}
+
+function bounds(boxes: Box[]): Box {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const b of boxes) {
+    x0 = Math.min(x0, b.x);
+    y0 = Math.min(y0, b.y);
+    x1 = Math.max(x1, b.x + b.w);
+    y1 = Math.max(y1, b.y + b.h);
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 // Merges boxes whose MERGE_PT-grown outlines overlap until nothing changes; the result holds the

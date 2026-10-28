@@ -6,7 +6,7 @@
 import { AnnotationMode, OPS, Util, version, type PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
 import { type Box, type Classified, type PageMeasure, RULES_VERSION, classify } from "./classify.js";
-import { openPdf } from "./pdfjs.js";
+import { PdfError, openPdf } from "./pdfjs.js";
 
 export type PageAnalysis = Classified & { n: number; width: number; height: number; rotation: number; chars: number; text: string };
 export type Analysis = {
@@ -21,10 +21,12 @@ export type Analysis = {
 export const ANALYSER = `pdfjs-dist@${version}+rules.${RULES_VERSION}`;
 
 export async function analyse(bytes: Uint8Array, maxPages: number): Promise<Analysis> {
+  if (typeof maxPages !== "number" || Number.isNaN(maxPages)) throw new PdfError("maxPages must be a number.", "bad_request");
+  const limit = Math.max(1, Math.floor(maxPages));
   const doc = await openPdf(bytes);
   try {
     const pageCount = doc.numPages;
-    const analysedPages = Math.max(0, Math.min(pageCount, Math.floor(maxPages)));
+    const analysedPages = Math.min(pageCount, limit);
     const { info } = (await doc.getMetadata().catch(() => ({ info: {} }))) as { info: Record<string, unknown> };
     const pages: PageAnalysis[] = [];
     for (let n = 1; n <= analysedPages; n++) {
@@ -155,6 +157,7 @@ function measureDrawing(fns: number[], args: unknown[][], displayed: Displayed) 
       case OPS.paintImageXObject:
       case OPS.paintInlineImageXObject:
       case OPS.paintImageMaskXObject:
+      case OPS.paintSolidColorImageMask:
         image(ctm);
         break;
       case OPS.paintImageXObjectRepeat: {

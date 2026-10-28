@@ -73,6 +73,18 @@ describe("classify", () => {
     expect(c.regions).toEqual([{ kind: "image", x: 0, y: 0, w: W, h: H }]);
   });
 
+  it("gives a page with very many path pieces one drawing quickly", () => {
+    // 50,000 boxes of 2 × 2 pt, 200 across and 250 down in steps of 2.4 pt.
+    const pieces = Array.from({ length: 50_000 }, (_, i) => box(50 + (i % 200) * 2.4, 100 + Math.floor(i / 200) * 2.4, 2, 2));
+    const started = performance.now();
+    const c = classify(page({ pathBoxes: pieces }));
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(c.type).toBe("mixed");
+    expect(c.vectorCoverage).toBeGreaterThan(0.3);
+    expect(c.vectorCoverage).toBeLessThan(0.6);
+    expect(c.regions).toEqual([{ kind: "drawing", x: 50, y: 100, w: 479.6, h: 599.6 }]);
+  });
+
   it("calls an empty page text with nothing covered", () => {
     expect(classify(page({}))).toEqual({ type: "text", textCoverage: 0, imageCoverage: 0, vectorCoverage: 0, images: 0, regions: [] });
   });

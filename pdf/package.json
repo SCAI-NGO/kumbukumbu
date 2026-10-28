@@ -10,7 +10,8 @@
   },
   "scripts": {
     "build": "tsc -p .",
-    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run",
     "start": "node dist/server.js"
   },
   "dependencies": {

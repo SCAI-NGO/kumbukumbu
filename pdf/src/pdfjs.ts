@@ -11,6 +11,8 @@ const root = dirname(createRequire(import.meta.url).resolve("pdfjs-dist/package.
 // pdf.js in Node reads these with fs; the paths must end in a separator.
 const asset = (folder: string) => join(root, folder) + "/";
 
+export const MAX_IMAGE_PIXELS = 50_000_000;
+
 export class PdfError extends Error {
   constructor(
     message: string,
@@ -37,12 +39,22 @@ export async function openPdf(bytes: Uint8Array): Promise<PDFDocumentProxy> {
     cMapPacked: true,
     wasmUrl: asset("wasm"),
     iccUrl: asset("iccs"),
+    // The server's own limit (ImageHeader.MaxPixels). A few bytes of Flate can declare an image
+    // of gigabytes, decoded outside the V8 heap; with stopAtErrors off pdf.js drops such an
+    // image's paint operation instead, so the page measures as if the image were not there.
+    maxImageSize: MAX_IMAGE_PIXELS,
   });
   try {
     return await task.promise;
   } catch (e) {
     await task.destroy();
-    if (e instanceof Error && e.name === "InvalidPDFException") throw new PdfError("The file is not a PDF.", "not_pdf");
-    throw e;
+    throw openError(e);
   }
+}
+
+export function openError(e: unknown): unknown {
+  if (!(e instanceof Error)) return e;
+  if (e.name === "InvalidPDFException") return new PdfError("The file is not a PDF.", "not_pdf");
+  if (e.name === "PasswordException") return new PdfError("The PDF is protected by a password.", "encrypted");
+  return e;
 }

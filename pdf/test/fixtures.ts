@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createCanvas } from "@napi-rs/canvas";
 import {
+  PDFArray,
   PDFDocument,
+  PDFHexString,
+  PDFName,
   PDFPage,
   StandardFonts,
+  concatTransformationMatrix,
   degrees,
+  drawObject,
   popGraphicsState,
   pushGraphicsState,
   rgb,
@@ -107,4 +112,49 @@ export async function threePages() {
   doc.setTitle("Three pages");
   doc.setAuthor("A. Writer");
   return doc.save();
+}
+
+// The filled box of cropBoxPage(), in PDF user space; the CropBox starts at (50, 50).
+export const CROPPED_BOX = { x: 100, y: 500, width: 100, height: 50 };
+export const CROP_BOX = { x: 50, y: 50, width: 400, height: 600 };
+
+export const cropBoxPage = () =>
+  single((_, page) => {
+    page.setCropBox(CROP_BOX.x, CROP_BOX.y, CROP_BOX.width, CROP_BOX.height);
+    page.drawRectangle({ ...CROPPED_BOX, color: rgb(0.2, 0.6, 0.2) });
+  });
+
+// A whole-page image that declares 10,000 × 10,000 pixels in a few bytes of Flate: it would cost
+// 100 MP of memory to decode.
+export const hugeImagePage = () =>
+  single(async (doc, page) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText("Text next to a huge image", { x: 50, y: 800, size: 12, font });
+    const image = doc.context.flateStream(new Uint8Array(1000), {
+      Type: "XObject",
+      Subtype: "Image",
+      Width: 10_000,
+      Height: 10_000,
+      ColorSpace: "DeviceGray",
+      BitsPerComponent: 8,
+    });
+    const name = page.node.newXObject("Huge", doc.context.register(image));
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(A4.width, 0, 0, A4.height, 0, 0), drawObject(name), popGraphicsState());
+  });
+
+// pdf-lib cannot encrypt, so this adds a Standard security handler whose user password check fails
+// for the empty password: pdf.js then asks for a password, as with any protected PDF.
+export async function encryptedPdf() {
+  const doc = await PDFDocument.create();
+  doc.addPage([A4.width, A4.height]);
+  const bytes32 = (seed: number) => PDFHexString.of(Array.from({ length: 32 }, (_, i) => ((i * 37 + seed) & 0xff).toString(16).padStart(2, "0")).join(""));
+  const encrypt = doc.context.obj({ Filter: "Standard", V: 1, R: 2, Length: 40, P: -4 });
+  encrypt.set(PDFName.of("O"), bytes32(1));
+  encrypt.set(PDFName.of("U"), bytes32(2));
+  doc.context.trailerInfo.Encrypt = doc.context.register(encrypt);
+  const id = PDFArray.withContext(doc.context);
+  id.push(bytes32(3));
+  id.push(bytes32(3));
+  doc.context.trailerInfo.ID = id;
+  return doc.save({ useObjectStreams: false });
 }
