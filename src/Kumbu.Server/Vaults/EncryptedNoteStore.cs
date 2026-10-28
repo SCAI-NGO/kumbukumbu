@@ -110,7 +110,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// attachments out of it, then the sources of all moves (notes' and attachments') are deleted (same check) before
     /// created notes and attachments, restored attachments and move targets are inserted, so a note may move to where
     /// another one just left. Every move, of a note or an attachment, is recorded in the moves. The unique index refuses a target that exists. Any refusal aborts the transaction: nothing is written.
-    /// The blobs the attachments name are put before (<see cref="PutBlobAsync"/>), outside the transaction.
+    /// The blobs the attachments name are put before (<see cref="PutBlobAsync"/>), outside the transaction, and checked in
+    /// it (<see cref="RequireBlobsAsync"/>).
     /// </summary>
     public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
     {
@@ -234,6 +235,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 });
             }
 
+            await RequireBlobsAsync(session, vault, NamedBlobs(batch), ct);
             return () => apply.ForEach(a => a());
         }, ct);
 
@@ -255,6 +257,47 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                 cancellationToken: ct);
             return move;
         }
+    }
+
+    /// <summary>
+    /// The blobs the batch's new attachment states name, but for those the records it replaces, moves or takes out of
+    /// the trash hold already: the batch checks those records at their revision, so their blobs are still referenced.
+    /// The others came from a checkpoint, another record or a put, read before the commit.
+    /// </summary>
+    private static IEnumerable<(VaultPath Path, string BlobId)> NamedBlobs(NoteBatch batch)
+    {
+        var held = batch.AttachmentReplaces.Select(r => r.Current)
+            .Concat(batch.AttachmentMoves.Select(m => m.Current))
+            .Concat(batch.AttachmentRestores.Select(r => r.Trashed.Attachment))
+            .SelectMany(States).Select(s => s.BlobId).ToHashSet(StringComparer.Ordinal);
+        return batch.AttachmentReplaces.Select(r => r.Next)
+            .Concat(batch.AttachmentCreates)
+            .Concat(batch.AttachmentRestores.Select(r => r.Restored))
+            .Concat(batch.AttachmentMoves.Select(m => m.Target))
+            .SelectMany(a => States(a).Select(s => (a.Path, s.BlobId)))
+            .Where(n => !held.Contains(n.BlobId));
+
+        static IEnumerable<AttachmentState> States(StoredAttachment a) => a.History.Select(h => h.State).Prepend(a.Current);
+    }
+
+    /// <summary>
+    /// Within the transaction: every blob <paramref name="named"/> is made young again, or the transaction refused with
+    /// <see cref="ContentMissingException"/> if one is gone. A reference read before the commit (from a checkpoint, say)
+    /// may name a blob that only something removed meanwhile held: the touch moves it past <see cref="BlobSweep"/>'s
+    /// cutoff and conflicts with a sweep deleting it at the same time, so a record never names bytes that aren't stored.
+    /// </summary>
+    private async Task RequireBlobsAsync(IClientSessionHandle session, UnlockedVault vault, IEnumerable<(VaultPath Path, string BlobId)> named, CancellationToken ct)
+    {
+        var wanted = named.DistinctBy(n => n.BlobId).ToList();
+        if (wanted.Count == 0) return;
+        var ids = wanted.Select(n => TryParseBlobId(n.BlobId, out var id) ? id : []).Where(id => id.Length > 0).ToList();
+        var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.In(d => d.BlobId, ids);
+        var touched = await catalog.Blobs.UpdateManyAsync(session, filter, Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now), cancellationToken: ct);
+        if (touched.MatchedCount == wanted.Count) return;
+
+        var stored = (await catalog.Blobs.Find(session, filter).Project(d => d.BlobId).ToListAsync(ct)).Select(Convert.ToBase64String).ToHashSet(StringComparer.Ordinal);
+        var missing = wanted.Where(n => !stored.Contains(n.BlobId)).Select(n => n.Path.Value).Distinct().Order(StringComparer.Ordinal);
+        throw new ContentMissingException($"The content of {string.Join(", ", missing)} is no longer stored (it was removed meanwhile); nothing was written.");
     }
 
     /// <summary>As <see cref="GetAsync"/>, a damaged path is read from MongoDB again first.</summary>
@@ -468,7 +511,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     /// <summary>One transaction: the checkpoint's document, and each content it holds that the vault doesn't
     /// store yet (an upsert on the content's keyed hash, so equal texts are stored once). Its attachments name blobs the
-    /// vault holds already; <see cref="BlobSweep"/> keeps them while the checkpoint exists.</summary>
+    /// vault holds (checked in the transaction, <see cref="RequireBlobsAsync"/>); <see cref="BlobSweep"/> keeps them while
+    /// the checkpoint exists.</summary>
     public async Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
     {
         if (await VaultAsync(checkpoint.Path, ct) is not { } vault) return false;
@@ -499,6 +543,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                     ct);
             }
 
+            await RequireBlobsAsync(session, vault, checkpoint.Attachments.Select(a => (a.Path, a.State.BlobId)), ct);
             var stored = new StoredCheckpoint(id, checkpoint, textIds);
             return () => vault.Checkpoints = vault.Checkpoints.Add(stored);
         }, ct);

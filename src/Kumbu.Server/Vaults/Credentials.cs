@@ -89,6 +89,12 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
 public class VaultUnavailableException(string message) : Exception(message);
 
 /// <summary>
+/// An attachment's bytes are not stored, or don't open: a write that would name them was refused (nothing was written),
+/// or a read can't serve them. Answered with 500 and the sentence: the file exists, its content is what is missing.
+/// </summary>
+public sealed class ContentMissingException(string message) : VaultUnavailableException(message);
+
+/// <summary>
 /// The vault is being re-encrypted, or the object a request holds was made with its old key (rekeying design §3):
 /// nothing was written. Answered with 503 and <c>Retry-After</c>; only <see cref="BeingReencrypted"/> and
 /// <see cref="JustReencrypted"/> are ever its message.

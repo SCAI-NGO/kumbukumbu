@@ -413,4 +413,53 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.False(await later.IsDamagedAsync(P("/Work/a.png"), Ct));
         Assert.Equal(0, await later.CountDamagedAsync(P("/Work"), Ct));
     }
+
+    [Fact]
+    public async Task A_commit_naming_a_blob_from_a_checkpoint_makes_it_young_again()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        _time.Advance(TimeSpan.FromHours(1));
+
+        // A restore read the checkpoint: its record names the blob the checkpoint held.
+        var restored = new StoredAttachment(shot.Path, shot.Current, 1, Writers.Dev, Now, [], null);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, Now, Ct));
+
+        // Within the sweep's grace again, whatever a sweep knows of the records.
+        var blob = await Raw(world, "blobs").Find(FilterDefinition<BsonDocument>.Empty).SingleAsync(Ct);
+        Assert.Equal(Now, blob["at"].ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task A_restore_from_a_checkpoint_whose_blob_was_swept_meanwhile_is_refused()
+    {
+        var (world, _, store) = await WorldAsync();
+        var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        var held = Assert.Single(Assert.Single(await store.ListCheckpointsAsync(P("/Work"), Ct)).Attachments);
+        // Between the restore's read and its commit, the checkpoint and the trash entry go, and a sweep with them.
+        await Raw(world, "blobs").DeleteManyAsync(FilterDefinition<BsonDocument>.Empty, Ct);
+
+        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null);
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, Now, []);
+        var refused = await Assert.ThrowsAsync<ContentMissingException>(
+            () => store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored }, Creates = { note } }, Writers.Dev, Now, Ct));
+
+        Assert.Contains("/Work/shot.png", refused.Message, StringComparison.Ordinal);
+        // Nothing of the batch was written, in MongoDB or the working set.
+        var later = Store(world.Catalog(time: _time));
+        Assert.Null(await later.GetAttachmentAsync(P("/Work/shot.png"), Ct));
+        Assert.Null(await later.GetAsync(P("/Work/a.md"), Ct));
+        Assert.Null(await store.GetAttachmentAsync(P("/Work/shot.png"), Ct));
+
+        // Nor is a checkpoint made that names it.
+        var again = checkpoint with { Name = "again" };
+        await Assert.ThrowsAsync<ContentMissingException>(() => store.TryAddCheckpointAsync(again, [], Ct));
+        Assert.DoesNotContain(await later.ListCheckpointsAsync(P("/Work"), Ct), c => c.Name == "again");
+    }
 }

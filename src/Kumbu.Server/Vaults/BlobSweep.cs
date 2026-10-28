@@ -78,8 +78,9 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
     /// open, since the blobs it names can't be known then. The collections are read at one point in time (a snapshot
     /// session): a restore, removal or move commits a record and a trash entry in one transaction, so a state that
     /// passes from one collection to the other between two plain reads would be missed by both. A commit after the
-    /// snapshot can only name a blob some state named in it already, or one put since, whose time is then past the
-    /// cutoff the deletion filters on.
+    /// snapshot names either a blob the records it replaces held (still referenced, so in the snapshot), or one its own
+    /// transaction touches (<see cref="EncryptedNoteStore.TryCommitAsync"/>, <see cref="EncryptedNoteStore.TryAddCheckpointAsync"/>):
+    /// that blob's time is then past the cutoff the deletion filters on, or, if it is gone already, the commit is refused.
     /// </summary>
     private async Task<HashSet<string>?> StoredReferencesAsync(UnlockedVault vault, CancellationToken ct)
     {

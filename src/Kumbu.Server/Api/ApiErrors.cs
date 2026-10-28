@@ -68,6 +68,11 @@ public static class ApiErrors
             SetRetryAfter(context.HttpContext, BusyRetryAfter);
             return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
         }
+        // An attachment's bytes are gone or don't open: the server's fault, not a deletion (a client reads 404 as one).
+        catch (Kumbu.Server.Vaults.ContentMissingException e)
+        {
+            return Result(StatusCodes.Status500InternalServerError, e.Message);
+        }
         // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
         catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
         {
