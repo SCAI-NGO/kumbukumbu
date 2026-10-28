@@ -2,7 +2,11 @@
 
 A React single-page app for Kumbu²: sign in, browse, read, edit, search and upload notes, manage API keys and app connections, see history and trash, manage checkpoints, and (for admins) users and invitations. It talks only to the server's REST API under `/api`, same origin, and is served by the server from `wwwroot` in the Docker image.
 
-Stack: TypeScript, React 18, Vite 6, Tailwind v4, react-router, TanStack Query, zustand, react-markdown, Vitest with Testing Library.
+Stack: TypeScript, React 18, Vite 6, Tailwind v4, react-router, TanStack Query, zustand, react-markdown, pdf.js (`pdfjs-dist` 6.4, Apache 2.0, its legacy build), Vitest with Testing Library.
+
+- pdf.js is loaded only when a PDF is shown, in a chunk of its own; its worker and its two plain-script image decoders are assets of the build, served from the app's origin (`vite.config.ts`, `src/attachments/pdf.ts`; the hardening is in `docs/security-architecture.md` §7).
+- `package.json` removes `@napi-rs/canvas` with the pnpm override `"-"`: an optional dependency of `pdfjs-dist`, a native canvas for running pdf.js under Node. The app runs pdf.js in the browser only, where it draws into the page's own canvases, and the tests replace pdf.js, so nothing loads it; leaving it out spares a 36 MB native binary per platform.
+- The lightbox has no library: its zoom, pan and swipe are the app's own (`src/attachments/gestures.ts`, which says why).
 
 ## Scripts
 
@@ -19,6 +23,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 
 ## Structure (`src/`)
 
+- `attachments/`: the lightbox for images and PDFs (`/view/:vault/<path>`), its gestures, the PDF pages and pdf.js's options
 - `api/`: typed client (`openapi-fetch`), generated `schema.d.ts`, error texts, note path helpers
 - `components/`: shared form parts, menu, password field, one-time secret reveal
 - `hooks/`: dialogs, edge swipe, visual viewport (keyboard)
@@ -51,7 +56,7 @@ From the repository root, use `pnpm -C web <script>`. See the main README for th
 - Downloading the recovery key on the Join screen may not work in iOS Safari; copying does.
 - The first tap on Search focuses a stand-in field in the dock inside the tap, so iOS raises the keyboard while the search sheet loads; the sheet's input then takes the focus over. Verified in tests only, not yet on an iPhone. Find in the note focuses its field as it opens, without a stand-in.
 - iOS Safari and Android's gesture navigation use a swipe from the screen's left edge for "back"; the drawer's edge swipe competes with them there.
-- Notes are text only; attachments are left to a later, carefully designed version.
+- The lightbox's pinch, pan and swipe, and the PDF pages' pinch, are tested in jsdom only, not yet on Android Chrome and iOS Safari.
 - Rename or move offers the vault's existing folders only; moving into a new folder isn't offered yet (make a note there first).
 - A missing link tapped inside an embedded note creates the note in the embedding note's folder, not the embedded one's.
 - Notes whose path contains `#`, `|`, `[` or `]` can't be named by a wiki link, so the `[[` list leaves them out.

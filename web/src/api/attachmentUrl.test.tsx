@@ -54,7 +54,7 @@ describe("useAttachmentUrl", () => {
 
     // Every render's answer: the one right after the change, before any effect has run, counts too.
     const seen: [string, string | null | undefined][] = [];
-    const { result, rerender } = renderHook(
+    const { result, rerender, unmount } = renderHook(
       ({ path }) => {
         const url = useAttachmentUrl("W", path);
         seen.push([path, url]);
@@ -67,6 +67,14 @@ describe("useAttachmentUrl", () => {
     expect(revoke).toHaveBeenCalledWith("blob:1");
     expect(seen.some(([path]) => path === "two.png")).toBe(true);
     expect(seen.filter(([path, url]) => path === "two.png" && url !== undefined)).toEqual([]);
+
+    // Back to the first while the second is still loading: its old URL is gone, a new one comes.
+    seen.length = 0;
+    rerender({ path: "one.png" });
+    expect(seen.filter(([, url]) => url === "blob:1")).toEqual([]);
+    await waitFor(() => expect(result.current).toBe("blob:2"));
+    unmount();
+    expect(revoke).toHaveBeenCalledWith("blob:2");
   });
 
   it("answers no URL for a file that can't be read", async () => {

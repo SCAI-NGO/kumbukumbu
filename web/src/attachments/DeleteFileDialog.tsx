@@ -9,7 +9,7 @@ import { useDialog } from "../hooks/useDialog";
  * Asks before an image or PDF goes to the trash, as a note's deletion does: the notes that link to it or embed it,
  * whose links then lead nowhere, are named first. `version` is the one shown: if it changed meanwhile, nothing goes.
  */
-export default function DeleteFileDialog({ path, version, onDeleted, onClose }: { path: string; version?: string; onDeleted(): void; onClose(): void }) {
+export default function DeleteFileDialog({ path, version, onDeleted, onClose }: { path: string; version: string; onDeleted(): void; onClose(): void }) {
   const backlinks = useBacklinks(path);
   const remove = useDeleteFile();
   const dialog = useDialog<HTMLDivElement>(onClose);

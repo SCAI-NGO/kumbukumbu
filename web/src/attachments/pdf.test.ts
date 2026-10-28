@@ -10,6 +10,9 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => pdfjs);
 const { openPdf, pageLinks } = await import("./pdf");
 
 describe("pdf.js", () => {
+  // pdfjs-dist 6.x no longer reads `isEvalSupported`: it compiles nothing from a PDF into JavaScript. The option is
+  // asserted because it is set (and would count in a 5.x build); what holds whatever pdf.js does is the CSP, whose
+  // script-src has no 'unsafe-eval' (Api/Security.cs).
   it("pdf.js is loaded with isEvalSupported false", async () => {
     const data = new ArrayBuffer(8);
     await openPdf(data);

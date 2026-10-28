@@ -221,7 +221,8 @@ export function useDeleteNote() {
  */
 export function useAttachmentUrl(vault: string, path: string, version?: string): string | null | undefined {
   const key = `${vault}\n${path}\n${version ?? ""}`;
-  // Kept with the file it was made for: after a change of file the old one, revoked by then, is never answered.
+  // Kept with the file it was made for, and dropped when its fetch ends: after a change of file (also back to one
+  // shown before) the old URL, revoked by then, is never answered.
   const [made, setMade] = useState<{ key: string; url: string | null }>();
   useEffect(() => {
     const controller = new AbortController();
@@ -243,6 +244,7 @@ export function useAttachmentUrl(vault: string, path: string, version?: string):
     return () => {
       controller.abort();
       if (url) URL.revokeObjectURL(url);
+      setMade(undefined);
     };
   }, [key, vault, path, version]);
   return made?.key === key ? made.url : undefined;
@@ -259,8 +261,8 @@ export const useFileInfo = (path: string) =>
 export function useDeleteFile() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ path, version }: { path: string; version?: string }) =>
-      call(api.DELETE("/api/files/{vault}/{path}", { params: { ...params(path), query: version ? { version } : {} } })),
+    mutationFn: ({ path, version }: { path: string; version: string }) =>
+      call(api.DELETE("/api/files/{vault}/{path}", { params: { ...params(path), query: { version } } })),
     onSuccess: (_, { path }) => {
       queryClient.removeQueries({ queryKey: ["version", path] });
       for (const key of ["tree", "vaults", "trash", "links", "backlinks", "activity", "history"]) void queryClient.invalidateQueries({ queryKey: [key] });

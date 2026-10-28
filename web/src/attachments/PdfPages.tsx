@@ -59,6 +59,12 @@ export default function PdfPages({
       if (!response?.ok || !data) return setFailure("unreadable");
       try {
         task = await openPdf(data);
+      } catch {
+        // pdf.js itself didn't load (its chunk comes over the network): the PDF is not to blame.
+        if (!ended) setFailure("unreadable");
+        return;
+      }
+      try {
         if (ended) return void task.destroy();
         const doc = await task.promise;
         const first = await doc.getPage(1);
@@ -194,6 +200,12 @@ export default function PdfPages({
   );
 }
 
+function release(target: HTMLCanvasElement | null) {
+  if (!target) return;
+  target.width = 0;
+  target.height = 0;
+}
+
 /** One page: a placeholder of the first page's shape until it comes into view, then the canvas and its links. */
 const PdfPage = memo(function PdfPage({
   pdf,
@@ -210,7 +222,8 @@ const PdfPage = memo(function PdfPage({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const [visible, setVisible] = useState(typeof IntersectionObserver === "undefined");
+  // Near the screen (within a screen's height of it): only then does the page hold a drawn canvas.
+  const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
   const [shape, setShape] = useState(ratio);
   const [links, setLinks] = useState<PageLink[]>([]);
   const linksRead = useRef(false);
@@ -218,14 +231,21 @@ const PdfPage = memo(function PdfPage({
   useEffect(() => {
     const element = box.current;
     if (!element || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => entry.isIntersecting && setVisible(true), { rootMargin: "100% 0px" });
+    const observer = new IntersectionObserver(([entry]) => setNear(entry.isIntersecting), { rootMargin: "100% 0px" });
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
 
-  // Drawn again for a new zoom, once the fingers have rested a moment.
+  // A canvas holds its pixels until it is emptied: browsers (iOS Safari above all) cap what all canvases together may
+  // hold, and a long PDF would go blank. So a page far from the screen, or of a PDF no longer shown, keeps none.
   useEffect(() => {
-    if (!visible) return;
+    const target = canvas.current;
+    return () => release(target);
+  }, []);
+
+  // Drawn when it comes near, and again for a new zoom once the fingers have rested a moment; emptied when it leaves.
+  useEffect(() => {
+    if (!near) return release(canvas.current);
     let task: { cancel(): void } | undefined;
     let ended = false;
     const timer = setTimeout(async () => {
@@ -259,7 +279,7 @@ const PdfPage = memo(function PdfPage({
       clearTimeout(timer);
       task?.cancel();
     };
-  }, [pdf, number, visible, zoom]);
+  }, [pdf, number, near, zoom]);
 
   return (
     <div ref={box} data-page={number} className="relative w-full bg-white shadow-md" style={{ aspectRatio: `1 / ${shape}` }}>

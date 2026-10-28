@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { timeText } from "../components/Sheet";
@@ -188,6 +188,79 @@ describe("Lightbox", () => {
     const move = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST")!;
     expect(await move.clone().json()).toEqual({ from: "/W/shots/b.png", to: "/W/shots/bug.png", keepLinks: false });
     expect(await within(dialog).findByRole("heading", { name: "Image moved" })).toBeInTheDocument();
+  });
+
+  it("focuses Close as it opens", async () => {
+    api();
+    renderApp(opened("/W/shots/b.png"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close" })).toHaveFocus());
+  });
+
+  it("offers Delete only once it knows the version shown", async () => {
+    let answer: (r: Response) => void = () => {};
+    api({ "GET /api/version/*": () => new Promise<Response>((resolve) => (answer = resolve)) });
+    renderApp(opened("/W/shots/b.png"));
+    const remove = await screen.findByRole("button", { name: "Delete" });
+    expect(remove).toBeDisabled();
+    answer(json(200, fileInfo("/W/shots/b.png")));
+    await waitFor(() => expect(remove).toBeEnabled());
+  });
+
+  it("says pdf.js can't be loaded when its chunk doesn't come, not that the PDF is damaged", async () => {
+    api();
+    vi.mocked(openPdf).mockRejectedValue(new TypeError("Failed to fetch dynamically imported module"));
+    renderApp(opened("/W/report.pdf", ["/W/report.pdf"]));
+    expect(await screen.findByRole("alert")).toHaveTextContent("can't be loaded");
+  });
+
+  it("draws only the pages near the screen, empties those that leave, and redraws only near ones on a zoom", async () => {
+    api();
+    // The pages report coming near and leaving as the test says.
+    const observed = new Map<Element, (entries: { isIntersecting: boolean }[]) => void>();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        observe(element: Element) {
+          observed.set(element, this.callback);
+        }
+        disconnect() {}
+      },
+    );
+    const renders: { page: number; cancel: ReturnType<typeof vi.fn> }[] = [];
+    const page = (number: number) => ({
+      getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale, convertToViewportPoint: () => [0, 0] }),
+      getAnnotations: async () => [],
+      render: () => {
+        const cancel = vi.fn();
+        renders.push({ page: number, cancel });
+        return { promise: new Promise(() => {}), cancel }; // still drawing
+      },
+    });
+    const doc = { numPages: 3, getPage: async (n: number) => page(n), getDestination: async () => null, getPageIndex: async () => 0 };
+    vi.mocked(openPdf).mockResolvedValue({ promise: Promise.resolve(doc), destroy: async () => {} } as never);
+    renderApp(opened("/W/report.pdf", ["/W/report.pdf"]));
+
+    await screen.findByText("Page 1 / 3");
+    const box = (n: number) => document.querySelector(`[data-page="${n}"]`)!;
+    const canvas = (n: number) => box(n).querySelector("canvas")!;
+    const report = (n: number, isIntersecting: boolean) => act(() => observed.get(box(n))!([{ isIntersecting }]));
+    expect(renders).toEqual([]);
+
+    report(1, true);
+    report(2, true);
+    await waitFor(() => expect(renders.map((r) => r.page)).toEqual([1, 2]));
+    expect(canvas(1).width).toBe(600);
+
+    report(1, false);
+    expect(renders[0].cancel).toHaveBeenCalled();
+    expect([canvas(1).width, canvas(1).height]).toEqual([0, 0]);
+
+    fireEvent.wheel(screen.getByTestId("pdf-pages"), { ctrlKey: true, deltaY: -100 });
+    await waitFor(() => expect(renders.map((r) => r.page)).toEqual([1, 2, 2]));
+    expect(renders[1].cancel).toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(renders.map((r) => r.page)).toEqual([1, 2, 2]);
   });
 
   it("a pdf link opens in a new tab with noopener", async () => {

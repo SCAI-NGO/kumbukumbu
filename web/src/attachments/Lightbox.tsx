@@ -55,6 +55,10 @@ export default function Lightbox() {
   const [zoom, setZoom] = useState(1);
   const [pdf, setPdf] = useState<PdfStatus | null>(null);
   const download = useRef<HTMLAnchorElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+
+  // Focus starts in the lightbox, on the way out of it.
+  useEffect(() => closeButton.current?.focus(), []);
 
   // What is shown of one file starts afresh with the next.
   useEffect(() => {
@@ -107,11 +111,13 @@ export default function Lightbox() {
   };
 
   const downloadUrl = `${fileUrl(vault, inVault(path))}?download=1`;
-  const actions: { label: string; icon: LucideIcon; onSelect(): void }[] = [
+  // Deleted only at the version shown, so not before it is known.
+  const version = info.data?.version;
+  const actions: { label: string; icon: LucideIcon; onSelect(): void; disabled?: boolean }[] = [
     { label: "Download", icon: Download, onSelect: () => download.current?.click() },
     { label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") },
     { label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
-    { label: "Delete", icon: Trash2, onSelect: () => setDialog("delete") },
+    { label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !version },
   ];
 
   const width = info.data?.width;
@@ -128,7 +134,7 @@ export default function Lightbox() {
 
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col gap-2 bg-gradient-to-b from-black/80 to-transparent px-2 pt-[max(8px,env(safe-area-inset-top))] pb-6">
         <div className="pointer-events-auto flex items-center gap-2">
-          <button type="button" aria-label="Close" onClick={close} className={controlClass}>
+          <button ref={closeButton} type="button" aria-label="Close" onClick={close} className={controlClass}>
             <X size={20} aria-hidden />
           </button>
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium" title={path}>
@@ -199,7 +205,7 @@ export default function Lightbox() {
           <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
             <Link2 size={20} aria-hidden />
           </button>
-          <button type="button" aria-label="Delete" onClick={() => setDialog("delete")} className={controlClass}>
+          <button type="button" aria-label="Delete" disabled={!version} onClick={() => setDialog("delete")} className={controlClass}>
             <Trash2 size={20} aria-hidden />
           </button>
         </div>
@@ -212,10 +218,10 @@ export default function Lightbox() {
           onMoved={(to) => show(to, paths.map((p) => (p === path ? to : p)))}
         />
       )}
-      {dialog === "delete" && (
+      {dialog === "delete" && version && (
         <DeleteFileDialog
           path={path}
-          version={info.data?.version}
+          version={version}
           onClose={() => setDialog(null)}
           onDeleted={() => {
             setDialog(null);
