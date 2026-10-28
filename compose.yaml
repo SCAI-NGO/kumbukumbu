@@ -91,7 +91,7 @@ services:
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
-      # Prometheus metrics: reachable from the compose network only (the port is not published), for compose.monitoring.yaml.
+      # Prometheus metrics, for compose.monitoring.yaml: not published, but reachable from every container on a network of the server's.
       Kumbu__Metrics__Url: http://0.0.0.0:9464
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.

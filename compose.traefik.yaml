@@ -28,7 +28,7 @@
 # networks, `ports: !reset []`, the Kumbu__ settings) into a compose.override.yaml, declare `proxy` as your Traefik's
 # network with `external: true` and its `name:`, and use your entry point and certificate resolver names in the labels.
 # Every container on that shared network can then reach Kumbu² on port 8080 directly and send its own X-Forwarded-For,
-# so give Kumbu² a network of its own with Traefik where you can.
+# and read its metrics on port 9464 without a credential, so give Kumbu² a network of its own with Traefik where you can.
 
 services:
   traefik:
