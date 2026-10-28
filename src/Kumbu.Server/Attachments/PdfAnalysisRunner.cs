@@ -85,7 +85,9 @@ public sealed class PdfAnalysisRunner : BackgroundService
         if (BlobIds([state]) is not [var blobId] || !_catalog.MayIndex(vault)) return null;
         await _analyses.EnqueueAsync(vault, [blobId], evenIfAnalysed: true, ct);
         var run = RunAsync(vault, blobId);
-        var first = await Task.WhenAny(run, Task.Delay(OnDemandWait, ct));
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var first = await Task.WhenAny(run, Task.Delay(OnDemandWait, wait.Token));
+        await wait.CancelAsync();
         ct.ThrowIfCancellationRequested();
         if (first != run) return null;
         var outcome = await run;
@@ -149,6 +151,10 @@ public sealed class PdfAnalysisRunner : BackgroundService
         catch (OperationCanceledException)
         {
             // Shutting down.
+        }
+        catch (Exception e)
+        {
+            _log.LogError("Queueing the PDFs of vault {VaultId} after its unlock failed: {Error}", vault.Id, e.GetType().Name);
         }
     });
 
