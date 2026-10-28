@@ -14,8 +14,8 @@ public sealed class MetricsServerTests(KumbuAppFactory app)
         var text = await Scrape.TextAsync(app);
 
         Assert.Contains("# TYPE process_cpu_seconds_total", text);
-        // The runtime meter, as the adapter names it (dotnet.gc.collections).
-        Assert.Contains("# TYPE dotnet_collection_count_total", text);
+        // The System.Runtime meter's dotnet.gc.collections, as the meter adapter names it.
+        Assert.Contains("# TYPE system_runtime_dotnet_gc_collections", text);
     }
 
     // The metrics are not on the app's port: a proxy forwarding a request with Host: localhost:9464 must not reach them.

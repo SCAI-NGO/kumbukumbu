@@ -109,8 +109,7 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
     // The port must be written out (0 is allowed, for tests): Uri.Port would fill in 80 for a bare http URL.
     private static bool IsUsableMetricsUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == "http" && uri.Host != ""
-        && !uri.IsDefaultPort && uri.AbsolutePath == "/" && uri.Query == "" && uri.Fragment == "" && uri.UserInfo == ""
-        && !url.EndsWith("/metrics", StringComparison.Ordinal);
+        && !uri.IsDefaultPort && uri.AbsolutePath == "/" && uri.Query == "" && uri.Fragment == "" && uri.UserInfo == "";
 
     /// <summary>
     /// What is wrong with an external embedding provider's settings. Fails closed: a provider that would send notes

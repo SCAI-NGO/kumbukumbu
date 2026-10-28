@@ -186,6 +186,18 @@ public sealed class KumbuOptionsValidatorTests
             KumbuOptionsValidator.MetricsUrlMessage);
     }
 
+    [Theory]
+    [InlineData("http://0.0.0.0:9464")]
+    [InlineData("http://127.0.0.1:0")]
+    [InlineData("http://127.0.0.1:9464/")]
+    public void Accepts_a_metrics_url_with_a_host_and_a_port(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Metrics.Url = url;
+
+        Assert.True(Validate(options).Succeeded);
+    }
+
     [Fact]
     public void Disabled_metrics_skip_the_url_check()
     {

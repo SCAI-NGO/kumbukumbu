@@ -22,13 +22,30 @@ public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedServi
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseUrls(options.Value.Metrics.Url);
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+        // The outer host owns SIGTERM and the lifetime messages; this one is started and stopped by it.
+        builder.Services.AddSingleton<IHostLifetime, NoLifetime>();
         var app = builder.Build();
-        app.MapMetrics("/metrics");
-        await app.StartAsync(cancellationToken);
-        _app = app;
+        try
+        {
+            app.MapMetrics("/metrics");
+            await app.StartAsync(cancellationToken);
+        }
+        catch
+        {
+            await app.DisposeAsync();
+            throw;
+        }
 
+        _app = app;
         var bound = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First();
         Address = new Uri(bound.Replace("[::]", "localhost").Replace("0.0.0.0", "127.0.0.1"));
+    }
+
+    private sealed class NoLifetime : IHostLifetime
+    {
+        public Task WaitForStartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
