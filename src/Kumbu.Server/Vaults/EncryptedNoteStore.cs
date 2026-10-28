@@ -13,7 +13,7 @@ namespace Kumbu.Server.Vaults;
 /// write is one MongoDB transaction over sealed documents (compare-and-swap on the revision), and changes the working
 /// set only after MongoDB committed it.
 /// </summary>
-public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null)
+public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null, Accounts.ApiKeys? keys = null)
     : INoteStore, IAttachmentStore, Kumbu.Core.Search.ISearchIndex
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
@@ -701,9 +701,17 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     /// Runs <paramref name="work"/> in one transaction under the vault's gate. It returns what to change in the
     /// working set, or null to abort. The working set changes only after MongoDB committed; after an abort,
     /// <paramref name="paths"/> are read again, since someone else wrote them. A cancelled request aborts too,
-    /// so it can't leave half a change behind.
+    /// so it can't leave half a change behind. A change of notes or attachments by an API key is recorded on the key
+    /// afterwards, outside the gate (<see cref="Accounts.ApiKeys.RecordWriteAsync"/>).
     /// </summary>
     private async Task<bool> WriteAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
+    {
+        var written = await WriteUnderGateAsync(vault, paths, work, ct);
+        if (written && paths.Count > 0 && credential is ApiKeyCredential key && keys is not null) await keys.RecordWriteAsync(key.KeyId);
+        return written;
+    }
+
+    private async Task<bool> WriteUnderGateAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
     {
         // Before waiting too: nothing queues behind a re-keying run.
         catalog.CheckWritable(vault);

@@ -6333,6 +6333,12 @@ export interface components {
             /** Format: date-time */
             lastWriteAt: string;
             version: string;
+            /** @default agent */
+            writerKind: string;
+            /** Format: date-time */
+            quietSince?: null | string;
+            /** Format: date-time */
+            resumedAt?: null | string;
         };
         CheckpointEntryView: {
             name: string;

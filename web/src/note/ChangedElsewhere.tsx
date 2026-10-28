@@ -2,6 +2,7 @@
 import { useIsFetching, useIsMutating } from "@tanstack/react-query";
 import { useEffect, useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { deviceOf } from "../api/activity";
 import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
 import { noteUrl } from "../api/paths";
@@ -54,17 +55,6 @@ export function GoneText({ movedTo }: { movedTo: string | null }) {
 }
 
 const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-text focus-visible:outline-2 focus-visible:outline-accent";
-
-const pairedInfix = " – Obsidian ";
-
-/**
- * The device of a key paired from Obsidian, named "<vault> – Obsidian <device>" ("Work – Obsidian Laptop" is
- * "Laptop", "Work – Obsidian My Obsidian Phone" is "My Obsidian Phone"); the whole label for any other name.
- */
-export function deviceOf(writer: string): string {
-  const at = writer.indexOf(pairedInfix);
-  return at < 0 ? writer : writer.slice(at + pairedInfix.length);
-}
 
 /**
  * "liz changed this note just now"; "You changed this note in Obsidian (Laptop) …" for a write by one of the user's

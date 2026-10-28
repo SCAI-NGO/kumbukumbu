@@ -3,11 +3,11 @@ import { focusManager } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deviceOf } from "../api/activity";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { setAutoRefresh, storedAutoRefresh } from "./autoRefresh";
-import { deviceOf } from "./ChangedElsewhere";
 
 beforeEach(() => localStorage.clear());
 
