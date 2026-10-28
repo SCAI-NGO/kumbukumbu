@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, FileText, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
 import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
 import { findFolder, useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
-import { boardUrl, noteUrl, titleOf } from "../api/paths";
+import { boardUrl, folderOf, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
@@ -28,18 +29,21 @@ export const sidebarId = "file-tree";
 
 export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
-  | { kind: "note"; path: string; depth: number };
+  | { kind: "note"; path: string; depth: number; fileKind: FileKind };
+
+/** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
+const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" ? entry.kind : "note");
 
 const count = (f: TreeFolder): number => f.notes.length + f.folders.reduce((n, sub) => n + count(sub), 0);
 
-/** The visible rows, in the server's order (as `ls`: folders first, then notes, each in text order). */
+/** The visible rows, in the server's order (as `ls`: folders first, then notes and attachments, each in text order). */
 export function rows(folder: TreeFolder, expanded: Record<string, boolean>, depth = 0): Row[] {
   return [
     ...folder.folders.flatMap((f): Row[] => {
       const open = !!expanded[f.path];
       return [{ kind: "folder", folder: f, depth, count: count(f), open }, ...(open ? rows(f, expanded, depth + 1) : [])];
     }),
-    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth })),
+    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n) })),
   ];
 }
 
@@ -76,12 +80,23 @@ function FolderButton({ folder, count, open, onToggle }: { folder: TreeFolder; c
   );
 }
 
-/** A note's entry shows the title; when that is cut off, the path is what the tooltip tells (the title alone may repeat). */
-function NoteButton({ path, current, onOpen }: { path: string; current: boolean; onOpen(): void }) {
+/**
+ * A note's entry shows the title, an attachment's its name with the icon of its kind; when that is cut off, the path
+ * is what the tooltip tells (the title alone may repeat).
+ */
+function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKind: FileKind; current: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
+  const Icon = fileKindIcon[fileKind];
   return (
-    <button type="button" aria-current={current ? "page" : undefined} onClick={onOpen} {...truncated} className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}>
-      <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+    <button
+      type="button"
+      aria-current={current ? "page" : undefined}
+      onClick={onOpen}
+      data-file-kind={fileKind}
+      {...truncated}
+      className={`${rowClass} pl-[22px] ${current ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+    >
+      <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
     </button>
   );
@@ -254,6 +269,14 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(boardUrl(vault));
   };
+  /** A note opens as the note; an attachment in the lightbox, which pages through its folder's attachments. */
+  const openEntry = (path: string, fileKind: FileKind) => {
+    if (!docked) setOverlay("none");
+    if (fileKind === "note") return navigate(noteUrl(path));
+    const folder = tree.data && findFolder(tree.data.root, folderOf(path));
+    const paths = folder?.notes.filter((n) => fileKindOfEntry(n) !== "note").map((n) => n.path) ?? [path];
+    navigate(viewUrl(path), { state: { paths } satisfies LightboxState });
+  };
   // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
   const vaultItems: MenuItem[] = [
     ...(activeVault
@@ -302,22 +325,20 @@ export default function TreeDrawer(props: {
                   </>
                 ) : (
                   <>
-                    <NoteButton
-                      path={row.path}
-                      current={row.path === currentPath}
-                      onOpen={() => {
-                        if (!docked) setOverlay("none");
-                        navigate(noteUrl(row.path));
-                      }}
-                    />
-                    <Menu
-                      label={`Actions for ${titleOf(row.path)}`}
-                      items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
-                      placement="below"
-                      className={menuButtonClass}
-                    >
-                      <Ellipsis size={18} aria-hidden />
-                    </Menu>
+                    <NoteButton path={row.path} fileKind={row.fileKind} current={row.path === currentPath} onOpen={() => openEntry(row.path, row.fileKind)} />
+                    {/* An attachment is moved from the lightbox: the note's dialog would give it a `.md`. */}
+                    {row.fileKind === "note" ? (
+                      <Menu
+                        label={`Actions for ${titleOf(row.path)}`}
+                        items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
+                        placement="below"
+                        className={menuButtonClass}
+                      >
+                        <Ellipsis size={18} aria-hidden />
+                      </Menu>
+                    ) : (
+                      <span aria-hidden className="size-11 flex-none" />
+                    )}
                   </>
                 )}
               </li>

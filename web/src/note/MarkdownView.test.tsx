@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LinkView } from "./wikiLinks";
 import MarkdownView from "./MarkdownView";
 
@@ -40,6 +40,26 @@ function show(
         onCreateMissing={handlers.onCreateMissing ?? vi.fn()}
         highlight={highlight}
       />
+    </MemoryRouter>,
+  );
+}
+
+/** Where a tap led, and the router state it took along: the lightbox's route is Task 13's, so a probe stands in. */
+function Lightbox() {
+  const location = useLocation();
+  return <p data-testid="lightbox">{`${location.pathname} ${JSON.stringify(location.state)}`}</p>;
+}
+
+function showRouted(source: string, links: LinkView[], onCreateMissing = vi.fn()) {
+  render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Routes>
+        <Route
+          path="/"
+          element={<MarkdownView source={source} links={links} tasksDisabled={false} onToggleTask={vi.fn()} onCreateMissing={onCreateMissing} path="/Work/plan.md" />}
+        />
+        <Route path="/view/:vault/*" element={<Lightbox />} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -323,5 +343,58 @@ describe("Callouts", () => {
     show("> [!info] See [[plan]]\n> and [[roadmap]]", [link(1, "[[plan]]", "note", "/W/plan.md"), link(2, "[[roadmap]]", "note", "/W/roadmap.md")]);
     expect(screen.getByRole("link", { name: "plan" })).toHaveAttribute("href", "/notes/W/plan.md");
     expect(screen.getByRole("link", { name: "roadmap" })).toHaveAttribute("href", "/notes/W/roadmap.md");
+  });
+});
+
+describe("MarkdownView: attachments", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders a vault image embed as a chip that opens the lightbox", async () => {
+    const source = "Before\n\n![[shot.png]]\n\nSee [[report.pdf]] and ![](/Screenshots/shot.png) and [[shot.png]].";
+    showRouted(source, [
+      link(3, "![[shot.png]]", "attachment", "/Work/Screenshots/shot.png"),
+      link(5, "[[report.pdf]]", "attachment", "/Work/report.pdf"),
+      mdLink(5, "![](/Screenshots/shot.png)", "attachment", "/Screenshots/shot.png", "/Work/Screenshots/shot.png"),
+      link(5, "[[shot.png]]", "attachment", "/Work/Screenshots/shot.png"),
+    ]);
+    expect(document.querySelector("img")).toBeNull();
+    const images = screen.getAllByRole("link", { name: "Open the image shot.png" });
+    expect(images).toHaveLength(3);
+    expect(images[0]).toHaveAttribute("href", "/view/Work/Screenshots/shot.png");
+    expect(screen.getByRole("link", { name: "Open the PDF report.pdf" })).toHaveAttribute("href", "/view/Work/report.pdf");
+
+    await userEvent.click(screen.getByRole("link", { name: "Open the PDF report.pdf" }));
+    // The note's attachments in the order they appear, each once: the lightbox pages through them.
+    expect(screen.getByTestId("lightbox")).toHaveTextContent('/view/Work/report.pdf {"paths":["/Work/Screenshots/shot.png","/Work/report.pdf"]}');
+  });
+
+  it("keeps an external image a placeholder and fetches nothing", () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    showRouted("![a chart](https://tracker.example/pixel.png)", []);
+    expect(document.querySelector("img")).toBeNull();
+    expect(screen.getByText("[image: a chart]")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows a missing attachment like a missing note, without offering to create a note", async () => {
+    const onCreateMissing = vi.fn();
+    showRouted("[[gone]] ![[pic.png]] ![](/x/old.PDF)", [
+      link(1, "[[gone]]", "not_found"),
+      link(1, "![[pic.png]]", "not_found"),
+      mdLink(1, "![](/x/old.PDF)", "not_found", "/x/old.PDF"),
+    ], onCreateMissing);
+    const note = screen.getByRole("button", { name: "Create the note “gone”" });
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.queryByRole("link")).toBeNull();
+    const picture = screen.getByText("pic.png");
+    for (const cls of ["text-muted", "underline", "decoration-dim", "decoration-dashed"]) {
+      expect(note).toHaveClass(cls);
+      expect(picture).toHaveClass(cls);
+    }
+    expect(screen.getByText("old.PDF")).toHaveClass("decoration-dashed");
+    await userEvent.click(picture);
+    expect(onCreateMissing).not.toHaveBeenCalled();
   });
 });

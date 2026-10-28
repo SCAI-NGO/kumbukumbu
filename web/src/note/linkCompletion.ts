@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { TreeFolder } from "../api/notes";
+import { fileKindOf } from "../api/paths";
 
 /** An open `[[` before the caret: where it starts (at the first `[`) and what has been typed after it. */
 export type LinkQuery = { start: number; query: string };
@@ -17,10 +18,11 @@ export function linkQuery(value: string, caret: number): LinkQuery | null {
   return { start: caret - line.length + open, query };
 }
 
-/** Every note path of a tree (`/Work/projects/plan.md`). */
+/** Every note and attachment path of a tree (`/Work/projects/plan.md`, `/Work/shot.png`). */
 export const notePaths = (folder: TreeFolder): string[] => [...folder.notes.map((n) => n.path), ...folder.folders.flatMap(notePaths)];
 
-/** `/Work/projects/plan.md` → `projects/plan`: the path in its vault without `.md`, as a link writes it. */
+/** `/Work/projects/plan.md` → `projects/plan`: the path in its vault without `.md` (an attachment keeps its
+ * extension), as a link writes it. */
 const linkPath = (path: string) => path.split("/").slice(2).join("/").replace(/\.md$/i, "");
 
 /**
@@ -47,9 +49,9 @@ export const linkable = (path: string) => !/[#|[\]]/.test(linkPath(path));
 const MAX = 8;
 
 /**
- * The notes for a query, best first: names starting with it, then names containing it, then notes whose folder
- * contains it; each group in text order. An empty query lists the vault's notes in text order. Notes no link can
- * name (`linkable`) are left out.
+ * The notes (and attachments) for a query, best first: names starting with it, then names containing it, then
+ * notes whose folder contains it; each group in text order. An empty query lists the vault's notes in text order.
+ * Notes no link can name (`linkable`) are left out.
  */
 export function rankNotes(paths: string[], query: string): string[] {
   const q = query.trim().toLowerCase();
@@ -69,12 +71,15 @@ export function rankNotes(paths: string[], query: string): string[] {
     .map(({ p }) => p);
 }
 
+/** Whether a link to `path` is written as an embed: an image shows in place (`![[shot.png]]`), a PDF is linked. */
+export const embedsAsImage = (path: string) => fileKindOf(path) === "image";
+
 /**
  * The edit that completes the link: `[[que` (and a `]]` right after the caret, as the toolbar's button leaves
- * it) becomes `[[target]]`, with the caret after it.
+ * it) becomes `[[target]]`, with the caret after it; with `embed`, `![[target]]`, unless the `!` is typed already.
  */
-export function completeLink(value: string, caret: number, at: LinkQuery, target: string) {
+export function completeLink(value: string, caret: number, at: LinkQuery, target: string, embed = false) {
   const end = value.startsWith("]]", caret) ? caret + 2 : caret;
-  const text = `[[${target}]]`;
+  const text = `${embed && value[at.start - 1] !== "!" ? "!" : ""}[[${target}]]`;
   return { start: at.start, end, text, selStart: at.start + text.length, selEnd: at.start + text.length };
 }

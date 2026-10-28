@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { crumbOf, folderOf, noteUrl, pathFromRoute, titleOf, untitledName } from "./paths";
+import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, noteUrl, pathFromRoute, titleOf, untitledName, viewUrl } from "./paths";
 
 describe("note paths", () => {
   it("puts a note into the URL one encoded segment at a time", () => {
@@ -22,5 +22,27 @@ describe("note paths", () => {
     expect(untitledName([])).toBe("Untitled.md");
     expect(untitledName(["plan.md"])).toBe("Untitled.md");
     expect(untitledName(["Untitled.md", "untitled 2.md", "Untitled 4.md"])).toBe("Untitled 3.md");
+  });
+});
+
+describe("attachment paths", () => {
+  it("tells attachments from notes by the extensions the server keeps, in any case", () => {
+    expect(fileKindOf("/Work/shot.PNG")).toBe("image");
+    expect(fileKindOf("/Work/a.jpeg")).toBe("image");
+    expect(fileKindOf("/Work/report.pdf")).toBe("pdf");
+    expect(fileKindOf("/Work/plan.md")).toBe("note");
+    expect(fileKindOf("/Work/x.png/plan.md")).toBe("note");
+    expect(isAttachment("/Work/memo.docx")).toBe(false);
+    expect(isAttachment("/Work/x.webp")).toBe(true);
+  });
+
+  it("keeps an attachment's extension in its title", () => {
+    expect(titleOf("/Work/Screenshots/shot.png")).toBe("shot.png");
+  });
+
+  it("puts an attachment into the API's and the lightbox's URL one encoded segment at a time", () => {
+    expect(fileUrl("My Vault", "a b/c#?.png")).toBe("/api/files/My%20Vault/a%20b/c%23%3F.png");
+    expect(fileUrl("W", "x.pdf", "abc123")).toBe("/api/files/W/x.pdf?version=abc123");
+    expect(viewUrl("/My Vault/a b/c#.png")).toBe("/view/My%20Vault/a%20b/c%23.png");
   });
 });

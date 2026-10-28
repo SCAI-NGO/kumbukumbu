@@ -17,6 +17,33 @@ export const checkpointUrl = (vault: string, name: string, path?: string) =>
 export const boardUrl = (vault: string, checkpoint?: string) =>
   `/board/${encodeURIComponent(vault)}` + (checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "");
 
+/** What a path holds by its extension, as the server tells files apart (`kind`): "image", "pdf" or "note". */
+export type FileKind = "note" | "image" | "pdf";
+
+/** The formats Kumbu² keeps besides notes, as the server accepts them (any case). */
+const attachmentKinds: Record<string, FileKind> = { ".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image" };
+
+export function fileKindOf(path: string): FileKind {
+  const dot = path.lastIndexOf(".");
+  return (dot > path.lastIndexOf("/") && attachmentKinds[path.slice(dot).toLowerCase()]) || "note";
+}
+
+export const isAttachment = (path: string) => fileKindOf(path) !== "note";
+
+/** The API's URL of an attachment's bytes (`/api/files/{vault}/{path}`), at `version` if given. */
+export const fileUrl = (vault: string, path: string, version?: string) =>
+  `/api/files/${encodeURIComponent(vault)}/${path.split("/").map(encodeURIComponent).join("/")}` +
+  (version ? `?version=${encodeURIComponent(version)}` : "");
+
+/**
+ * The app's URL of an attachment in the lightbox (`/view/:vault/*`). It is opened with the paths to page through
+ * as router state (`LightboxState`): a folder's attachments from the tree, a note's from its chips.
+ */
+export const viewUrl = (path: string) => `/view/${path.split("/").slice(1).map(encodeURIComponent).join("/")}`;
+
+/** The lightbox's router state: the attachments (paths from the root of the tree) in the order it pages through. */
+export type LightboxState = { paths: string[] };
+
 export const vaultOf = (path: string) => path.split("/")[1];
 
 export const folderOf = (path: string) => path.slice(0, path.lastIndexOf("/"));
@@ -24,6 +51,7 @@ export const folderOf = (path: string) => path.slice(0, path.lastIndexOf("/"));
 /** The path within its vault, as `{path}` of `/api/notes/{vault}/{path}` wants it. */
 export const inVault = (path: string) => path.split("/").slice(2).join("/");
 
+/** A note's file name without `.md`; an attachment's keeps its extension (`shot.png`), which tells it apart. */
 export const titleOf = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
 
 export const crumbOf = (path: string) => folderOf(path).split("/").slice(1).join(" / ");

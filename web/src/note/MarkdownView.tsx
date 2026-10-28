@@ -7,7 +7,8 @@ import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { errorText } from "../api/error-text";
 import { useLinks, useNote } from "../api/notes";
-import { noteUrl, titleOf } from "../api/paths";
+import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { fileKindIcon } from "../components/fileKindIcon";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
@@ -96,8 +97,9 @@ interface Props {
 
 // The components below must keep their identity across renders: a new one would remount every block of that
 // kind (a tapped checkbox, a focused link). So what changes with the note reaches them through this context.
-const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find">>({
+const NoteContext = createContext<Omit<Props, "source" | "highlight" | "find"> & { attachments: string[] }>({
   links: undefined,
+  attachments: [],
   tasksDisabled: true,
   onToggleTask: () => {},
   onCreateMissing: () => {},
@@ -162,6 +164,38 @@ function EmbeddedNote({ path, heading }: { path: string; heading: string | null 
   );
 }
 
+const missingClass = "text-muted underline decoration-dim decoration-dashed underline-offset-[3px]";
+
+/**
+ * A link or embed to an attachment of the vault (`![[shot.png]]`, `[[report.pdf]]`): a chip with its kind's icon
+ * and its name, never the bytes, which open in the lightbox with the note's other attachments to page through. In a
+ * checkpoint the chip only names it.
+ */
+function AttachmentChip({ path }: { path: string }) {
+  const { attachments, checkpointLink } = useContext(NoteContext);
+  const kind = fileKindOf(path);
+  const Icon = fileKindIcon[kind];
+  const name = titleOf(path);
+  const content = (
+    <>
+      <Icon size={14} strokeWidth={2} aria-hidden className="flex-none" />
+      <span className="min-w-0 truncate">{name}</span>
+    </>
+  );
+  const chip = "inline-flex max-w-full items-center gap-1 rounded-[6px] border border-line bg-surface-2 px-1.5 align-bottom font-mono text-[0.85em]";
+  if (checkpointLink) return <span className={`${chip} text-text-body`}>{content}</span>;
+  return (
+    <Link
+      to={viewUrl(path)}
+      state={{ paths: attachments } satisfies LightboxState}
+      aria-label={`Open the ${kind === "pdf" ? "PDF" : "image"} ${name}`}
+      className={`${chip} text-accent-text focus-visible:outline-2 focus-visible:outline-accent`}
+    >
+      {content}
+    </Link>
+  );
+}
+
 function WikiLink({ index, embed, children }: { index: number; embed: unknown; children: ReactNode }) {
   const { links, onCreateMissing, path, checkpointLink } = useContext(NoteContext);
   const link = links?.[index];
@@ -171,6 +205,9 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
     return <EmbeddedNote path={link.path} heading={embedHeading(link.raw)} />;
   }
   switch (link?.kind) {
+    case "attachment":
+      // Without a path: a file of a kind the vault doesn't keep (a .docx), named, not opened.
+      return link.path ? <AttachmentChip path={link.path} /> : <span className="text-text-body">{children}</span>;
     case undefined:
       return <span>{children}</span>;
     case "note":
@@ -189,12 +226,21 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
           </span>
         );
       }
+      // A missing image or PDF looks the same, but is no note to create: it comes by upload.
+      if (isAttachment(link.target)) {
+        return (
+          <span className={missingClass}>
+            {children}
+            <span className="sr-only"> (missing)</span>
+          </span>
+        );
+      }
       return (
         <button
           type="button"
           aria-label={`Create the note “${link.target}”`}
           onClick={() => onCreateMissing(link.target)}
-          className="text-left text-muted underline decoration-dim decoration-dashed underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent"
+          className={`text-left ${missingClass} focus-visible:outline-2 focus-visible:outline-accent`}
         >
           {children}
         </button>
@@ -211,11 +257,18 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
             {children}
             <span className="ml-1 rounded-[4px] bg-surface-2 px-1 font-mono text-[11px] text-muted no-underline">{link.candidates.length} notes</span>
           </button>
-          {choosing && <AmbiguousLinkDialog target={link.target} candidates={link.candidates} hrefOf={checkpointLink} onClose={() => setChoosing(false)} />}
+          {choosing && (
+            <AmbiguousLinkDialog
+              target={link.target}
+              candidates={link.candidates}
+              hrefOf={(p) => (checkpointLink ? checkpointLink(p) : isAttachment(p) ? viewUrl(p) : noteUrl(p))}
+              onClose={() => setChoosing(false)}
+            />
+          )}
         </>
       );
     default:
-      // A heading of this note (`self`) or an attachment: named, not opened.
+      // A heading of this note (`self`): named, not opened.
       return <span className="text-text-body">{children}</span>;
   }
 }
@@ -342,7 +395,8 @@ const components: Components = {
       {children}
     </a>
   ),
-  // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when (text first in v1).
+  // No image is fetched: a note's `![](url)` would tell a third party who reads it, and when. One of the vault's
+  // own (`![](/Screenshots/shot.png)`) is an attachment chip instead (`remarkWikiLinks`).
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
@@ -364,9 +418,11 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
       [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
     [links, highlight, query, current],
   );
+  // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
+  const attachments = useMemo(() => [...new Set((links ?? []).flatMap((l) => (l.kind === "attachment" && l.path ? [l.path] : [])))], [links]);
   const context = useMemo(
-    () => ({ links, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink }),
-    [links, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink],
+    () => ({ links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink }),
+    [links, attachments, tasksDisabled, onToggleTask, onCreateMissing, path, nested, checkpointLink],
   );
 
   return (

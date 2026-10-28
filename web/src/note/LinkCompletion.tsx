@@ -2,7 +2,7 @@
 import { useCallback, useMemo, useState, type KeyboardEvent, type RefObject, type SyntheticEvent } from "react";
 import { useTree } from "../api/notes";
 import { crumbOf, titleOf, vaultOf } from "../api/paths";
-import { completeLink, linkQuery, linkTarget, notePaths, rankNotes, type LinkQuery } from "./linkCompletion";
+import { completeLink, embedsAsImage, linkQuery, linkTarget, notePaths, rankNotes, type LinkQuery } from "./linkCompletion";
 import { apply } from "./textEdit";
 
 const keepFocus = (e: SyntheticEvent) => e.preventDefault();
@@ -35,7 +35,7 @@ export function useLinkCompletion(path: string, textarea: RefObject<HTMLTextArea
   const pick = (option: string) => {
     const area = textarea.current;
     if (!area || !at) return;
-    apply(area, completeLink(area.value, area.selectionStart, at, linkTarget(option, all)), onChange);
+    apply(area, completeLink(area.value, area.selectionStart, at, linkTarget(option, all), embedsAsImage(option)), onChange);
     setAt(null);
   };
 

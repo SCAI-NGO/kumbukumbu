@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { api, call } from "./client";
-import { folderOf, inVault, untitledName, vaultOf } from "./paths";
+import { folderOf, inVault, isAttachment, untitledName, vaultOf } from "./paths";
 import type { components } from "./schema";
 
 export type TreeFolder = components["schemas"]["TreeFolder"];
@@ -194,7 +195,8 @@ export function useDeleteNote() {
         queryKey: ["tree", vault],
         queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault } } })),
       });
-      const siblings = findFolder(tree.root, folderOf(path))?.notes.map((n) => n.path) ?? [];
+      // The tree's `notes` hold the folder's attachments too; the way on is to a note.
+      const siblings = findFolder(tree.root, folderOf(path))?.notes.filter((n) => n.path === path || !isAttachment(n.path)).map((n) => n.path) ?? [];
       const at = siblings.indexOf(path);
       const next = siblings[at + 1] ?? (at > 0 ? siblings[at - 1] : undefined) ?? null;
       await call(api.DELETE("/api/notes/{vault}/{path}", { params: params(path) }));
@@ -210,4 +212,35 @@ export function useDeleteNote() {
       void queryClient.invalidateQueries({ queryKey: ["changes"] });
     },
   });
+}
+
+/**
+ * An attachment's bytes (`path` within `vault`, at `version` if given) as an object URL for an `img` or pdf.js:
+ * fetched with the session, as the server serves files to signed-in users only. Undefined while they load, or if
+ * they can't be read; the URL is revoked when the component unmounts or asks for another file.
+ */
+export function useAttachmentUrl(vault: string, path: string, version?: string): string | undefined {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    const controller = new AbortController();
+    let made: string | undefined;
+    setUrl(undefined);
+    api
+      .GET("/api/files/{vault}/{path}", {
+        params: { path: { vault, path }, query: version ? { version } : {} },
+        parseAs: "blob",
+        signal: controller.signal,
+      })
+      .then(({ data, response }) => {
+        if (!response.ok || !data || controller.signal.aborted) return;
+        made = URL.createObjectURL(data);
+        setUrl(made);
+      })
+      .catch(() => {}); // Aborted, or the network failed: no URL.
+    return () => {
+      controller.abort();
+      if (made) URL.revokeObjectURL(made);
+    };
+  }, [vault, path, version]);
+  return url;
 }
