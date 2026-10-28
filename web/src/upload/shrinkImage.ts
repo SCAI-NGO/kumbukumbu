@@ -6,7 +6,7 @@ export type ShrinkType = "image/webp" | "image/jpeg";
 /** The server's limits for an image (`ImageHeader`): refused here too, before the browser decodes anything. */
 export const MAX_PIXELS = 50_000_000;
 export const MAX_SIDE = 16_384;
-/** How much of the file the header is looked for in, as the server does. */
+/** How much of the file the header is looked for in first; a JPEG's may follow large metadata, then the whole file. */
 const HEADER_BYTES = 256 * 1024;
 
 /** First the quality is lowered (0.92 down to 0.5 in steps of 0.07), then the size, by 0.85 per round. */
@@ -140,6 +140,17 @@ export function imageSize(b: Uint8Array): [number, number] | null {
   return null;
 }
 
+/**
+ * An image's size from its header (`imageSize`): in the file's first bytes, or, for a JPEG whose frame header comes
+ * after large segments (EXIF, ICC profiles, XMP), in the whole file, as the server reads it.
+ */
+async function headerSize(file: Blob): Promise<[number, number] | null> {
+  const head = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
+  const size = imageSize(head);
+  const jpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  return size || !jpeg || file.size <= HEADER_BYTES ? size : imageSize(new Uint8Array(await file.arrayBuffer()));
+}
+
 const megabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
 /**
@@ -149,7 +160,7 @@ const megabytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
  * browser decodes it: such a file can be small on disk and gigabytes as pixels. Rejects with a `ShrinkError`.
  */
 export async function shrinkImage(file: File, maxBytes: number, canvas: Canvas = browserCanvas, preferred?: ShrinkType): Promise<File> {
-  const size = imageSize(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
+  const size = await headerSize(file);
   if (!size || size[0] <= 0 || size[1] <= 0) throw new ShrinkError("can't be read as an image, so it can't be shrunk");
   if (size[0] > MAX_SIDE || size[1] > MAX_SIDE) throw new ShrinkError("too large to shrink: at most 16,384 px on each side");
   if (size[0] * size[1] > MAX_PIXELS) throw new ShrinkError("too large to shrink: at most 50 megapixels");

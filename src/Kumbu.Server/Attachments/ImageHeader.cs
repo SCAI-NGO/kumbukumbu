@@ -5,33 +5,44 @@ using System.Globalization;
 namespace Kumbu.Server.Attachments;
 
 /// <summary>
-/// Reads an image's size from the first bytes of its file, never its pixels, so a small file claiming a huge
-/// canvas is refused before anything is allocated for it. Reads at most <see cref="MaxPrefix"/> bytes.
+/// Reads an image's size from its header, never its pixels, so a small file claiming a huge canvas is refused before
+/// anything is allocated for it. A JPEG's frame header may come after large segments (EXIF, ICC profiles, XMP): the
+/// walk skips them by their lengths through the whole file (at most 15 MB, held in memory already), allocating and
+/// decoding nothing.
 /// </summary>
 public static class ImageHeader
 {
     public const long MaxPixels = 50_000_000;
     public const int MaxSide = 16_384;
 
-    /// <summary>How much of the stream is looked at; JPEG marker walking stops here.</summary>
-    public const int MaxPrefix = 256 * 1024;
-
     private const string Unreadable = "This image can't be read";
 
-    /// <summary>The dimensions as displayed (swapped for EXIF orientations 5 to 8), or null with the reason
-    /// the image is refused or unreadable. Never throws for malformed content.</summary>
+    /// <summary>As <see cref="Read(ReadOnlySpan{byte}, out string?)"/>, for the rest of a stream (a memory stream's
+    /// own buffer; any other stream read to its end, up to the attachments' limit).</summary>
     public static (int Width, int Height)? Read(Stream s, out string? problem)
     {
-        var buffer = new byte[MaxPrefix];
-        var length = 0;
-        int n;
-        while (length < buffer.Length && (n = s.Read(buffer, length, buffer.Length - length)) > 0)
+        if (s is MemoryStream memory && memory.TryGetBuffer(out var buffer))
         {
-            length += n;
+            return Read(buffer.AsSpan((int)memory.Position), out problem);
         }
 
-        var head = buffer.AsSpan(0, length);
-        var size = Parse(head);
+        using var copy = new MemoryStream();
+        var piece = new byte[64 * 1024];
+        int n;
+        while (copy.Length <= Kumbu.Core.Attachments.AttachmentFormat.MaxBytes && (n = s.Read(piece, 0, piece.Length)) > 0)
+        {
+            copy.Write(piece, 0, n);
+        }
+
+        return Read(copy.GetBuffer().AsSpan(0, (int)copy.Length), out problem);
+    }
+
+    /// <summary>The dimensions as displayed (swapped for EXIF orientations 5 to 8), or null with the reason
+    /// the image is refused or unreadable. <paramref name="file"/> is the whole file. Never throws for malformed
+    /// content.</summary>
+    public static (int Width, int Height)? Read(ReadOnlySpan<byte> file, out string? problem)
+    {
+        var size = Parse(file);
         if (size is not var (width, height) || width <= 0 || height <= 0)
         {
             problem = Unreadable;
@@ -175,7 +186,7 @@ public static class ImageHeader
             var segment = BinaryPrimitives.ReadUInt16BigEndian(h[pos..]);
             if (segment < 2 || pos + segment > h.Length)
             {
-                break; // garbled or cut off by the prefix bound
+                break; // garbled or cut off
             }
 
             var data = h.Slice(pos + 2, segment - 2);

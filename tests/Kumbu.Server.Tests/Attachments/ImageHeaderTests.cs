@@ -118,6 +118,38 @@ public class ImageHeaderTests
     }
 
     [Fact]
+    public void A_jpeg_whose_frame_header_follows_300_KB_of_segments_reports_its_size()
+    {
+        // A segment holds at most 64 KB: an ICC profile or XMP that large comes in several (APP2, APP1), as from
+        // Photoshop; the frame header follows them all.
+        var jpeg = new List<byte> { 0xFF, 0xD8 };
+        var payload = 0;
+        while (payload < 300 * 1024)
+        {
+            var data = new byte[65_533];
+            jpeg.AddRange([0xFF, (byte)(payload == 0 ? 0xE1 : 0xE2), .. Be16(data.Length + 2), .. data]);
+            payload += data.Length;
+        }
+
+        jpeg.AddRange([0xFF, 0xC0, .. Be16(11), 8, .. Be16(3_000), .. Be16(4_000), 1, 1, 0x11, 0, 0xFF, 0xD9]);
+        Assert.True(jpeg.Count > 300 * 1024);
+
+        Assert.Equal((4_000, 3_000), ImageHeader.Read(jpeg.ToArray(), out var problem));
+        Assert.Null(problem);
+        // A stream that isn't in memory is read to its end too.
+        using var stream = new BufferedStream(new MemoryStream(jpeg.ToArray()));
+        Assert.Equal((4_000, 3_000), ImageHeader.Read(stream, out _));
+    }
+
+    [Fact]
+    public void A_jpeg_cut_off_before_its_frame_header_is_unreadable()
+    {
+        byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE1, .. Be16(65_535), .. new byte[1_000]];
+        Assert.Null(ImageHeader.Read(jpeg, out var problem));
+        Assert.Equal("This image can't be read", problem);
+    }
+
+    [Fact]
     public void A_jpeg_without_exif_reports_the_stored_size()
     {
         using var jpeg = new MemoryStream([0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 20, 0, 40, 1, 1, 0x11, 0, 0xFF, 0xD9]);
@@ -180,12 +212,12 @@ public class ImageHeaderTests
     }
 
     [Fact]
-    public void Only_a_bounded_prefix_is_read()
+    public void A_jpeg_whose_frame_header_never_comes_is_unreadable()
     {
-        // A JPEG whose frame header never comes: endless comment segments.
+        // Endless comment segments: the walk goes through the whole file, by the segments' lengths, and finds none.
         var jpeg = new MemoryStream();
         jpeg.Write([0xFF, 0xD8, 0xFF]);
-        while (jpeg.Length < ImageHeader.MaxPrefix * 4)
+        while (jpeg.Length < 1024 * 1024)
         {
             jpeg.Write([0xFE, 0xFF, 0xFF]);
             jpeg.Write(new byte[0xFFFD]);
@@ -195,7 +227,6 @@ public class ImageHeaderTests
         jpeg.Position = 0;
         Assert.Null(ImageHeader.Read(jpeg, out var problem));
         Assert.Equal("This image can't be read", problem);
-        Assert.Equal(ImageHeader.MaxPrefix, jpeg.Position);
     }
 
     [Fact]

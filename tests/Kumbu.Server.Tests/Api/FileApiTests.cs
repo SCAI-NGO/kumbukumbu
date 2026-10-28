@@ -104,6 +104,21 @@ public sealed class FileApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_jpeg_with_its_frame_header_past_300_KB_of_metadata_uploads()
+    {
+        var user = await UserAsync();
+        var jpeg = new List<byte> { 0xFF, 0xD8 };
+        for (var i = 0; i < 5; i++) jpeg.AddRange([0xFF, 0xE2, 0xFF, 0xFF, .. new byte[0xFFFD]]);
+        jpeg.AddRange([0xFF, 0xC0, 0, 11, 8, 0x0B, 0xB8, 0x0F, 0xA0, 1, 1, 0x11, 0, 0xFF, 0xD9]);
+
+        using var put = await user.PutFileAsync("photo.jpg", [.. jpeg]);
+
+        Assert.True(put.StatusCode == HttpStatusCode.Created, await put.Content.ReadAsStringAsync(Ct));
+        var state = await JsonAsync(put);
+        Assert.Equal((4000, 3000), (state["width"]!.GetValue<int>(), state["height"]!.GetValue<int>()));
+    }
+
+    [Fact]
     public async Task A_png_named_pdf_is_a_400_naming_the_mismatch()
     {
         var user = await UserAsync();

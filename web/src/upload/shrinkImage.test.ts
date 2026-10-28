@@ -89,6 +89,22 @@ describe("shrinkImage", () => {
     expect(canvas.decode).not.toHaveBeenCalled();
   });
 
+  it("reads a JPEG's size past 300 KB of metadata before its frame header", async () => {
+    const { canvas } = fakeCanvas(4000, 3000, () => 1);
+    const parts: Uint8Array<ArrayBuffer>[] = [new Uint8Array([0xff, 0xd8])];
+    for (let i = 0; i < 5; i++) {
+      const segment = new Uint8Array(4 + 0xfffd);
+      segment.set([0xff, 0xe2, 0xff, 0xff]);
+      parts.push(segment);
+    }
+    // A frame header claiming 20,000 × 3,000: refused, which only a read past the first 256 KB can tell.
+    parts.push(new Uint8Array([0xff, 0xc0, 0, 11, 8, 0x0b, 0xb8, 0x4e, 0x20, 1, 1, 0x11, 0, 0xff, 0xd9]));
+    const file = new File(parts, "photo.jpg", { type: "image/jpeg" });
+    expect(file.size).toBeGreaterThan(300 * 1024);
+    await expect(shrinkImage(file, 15 * MB, canvas)).rejects.toThrow("at most 16,384 px on each side");
+    expect(canvas.decode).not.toHaveBeenCalled();
+  });
+
   it("says so when the browser can't decode the image", async () => {
     const { canvas } = fakeCanvas(1, 1, () => 1);
     canvas.decode = vi.fn(async () => {

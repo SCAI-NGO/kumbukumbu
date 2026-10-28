@@ -156,8 +156,7 @@ public static class FileApi
             (int, int)? dimensions = null;
             if (AttachmentFormat.ForPath(filePath)!.Kind == AttachmentKind.Image)
             {
-                using var header = new MemoryStream(buffer, 0, length, writable: false);
-                dimensions = ImageHeader.Read(header, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
+                dimensions = ImageHeader.Read(bytes.Span, out var headerProblem) ?? throw ApiErrors.BadRequest(headerProblem ?? "The image's header doesn't read.");
             }
 
             // Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.
