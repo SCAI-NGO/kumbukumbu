@@ -2,10 +2,12 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
@@ -19,13 +21,15 @@ public sealed record ExportTicketView(string Ticket, DateTime ExpiresAt);
 
 /// <summary>
 /// The export (demo-round design §2): vaults of the session as a ZIP, one top-level folder per vault named as the
-/// vault, its notes verbatim at their paths below it, each entry dated with the note's last write. Only the current
-/// notes: no history, trash, checkpoints or settings. Unpacked, each folder opens in Obsidian as a vault; it is also
-/// what the import reads. A checkpoint exports the same way, its notes as it holds them (a folder checkpoint
-/// below the vault's folder), each entry dated with the time the checkpoint was made. Sessions only
-/// (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An export is a heavyweight operation: it
-/// takes the notes out of the encryption at rest in one go, so it needs the password again, as deleting a vault does,
-/// through a ticket (<see cref="ExportTickets"/>), and each one is logged with ids and counts, never a name.
+/// vault, its notes verbatim and its attachments byte for byte at their paths below it, each entry dated with its last
+/// write. Only the current notes and files: no history, trash, checkpoints or settings. Unpacked, each folder opens in
+/// Obsidian as a vault; it is also what the import reads. A checkpoint exports the same way, its notes and files as it
+/// holds them (a folder checkpoint below the vault's folder), each entry dated with the time the checkpoint was made.
+/// A download of several attachments (<c>GET /api/files/{vault}/zip</c>) is treated as an export too, unless the user
+/// turned its password off. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An
+/// export is a heavyweight operation: it takes the notes out of the encryption at rest in one go, so it needs the
+/// password again, as deleting a vault does, through a ticket (<see cref="ExportTickets"/>), and each one is logged with
+/// ids and counts, never a name.
 /// </summary>
 public static class ExportApi
 {
@@ -42,7 +46,15 @@ public static class ExportApi
         api.MapGet("/vaults/{vault}/checkpoints/{name}/export", CheckpointExportAsync)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
+        // A literal segment outranks FileApi's catch-all, and no file is named "zip" (a file has an extension);
+        // a folder "zip" still reaches FileApi, as its paths have a segment more.
+        api.MapGet("/files/{vault}/zip", FilesZipAsync)
+            .Produces(StatusCodes.Status200OK, contentType: "application/zip")
+            .Errors(400, 401, 403, 404, 503);
     }
+
+    /// <summary>The most files one download of several takes.</summary>
+    public const int MaxFiles = 100;
 
     /// <summary>What every export needs, bound from the request.</summary>
     internal sealed record Export(
@@ -87,15 +99,16 @@ public static class ExportApi
         var root = ApiPaths.Parse(vault, null, note: false);
         var view = await HistoryApi.OpenCheckpointAsync(root, name, store, checkpoints, ct);
         var made = view.Checkpoint.CreatedAt;
-        var notes = (await view.ReadNotesUnderAsync(root, ct))
-            .OrderBy(n => n.Path.Value, StringComparer.Ordinal)
-            .Select(n => new ExportNote(n.Path, n.Content, made))
+        var entries = (await view.ReadNotesUnderAsync(root, ct))
+            .Select(n => ExportEntry.OfNote(n.Path, n.Content, made))
+            .Concat((await view.ListAttachmentsUnderAsync(root, ct)).Select(a => ExportEntry.OfFile(a.Path, view, a.Current.BlobId, made)))
+            .OrderBy(e => e.Path.Value, StringComparer.Ordinal)
             .ToList();
         var zone = Zone(tz);
         export.Log.LogInformation(
-            "User {UserId} exported a checkpoint of vault {VaultId}: {Notes} notes",
-            export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]), notes.Count);
-        return Zip(http, CheckpointZipName(root.Segments[0], name, made, zone), [(root.Segments[0], notes)], zone, ct);
+            "User {UserId} exported a checkpoint of vault {VaultId}: {Notes} notes, {Files} files",
+            export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]), entries.Count(e => e.IsNote), entries.Count(e => !e.IsNote));
+        return Zip(http, CheckpointZipName(root.Segments[0], name, made, zone), [(root.Segments[0] + "/", entries)], zone, export.Log, ct);
     }
 
     /// <summary>Every vault is checked and its notes taken before the first byte, so a refusal (unknown vault,
@@ -110,65 +123,148 @@ public static class ExportApi
         var roots = vaults.Select(v => ApiPaths.Parse(v, null, note: false)).ToList();
         if (roots.Select(r => r.Segments[0]).Distinct(StringComparer.Ordinal).Count() != roots.Count) throw ApiErrors.BadRequest("Name each vault once.");
 
-        var content = new List<(string Vault, IReadOnlyList<ExportNote> Notes)>();
+        var content = new List<(string Folder, IReadOnlyList<ExportEntry> Entries)>();
         foreach (var root in roots)
         {
             await NoteApi.RequireVaultAsync(store, root, ct);
-            var notes = new List<ExportNote>();
-            foreach (var path in (await store.ListNotesUnderAsync(root, ct)).OrderBy(p => p.Value, StringComparer.Ordinal))
+            var entries = new List<ExportEntry>();
+            foreach (var path in await store.ListNotesUnderAsync(root, ct))
             {
                 // Only notes that open are listed (a damaged one isn't, and isn't exported); null only if the note
                 // went between the listing and here.
-                if (await store.GetAsync(path, ct) is { } note) notes.Add(new ExportNote(note.Path, note.Content, note.LastWriteAt));
+                if (await store.GetAsync(path, ct) is { } note) entries.Add(ExportEntry.OfNote(note.Path, note.Content, note.LastWriteAt));
             }
 
-            content.Add((root.Segments[0], notes));
+            // Only the records here; each file's bytes are read as its entry is written, one at a time.
+            if (store is IAttachmentStore files)
+            {
+                entries.AddRange((await files.ListAttachmentsUnderAsync(root, ct)).Select(a => ExportEntry.OfFile(a.Path, files, a.Current.BlobId, a.LastWriteAt)));
+            }
+
+            content.Add((root.Segments[0] + "/", [.. entries.OrderBy(e => e.Path.Value, StringComparer.Ordinal)]));
         }
 
         export.Log.LogInformation(
-            "User {UserId} exported {Count} vaults ({VaultIds}): {Notes} notes",
-            export.Caller.User!.Id, content.Count, await export.VaultIdsAsync(content.Select(c => c.Vault)), content.Sum(c => c.Notes.Count));
-        return Zip(http, ZipName([.. content.Select(c => c.Vault)], export.Time.GetUtcNow().UtcDateTime), content, Zone(tz), ct);
+            "User {UserId} exported {Count} vaults ({VaultIds}): {Notes} notes, {Files} files",
+            export.Caller.User!.Id, content.Count, await export.VaultIdsAsync(roots.Select(r => r.Segments[0])),
+            content.Sum(c => c.Entries.Count(e => e.IsNote)), content.Sum(c => c.Entries.Count(e => !e.IsNote)));
+        return Zip(http, ZipName([.. roots.Select(r => r.Segments[0])], export.Time.GetUtcNow().UtcDateTime), content, Zone(tz), export.Log, ct);
     }
 
-    /// <summary>A note as it goes into the ZIP: what a vault's current note and a checkpoint's note have in common.</summary>
-    private sealed record ExportNote(VaultPath Path, string Content, DateTime WrittenAt);
+    /// <summary>
+    /// Several attachments of one vault as a ZIP, at their paths in the vault (no vault folder on top), each entry dated
+    /// with its last write. <c>path</c>: one per file, from the root of the vault, at most <see cref="MaxFiles"/>. Treated
+    /// like an export (attachments design, "Server API"): it needs a ticket, unless the user turned "Ask for my password
+    /// when downloading several files" off, and it is logged either way. Every file is checked before the first byte.
+    /// </summary>
+    private static async Task<IResult> FilesZipAsync(
+        string vault, [FromQuery(Name = "path")] string[]? path, string? tz, string? ticket, UserCatalog users, [AsParameters] Export export)
+    {
+        var (store, http, ct) = (export.Store, export.Http, export.Ct);
+        var asked = path ?? [];
+        if (asked.Length == 0) throw ApiErrors.BadRequest("Name at least one file: ?path=<path in the vault>, once per file.");
+        if (asked.Length > MaxFiles) throw ApiErrors.BadRequest($"A download takes at most {MaxFiles} files at once; this asked for {asked.Length}.");
+        // Parsed (NFC, no '.' or '..') before anything is read; one file named twice is one entry.
+        var paths = asked.Select(p => ApiPaths.Parse(vault, p.TrimStart('/'), PathKind.Attachment)).Distinct().ToList();
 
-    private static IResult Zip(HttpContext http, string name, IReadOnlyList<(string Vault, IReadOnlyList<ExportNote> Notes)> content, TimeZoneInfo zone, CancellationToken ct)
+        var withPassword = await users.AsksPasswordForDownloadsAsync(export.Caller.User!.Id, ct);
+        if (withPassword) export.RequireTicket(ticket);
+
+        var root = ApiPaths.Parse(vault, null, note: false);
+        await NoteApi.RequireVaultAsync(store, root, ct);
+        var files = FileApi.Files(store);
+        var entries = new List<ExportEntry>();
+        long bytes = 0;
+        foreach (var filePath in paths.OrderBy(p => p.Value, StringComparer.Ordinal))
+        {
+            var file = await files.GetAttachmentAsync(filePath, ct) ?? throw await NoteApi.MissingAsync(store, filePath, ct);
+            entries.Add(ExportEntry.OfFile(file.Path, files, file.Current.BlobId, file.LastWriteAt));
+            bytes += file.Current.Size;
+        }
+
+        export.Log.LogInformation(
+            "User {UserId} downloaded {Files} files ({Bytes} bytes) of vault {VaultId} as a ZIP, {Password}",
+            export.Caller.User!.Id, entries.Count, bytes, await export.VaultIdsAsync([root.Segments[0]]), withPassword ? "with the password" : "without the password (turned off)");
+        var name = $"{root.Segments[0]} files {export.Time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
+        return Zip(http, name, [("", entries)], Zone(tz), export.Log, ct);
+    }
+
+    /// <summary>
+    /// A note or a file as it goes into the ZIP: what a vault's current note or attachment and a checkpoint's have in
+    /// common. A note brings its text; a file only where its bytes are (<paramref name="Files"/>, <paramref name="BlobId"/>),
+    /// opened when its entry is written.
+    /// </summary>
+    private sealed record ExportEntry(VaultPath Path, DateTime WrittenAt, string? Content, IAttachmentStore? Files, string? BlobId)
+    {
+        public bool IsNote => Content is not null;
+
+        public static ExportEntry OfNote(VaultPath path, string content, DateTime writtenAt) => new(path, writtenAt, content, null, null);
+
+        public static ExportEntry OfFile(VaultPath path, IAttachmentStore files, string blobId, DateTime writtenAt) => new(path, writtenAt, null, files, blobId);
+    }
+
+    /// <summary><paramref name="content"/>: the entries below each folder (the vault's name and a '/', or "" for none).</summary>
+    private static IResult Zip(
+        HttpContext http, string name, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct)
     {
         var disposition = new ContentDispositionHeaderValue("attachment") { FileName = $"\"{AsciiName(name)}\"", FileNameStar = name };
         http.Response.Headers.ContentDisposition = disposition.ToString();
-        return TypedResults.Stream(body => WriteAsync(body, content, zone, ct), "application/zip");
+        return TypedResults.Stream(body => WriteAsync(body, content, zone, log, ct), "application/zip");
     }
 
     /// <summary>The time zone of that IANA (or Windows) id, or UTC.</summary>
     internal static TimeZoneInfo Zone(string? tz) =>
         !string.IsNullOrWhiteSpace(tz) && tz.Length <= 64 && TimeZoneInfo.TryFindSystemTimeZoneById(tz, out var zone) ? zone : TimeZoneInfo.Utc;
 
-    /// <summary>Small notes are sent together, not one tiny write each; memory stays at one note plus this.</summary>
+    /// <summary>Small notes are sent together, not one tiny write each; memory stays at one note or file plus this.</summary>
     private const int DrainAt = 64 * 1024;
 
     /// <summary>Straight to the response: entries are written as they come (data descriptors, no seeking), so an
     /// export never sits in memory as a whole. <see cref="ZipArchive"/> still writes some headers synchronously,
     /// which Kestrel refuses; they go into <see cref="Chunks"/> and reach the response asynchronously in pieces of
     /// about <see cref="DrainAt"/>.</summary>
-    private static async Task WriteAsync(Stream body, IReadOnlyList<(string Vault, IReadOnlyList<ExportNote> Notes)> content, TimeZoneInfo zone, CancellationToken ct)
+    private static async Task WriteAsync(
+        Stream body, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct)
     {
         var chunks = new Chunks();
         // A null entry-name encoding: names are UTF-8 with the language flag set, so Bücher/Ü².md unpacks as such.
         var zip = await ZipArchive.CreateAsync(chunks, ZipArchiveMode.Create, leaveOpen: true, entryNameEncoding: null, ct);
         try
         {
-            foreach (var (vault, notes) in content)
+            foreach (var (folder, entries) in content)
             {
-                zip.CreateEntry(vault + "/");
-                foreach (var note in notes)
+                if (folder.Length > 0) zip.CreateEntry(folder);
+                foreach (var item in entries)
                 {
-                    var entry = zip.CreateEntry(vault + "/" + string.Join('/', note.Path.Segments.Skip(1)), CompressionLevel.Optimal);
+                    // Opened before its entry exists: a file whose bytes don't open is left out, not written half.
+                    using var bytes = item.IsNote ? null : await OpenAsync(item, log, ct);
+                    if (!item.IsNote && bytes is null) continue;
+
+                    // Vault paths: checked segments, never '.', '..' or empty, so no entry unpacks outside its folder.
+                    // Formats that are compressed already (images, most PDFs) are only stored faster.
+                    var entry = zip.CreateEntry(folder + string.Join('/', item.Path.Segments.Skip(1)), item.IsNote ? CompressionLevel.Optimal : CompressionLevel.Fastest);
                     // A ZIP entry's time has no zone: unpackers read it as their local time. So the reader's clock at
-                    // the moment of the write, each note with its own offset (summer or winter time).
-                    entry.LastWriteTime = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(note.WrittenAt, DateTimeKind.Utc)), zone);
-                    await using (var stream = await entry.OpenAsync(ct)) await stream.WriteAsync(Encoding.UTF8.GetBytes(note.Content), ct);
+                    // the moment of the write, each entry with its own offset (summer or winter time).
+                    entry.LastWriteTime = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(item.WrittenAt, DateTimeKind.Utc)), zone);
+                    await using (var stream = await entry.OpenAsync(ct))
+                    {
+                        if (bytes is null)
+                        {
+                            await stream.WriteAsync(Encoding.UTF8.GetBytes(item.Content!), ct);
+                        }
+                        else
+                        {
+                            // In pieces, drained as they fill: a 15 MB file never sits in the buffer as a whole.
+                            var piece = new byte[DrainAt];
+                            int read;
+                            while ((read = await bytes.ReadAsync(piece, ct)) > 0)
+                            {
+                                await stream.WriteAsync(piece.AsMemory(0, read), ct);
+                                if (chunks.Buffered >= DrainAt) await chunks.DrainAsync(body, ct);
+                            }
+                        }
+                    }
+
                     if (chunks.Buffered >= DrainAt) await chunks.DrainAsync(body, ct);
                 }
             }
@@ -181,8 +277,24 @@ public static class ExportApi
         await chunks.DrainAsync(body, ct);
     }
 
+    /// <summary>A file's bytes, or null (and a warning with its blob id, never its name) if they don't open: the
+    /// response has begun, so a status can no longer say it.</summary>
+    private static async Task<Stream?> OpenAsync(ExportEntry file, ILogger log, CancellationToken ct)
+    {
+        try
+        {
+            if (await file.Files!.OpenBlobAsync(file.Path.Segments[0], file.BlobId!, ct) is { } bytes) return bytes;
+        }
+        catch (VaultUnavailableException e) when (e is not VaultBusyException)
+        {
+        }
+
+        log.LogWarning("An export left out a file whose content doesn't open (blob {BlobId})", file.BlobId);
+        return null;
+    }
+
     /// <summary>A write-only, non-seekable buffer the ZIP writes into, emptied into the response by
-    /// <see cref="DrainAsync"/>; it holds at most one note's entry beyond <see cref="DrainAt"/>.</summary>
+    /// <see cref="DrainAsync"/>; it holds at most one note's entry, or one piece of a file's, beyond <see cref="DrainAt"/>.</summary>
     private sealed class Chunks : Stream
     {
         private readonly MemoryStream _buffer = new();

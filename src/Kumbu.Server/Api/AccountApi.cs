@@ -151,6 +151,8 @@ public static class AccountApi
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
         account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
+        account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
+        account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
@@ -437,4 +439,32 @@ public static class AccountApi
     }
 
     private static void ClearSessionCookie(HttpContext http) => http.Response.Cookies.Delete(CallerMiddleware.SessionCookie, SessionCookieOptions());
+
+    private static async Task<Ok<PreferencesView>> PreferencesAsync(RequestCaller caller, UserCatalog users, CancellationToken ct) =>
+        TypedResults.Ok(new PreferencesView(await users.AsksPasswordForDownloadsAsync(caller.User!.Id, ct)));
+
+    private static async Task<Ok<PreferencesView>> SetPreferencesAsync(
+        PreferencesRequest body, RequestCaller caller, UserCatalog users, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (!body.AskPasswordForDownloads && await users.AsksPasswordForDownloadsAsync(user.Id, ct))
+        {
+            if (string.IsNullOrEmpty(body.Password)) throw ApiErrors.BadRequest("Turning off the password for downloads of several files needs your password.");
+            // The same limit as the export's ticket: both are a password check behind a session.
+            if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw ApiErrors.BadRequest("The password is wrong.");
+            logs.CreateLogger(typeof(AccountApi).FullName!).LogInformation("User {UserId} turned off the password for downloads of several files", user.Id);
+        }
+
+        await users.SetAsksPasswordForDownloadsAsync(user.Id, body.AskPasswordForDownloads, ct);
+        return TypedResults.Ok(new PreferencesView(body.AskPasswordForDownloads));
+    }
 }
+
+/// <summary>The user's own settings. <c>askPasswordForDownloads</c>: "Ask for my password when downloading several
+/// files" (default true), see <c>GET /api/files/{vault}/zip</c>.</summary>
+public sealed record PreferencesView(bool AskPasswordForDownloads);
+
+/// <summary>A change of the preferences. Turning <c>askPasswordForDownloads</c> off needs <c>password</c>: it is a
+/// protection a stolen session alone must not be able to drop.</summary>
+public sealed record PreferencesRequest(bool AskPasswordForDownloads, string? Password = null);
