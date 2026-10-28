@@ -235,6 +235,14 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         Assert.Equal("/Arbeit/Berichte/q3.pdf", pdf["path"]!.GetValue<string>());
         Assert.Equal("pdf", pdf["kind"]!.GetValue<string>());
         Assert.Equal("application/pdf", pdf["mediaType"]!.GetValue<string>());
+
+        // An attachment has its version and time of writing (the gallery's date order); a note's entry has neither.
+        using var state = await user.GetAsync(user.Url("shot.png", "version"));
+        var shot = root["notes"]![1]!;
+        Assert.Equal((await JsonAsync(state))["version"]!.GetValue<string>(), shot["version"]!.GetValue<string>());
+        Assert.True(DateTime.UtcNow - shot["writtenAt"]!.GetValue<DateTime>().ToUniversalTime() < TimeSpan.FromMinutes(1));
+        Assert.Null(root["notes"]![0]!["version"]);
+        Assert.Null(root["notes"]![0]!["writtenAt"]);
     }
 
     [Fact]

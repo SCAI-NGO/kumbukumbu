@@ -17,6 +17,9 @@ export const checkpointUrl = (vault: string, name: string, path?: string) =>
 export const boardUrl = (vault: string, checkpoint?: string) =>
   `/board/${encodeURIComponent(vault)}` + (checkpoint ? `?checkpoint=${encodeURIComponent(checkpoint)}` : "");
 
+/** The app's URL of a vault's gallery: its images and PDFs. */
+export const galleryUrl = (vault: string) => `/gallery/${encodeURIComponent(vault)}`;
+
 /** What a path holds by its extension, as the server tells files apart (`kind`): "image", "pdf" or "note". */
 export type FileKind = "note" | "image" | "pdf";
 

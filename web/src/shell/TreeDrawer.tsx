@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, History, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
 import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
 import { findFolder, useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
-import { boardUrl, folderOf, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, folderOf, galleryUrl, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
@@ -269,6 +269,10 @@ export default function TreeDrawer(props: {
     setOverlay("none");
     navigate(boardUrl(vault));
   };
+  const openGallery = (vault: string) => {
+    setOverlay("none");
+    navigate(galleryUrl(vault));
+  };
   /** A note opens as the note; an attachment in the lightbox, which pages through its folder's attachments. */
   const openEntry = (path: string, fileKind: FileKind) => {
     if (!docked) setOverlay("none");
@@ -288,6 +292,7 @@ export default function TreeDrawer(props: {
           hasBoard
             ? { label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }
             : { label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) },
+          { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
           { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
           { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
         ]

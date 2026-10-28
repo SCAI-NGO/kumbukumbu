@@ -73,4 +73,13 @@ describe("attachments in the tree", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/view/Work/report.pdf"));
     expect(router.state.location.state).toEqual({ paths: ["/Work/a shot.png", "/Work/report.pdf", "/Work/z photo.jpg"] });
   });
+
+  it("the vault's menu opens its gallery, beside the board", async () => {
+    const router = await openDrawer();
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
+    const items = within(drawer()).getAllByRole("menuitem").map((i) => i.textContent);
+    expect(items.indexOf("Gallery")).toBe(items.indexOf("Create board") + 1);
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Gallery" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/gallery/Work"));
+  });
 });

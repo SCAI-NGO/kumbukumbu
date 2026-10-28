@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
@@ -54,8 +55,17 @@ public sealed record TreeView(TreeFolder Root, int Damaged);
 public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFolder> Folders, IReadOnlyList<TreeNote> Notes);
 
 /// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
-/// <c>pdf</c>; <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format.</summary>
-public sealed record TreeNote(string Name, string Path, int Size, string Kind = "note", string MediaType = NoteApi.NoteMediaType);
+/// <c>pdf</c>; <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment
+/// also has its <c>version</c> and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows);
+/// a note has neither, its entry is as before.</summary>
+public sealed record TreeNote(
+    string Name,
+    string Path,
+    int Size,
+    string Kind = "note",
+    string MediaType = NoteApi.NoteMediaType,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Version = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
 
 /// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
 /// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
@@ -260,10 +270,10 @@ public static class NoteApi
     /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
     internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments) =>
         TreeOf(dir, notes.Select(n => (n.Path, new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content))))
-            .Concat(attachments.Select(a => (a.Path, TreeFile(a.Path, a.Current)))));
+            .Concat(attachments.Select(a => (a.Path, TreeFile(a)))));
 
-    private static TreeNote TreeFile(VaultPath path, AttachmentState state) =>
-        new(path.Name, path.Value, (int)state.Size, AttachmentFormat.KindOf(path.Name), state.MediaType);
+    private static TreeNote TreeFile(StoredAttachment file) =>
+        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Name), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
 
     private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below)
     {

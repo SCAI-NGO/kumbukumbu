@@ -6720,6 +6720,9 @@ export interface components {
             kind: string;
             /** @default text/markdown */
             mediaType: string;
+            version?: null | string;
+            /** Format: date-time */
+            writtenAt?: null | string;
         };
         TreeView: {
             root: components["schemas"]["TreeFolder"];
