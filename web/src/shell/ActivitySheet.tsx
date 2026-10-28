@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { countsText, useActivity, writerText, type ActivityFile, type ActivityRow } from "../api/activity";
 import { errorText } from "../api/error-text";
+import { fileInfoQuery } from "../api/notes";
 import { fileKindOf, folderOf, inVault, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError, secondaryButtonClass } from "../components/form";
@@ -34,13 +36,18 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
   const [chosen, setChosen] = useState<ActivityFile | null>(null);
   const rows = activity.data?.pages.flatMap((p) => p.rows) ?? [];
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  const choose = (f: ActivityFile) => {
-    // An attachment's state is looked at full screen; one deleted in the change has none left to show.
+  const choose = async (f: ActivityFile) => {
+    // An attachment's state is looked at full screen; one deleted in the change has none left to show. A version of a
+    // file in the trash is served too (the session's own trash).
     if (kindOf(f) === "note" || f.kind === "deleted" || f.version === null) return setChosen(f);
+    // The change left the file as it is now: today's lightbox, with its actions, rather than a read-only one.
+    let now: string | undefined;
+    if (!f.trashed) now = await queryClient.fetchQuery({ ...fileInfoQuery(f.path), staleTime: 0 }).then((i) => i.version, () => undefined);
     onClose();
     useEditor.getState().setOverlay("none");
-    navigate(viewUrl(f.path, { version: f.version }), { state: { paths: [f.path] } satisfies LightboxState });
+    navigate(viewUrl(f.path, now === f.version ? {} : { version: f.version }), { state: { paths: [f.path] } satisfies LightboxState });
   };
 
   // One dialog for both steps, so the focus stays in it on the way to a note and back.
@@ -110,7 +117,7 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
                         <li key={`${j}-${f.path}`} data-file-kind={kindOf(f)}>
                           <button
                             type="button"
-                            onClick={() => choose(f)}
+                            onClick={() => void choose(f)}
                             className="flex min-h-11 w-full items-center gap-2 px-3.5 py-1.5 text-left focus-visible:outline-2 focus-visible:outline-accent"
                           >
                             <Icon size={16} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />

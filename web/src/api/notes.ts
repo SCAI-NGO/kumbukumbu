@@ -256,8 +256,12 @@ export function useAttachmentUrl(vault: string, path: string, version?: string, 
 }
 
 /** An attachment as it is, without its bytes (`GET /api/version`): size, dimensions, version and last write. */
-export const useFileInfo = (path: string, enabled = true) =>
-  useQuery({ queryKey: ["version", path], queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })), enabled });
+export const fileInfoQuery = (path: string) => ({
+  queryKey: ["version", path],
+  queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })),
+});
+
+export const useFileInfo = (path: string, enabled = true) => useQuery({ ...fileInfoQuery(path), enabled });
 
 /**
  * Moves an attachment to the vault's trash, only if it is still at `version` (else a 409: it changed meanwhile).

@@ -136,7 +136,10 @@ export default function Lightbox() {
   const fileHref = fileAtUrl(vault, inVault(path), source);
   const downloadUrl = `${fileHref}${fileHref.includes("?") ? "&" : "?"}download=1`;
   // Deleted only at the version shown, so not before it is known.
-  const current = info.data?.version;
+  // Today's info only for today's file: read only, the cache may still hold it (the query is shared), but it isn't
+  // what is shown.
+  const live = readOnly ? undefined : info.data;
+  const current = live?.version;
   const actions: { label: string; icon: LucideIcon; onSelect(): void; disabled?: boolean }[] = [
     { label: "Download", icon: Download, onSelect: () => download.current?.click() },
     ...(readOnly
@@ -149,12 +152,12 @@ export default function Lightbox() {
         ]),
   ];
 
-  const width = info.data?.width;
-  const height = info.data?.height;
+  const width = live?.width;
+  const height = live?.height;
   const extent = kind === "pdf" ? (pdf ? `${pdf.pages} ${pdf.pages === 1 ? "page" : "pages"}` : null) : width && height ? `${width} × ${height}` : null;
   // What is known of the state shown: today's from its info, an earlier one from the history, a checkpoint's from its tree.
-  const facts = info.data
-    ? { size: info.data.size, date: info.data.lastWriteAt, writer: info.data.lastWriter }
+  const facts = live
+    ? { size: live.size, date: live.lastWriteAt, writer: live.lastWriter }
     : shownVersion
       ? { size: shownVersion.size, date: shownVersion.writtenAt, writer: shownVersion.writer }
       : checkpointFile
@@ -212,7 +215,7 @@ export default function Lightbox() {
                 {facts.writer && <InfoRow label="Writer">{facts.writer}</InfoRow>}
               </>
             )}
-            {info.isError && <dd className="col-span-2 text-[#a09d96]">The rest couldn't be loaded.</dd>}
+            {!readOnly && info.isError && <dd className="col-span-2 text-[#a09d96]">The rest couldn't be loaded.</dd>}
           </dl>
         )}
       </div>

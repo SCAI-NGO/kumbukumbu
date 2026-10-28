@@ -227,4 +227,30 @@ describe("the vault's activity", () => {
       URL.revokeObjectURL = revokeObjectURL;
     }
   });
+
+  it("opens today's lightbox when the change left the file as it is now", async () => {
+    const { createObjectURL, revokeObjectURL } = URL;
+    URL.createObjectURL = vi.fn(() => "blob:file");
+    URL.revokeObjectURL = vi.fn();
+    try {
+      const shot = "/Work/shot.png";
+      api(() => json(200, { rows: [row("liz", "agent", [{ path: shot, kind: "changed", fileKind: "image" }])], more: false }), {
+        "GET /api/files/Work/shot.png": () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "Content-Type": "image/png" } }),
+        "GET /api/version/Work/shot.png": () =>
+          json(200, { path: shot, version: "v2", lastWriter: "liz", lastWriteAt: "2026-10-26T09:10:00Z", kind: "image", mediaType: "image/png", size: 10, width: 4, height: 3 }),
+      });
+      const dialog = await openActivity();
+      const [first] = await rowsOf(dialog);
+      await userEvent.click(within(first).getByRole("button", { expanded: false }));
+      await userEvent.click(within(first).getByRole("button", { name: /shot\.png/ }));
+
+      expect(await screen.findByRole("main", { name: "shot.png" })).toBeInTheDocument();
+      expect(screen.queryByText(/read only/)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    } finally {
+      cleanup();
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+    }
+  });
 });

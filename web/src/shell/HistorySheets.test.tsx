@@ -495,6 +495,29 @@ describe("an attachment's history, the trash and the activity", () => {
     expect(router.state.location.pathname).toBe("/view/Work/shots/shot.png");
   });
 
+  it("a version's info is its own, not today's", async () => {
+    shotApi();
+    renderApp(["/notes/Work/inbox.md", { pathname: "/view/Work/shots/shot.png", state: { paths: [SHOT] } }]);
+    const infoPanel = () => document.querySelector<HTMLElement>("dl[aria-label='Info']")!;
+    // Today's info first: it is in the cache when the version is shown.
+    await userEvent.click(await screen.findByRole("button", { name: "Info" }));
+    await waitFor(() => expect(infoPanel()).toHaveTextContent("412.0 KB"));
+    expect(infoPanel()).toHaveTextContent("1440 × 3120");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions for shot.png" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: `Show the version of ${timeText("2026-10-24T09:00:00Z")}` }));
+
+    await screen.findByText(`Version of ${timeText("2026-10-24T09:00:00Z")} · read only`);
+    const info = infoPanel();
+    expect(info).toHaveTextContent("293.0 KB");
+    expect(info).toHaveTextContent(timeText("2026-10-24T09:00:00Z"));
+    expect(info).toHaveTextContent("liz");
+    expect(info).not.toHaveTextContent("412.0 KB");
+    expect(info).not.toHaveTextContent("1440 × 3120");
+    expect(info).not.toHaveTextContent("ada");
+  });
+
   it("comparing two image versions shows both images", async () => {
     shotApi();
     const { versions } = await openShotHistory();

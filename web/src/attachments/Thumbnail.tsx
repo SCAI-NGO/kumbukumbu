@@ -73,6 +73,45 @@ function ImageThumb({ vault, path, at, fit, alt }: Required<Props>) {
 const maxThumbPixels = 1_000_000;
 
 /**
+ * At most this many PDF thumbnails fetch and draw at once, the others wait their turn: a history sheet shows all of a
+ * PDF's versions at once, each up to 15 MB and a pdf.js worker of its own while it is drawn.
+ */
+export const maxPdfThumbs = 2;
+let drawing = 0;
+const waiting: (() => void)[] = [];
+
+/**
+ * A turn to fetch and draw a PDF thumbnail, once one is free; the function it answers ends the turn (again does
+ * nothing). Aborted while waiting, it leaves the queue and rejects.
+ */
+export function pdfThumbTurn(signal: AbortSignal): Promise<() => void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const take = () => {
+      drawing++;
+      let ended = false;
+      resolve(() => {
+        if (ended) return;
+        ended = true;
+        drawing--;
+        waiting.shift()?.();
+      });
+    };
+    if (drawing < maxPdfThumbs) return take();
+    const turn = () => {
+      signal.removeEventListener("abort", abort);
+      take();
+    };
+    const abort = () => {
+      waiting.splice(waiting.indexOf(turn), 1);
+      reject(signal.reason);
+    };
+    waiting.push(turn);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
  * A PDF's first page at the box's size, drawn by pdf.js; the document is let go of as soon as it is drawn, and the
  * canvas emptied when the thumbnail goes (browsers cap what all canvases together may hold, iOS Safari above all).
  */
@@ -84,11 +123,14 @@ function PdfThumb({ vault, path, at, fit, alt }: Required<Props>) {
   useEffect(() => {
     let task: Awaited<ReturnType<typeof openPdf>> | undefined;
     let render: { cancel(): void } | undefined;
+    let endTurn: (() => void) | undefined;
     let ended = false;
     const controller = new AbortController();
     const target = canvas.current;
     void (async () => {
       try {
+        endTurn = await pdfThumbTurn(controller.signal);
+        if (ended) return;
         const { data, response } = await fetchFile(vault, inVault(path), { version, checkpoint }, "arrayBuffer", controller.signal);
         if (ended || !response.ok || !data || !target) return;
         task = await openPdf(data as ArrayBuffer);
@@ -110,6 +152,7 @@ function PdfThumb({ vault, path, at, fit, alt }: Required<Props>) {
         // Drawn (or not): the document and its worker go; the canvas keeps the pixels.
         void task?.destroy();
         task = undefined;
+        endTurn?.();
       }
     })();
     return () => {
@@ -117,6 +160,8 @@ function PdfThumb({ vault, path, at, fit, alt }: Required<Props>) {
       controller.abort();
       render?.cancel();
       void task?.destroy();
+      // Gone: the next thumbnail need not wait for this one's fetch or drawing to wind down.
+      endTurn?.();
       if (target) {
         target.width = 0;
         target.height = 0;
