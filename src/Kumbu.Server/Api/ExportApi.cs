@@ -135,11 +135,10 @@ public static class ExportApi
                 if (await store.GetAsync(path, ct) is { } note) entries.Add(ExportEntry.OfNote(note.Path, note.Content, note.LastWriteAt));
             }
 
-            // Only the records here; each file's bytes are read as its entry is written, one at a time.
-            if (store is IAttachmentStore files)
-            {
-                entries.AddRange((await files.ListAttachmentsUnderAsync(root, ct)).Select(a => ExportEntry.OfFile(a.Path, files, a.Current.BlobId, a.LastWriteAt)));
-            }
+            // Only the records here; each file's bytes are read as its entry is written, one at a time. FileApi.Files
+            // fails loudly: a store that keeps no attachments must not export a vault without its files.
+            var files = FileApi.Files(store);
+            entries.AddRange((await files.ListAttachmentsUnderAsync(root, ct)).Select(a => ExportEntry.OfFile(a.Path, files, a.Current.BlobId, a.LastWriteAt)));
 
             content.Add((root.Segments[0] + "/", [.. entries.OrderBy(e => e.Path.Value, StringComparer.Ordinal)]));
         }
@@ -182,11 +181,12 @@ public static class ExportApi
             bytes += file.Current.Size;
         }
 
-        export.Log.LogInformation(
-            "User {UserId} downloaded {Files} files ({Bytes} bytes) of vault {VaultId} as a ZIP, {Password}",
-            export.Caller.User!.Id, entries.Count, bytes, await export.VaultIdsAsync([root.Segments[0]]), withPassword ? "with the password" : "without the password (turned off)");
+        // Logged once the last byte is out: a download cut off by a file that doesn't open is logged as such instead.
+        var (userId, vaultId) = (export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]));
         var name = $"{root.Segments[0]} files {export.Time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
-        return Zip(http, name, [("", entries)], Zone(tz), export.Log, ct);
+        return Zip(http, name, [("", entries)], Zone(tz), export.Log, ct, completed: () => export.Log.LogInformation(
+            "User {UserId} downloaded {Files} files ({Bytes} bytes) of vault {VaultId} as a ZIP, {Password}",
+            userId, entries.Count, bytes, vaultId, withPassword ? "with the password" : "without the password (turned off)"));
     }
 
     /// <summary>
@@ -204,12 +204,20 @@ public static class ExportApi
     }
 
     /// <summary><paramref name="content"/>: the entries below each folder (the vault's name and a '/', or "" for none).</summary>
+    /// <paramref name="completed"/>: run once the whole ZIP is out.
     private static IResult Zip(
-        HttpContext http, string name, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct)
+        HttpContext http, string name, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct,
+        Action? completed = null)
     {
         var disposition = new ContentDispositionHeaderValue("attachment") { FileName = $"\"{AsciiName(name)}\"", FileNameStar = name };
         http.Response.Headers.ContentDisposition = disposition.ToString();
-        return TypedResults.Stream(body => WriteAsync(body, content, zone, log, ct), "application/zip");
+        return TypedResults.Stream(
+            async body =>
+            {
+                await WriteAsync(body, content, zone, log, ct);
+                completed?.Invoke();
+            },
+            "application/zip");
     }
 
     /// <summary>The time zone of that IANA (or Windows) id, or UTC.</summary>
@@ -227,6 +235,7 @@ public static class ExportApi
         Stream body, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct)
     {
         var chunks = new Chunks();
+        var piece = new byte[DrainAt];
         // A null entry-name encoding: names are UTF-8 with the language flag set, so Bücher/Ü².md unpacks as such.
         var zip = await ZipArchive.CreateAsync(chunks, ZipArchiveMode.Create, leaveOpen: true, entryNameEncoding: null, ct);
         try
@@ -236,9 +245,8 @@ public static class ExportApi
                 if (folder.Length > 0) zip.CreateEntry(folder);
                 foreach (var item in entries)
                 {
-                    // Opened before its entry exists: a file whose bytes don't open is left out, not written half.
+                    // Opened before its entry exists; a file whose bytes don't open ends the download (OpenAsync).
                     using var bytes = item.IsNote ? null : await OpenAsync(item, log, ct);
-                    if (!item.IsNote && bytes is null) continue;
 
                     // Vault paths: checked segments, never '.', '..' or empty, so no entry unpacks outside its folder.
                     // Formats that are compressed already (images, most PDFs) are only stored faster.
@@ -255,7 +263,6 @@ public static class ExportApi
                         else
                         {
                             // In pieces, drained as they fill: a 15 MB file never sits in the buffer as a whole.
-                            var piece = new byte[DrainAt];
                             int read;
                             while ((read = await bytes.ReadAsync(piece, ct)) > 0)
                             {
@@ -277,9 +284,13 @@ public static class ExportApi
         await chunks.DrainAsync(body, ct);
     }
 
-    /// <summary>A file's bytes, or null (and a warning with its blob id, never its name) if they don't open: the
-    /// response has begun, so a status can no longer say it.</summary>
-    private static async Task<Stream?> OpenAsync(ExportEntry file, ILogger log, CancellationToken ct)
+    /// <summary>
+    /// A file's bytes. If they don't open (changed or damaged outside Kumbu², or gone), the download fails instead of
+    /// arriving without the file: an error with the blob id (never a name) and an exception, which, once the response has
+    /// begun, makes Kestrel reset it, so the browser shows a failed download, never a ZIP that looks complete. (A damaged
+    /// note is never listed, so never exported; a file the export did list is one the user expects in it.)
+    /// </summary>
+    private static async Task<Stream> OpenAsync(ExportEntry file, ILogger log, CancellationToken ct)
     {
         try
         {
@@ -289,8 +300,8 @@ public static class ExportApi
         {
         }
 
-        log.LogWarning("An export left out a file whose content doesn't open (blob {BlobId})", file.BlobId);
-        return null;
+        log.LogError("A ZIP download was cut off: the content of a file doesn't open (blob {BlobId})", file.BlobId);
+        throw new InvalidOperationException("A file's content doesn't open; the ZIP download is cut off.");
     }
 
     /// <summary>A write-only, non-seekable buffer the ZIP writes into, emptied into the response by

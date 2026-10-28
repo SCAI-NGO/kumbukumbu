@@ -6,7 +6,11 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Kumbu.Server.Vaults;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -617,5 +621,67 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
         using var zip = await ZipAsync(response);
         Assert.Equal(pdf, Bytes(zip.GetEntry("big.pdf")!));
+    }
+
+    /// <summary>Breaks the stored bytes of the smallest blob of the user's vault, as a change outside Kumbu² would.</summary>
+    private async Task BreakSmallestBlobAsync(RestClient user)
+    {
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var blobs = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs");
+        var smallest = (await blobs.Find(Builders<BsonDocument>.Filter.Eq("vault", vault.Id)).ToListAsync(Ct)).MinBy(d => d["blob"].AsByteArray.Length)!;
+        var broken = smallest["blob"].AsByteArray.ToArray();
+        broken[^1] ^= 0xFF;
+        await blobs.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", smallest["_id"]), Builders<BsonDocument>.Update.Set("blob", broken), cancellationToken: Ct);
+    }
+
+    /// <summary>The download either fails outright or isn't a 200 with a ZIP that opens holding every one of <paramref name="expected"/>.</summary>
+    private static async Task AssertNoCompleteZipAsync(Func<Task<HttpResponseMessage>> download, params string[] expected)
+    {
+        HttpResponseMessage response;
+        byte[] bytes;
+        try
+        {
+            response = await download();
+            bytes = await response.Content.ReadAsByteArrayAsync(Ct);
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException)
+        {
+            return;
+        }
+
+        using (response)
+        {
+            if (response.StatusCode != HttpStatusCode.OK) return;
+            try
+            {
+                using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+                Assert.False(expected.All(n => zip.GetEntry(n) is not null), "A ZIP missing nothing arrived although a file's content doesn't open.");
+            }
+            catch (InvalidDataException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_file_whose_content_does_not_open_fails_the_download_instead_of_leaving_it_out()
+    {
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var user = await RestClient.NewAsync(logged);
+        // A large first file, so the response has begun when the broken one comes.
+        var big = new byte[512 * 1024];
+        Random.Shared.NextBytes(big);
+        "%PDF-1.4\n"u8.CopyTo(big);
+        await user.CreateFileAsync("a.pdf", big);
+        await user.CreateFileAsync("b.png", Png(2, 2));
+        await BreakSmallestBlobAsync(user);
+        await TurnPasswordOffAsync(user);
+
+        await AssertNoCompleteZipAsync(() => user.GetAsync(ZipUrl(user, "a.pdf", "b.png")), "a.pdf", "b.png");
+        await AssertNoCompleteZipAsync(() => ExportAsync(user, $"/api/vaults/{user.Vault}/export"), "Arbeit/a.pdf", "Arbeit/b.png");
+
+        Assert.Contains(log.Lines, l => l.Contains("A ZIP download was cut off", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains($"User {user.User.Id} downloaded", StringComparison.Ordinal));
     }
 }
