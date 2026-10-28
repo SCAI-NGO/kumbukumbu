@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Kumbu.Server.Metrics;
 using ModelContextProtocol.Client;
@@ -90,13 +89,12 @@ public sealed class ToolMetricsTests(KumbuAppFactory app)
     public async Task A_rest_conflict_is_counted()
     {
         const string series = "kumbu_write_conflicts_total{via=\"api\"}";
+        // A vault of its own: the sample vaults are listed exactly by other tests.
+        var user = await Api.RestClient.NewAsync(app.PublicApi, "Work");
+        await user.CreateAsync("zz-rest-metrics.md", "one\n");
         var before = Scrape.Value(await Scrape.TextAsync(app), series);
-        using var client = app.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", KumbuAppFactory.Token);
-        var first = await client.PutAsJsonAsync("/api/notes/Ideas/zz-rest-metrics.md", new { content = "one\n" }, Ct);
-        first.EnsureSuccessStatusCode();
 
-        var stale = await client.PutAsJsonAsync("/api/notes/Ideas/zz-rest-metrics.md", new { content = "two\n", version = "stale" }, Ct);
+        using var stale = await user.SendAsync(HttpMethod.Put, user.Url("zz-rest-metrics.md"), new { content = "two\n", version = "stale" });
 
         Assert.Equal(System.Net.HttpStatusCode.Conflict, stale.StatusCode);
         Assert.True(Scrape.Value(await Scrape.TextAsync(app), series) >= before + 1);
