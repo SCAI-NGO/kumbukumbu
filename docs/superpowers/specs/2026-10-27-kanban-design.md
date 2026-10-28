@@ -24,7 +24,7 @@ The earlier leaning in `docs/concept.md` ("its own data model, not a note") stoo
 - Who works on a card (an assignee): one person's board until sharing comes in v4, if ever.
 - A board view in the Obsidian plugin: later, alongside v4/v5. In Obsidian, `/Board/` is a folder of notes; a card moves there by editing its `column`. The format is chosen so that the plugin can show and change it later without a migration.
 - Import and export in the Obsidian Kanban plugin's format (`docs/concept.md` planned it): cards are notes already, which Obsidian reads.
-- A general tag search over all notes: a feature of its own, later, which then covers cards too. The board shows tags and filters by one.
+- A general tag search over all notes: a feature of its own, later, which then covers cards too. The board shows tags and filters by one. (Since designed and built: `docs/superpowers/specs/2026-10-28-tags-design.md`; `board --tag` uses its matcher.)
 - Several boards per vault, nested boards, sub-folders of cards (other than `Archive/`).
 - Time of day in dates: days are enough for planning and for the archive rule.
 
