@@ -20,13 +20,15 @@ export type Analysis = {
 
 export const ANALYSER = `pdfjs-dist@${version}+rules.${RULES_VERSION}`;
 
-export async function analyse(bytes: Uint8Array, maxPages: number): Promise<Analysis> {
+// onPages hears the number of pages to analyse as soon as it is known (the pool's time limit grows with it).
+export async function analyse(bytes: Uint8Array, maxPages: number, onPages?: (pages: number) => void): Promise<Analysis> {
   if (typeof maxPages !== "number" || Number.isNaN(maxPages)) throw new PdfError("maxPages must be a number.", "bad_request");
   const limit = Math.max(1, Math.floor(maxPages));
   const doc = await openPdf(bytes);
   try {
     const pageCount = doc.numPages;
     const analysedPages = Math.min(pageCount, limit);
+    onPages?.(analysedPages);
     const { info } = (await doc.getMetadata().catch(() => ({ info: {} }))) as { info: Record<string, unknown> };
     const pages: PageAnalysis[] = [];
     for (let n = 1; n <= analysedPages; n++) {

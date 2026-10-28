@@ -15,8 +15,15 @@ import {
   rgb,
   setTextRenderingMode,
 } from "pdf-lib";
+import type { Target } from "../src/steps.js";
 
 export const A4 = { width: 595, height: 842 } as const;
+
+// The size steps (src/Kumbu.Core/Attachments/SizeSteps.cs); the server sends them with each request.
+export const KB = 1024;
+export const SMALL: Target = { longEdge: 768, pixels: 400_000, bytes: 150 * KB };
+export const MEDIUM: Target = { longEdge: 1568, pixels: 1_200_000, bytes: 400 * KB };
+export const LARGE: Target = { longEdge: 2576, pixels: 3_700_000, bytes: 1024 * KB };
 
 // Every bar of chartPage(), in PDF user space (bottom-left origin).
 export const CHART_BARS = Array.from({ length: 12 }, (_, i) => ({ x: 70 + i * 36, y: 330, width: 28, height: 80 + i * 30 }));
@@ -158,3 +165,23 @@ export async function encryptedPdf() {
   doc.context.trailerInfo.ID = id;
   return doc.save({ useObjectStreams: false });
 }
+
+// A deterministic noise pattern in blocks (4 × 4 px by default): as hard to compress as a photograph.
+export function noiseCanvas(width: number, height: number, block = 4) {
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  let seed = 12345;
+  const next = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % 256;
+  for (let y = 0; y < height; y += block)
+    for (let x = 0; x < width; x += block) {
+      ctx.fillStyle = `rgb(${next()},${next()},${next()})`;
+      ctx.fillRect(x, y, block, block);
+    }
+  return canvas;
+}
+
+export const photoPage = () =>
+  single(async (doc, page) => {
+    const photo = await doc.embedPng(noiseCanvas(600, 850).toBuffer("image/png"));
+    page.drawImage(photo, { x: 0, y: 0, width: A4.width, height: A4.height });
+  });

@@ -33,6 +33,13 @@ describe("analyse", () => {
     expect(ANALYSER).toBe("pdfjs-dist@6.4.299+rules.1");
   });
 
+  it("reports the number of pages to analyse before analysing them", async () => {
+    const heard: number[] = [];
+    const a = await analyse(await threePages(), 2, (pages) => heard.push(pages));
+    expect(heard).toEqual([2]);
+    expect(a.analysedPages).toBe(2);
+  });
+
   it("reads a text page", async () => {
     const p = await onlyPage(await textPage());
     expect(p).toMatchObject({ n: 1, type: "text", width: A4.width, height: A4.height, rotation: 0, images: 0, regions: [] });
