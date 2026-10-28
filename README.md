@@ -420,12 +420,16 @@ The server exposes Prometheus metrics on a port of its own, and `compose.monitor
 KUMBU_GRAFANA_ADMIN_PASSWORD=…        # required with the monitoring file: openssl rand -hex 24
 # KUMBU_GRAFANA_PORT=3000             # optional: host port, localhost only (default 3000)
 # KUMBU_GRAFANA_ROOT_URL=https://grafana.example.org/   # only behind a reverse proxy, see below
+COMPOSE_FILE=compose.yaml:compose.monitoring.yaml                 # behind Traefik: compose.yaml:compose.traefik.yaml:compose.monitoring.yaml
 ```
 
 ```sh
-docker compose -f compose.yaml -f compose.monitoring.yaml up -d   # behind Traefik, add -f compose.traefik.yaml
-ssh -L 3000:127.0.0.1:3000 user@host                               # from your machine, for a server elsewhere
+docker compose up -d                  # without COMPOSE_FILE: docker compose -f compose.yaml -f compose.monitoring.yaml up -d
+                                      # behind Traefik: docker compose -f compose.yaml -f compose.traefik.yaml -f compose.monitoring.yaml up -d
+ssh -L 3000:127.0.0.1:3000 user@host  # from your machine, for a server elsewhere
 ```
+
+Keep the monitoring file in `COMPOSE_FILE` (append `:compose.monitoring.yaml` to the line you have, as for any override) rather than passing `-f` once: it also puts the server on the monitoring network, so a later `docker compose pull` or `up -d` without it recreates the server off that network, and Prometheus silently loses its target.
 
 Then open `http://localhost:3000` and sign in as `admin` with that password. Without `KUMBU_GRAFANA_ADMIN_PASSWORD` the monitoring file refuses to start, so Grafana never runs with its default login. Anonymous access and sign-up are off, and Grafana reports nothing home. Grafana is published on `127.0.0.1` only and reached through the SSH tunnel. Putting it behind the public reverse proxy is your decision: it then needs `KUMBU_GRAFANA_ROOT_URL` (the address it is reached at, e.g. `https://grafana.example.org/`, as a `compose.override.yaml` adds its route), and its login page is on the internet, guarded by that password alone.
 

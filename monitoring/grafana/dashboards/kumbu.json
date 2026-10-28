@@ -312,7 +312,7 @@
     {
       "type": "timeseries",
       "id": 7,
-      "title": "MCP errors by kind",
+      "title": "MCP errors by tool and kind",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
