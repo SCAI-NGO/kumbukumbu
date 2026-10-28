@@ -64,6 +64,7 @@ builder.Services.AddHttpClient();
 // The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit.
 builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2) });
+builder.Services.AddSingleton<PdfAnalyses>();
 builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());

@@ -217,6 +217,14 @@ public sealed class UnlockedVault
 
     private string BlobContext(byte[] blobId) => $"blob:{Id}:{Convert.ToBase64String(blobId)}";
 
+    /// <summary>A part of a PDF's analysis, bound to its blob's id and its part number: moved to another blob or part,
+    /// it doesn't open.</summary>
+    internal byte[] SealPdfAnalysis<T>(byte[] blobId, int part, T payload) => Seal(PdfAnalysisContext(blobId, part), payload);
+
+    internal T OpenPdfAnalysis<T>(PdfAnalysisDocument doc) => Open<T>(PdfAnalysisContext(doc.BlobId, doc.Part), doc.Blob);
+
+    private string PdfAnalysisContext(byte[] blobId, int part) => $"pdfa:{Id}:{Convert.ToBase64String(blobId)}:{part}";
+
     /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
     public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
         Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(

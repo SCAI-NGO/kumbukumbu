@@ -103,6 +103,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary><see cref="Blobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
     private IMongoCollection<SealedDocument> BlobsByVault { get; } = db.GetCollection<SealedDocument>("blobs");
 
+    /// <summary>The analyses of PDFs, in parts under their blob's id (<see cref="Attachments.PdfAnalyses"/>); they go with the blob.</summary>
+    internal IMongoCollection<PdfAnalysisDocument> PdfParts { get; } = db.GetCollection<PdfAnalysisDocument>("pdf_analyses");
+
+    /// <summary>The PDFs' blobs waiting for an analysis (<see cref="Attachments.PdfAnalysisRunner"/>).</summary>
+    internal IMongoCollection<PdfJobDocument> PdfJobs { get; } = db.GetCollection<PdfJobDocument>("pdf_jobs");
+
     internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>A session for one transaction over several documents.</summary>
@@ -1190,6 +1196,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
             ],
             ct);
+        await PdfParts.Indexes.CreateOneAsync(
+            new CreateIndexModel<PdfAnalysisDocument>(
+                Builders<PdfAnalysisDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId).Ascending(d => d.Part), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        await PdfJobs.Indexes.CreateOneAsync(
+            new CreateIndexModel<PdfJobDocument>(Builders<PdfJobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),
