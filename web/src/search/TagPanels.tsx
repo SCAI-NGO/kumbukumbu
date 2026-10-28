@@ -33,7 +33,10 @@ export function TagList({ prefix = "", onPick }: { prefix?: string; onPick(tag: 
   const [all, setAll] = useState(false);
   if (!tags.data) return null;
   const lower = prefix.toLowerCase();
-  const matching = tags.data.filter((t) => t.tag.toLowerCase().startsWith(lower));
+  // The tag typed in full comes first, then those nested below it or longer.
+  const matching = tags.data
+    .filter((t) => t.tag.toLowerCase().startsWith(lower))
+    .sort((a, b) => Number(b.tag.toLowerCase() === lower) - Number(a.tag.toLowerCase() === lower));
   if (matching.length === 0) return prefix ? <p className="text-sm text-text-body">No tag starts with #{prefix}.</p> : null;
   const shown = all ? matching : matching.slice(0, SHOWN);
   return (

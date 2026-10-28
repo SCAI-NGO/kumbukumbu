@@ -28,6 +28,10 @@ public class TagReaderTests
     [InlineData("##tag", "")]
     [InlineData("# Title #inheading", "inheading")]
     [InlineData("#Title", "Title")]
+    [InlineData("> quoted #tag", "tag")]
+    [InlineData("| cell #tag |", "tag")]
+    [InlineData("**#bold** *a* #after", "after")]
+    [InlineData("#tag\r\n#next", "tag next")]
     // The tag ends at the first other character.
     [InlineData("#tag.", "tag")]
     [InlineData("#tag, #other;", "tag other")]

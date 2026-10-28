@@ -415,7 +415,7 @@ describe("tags in the text", () => {
   });
 
   it("leaves headings, code, links, numbers and escaped tags as written", () => {
-    show("# Heading\n\n`#code` and [x](https://example.org/#part) #123 \\#escaped word#tag\n\n```\n#fenced\n```\n");
+    show("# Heading\n\n`#code` and [x](https://example.org/#part) #123 \\#escaped word#tag *#emphasis* [see #linked](/x.md)\n\n```\n#fenced\n```\n");
     expect(screen.queryByRole("button", { name: /^Notes tagged/ })).not.toBeInTheDocument();
     expect(screen.getByText("#code")).toBeInTheDocument();
     expect(screen.getByText("#fenced")).toBeInTheDocument();

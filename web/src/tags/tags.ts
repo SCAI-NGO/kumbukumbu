@@ -73,6 +73,8 @@ interface MdNode {
 
 // Never text a tag stands in: code, links (their text is the link's), raw HTML (shown as written).
 const opaque = new Set(["code", "inlineCode", "link", "linkReference", "image", "imageReference", "html", "definition"]);
+// Their text begins after the markup that opens them, never after whitespace.
+const inline = new Set(["emphasis", "strong", "delete"]);
 
 /**
  * A remark plugin that turns inline `#tags` in the text into `tag` nodes (a `span` with `data-tag`), which the view
@@ -102,9 +104,9 @@ export function remarkTags() {
           out.push(child);
           return;
         }
-        // A text that follows emphasis or a link doesn't start after whitespace (`**a**#b`).
+        // A text that follows emphasis or a link doesn't start after whitespace (`**a**#b`), nor one that starts it (`*#b*`).
         const prev = node.children![i - 1];
-        const startsClean = !prev || prev.type === "break" || (prev.type === "text" && /\s$/.test(prev.value ?? ""));
+        const startsClean = prev ? prev.type === "break" || (prev.type === "text" && /\s$/.test(prev.value ?? "")) : !inline.has(node.type);
         const value = child.value;
         const tags = findTags(value, startsClean);
         const skip = tags.length && value.includes("#") ? escaped(child) : new Set<string>();
