@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowLeft, Check, Download, Folder, FolderInput, Image as ImageIcon, ListChecks, Trash2, Upload, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useDeleteFile, useTree, type TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { folderOrder, textOrder } from "../api/textOrder";
+import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { sizeText } from "../components/Sheet";
 import { topDialog, useDialog } from "../hooks/useDialog";
 import MoveDialog from "../shell/MoveDialog";
-import { useEditor } from "../state/editor";
 import DeleteFileDialog from "./DeleteFileDialog";
 import { downloadFile, downloadZip, maxZipFiles, preferencesQuery, zipFrameError } from "./downloadFiles";
 import MoveFilesDialog from "./MoveFilesDialog";
 import { FileThumb, ScrollRoot, useNear } from "./Thumbnail";
 import { useLongPress, useSelection } from "./useSelection";
+
+const UploadSheet = lazy(() => import("../upload/UploadSheet"));
 
 export type GalleryOrder = "date" | "folder" | "name";
 
@@ -125,6 +127,7 @@ export default function GalleryPage() {
   const [dialog, setDialog] = useState<{ kind: "download" | "move" | "delete"; files: GalleryFile[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const queryClient = useQueryClient();
 
   const files = useMemo(() => (tree.data ? filesOf(tree.data.root) : []), [tree.data]);
@@ -166,12 +169,8 @@ export default function GalleryPage() {
     [fired, selecting, toggle, navigate, paths],
   );
 
-  // The upload sheet lives with the notes: it opens there, for the vault's top level.
-  const upload = () => {
-    useEditor.getState().setActiveVault(vault);
-    useEditor.getState().openUpload(`/${vault}`);
-    navigate("/");
-  };
+  // Into the vault's top level, over the gallery: the new files show here once uploaded, as the sheet refreshes the tree.
+  const upload = () => setUploading(true);
 
   const download = async () => {
     setProblem(null);
@@ -292,6 +291,13 @@ export default function GalleryPage() {
       )}
       <ZipFrame onError={setProblem} />
 
+      {uploading && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setUploading(false)} />}>
+          <Suspense>
+            <UploadSheet folder={`/${vault}`} dropped={null} onClose={() => setUploading(false)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {dialog?.kind === "download" && <ZipDialog vault={vault} paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} />}
       {dialog?.kind === "move" &&
         (dialog.files.length === 1 ? (
