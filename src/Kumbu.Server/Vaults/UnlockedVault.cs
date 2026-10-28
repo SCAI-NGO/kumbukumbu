@@ -96,9 +96,16 @@ public sealed class UnlockedVault
     /// <summary>The named checkpoints; their notes' content stays in MongoDB until a command reads it.</summary>
     public ImmutableList<StoredCheckpoint> Checkpoints { get; set; } = [];
 
-    /// <summary>Path ids of notes whose documents don't open. Their paths are sealed, so the path id is all
-    /// that's known; it is enough to tell a request that asks for that path.</summary>
+    /// <summary>Path ids of notes and attachment records whose documents don't open. Their paths are sealed, so the
+    /// path id is all that's known; it is enough to tell a request that asks for that path.</summary>
     public ImmutableHashSet<string> DamagedPathIds { get; set; } = [];
+
+    /// <summary>Those of <see cref="DamagedPathIds"/> that are attachment records: a client that knows no attachments
+    /// isn't told about them.</summary>
+    public ImmutableHashSet<string> DamagedAttachmentIds { get; set; } = [];
+
+    /// <summary>How many notes (not attachment records) don't open.</summary>
+    public int DamagedNotes => DamagedPathIds.Except(DamagedAttachmentIds).Count;
 
     public bool IsDamaged(VaultPath path) => DamagedPathIds.Contains(Convert.ToBase64String(PathId(path)));
 

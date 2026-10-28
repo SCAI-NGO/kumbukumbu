@@ -120,7 +120,8 @@ public static class SyncApi
         var changedAt = unlocked.ChangedAt;
         var notes = unlocked.Notes;
         var files = withFiles ? unlocked.Attachments : [];
-        var damaged = unlocked.DamagedPathIds.Count;
+        // Damaged attachment records count only for a client that knows attachments: the plain answer stays today's.
+        var damaged = withFiles ? unlocked.DamagedPathIds.Count : unlocked.DamagedNotes;
         var state = State(notes.Values.Select(n => (n.Note.Path, n.Note.Version)).Concat(files.Values.Select(a => (a.Attachment.Path, a.Attachment.Version))), damaged);
         http.Response.Headers.ETag = $"\"{state}\"";
         var marker = withFiles ? true : (bool?)null;

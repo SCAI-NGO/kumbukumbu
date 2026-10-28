@@ -106,9 +106,7 @@ public static class HistoryApi
         api.MapPost("/vaults/{vault}/checkpoints", CreateCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapGet("/vaults/{vault}/checkpoints/{name}/tree", CheckpointTreeAsync).Errors(400, 401, 404, 503);
         api.MapGet("/vaults/{vault}/checkpoints/{name}/notes/{**path}", CheckpointNoteAsync).Errors(400, 401, 404, 503);
-        api.MapGet("/vaults/{vault}/checkpoints/{name}/files/{**path}", CheckpointFileAsync)
-            .Produces(StatusCodes.Status200OK, typeof(byte[]), "application/octet-stream")
-            .Errors(400, 401, 404, 503);
+        api.MapGet("/vaults/{vault}/checkpoints/{name}/files/{**path}", CheckpointFileAsync).ProducesFile().Errors(400, 401, 404, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/preview", PreviewAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/restore", RestoreCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);

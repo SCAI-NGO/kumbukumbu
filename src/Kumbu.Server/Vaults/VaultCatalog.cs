@@ -923,16 +923,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 vault.Attachments = vault.Attachments.Remove(path);
                 vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Remove(key);
             }
             else if (TryOpen(vault, () => vault.OpenAttachment(record), record) is { } attachment)
             {
                 vault.Attachments = vault.Attachments.SetItem(path, (record.Id, attachment));
                 vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Remove(key);
             }
             else
             {
                 vault.Attachments = vault.Attachments.Remove(path);
                 vault.DamagedPathIds = vault.DamagedPathIds.Add(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Add(key);
             }
 
             return;
@@ -1020,14 +1023,17 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // The records only: blobs are read on demand, never held with the vault. A record that doesn't open is marked
             // damaged under its path id, as a note is.
             var attachments = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, Kumbu.Core.Attachments.StoredAttachment)>();
+            var damagedAttachments = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Attachments.Find(n => n.Vault == id).ToListAsync(ct))
             {
                 if (TryOpen(vault, () => vault.OpenAttachment(d), d) is { } attachment) attachments[attachment.Path] = (d.Id, attachment);
-                else damaged.Add(Convert.ToBase64String(d.PathId));
+                else damagedAttachments.Add(Convert.ToBase64String(d.PathId));
             }
 
             vault.Attachments = attachments.ToImmutable();
+            damaged.UnionWith(damagedAttachments);
             vault.DamagedPathIds = damaged.ToImmutable();
+            vault.DamagedAttachmentIds = damagedAttachments.ToImmutable();
             vault.AttachmentTrash = [.. (await AttachmentTrash.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenAttachmentTrash(d), d)))
                 .Where(t => t.Trashed is not null)

@@ -45,9 +45,7 @@ public static class FileApi
     public static void MapFileApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("/files/{vault}/{**path}", ReadAsync)
-            .Produces(StatusCodes.Status200OK, typeof(byte[]), MediaTypes[0], MediaTypes[1..])
-            .Errors(400, 401, 404, 503);
+        api.MapGet("/files/{vault}/{**path}", ReadAsync).ProducesFile().Errors(400, 401, 404, 503);
         api.MapPut("/files/{vault}/{**path}", WriteAsync)
             .WithMetadata(new RequestSizeLimitAttribute(MaxBody))
             // Described, not declared with Accepts: routing would then refuse a body whose Content-Type isn't listed,
@@ -68,6 +66,10 @@ public static class FileApi
             .Errors(400, 401, 403, 404, 413, 503);
         api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
     }
+
+    /// <summary>Declares a 200 with an attachment's bytes, in any of the formats Kumbu² keeps.</summary>
+    internal static RouteHandlerBuilder ProducesFile(this RouteHandlerBuilder builder) =>
+        builder.Produces(StatusCodes.Status200OK, typeof(byte[]), MediaTypes[0], MediaTypes[1..]);
 
     /// <summary>
     /// The file's bytes, typed by its format. <c>version</c>: a token from its history (or, for a session, of a file at
@@ -139,10 +141,9 @@ public static class FileApi
         // One more byte than may come, to tell "exactly the limit" from "more".
         var capacity = (int)Math.Min(declared ?? AttachmentFormat.MaxBytes, AttachmentFormat.MaxBytes) + 1;
         var buffer = ArrayPool<byte>.Shared.Rent(capacity);
-        var length = 0;
         try
         {
-            length = await ReadBodyAsync(request, buffer, capacity, declared, ct);
+            var length = await ReadBodyAsync(request, buffer, capacity, declared, ct);
             var bytes = buffer.AsMemory(0, length);
             if (AttachmentFormat.Problem(filePath, bytes.Span) is { } problem) throw ApiErrors.BadRequest(problem + ".");
 
@@ -177,8 +178,9 @@ public static class FileApi
         }
         finally
         {
-            // The pool hands the array to the next renter: the file's bytes don't go with it.
-            buffer.AsSpan(0, length).Clear();
+            // The pool hands the array to the next renter: the file's bytes don't go with it, also when reading
+            // stopped part-way (too large, cut off), so all that may have been written is cleared.
+            buffer.AsSpan(0, capacity).Clear();
             ArrayPool<byte>.Shared.Return(buffer);
         }
     }

@@ -206,6 +206,29 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_damaged_attachment_is_counted_only_for_a_client_that_asks_for_attachments()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateFileAsync("shot.png", FileApiTests.Png(4, 4));
+        var before = await VersionsAsync(user);
+        var vaultId = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Id;
+        var records = app.Database.GetCollection<BsonDocument>("attachments");
+        await records.UpdateOneAsync(new BsonDocument("vault", vaultId), Builders<BsonDocument>.Update.Set("blob", new BsonBinaryData(new byte[64])), cancellationToken: Ct);
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Catalog.Sweep();
+
+        var again = await user.SignInAgainAsync();
+        var plain = await VersionsAsync(again);
+        var withFiles = await JsonAsync(await again.GetAsync(AttachmentsUrl(again)));
+
+        Assert.Equal(0, plain["damaged"]!.GetValue<int>());
+        Assert.Equal(before["state"]!.GetValue<string>(), plain["state"]!.GetValue<string>());
+        Assert.Equal(1, withFiles["damaged"]!.GetValue<int>());
+        Assert.Equal(["/Arbeit/a.md"], Paths(withFiles));
+    }
+
+    [Fact]
     public async Task Since_never_lists_a_damaged_note_as_deleted()
     {
         var user = await NewAsync(Api);
