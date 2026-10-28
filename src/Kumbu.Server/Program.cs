@@ -47,6 +47,7 @@ var metricsEnabled = !bootstrapCommand && builder.Configuration.GetValue("Kumbu:
 if (metricsEnabled)
 {
     KumbuMetrics.Configure();
+    builder.Services.AddSingleton<Kumbu.Core.Sh.IShellObserver, ShellMetrics>();
     builder.Services.AddSingleton<MetricsServer>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricsServer>());
 }

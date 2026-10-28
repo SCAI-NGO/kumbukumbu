@@ -29,9 +29,11 @@ public sealed class Shell
     private readonly Dictionary<string, ICommand> _commands = new(StringComparer.Ordinal);
     private readonly Checkpoints _checkpoints;
     private readonly Func<DateTime> _now;
+    private readonly IShellObserver? _observer;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null)
     {
+        _observer = observer;
         _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         var files = writer.ForAttachments();
@@ -49,6 +51,9 @@ public sealed class Shell
             _commands[command.Name] = command;
         }
     }
+
+    /// <summary>The names of the commands, in the order of the help list.</summary>
+    public IReadOnlyCollection<string> CommandNames => _commands.Keys;
 
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
@@ -69,6 +74,8 @@ public sealed class Shell
 
         if (stages.Count == 0) return ShellResult.Error("sh: empty command");
 
+        _observer?.Ran([.. stages.Select(s => s[0])]);
+
         string? input = null;
         NoteVersion? version = null;
         var result = ShellResult.Ok("");
@@ -88,6 +95,7 @@ public sealed class Shell
             }
 
             var args = stage.Skip(1).ToList();
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
             // "rg -- --help" searches for "--help"; only an option before "--" asks for help.
             if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(Help.Of(command));
             else if (command is not (DiffCommand or Restore) && TakeCheckpoint(name, args, out var checkpoint, out var rest, out var optionError))
@@ -95,6 +103,7 @@ public sealed class Shell
                 result = optionError ?? await RunInCheckpointAsync(name, checkpoint!, rest, input, ct);
             }
             else result = await command.RunAsync(args, input, ct);
+            _observer?.Timed(name, System.Diagnostics.Stopwatch.GetElapsedTime(started));
             if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.

@@ -111,7 +111,7 @@ public class NoteWriterTests
 
     [Fact]
     public async Task StaleTokenIsAConflict() => Assert.Equal(
-        ShellResult.Error($"write: /Work/plan.md has changed since version 000000000000 (it is now {V(Plan)}); cat it again and redo the change"),
+        ShellResult.Error($"write: /Work/plan.md has changed since version 000000000000 (it is now {V(Plan)}); cat it again and redo the change") with { Kind = ShellErrorKind.Conflict },
         await Write("/Work/plan.md", "new", "000000000000"));
 
     [Fact]
@@ -135,7 +135,7 @@ public class NoteWriterTests
         var result = await Write("/Work/plan.md", "mine\n", V(Plan));
 
         Assert.Equal(
-            ShellResult.Error($"write: /Work/plan.md has changed since version {V(Plan)} (it is now {V("someone else\n")}); cat it again and redo the change"),
+            ShellResult.Error($"write: /Work/plan.md has changed since version {V(Plan)} (it is now {V("someone else\n")}); cat it again and redo the change") with { Kind = ShellErrorKind.Conflict },
             result);
         Assert.Equal("someone else\n", (await Get("/Work/plan.md")).Content);
     }

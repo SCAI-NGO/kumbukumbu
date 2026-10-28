@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 using ModelContextProtocol.Protocol;
 
@@ -23,25 +25,47 @@ internal static class ToolResult
         return new CallToolResult { IsError = result.IsError, Content = content };
     }
 
-    /// <summary>Runs a tool body; vaults that can't be used at all become a tool error with the reason.</summary>
-    public static async Task<CallToolResult> RunAsync(Func<Task<ShellResult>> body)
+    /// <summary>Runs a tool body; vaults that can't be used at all become a tool error with the reason. Counts and times the call.</summary>
+    public static async Task<CallToolResult> RunAsync(KumbuMetrics.Tool tool, Func<Task<ShellResult>> body)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var (result, kind) = await RunBodyAsync(body);
+        KumbuMetrics.ToolCalled(tool, Stopwatch.GetElapsedTime(started));
+        if (result.IsError)
+        {
+            KumbuMetrics.ToolFailed(tool, kind);
+            if (kind == KumbuMetrics.ToolError.Conflict) KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Mcp);
+        }
+
+        return From(result);
+    }
+
+    private static async Task<(ShellResult Result, KumbuMetrics.ToolError Kind)> RunBodyAsync(Func<Task<ShellResult>> body)
     {
         try
         {
-            return From(await body());
+            var result = await body();
+            return (result, result.Kind switch
+            {
+                ShellErrorKind.Invalid => KumbuMetrics.ToolError.Invalid,
+                ShellErrorKind.Refused => KumbuMetrics.ToolError.Refused,
+                ShellErrorKind.NotFound => KumbuMetrics.ToolError.NotFound,
+                ShellErrorKind.Conflict => KumbuMetrics.ToolError.Conflict,
+                _ => KumbuMetrics.ToolError.Other,
+            });
         }
         catch (VaultUnavailableException e)
         {
-            return From(ShellResult.Error(e.Message));
+            return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Unavailable);
         }
         catch (VaultDeletedException e)
         {
-            return From(ShellResult.Error(e.Message));
+            return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Unavailable);
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
             // A backstop: the stores mark damaged documents, so this should not happen.
-            return From(ShellResult.Error("stored data doesn't open (changed or damaged outside Kumbu²); the server log has details"));
+            return (ShellResult.Error("stored data doesn't open (changed or damaged outside Kumbu²); the server log has details"), KumbuMetrics.ToolError.Damaged);
         }
     }
 }
