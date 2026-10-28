@@ -166,7 +166,7 @@ public static class NoteApi
         api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
         api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
-        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
@@ -498,9 +498,11 @@ public static class NoteApi
     /// <summary>
     /// Search in earlier versions: the sections of the notes' history (not their current text) that hold every word of
     /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
-    /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
+    /// <c>/search</c>. Sessions only: old versions are the owner's to look through. Limited with a vault's activity
+    /// (<see cref="AccountLimits.HistoryScansPerUser"/>): both read every note in their scope.
     /// </summary>
-    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(
+        string? q, string? path, int? n, RequestCaller caller, AccountLimits limits, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
         if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
@@ -512,6 +514,7 @@ public static class NoteApi
             throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
         }
 
+        if (limits.HistoryScan(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter, AccountLimits.HistoryScansRefused);
         var notes = new List<StoredNote>();
         if (!scope.IsRoot && await store.GetAsync(scope, ct) is { } single) notes.Add(single);
         else
