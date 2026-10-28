@@ -10,7 +10,7 @@ namespace Kumbu.Server.Metrics;
 /// Serves <c>/metrics</c> on a listener of its own, so that the app's port, which a proxy exposes, never carries it
 /// (a request there cannot be told to be for the metrics by a <c>Host</c> header). Nothing else is served: any other path is 404.
 /// </summary>
-public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedService
+public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedService, IAsyncDisposable
 {
     private WebApplication? _app;
 
@@ -20,7 +20,10 @@ public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedServi
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseUrls(options.Value.Metrics.Url);
+        // Nothing of the app's configuration: its Kestrel endpoints, URLS or HTTP_PORTS would win over the URL here and
+        // put the metrics on the app's port (and keep the app off it).
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection([new(WebHostDefaults.ServerUrlsKey, options.Value.Metrics.Url)]);
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         // The outer host owns SIGTERM and the lifetime messages; this one is started and stopped by it.
         builder.Services.AddSingleton<IHostLifetime, NoLifetime>();
@@ -55,6 +58,17 @@ public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedServi
             _app = null;
             Address = null;
             await app.StopAsync(cancellationToken);
+            await app.DisposeAsync();
+        }
+    }
+
+    /// <summary>For a host disposed without being stopped: the listener goes with it.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (_app is { } app)
+        {
+            _app = null;
+            Address = null;
             await app.DisposeAsync();
         }
     }
