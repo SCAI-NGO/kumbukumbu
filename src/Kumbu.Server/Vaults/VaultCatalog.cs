@@ -1172,7 +1172,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         await Blobs.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<BlobDocument>(Builders<BlobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
-                new CreateIndexModel<BlobDocument>(Builders<BlobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.At)),
+                // The sweep's candidates by age, without fetching them (BlobSweep.CandidateIndex).
+                new CreateIndexModel<BlobDocument>(BlobSweep.CandidateIndex),
                 // Whether blobs exist, and since when, without fetching them (EncryptedNoteStore.RequireBlobsAsync).
                 new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
             ],

@@ -21,6 +21,13 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
 
     private static FilterDefinitionBuilder<BlobDocument> F => Builders<BlobDocument>.Filter;
 
+    /// <summary>The index the candidates are read from: it holds their ids, so no blob (up to 15 MB each) is fetched to
+    /// find them, on every round of every unlocked vault.</summary>
+    internal static readonly MongoDB.Bson.BsonDocument CandidateIndex = new() { { "vault", 1 }, { "at", 1 }, { "bid", 1 } };
+
+    /// <summary>The candidates' query, covered by <see cref="CandidateIndex"/>.</summary>
+    internal static readonly MongoDB.Bson.BsonDocument CandidateProjection = new() { { "bid", 1 }, { "_id", 0 } };
+
     /// <summary>Returns how many blobs were released.</summary>
     public async Task<int> RunAsync(UnlockedVault vault, DateTime now, CancellationToken ct)
     {
@@ -31,7 +38,8 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
             await ExpireTrashAsync(vault, now, ct);
 
             var old = F.Eq(d => d.Vault, vault.Id) & F.Lt(d => d.At, now - Grace);
-            var candidates = (await catalog.Blobs.Find(old).Project(d => d.BlobId).ToListAsync(ct)).Select(Convert.ToBase64String).ToHashSet();
+            var candidates = (await catalog.Blobs.Find(old, new FindOptions { Hint = CandidateIndex }).Project(CandidateProjection).ToListAsync(ct))
+                .Select(d => Convert.ToBase64String(d["bid"].AsByteArray)).ToHashSet();
             candidates.ExceptWith(References(
                 vault.Attachments.Values.Select(a => a.Attachment), vault.AttachmentTrash.Select(t => t.Trashed), vault.Checkpoints.Select(c => c.Checkpoint)));
             if (candidates.Count == 0) return 0;

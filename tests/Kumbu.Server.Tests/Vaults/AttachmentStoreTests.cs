@@ -462,6 +462,37 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_sweeps_candidates_are_read_from_the_index_alone()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        await store.PutBlobAsync("Work", Png(100, 1), Ct);
+        await store.PutBlobAsync("Work", Png(100, 2), Ct);
+        var vault = (await Raw(world, "blobs").Find(FilterDefinition<BsonDocument>.Empty).FirstAsync(Ct))["vault"];
+        _time.Advance(TimeSpan.FromHours(1));
+
+        var explain = await world.Db.RunCommandAsync<BsonDocument>(new BsonDocument
+        {
+            {
+                "explain", new BsonDocument
+                {
+                    { "find", "blobs" },
+                    { "filter", new BsonDocument { { "vault", vault }, { "at", new BsonDocument("$lt", Now - BlobSweep.Grace) } } },
+                    { "projection", BlobSweep.CandidateProjection },
+                    { "hint", BlobSweep.CandidateIndex },
+                }
+            },
+            { "verbosity", "executionStats" },
+        }, cancellationToken: Ct);
+
+        var stats = explain["executionStats"].AsBsonDocument;
+        Assert.Equal(2, stats["nReturned"].ToInt32());
+        // Covered: no blob document is fetched to find the candidates.
+        Assert.Equal(0, stats["totalDocsExamined"].ToInt32());
+        // And the sweep reads them so: both are released.
+        Assert.Equal(2, await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct));
+    }
+
+    [Fact]
     public async Task Whether_blobs_are_stored_is_read_from_the_index_alone()
     {
         var (world, _, store) = await WorldAsync();
