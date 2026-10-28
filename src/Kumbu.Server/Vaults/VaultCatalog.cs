@@ -31,8 +31,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
 
-    /// <summary>The attachments' bytes held in memory at once, server-wide (<see cref="VaultOptions.ConcurrentFileReads"/>):
-    /// a slot from before a blob is read until its stream is disposed.</summary>
+    /// <summary>The attachments' blobs read and decrypted at once, server-wide (<see cref="VaultOptions.ConcurrentFileReads"/>):
+    /// a slot from before a blob is read until its bytes are open.</summary>
     internal SemaphoreSlim FileReads { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileReads));
 
     /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
@@ -1173,6 +1173,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             [
                 new CreateIndexModel<BlobDocument>(Builders<BlobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
                 new CreateIndexModel<BlobDocument>(Builders<BlobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.At)),
+                // Whether blobs exist, and since when, without fetching them (EncryptedNoteStore.RequireBlobsAsync).
+                new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
             ],
             ct);
         await Slots.Indexes.CreateManyAsync(

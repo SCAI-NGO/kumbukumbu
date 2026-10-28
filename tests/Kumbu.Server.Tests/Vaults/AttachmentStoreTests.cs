@@ -414,23 +414,78 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal(0, await later.CountDamagedAsync(P("/Work"), Ct));
     }
 
-    [Fact]
-    public async Task A_commit_naming_a_blob_from_a_checkpoint_makes_it_young_again()
+    /// <summary>A blob only a checkpoint holds, 31 days old: the file was removed and its trash entry expired.</summary>
+    private async Task<(StoredAttachment Shot, IMongoCollection<BsonDocument> Blobs)> HeldByACheckpointAsync(VaultWorld world, VaultCatalog catalog, EncryptedNoteStore store)
     {
-        var (world, catalog, store) = await WorldAsync();
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
         var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
-        _time.Advance(TimeSpan.FromHours(1));
+        _time.Advance(TimeSpan.FromDays(31));
+        await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct);
+        Assert.Empty(await store.ListAttachmentTrashAsync(null, Ct));
+        return (shot, Raw(world, "blobs"));
+    }
 
-        // A restore read the checkpoint: its record names the blob the checkpoint held.
+    private static async Task<DateTime> AtAsync(IMongoCollection<BsonDocument> blobs) =>
+        (await blobs.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync(Ct))["at"].ToUniversalTime();
+
+    [Fact]
+    public async Task A_commit_naming_a_blob_the_working_set_holds_writes_nothing_to_it()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var (shot, blobs) = await HeldByACheckpointAsync(world, catalog, store);
+        var at = await AtAsync(blobs);
+
+        // The checkpoint holds the bytes: the commit reads their index entry only, and no sweep can run meanwhile.
         var restored = new StoredAttachment(shot.Path, shot.Current, 1, Writers.Dev, Now, [], null);
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, Now, Ct));
 
-        // Within the sweep's grace again, whatever a sweep knows of the records.
+        Assert.Equal(at, await AtAsync(blobs));
+    }
+
+    [Fact]
+    public async Task A_commit_naming_a_blob_nothing_holds_any_more_makes_it_young_again()
+    {
+        var (world, catalog, store) = await WorldAsync();
+        var (shot, blobs) = await HeldByACheckpointAsync(world, catalog, store);
+        // A restore read the checkpoint; it is removed before the restore commits, and nothing else holds the bytes.
+        var held = Assert.Single(Assert.Single(await store.ListCheckpointsAsync(P("/Work"), Ct)).Attachments);
+        Assert.True(await store.TryRemoveCheckpointAsync("Work", "before", Ct));
+
+        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, Now, Ct));
+
+        // Within the sweep's grace again, whatever a sweep of another process knows of the records.
+        Assert.Equal(Now, await AtAsync(blobs));
+        Assert.Equal(Png(100), await ReadBlobAsync(store, shot.Current.BlobId));
+    }
+
+    [Fact]
+    public async Task Whether_blobs_are_stored_is_read_from_the_index_alone()
+    {
+        var (world, _, store) = await WorldAsync();
+        await CreateAsync(store, "/Work/shot.png", Png(100));
         var blob = await Raw(world, "blobs").Find(FilterDefinition<BsonDocument>.Empty).SingleAsync(Ct);
-        Assert.Equal(Now, blob["at"].ToUniversalTime());
+
+        var explain = await world.Db.RunCommandAsync<BsonDocument>(new BsonDocument
+        {
+            {
+                "explain", new BsonDocument
+                {
+                    { "find", "blobs" },
+                    { "filter", new BsonDocument { { "vault", blob["vault"] }, { "bid", new BsonDocument("$in", new BsonArray { blob["bid"] }) } } },
+                    { "projection", new BsonDocument { { "bid", 1 }, { "at", 1 }, { "_id", 0 } } },
+                    { "hint", EncryptedNoteStore.BlobTimeIndex },
+                }
+            },
+            { "verbosity", "executionStats" },
+        }, cancellationToken: Ct);
+
+        var stats = explain["executionStats"].AsBsonDocument;
+        Assert.Equal(1, stats["nReturned"].ToInt32());
+        // Covered: the entry is read from the index, no blob document is fetched.
+        Assert.Equal(0, stats["totalDocsExamined"].ToInt32());
     }
 
     [Fact]
@@ -464,7 +519,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task File_reads_beyond_the_servers_slots_wait_for_one_to_be_disposed()
+    public async Task A_file_read_waits_for_a_slot_only_while_blobs_are_decrypted()
     {
         var world = new VaultWorld(fixture.NewDatabase());
         var catalog = world.Catalog(time: _time, fileReads: 1);
@@ -473,20 +528,22 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var a = await CreateAsync(store, "/Work/a.png", Png(100, 1));
         var b = await CreateAsync(store, "/Work/b.png", Png(100, 2));
 
-        var first = await store.OpenBlobAsync("Work", a.Current.BlobId, Ct);
-        // Another request of the same server waits until the first stream is disposed.
-        var second = Store(catalog).OpenBlobAsync("Work", b.Current.BlobId, Ct);
+        // An answer whose bytes are open but not yet sent (a slow download) holds no slot: another read goes ahead.
+        await using var unread = await store.OpenBlobAsync("Work", a.Current.BlobId, Ct);
+        await using var other = await Store(catalog).OpenBlobAsync("Work", b.Current.BlobId, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.NotNull(other);
+
+        // While a blob is read and decrypted, the slot is taken: a further read waits for it.
+        await catalog.FileReads.WaitAsync(Ct);
+        var waiting = store.OpenBlobAsync("Work", a.Current.BlobId, Ct);
         await Task.Delay(200, Ct);
-        Assert.False(second.IsCompleted);
-
-        await first!.DisposeAsync();
-        var opened = await second.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.False(waiting.IsCompleted);
+        catalog.FileReads.Release();
+        await using var opened = await waiting.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.NotNull(opened);
-        await opened.DisposeAsync();
 
-        // A blob that isn't there gives its slot back at once.
+        // A blob that isn't there gives its slot back too.
         Assert.Null(await store.OpenBlobAsync("Work", Convert.ToBase64String(new byte[32]), Ct));
-        await using var again = await store.OpenBlobAsync("Work", a.Current.BlobId, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
-        Assert.NotNull(again);
+        Assert.Equal(1, catalog.FileReads.CurrentCount);
     }
 }

@@ -506,4 +506,26 @@ public sealed class FileApiTests(KumbuAppFactory app)
         using var again = await user.GetAsync(user.Url("shot.png", "files")).WaitAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
     }
+
+    [Fact]
+    public async Task A_checkpoint_restore_whose_files_content_is_gone_is_a_409_and_writes_nothing()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("shot.png", Png(4, 4));
+        using var made = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints", new { name = "before" });
+        using var removed = await user.SendAsync(HttpMethod.Delete, user.Url("shot.png", "files") + "?version=" + Kumbu.Core.Notes.VersionToken.Of(Png(4, 4)));
+        Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        using var preview = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/before/preview");
+        var plan = (await JsonAsync(preview))["plan"]!.GetValue<string>();
+        // Gone between the preview and the restore.
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs").DeleteManyAsync(Builders<BsonDocument>.Filter.Eq("vault", vault.Id), Ct);
+
+        using var restore = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/before/restore", new { plan });
+
+        Assert.Equal(HttpStatusCode.Conflict, restore.StatusCode);
+        Assert.Equal("The content of /Arbeit/shot.png is no longer stored (it was removed meanwhile); nothing was written. Try again.", await RestClient.ErrorAsync(restore));
+        using var none = await user.GetAsync(user.Url("shot.png", "files"));
+        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+    }
 }

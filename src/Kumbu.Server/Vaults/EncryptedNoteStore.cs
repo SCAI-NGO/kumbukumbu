@@ -280,24 +280,50 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         static IEnumerable<AttachmentState> States(StoredAttachment a) => a.History.Select(h => h.State).Prepend(a.Current);
     }
 
+    /// <summary>The index <see cref="RequireBlobsAsync"/> reads by: it holds all it needs, so no blob is fetched.</summary>
+    internal static readonly BsonDocument BlobTimeIndex = new() { { "vault", 1 }, { "bid", 1 }, { "at", 1 } };
+
     /// <summary>
-    /// Within the transaction: every blob <paramref name="named"/> is made young again, or the transaction refused with
-    /// <see cref="ContentMissingException"/> if one is gone. A reference read before the commit (from a checkpoint, say)
-    /// may name a blob that only something removed meanwhile held: the touch moves it past <see cref="BlobSweep"/>'s
-    /// cutoff and conflicts with a sweep deleting it at the same time, so a record never names bytes that aren't stored.
+    /// Within the transaction, under the vault's gate: every blob <paramref name="named"/> must be stored, or the
+    /// transaction is refused with <see cref="ContentMissingException"/>. A reference read before the commit (from a
+    /// checkpoint, say) may name a blob that only something removed meanwhile held. Whether each is stored, and when it
+    /// was last put, is read from <see cref="BlobTimeIndex"/> alone, never from the blobs. A blob that the sweep could
+    /// release soon (older than half its <see cref="BlobSweep.Grace"/>) and that nothing in the working set holds any
+    /// more is made young again: the touch moves it past the sweep's cutoff and conflicts with a sweep deleting it at the
+    /// same time. One the working set still holds can't be released while the gate is held, since every sweep of this
+    /// process takes it; only a process whose working set is behind another's removals is left to the check above.
     /// </summary>
     private async Task RequireBlobsAsync(IClientSessionHandle session, UnlockedVault vault, IEnumerable<(VaultPath Path, string BlobId)> named, CancellationToken ct)
     {
         var wanted = named.DistinctBy(n => n.BlobId).ToList();
         if (wanted.Count == 0) return;
         var ids = wanted.Select(n => TryParseBlobId(n.BlobId, out var id) ? id : []).Where(id => id.Length > 0).ToList();
-        var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.In(d => d.BlobId, ids);
-        var touched = await catalog.Blobs.UpdateManyAsync(session, filter, Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now), cancellationToken: ct);
-        if (touched.MatchedCount == wanted.Count) return;
+        var f = Builders<BlobDocument>.Filter;
+        var filter = f.Eq(d => d.Vault, vault.Id) & f.In(d => d.BlobId, ids);
+        var stored = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        var found = await catalog.Blobs.Find(session, filter, new FindOptions { Hint = BlobTimeIndex })
+            .Project(new BsonDocument { { "bid", 1 }, { "at", 1 }, { "_id", 0 } })
+            .ToListAsync(ct);
+        foreach (var doc in found) stored[Convert.ToBase64String(doc["bid"].AsByteArray)] = doc["at"].ToUniversalTime();
 
-        var stored = (await catalog.Blobs.Find(session, filter).Project(d => d.BlobId).ToListAsync(ct)).Select(Convert.ToBase64String).ToHashSet(StringComparer.Ordinal);
-        var missing = wanted.Where(n => !stored.Contains(n.BlobId)).Select(n => n.Path.Value).Distinct().Order(StringComparer.Ordinal);
-        throw new ContentMissingException($"The content of {string.Join(", ", missing)} is no longer stored (it was removed meanwhile); nothing was written.");
+        if (wanted.Where(n => !stored.ContainsKey(n.BlobId)).Select(n => n.Path.Value).Distinct().Order(StringComparer.Ordinal).ToList() is { Count: > 0 } missing)
+        {
+            throw new ContentMissingException($"The content of {string.Join(", ", missing)} is no longer stored (it was removed meanwhile); nothing was written. Try again.");
+        }
+
+        var soon = catalog.Now - BlobSweep.Grace / 2;
+        var old = stored.Where(b => b.Value < soon).Select(b => b.Key).ToList();
+        if (old.Count == 0) return;
+        var held = BlobSweep.References(
+            vault.Attachments.Values.Select(a => a.Attachment), vault.AttachmentTrash.Select(t => t.Trashed), vault.Checkpoints.Select(c => c.Checkpoint));
+        var touch = old.Where(id => !held.Contains(id)).Select(Convert.FromBase64String).ToList();
+        if (touch.Count == 0) return;
+        var touched = await catalog.Blobs.UpdateManyAsync(
+            session, f.Eq(d => d.Vault, vault.Id) & f.In(d => d.BlobId, touch), Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now), cancellationToken: ct);
+        if (touched.MatchedCount < touch.Count)
+        {
+            throw new ContentMissingException("The content of a file is no longer stored (it was removed meanwhile); nothing was written. Try again.");
+        }
     }
 
     /// <summary>As <see cref="GetAsync"/>, a damaged path is read from MongoDB again first.</summary>
@@ -327,22 +353,18 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
 
     /// <summary>
     /// The blob read from MongoDB and opened; <see cref="VaultUnavailableException"/> if it doesn't open (changed or
-    /// damaged outside Kumbu²). Each read takes one of the server's <see cref="VaultCatalog.FileReads"/> slots, waiting
-    /// for one if all are taken, and gives it back when the stream is disposed: a gallery of large photos asked for at
-    /// once holds only that many in memory.
+    /// damaged outside Kumbu²). The read and the decryption, when a file costs about twice its size, take one of the
+    /// server's <see cref="VaultCatalog.FileReads"/> slots, waiting for one if all are taken; the slot goes back before
+    /// the bytes are returned, so a slow download holds only its own bytes, never a slot.
     /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v || !TryParseBlobId(blobId, out var id)) return null;
         await catalog.FileReads.WaitAsync(ct);
-        var held = false;
         try
         {
             var doc = await catalog.Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id)).FirstOrDefaultAsync(ct);
-            if (doc is null) return null;
-            var stream = new HeldStream(v.OpenBlob(doc), catalog.FileReads);
-            held = true;
-            return stream;
+            return doc is null ? null : new MemoryStream(v.OpenBlob(doc), writable: false);
         }
         catch (Exception e) when (e is System.Security.Cryptography.CryptographicException or InvalidDataException)
         {
@@ -350,19 +372,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }
         finally
         {
-            if (!held) catalog.FileReads.Release();
-        }
-    }
-
-    /// <summary>A blob's bytes, read only, that give their read slot back once disposed.</summary>
-    private sealed class HeldStream(byte[] bytes, SemaphoreSlim slot) : MemoryStream(bytes, writable: false)
-    {
-        private int _released;
-
-        protected override void Dispose(bool disposing)
-        {
-            if (Interlocked.Exchange(ref _released, 1) == 0) slot.Release();
-            base.Dispose(disposing);
+            catalog.FileReads.Release();
         }
     }
 

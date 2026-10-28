@@ -112,7 +112,7 @@ public static class HistoryApi
                 operation.Responses ??= [];
                 operation.Responses["200"] = OneOf(context, "A note's restore: NoteView; an attachment's: FileStateView", "NoteView", "FileStateView");
                 operation.Responses["409"] = OneOf(
-                    context, "A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError",
+                    context, "A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError (e.g. the file's content was removed meanwhile)",
                     "ConflictView", "FileConflictView", "ApiError");
                 return Task.CompletedTask;
             });
@@ -127,6 +127,19 @@ public static class HistoryApi
         api.MapPost("/vaults/{vault}/checkpoints/{name}/restore", RestoreCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);
         api.MapGet("/vaults/{vault}/activity", ActivityAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+    }
+
+    /// <summary>A restore whose file's content was removed while it ran wrote nothing: a 409, as any lost race.</summary>
+    private static async Task<ShellResult> Gone(Func<Task<ShellResult>> restore)
+    {
+        try
+        {
+            return await restore();
+        }
+        catch (ContentMissingException e)
+        {
+            throw new ApiException(StatusCodes.Status409Conflict, e.Message);
+        }
     }
 
     /// <summary>A JSON response that is one of the named component schemas.</summary>
@@ -153,7 +166,7 @@ public static class HistoryApi
         if (notePath.IsAttachment) return await RestoreAttachmentAsync(notePath, body, store, writer, ct);
         var existing = await store.GetAsync(notePath, ct);
         if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return NoteApi.Conflict(existing, body.Expected);
-        var result = await writer.RestoreAsync(notePath, body.Version, ct);
+        var result = await Gone(() => writer.RestoreAsync(notePath, body.Version, ct));
         if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(await NoteView.FromAsync(now, kinds, ct));
 
         // What was asked for exists (in the history, or in the trash with a note at its path now), so it is the
@@ -172,7 +185,7 @@ public static class HistoryApi
         var attachments = writer.ForAttachments() ?? throw ApiErrors.NotFound("This server keeps no attachments.");
         var existing = await files.GetAttachmentAsync(path, ct);
         if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return FileApi.Conflict(existing, body.Expected);
-        var result = await attachments.RestoreAsync(path.Value, body.Version, ct);
+        var result = await Gone(() => attachments.RestoreAsync(path.Value, body.Version, ct));
         if (!result.IsError && await files.GetAttachmentAsync(path, ct) is { } now) return TypedResults.Ok(FileStateView.Of(now));
 
         // As for a note: what was asked for exists, so it is the state of the vault that stood in the way.

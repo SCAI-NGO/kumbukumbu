@@ -3532,7 +3532,7 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError */
+                /** @description A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError (e.g. the file's content was removed meanwhile) */
                 409: {
                     headers: {
                         [name: string]: unknown;
