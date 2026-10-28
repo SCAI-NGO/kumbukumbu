@@ -265,6 +265,74 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         AssertDated("Kumbu² export {date}.zip", disposition.FileNameStar, before);
     }
 
+    /// <summary>Overwrites the stored note at <paramref name="path"/> as a change outside Kumbu² would, and has the
+    /// server read the vault again, which then finds it damaged.</summary>
+    private async Task DamageNoteAsync(RestClient user, string path)
+    {
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var notes = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("notes");
+        Assert.True(Kumbu.Core.Paths.VaultPath.TryParse($"/{user.Vault}/{path}", out var notePath));
+        var filter = Builders<BsonDocument>.Filter.Eq("vault", vault.Id) & Builders<BsonDocument>.Filter.Eq("pid", new BsonBinaryData(vault.PathId(notePath)));
+        var updated = await notes.UpdateOneAsync(filter, Builders<BsonDocument>.Update.Set("blob", new BsonBinaryData(new byte[64])), cancellationToken: Ct);
+        Assert.Equal(1, updated.ModifiedCount);
+        catalog.Forget(vault, new InvalidOperationException("test: read the damaged vault again"));
+    }
+
+    [Fact]
+    public async Task An_export_with_a_damaged_note_completes_and_counts_it_in_MISSING_txt()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        await user.CreateAsync("p/b.md", "b\n");
+        await user.CreateFileAsync("c.png", Png(2, 2));
+        using var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Ideen" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var written = await user.SendAsync(HttpMethod.Put, "/api/notes/Ideen/x.md", new { content = "x\n" });
+        Assert.Equal(HttpStatusCode.Created, written.StatusCode);
+
+        // Nothing missing: no MISSING.txt.
+        using (var clean = await ExportAsync(user, "/api/export?vault=Arbeit&vault=Ideen"))
+        using (var zip = await ZipAsync(clean))
+        {
+            Assert.Null(zip.GetEntry(ExportApi.MissingName));
+            Assert.Equal(["Arbeit/", "Arbeit/a.md", "Arbeit/c.png", "Arbeit/p/b.md", "Ideen/", "Ideen/x.md"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        }
+
+        await DamageNoteAsync(user, "p/b.md");
+
+        using (var damaged = await ExportAsync(user, "/api/export?vault=Arbeit&vault=Ideen"))
+        using (var zip = await ZipAsync(damaged))
+        {
+            Assert.Equal(
+                ["Arbeit/", "Arbeit/a.md", "Arbeit/c.png", "Ideen/", "Ideen/x.md", "MISSING.txt"],
+                zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+            Assert.Equal("a\n", Read(zip.GetEntry("Arbeit/a.md")!));
+            Assert.Equal("x\n", Read(zip.GetEntry("Ideen/x.md")!));
+            var missing = Read(zip.GetEntry("MISSING.txt")!);
+            Assert.StartsWith("Kumbu² couldn't read some notes or files of this export", missing, StringComparison.Ordinal);
+            Assert.EndsWith("\n\nArbeit: 1 note or file\n", missing, StringComparison.Ordinal);
+            Assert.DoesNotContain("Ideen", missing, StringComparison.Ordinal);
+        }
+
+        // One vault alone: MISSING.txt beside its folder.
+        using (var one = await ExportAsync(user, $"/api/vaults/{user.Vault}/export"))
+        using (var zip = await ZipAsync(one))
+        {
+            Assert.Equal(["Arbeit/", "Arbeit/a.md", "Arbeit/c.png", "MISSING.txt"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void MISSING_txt_counts_per_vault()
+    {
+        Assert.Equal(
+            "Kumbu² couldn't read some notes or files of this export, so this ZIP is without them: they were changed or damaged outside Kumbu². "
+            + "Their names are stored with what doesn't open, so they are counted here by vault, not named; the server log has details.\n\n"
+            + "Arbeit: 1 note or file\nIdeen: 3 notes or files\n",
+            ExportApi.MissingText([("Arbeit", 1), ("Ideen", 3)]));
+    }
+
     [Fact]
     public async Task Export_is_for_sessions_only()
     {
