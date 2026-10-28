@@ -18,9 +18,9 @@ public class ShellObserverTests
         public void Timed(string command, TimeSpan elapsed) => Timings.Add(command);
     }
 
-    private static (Shell Shell, Recorder Seen) Make()
+    private static (Shell Shell, Recorder Seen) Make(InMemoryNoteStore? store = null)
     {
-        var store = new InMemoryNoteStore(("/V/a.md", "one\ntwo\n"));
+        store ??= new InMemoryNoteStore(("/V/a.md", "one\ntwo\n"));
         var time = new FakeTimeProvider(InMemoryNoteStore.Seeded.AddDays(1));
         var seen = new Recorder();
         var shell = new Shell(store, new NoteWriter(store, time, new FixedCaller(Writers.Dev)), new NoteMover(store, time, new FixedCaller(Writers.Dev)), observer: seen);
@@ -61,12 +61,13 @@ public class ShellObserverTests
     }
 
     [Fact]
-    public void The_shell_names_its_commands_in_the_order_of_help()
+    public async Task A_stage_that_throws_is_still_timed()
     {
-        var (shell, _) = Make();
+        var store = new InMemoryNoteStore(("/V/a.md", "one\ntwo\n")) { Contended = _ => throw new InvalidOperationException("unexpected") };
+        var (shell, seen) = Make(store);
 
-        Assert.Equal("ls", shell.CommandNames.First());
-        Assert.Equal("help", shell.CommandNames.Last());
-        Assert.Contains("rg", shell.CommandNames);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => shell.RunAsync("rm /V/a.md", CancellationToken.None));
+
+        Assert.Equal(["rm"], seen.Timings);
     }
 }

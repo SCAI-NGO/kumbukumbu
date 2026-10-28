@@ -29,8 +29,23 @@ internal static class ToolResult
     public static async Task<CallToolResult> RunAsync(KumbuMetrics.Tool tool, Func<Task<ShellResult>> body)
     {
         var started = Stopwatch.GetTimestamp();
-        var (result, kind) = await RunBodyAsync(body);
-        KumbuMetrics.ToolCalled(tool, Stopwatch.GetElapsedTime(started));
+        ShellResult result;
+        KumbuMetrics.ToolError kind;
+        try
+        {
+            (result, kind) = await RunBodyAsync(body);
+        }
+        catch
+        {
+            // Unexpected: the MCP library answers it; it still counts as a call that failed.
+            KumbuMetrics.ToolFailed(tool, KumbuMetrics.ToolError.Other);
+            throw;
+        }
+        finally
+        {
+            KumbuMetrics.ToolCalled(tool, Stopwatch.GetElapsedTime(started));
+        }
+
         if (result.IsError)
         {
             KumbuMetrics.ToolFailed(tool, kind);

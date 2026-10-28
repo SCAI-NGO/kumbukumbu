@@ -55,6 +55,38 @@ public sealed class ToolMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_tool_body_that_throws_is_counted_and_rethrown()
+    {
+        const string calls = "kumbu_mcp_tool_calls_total{tool=\"board\"}";
+        const string durations = "kumbu_mcp_tool_duration_seconds_count{tool=\"board\"}";
+        const string errors = "kumbu_mcp_tool_errors_total{tool=\"board\",kind=\"other\"}";
+        var before = await Scrape.TextAsync(app);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Kumbu.Server.Mcp.ToolResult.RunAsync(KumbuMetrics.Tool.Board, () => throw new InvalidOperationException("unexpected")));
+
+        var after = await Scrape.TextAsync(app);
+        Assert.True(Scrape.Value(after, calls) >= Scrape.Value(before, calls) + 1);
+        Assert.True(Scrape.Value(after, durations) >= Scrape.Value(before, durations) + 1);
+        Assert.True(Scrape.Value(after, errors) >= Scrape.Value(before, errors) + 1);
+    }
+
+    [Fact]
+    public async Task A_rest_board_conflict_is_counted()
+    {
+        const string series = "kumbu_write_conflicts_total{via=\"api\"}";
+        var user = await Api.RestClient.NewAsync(app.PublicApi, "Work");
+        await user.CreateAsync("Board/Board.md", "---\nkumbu-board: 1\ncolumns: [Ideas, Doing]\n---\n# Roadmap\n");
+        await user.CreateAsync("Board/Task.md", "---\ncolumn: Ideas\nrank: a1\n---\nText.\n");
+        var before = Scrape.Value(await Scrape.TextAsync(app), series);
+
+        using var taken = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/board/cards", new { title = "Task", column = "Ideas" });
+
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, taken.StatusCode);
+        Assert.True(Scrape.Value(await Scrape.TextAsync(app), series) >= before + 1);
+    }
+
+    [Fact]
     public async Task A_rest_conflict_is_counted()
     {
         const string series = "kumbu_write_conflicts_total{via=\"api\"}";

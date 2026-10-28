@@ -52,9 +52,6 @@ public sealed class Shell
         }
     }
 
-    /// <summary>The names of the commands, in the order of the help list.</summary>
-    public IReadOnlyCollection<string> CommandNames => _commands.Keys;
-
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
@@ -96,14 +93,21 @@ public sealed class Shell
 
             var args = stage.Skip(1).ToList();
             var started = System.Diagnostics.Stopwatch.GetTimestamp();
-            // "rg -- --help" searches for "--help"; only an option before "--" asks for help.
-            if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(Help.Of(command));
-            else if (command is not (DiffCommand or Restore) && TakeCheckpoint(name, args, out var checkpoint, out var rest, out var optionError))
+            try
             {
-                result = optionError ?? await RunInCheckpointAsync(name, checkpoint!, rest, input, ct);
+                // "rg -- --help" searches for "--help"; only an option before "--" asks for help.
+                if (args.TakeWhile(a => a != "--").Contains("--help")) result = ShellResult.Ok(Help.Of(command));
+                else if (command is not (DiffCommand or Restore) && TakeCheckpoint(name, args, out var checkpoint, out var rest, out var optionError))
+                {
+                    result = optionError ?? await RunInCheckpointAsync(name, checkpoint!, rest, input, ct);
+                }
+                else result = await command.RunAsync(args, input, ct);
             }
-            else result = await command.RunAsync(args, input, ct);
-            _observer?.Timed(name, System.Diagnostics.Stopwatch.GetElapsedTime(started));
+            finally
+            {
+                _observer?.Timed(name, System.Diagnostics.Stopwatch.GetElapsedTime(started));
+            }
+
             if (stages.Count == 1 && command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.

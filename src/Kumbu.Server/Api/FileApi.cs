@@ -238,7 +238,7 @@ public static class FileApi
         if (!result.IsError) return TypedResults.NoContent();
         var now = await files.GetAttachmentAsync(filePath, ct) ?? throw await NoteApi.MissingAsync(store, filePath, ct);
         if (version is not null && now.Version != version) return Conflict(now, version);
-        throw new ApiException(StatusCodes.Status409Conflict, result.Output);
+        throw ConflictWithoutState(result.Output);
     }
 
     private static ApiException ConflictWithoutState(string message)
