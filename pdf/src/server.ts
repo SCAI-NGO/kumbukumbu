@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import type { Analysis } from "./analyse.js";
 import type { RenderedImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
-import { type Job, Pool } from "./pool.js";
+import { Pool, type Reservation } from "./pool.js";
 import type { RenderedPage } from "./render.js";
 import type { Crop, Target } from "./steps.js";
 
@@ -36,8 +36,11 @@ class TooLarge extends Error {}
 
 const bad = (message: string) => new PdfError(message, "bad_request");
 
-export function createSidecar(pool: Pool): Server {
-  return createServer((req, res) => {
+export type Limits = { renderMs: number; analysisMs: number };
+
+export function createSidecar(pool: Pool, limits: Partial<Limits> = {}): Server {
+  const ms: Limits = { renderMs: RENDER_MS, analysisMs: ANALYSIS_MS, ...limits };
+  const server = createServer((req, res) => {
     const started = Date.now();
     const path = (req.url ?? "/").split("?")[0];
     const route = req.method === "GET" && path === "/healthz" ? path : req.method === "POST" && Object.hasOwn(ROUTES, path!) ? path! : undefined;
@@ -46,48 +49,74 @@ export function createSidecar(pool: Pool): Server {
     if (!route) return error(res, 404, "not_found", "There is no such route.");
     if (route === "/healthz") return json(res, 200, { status: "ok" });
 
-    handle(route, req, pool).then(
+    handle(route, req, pool, ms).then(
       (send) => send(res),
       (e: unknown) => {
-        if (e instanceof TooLarge) {
-          // Stop reading: the rest of the body is not wanted.
+        // Answered before the body is in (busy, too large, bad parameters): the rest is not wanted.
+        if (!req.complete) {
           res.setHeader("Connection", "close");
           res.on("finish", () => req.destroy());
-          return error(res, 413, "too_large", `The body is larger than ${MAX_BODY / 1024 / 1024} MiB.`);
         }
+        if (e instanceof TooLarge) return error(res, 413, "too_large", `The body is larger than ${MAX_BODY / 1024 / 1024} MiB.`);
         if (e instanceof PdfError && Object.hasOwn(STATUS, e.code)) return error(res, STATUS[e.code]!, e.code, e.message);
         // Nothing of an unexpected error's text: it may quote the file.
         error(res, 500, "failed", "The sidecar could not process the request.");
       },
     );
   });
+  // Every connection can carry a job or wait for one, plus a margin for health checks; a 16 MiB
+  // body over the compose network takes well under a minute.
+  server.maxConnections = pool.capacity + 16;
+  server.headersTimeout = 20_000;
+  server.requestTimeout = 60_000;
+  return server;
 }
 
 type Send = (res: ServerResponse) => void;
+// A route checks its parameters first, then runs with the body in the place reserved for it.
+type Route = (q: URLSearchParams, ms: Limits) => (body: Uint8Array, slot: Reservation) => Promise<Send>;
 
-const ROUTES: Record<string, (q: URLSearchParams, body: Uint8Array, pool: Pool) => Promise<Send>> = {
-  "/analyse": async (q, body, pool) => {
+const ROUTES: Record<string, Route> = {
+  "/analyse": (q, ms) => {
     const maxPages = q.has("maxPages") ? integer(q, "maxPages", 1, MAX_PAGES) : MAX_PAGES;
-    const a = await pool.run<Analysis>({ kind: "analyse", bytes: body, maxPages }, ANALYSIS_MS, analysisLimit);
-    return (res) => json(res, 200, a);
+    return async (body, slot) => {
+      const a = await slot.run<Analysis>({ kind: "analyse", bytes: body, maxPages }, ms.analysisMs, analysisLimit);
+      return (res) => json(res, 200, a);
+    };
   },
-  "/render/page": async (q, body, pool) => {
-    const job: Job = { kind: "page", bytes: body, page: integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target: target(q), crop: crop(q) };
-    const r = await pool.run<RenderedPage>(job, RENDER_MS);
-    return (res) => image(res, r, { "X-Kumbu-Page-Width": r.pageWidth, "X-Kumbu-Page-Height": r.pageHeight });
+  "/render/page": (q, ms) => {
+    const [page, t, c] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target(q), crop(q)];
+    return async (body, slot) => {
+      const r = await slot.run<RenderedPage>({ kind: "page", bytes: body, page, target: t, crop: c }, ms.renderMs);
+      return (res) => image(res, r, { "X-Kumbu-Page-Width": r.pageWidth, "X-Kumbu-Page-Height": r.pageHeight });
+    };
   },
-  "/render/image": async (q, body, pool) => {
-    const r = await pool.run<RenderedImage>({ kind: "image", bytes: body, target: target(q), crop: crop(q) }, RENDER_MS);
-    return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight });
+  "/render/image": (q, ms) => {
+    const [t, c] = [target(q), crop(q)];
+    return async (body, slot) => {
+      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c }, ms.renderMs);
+      return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight });
+    };
   },
 };
 
-async function handle(route: string, req: IncomingMessage, pool: Pool): Promise<Send> {
+// The place in the pool is taken before the body is read, so a full pool answers busy at once and
+// bodies in memory never outnumber the jobs the pool holds.
+async function handle(route: string, req: IncomingMessage, pool: Pool, ms: Limits): Promise<Send> {
   const q = new URL(req.url ?? "/", "http://sidecar").searchParams;
-  const body = await read(req);
-  return ROUTES[route]!(q, body, pool);
+  const run = ROUTES[route]!(q, ms);
+  const slot = pool.reserve();
+  let body: Uint8Array;
+  try {
+    body = await read(req);
+  } catch (e) {
+    slot.release();
+    throw e;
+  }
+  return run(body, slot);
 }
 
+// The body in a buffer of its own (not Node's shared pool), so it can be transferred to the worker.
 function read(req: IncomingMessage): Promise<Uint8Array> {
   const declared = Number(req.headers["content-length"]);
   if (declared > MAX_BODY) return Promise.reject(new TooLarge());
@@ -102,7 +131,15 @@ function read(req: IncomingMessage): Promise<Uint8Array> {
         reject(new TooLarge());
       } else pieces.push(piece);
     });
-    req.on("end", () => resolve(new Uint8Array(Buffer.concat(pieces))));
+    req.on("end", () => {
+      const body = new Uint8Array(new ArrayBuffer(size));
+      let at = 0;
+      for (const piece of pieces) {
+        body.set(piece, at);
+        at += piece.length;
+      }
+      resolve(body);
+    });
     req.on("error", reject);
   });
 }

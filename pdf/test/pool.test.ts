@@ -33,6 +33,29 @@ describe("Pool", () => {
     for (const r of running) await expect(r).rejects.toMatchObject({ code: "timeout" });
   });
 
+  it("counts a reservation against workers plus queue until it runs or is released", async () => {
+    pool = new Pool({ workers: 1, queue: 0, entry: stub });
+    const reservation = pool.reserve();
+    expect(() => pool!.reserve()).toThrowError(expect.objectContaining({ code: "busy" }));
+    await expect(pool.run(job({ kind: "echo", value: 1 }), 500)).rejects.toMatchObject({ code: "busy" });
+    reservation.release();
+    expect(await pool.reserve().run(job({ kind: "echo", value: 2 }), 5_000)).toBe(2);
+  });
+
+  it("keeps a timed-out worker's slot until its thread has gone", async () => {
+    pool = new Pool({ workers: 1, queue: 1, entry: stub });
+    await expect(pool.run(job({ kind: "hang" }), 100)).rejects.toMatchObject({ code: "timeout" });
+    expect(pool.threads).toBeLessThanOrEqual(1);
+    expect(await pool.run(job({ kind: "echo", value: "after" }), 5_000)).toBe("after");
+  });
+
+  it("transfers the job's bytes to the worker", async () => {
+    pool = new Pool({ workers: 1, queue: 0, entry: stub });
+    const bytes = new Uint8Array(1024);
+    await pool.run(job({ kind: "echo", value: 1, bytes }), 5_000);
+    expect(bytes.byteLength).toBe(0);
+  });
+
   it("extends the deadline by the page count a worker reports", async () => {
     pool = new Pool({ workers: 1, queue: 0, entry: stub });
     const extend = (pages: number) => 300 + pages * 100;

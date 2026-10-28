@@ -6,7 +6,7 @@ import { Pool } from "../src/pool.js";
 import { createSidecar } from "../src/server.js";
 import { chartPage, encryptedPdf, threePages } from "./fixtures.js";
 
-// The built worker: `pnpm test` builds before it runs vitest.
+// The built worker (vitest's global setup builds it).
 const entry = new URL("../dist/worker.js", import.meta.url);
 const pool = new Pool({ workers: 2, queue: 4, entry });
 const server = createSidecar(pool);
@@ -140,5 +140,50 @@ describe("server", () => {
     const r = await fetch(base + "/nothing");
     expect(r.status).toBe(404);
     expect((await post("/healthz", new Uint8Array(1))).status).toBe(404);
+  });
+});
+
+describe("server limits", () => {
+  const stub = new URL("./workers/stub.mjs", import.meta.url);
+  // A queue of one: a timed-out thread keeps its slot until it has gone, and the next job waits for it.
+  const limited = new Pool({ workers: 1, queue: 1, entry: stub });
+  const sidecar = createSidecar(limited, { analysisMs: 300 });
+  let url = "";
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => sidecar.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(sidecar.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => sidecar.close(resolve));
+    await limited.close();
+  });
+
+  it("answers 504 for a job past its limit, and then serves the next", async () => {
+    const r = await fetch(url + "/analyse", { method: "POST", body: new Uint8Array(10) });
+    expect(r.status).toBe(504);
+    expect(await r.json()).toMatchObject({ code: "timeout" });
+    expect((await fetch(url + "/healthz")).status).toBe(200);
+    const page = await fetch(`${url}/render/page?page=1&${medium}`, { method: "POST", body: new Uint8Array(10) });
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-kumbu-page-width")).toBe("1");
+  });
+
+  it("answers 503 at once when the pool is full, without waiting for the body", async () => {
+    const full = [1, 2].map(() => fetch(url + "/analyse", { method: "POST", body: new Uint8Array(10) }));
+    while (limited.load < 2) await new Promise((resolve) => setTimeout(resolve, 10));
+    // Headers and a first piece of a large body, the rest never sent.
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(url + "/analyse", { method: "POST", headers: { "content-length": 8 * 1024 * 1024 } }, (res) => {
+        res.resume();
+        resolve(res.statusCode!);
+      });
+      req.on("error", () => {});
+      req.write(new Uint8Array(64 * 1024));
+      setTimeout(() => reject(new Error("no answer while the body was pending")), 2_000);
+    });
+    expect(status).toBe(503);
+    for (const r of await Promise.all(full)) expect(r.status).toBe(504);
   });
 });

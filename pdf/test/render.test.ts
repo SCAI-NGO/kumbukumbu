@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { encode } from "../src/encode.js";
 import { renderPage } from "../src/render.js";
 import { type Target, fit } from "../src/steps.js";
-import { A4, KB, LARGE, MEDIUM, SMALL, chartPage, noiseCanvas, photoPage, rotatedPage, threePages } from "./fixtures.js";
+import { A4, CROPPED_BOX, CROP_BOX, KB, LARGE, MEDIUM, ROTATED_BOX, SMALL, chartPage, cropBoxPage, noiseCanvas, photoPage, rotatedPage, threePages } from "./fixtures.js";
 
 const within = (r: { width: number; height: number }, t: Target) => {
   expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(t.longEdge);
@@ -17,6 +17,19 @@ async function pixel(data: Uint8Array, x: number, y: number) {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
   return [...ctx.getImageData(x, y, 1, 1).data];
+}
+
+// Crops a margin of 20 pt around a box (displayed points) and finds its colour inside, white outside.
+async function expectBox(pdf: Uint8Array, box: { x: number; y: number; w: number; h: number }, colour: number[]) {
+  const margin = 20;
+  const r = await renderPage(pdf, 1, MEDIUM, { x: box.x - margin, y: box.y - margin, w: box.w + 2 * margin, h: box.h + 2 * margin });
+  const scale = r.width / (box.w + 2 * margin);
+  const at = (x: number, y: number) => pixel(r.data, Math.round(x * scale), Math.round(y * scale));
+  const [red, green, blue] = await at(margin + box.w / 2, margin + box.h / 2);
+  for (const [got, want] of [[red, colour[0]], [green, colour[1]], [blue, colour[2]]]) expect(Math.abs(got! - want!)).toBeLessThanOrEqual(3);
+  // Just outside each edge of the box.
+  for (const [x, y] of [[margin / 2, margin + box.h / 2], [margin + box.w + margin / 2, margin + box.h / 2], [margin + box.w / 2, margin / 2], [margin + box.w / 2, margin + box.h + margin / 2]])
+    expect(await at(x!, y!)).toEqual([255, 255, 255, 255]);
 }
 
 describe("fit", () => {
@@ -55,6 +68,22 @@ describe("renderPage", () => {
     expect(bar[2]).toBeGreaterThan(150);
     expect(bar[0]).toBeLessThan(100);
     expect(await pixel(r.data, Math.round(14 * scale), Math.round(10 * scale))).toEqual([255, 255, 255, 255]);
+  });
+
+  it("crops a rotated page in displayed points", async () => {
+    // Rotated by 90° clockwise: the box shows at x = PDF y, y = PDF x.
+    const box = { x: ROTATED_BOX.y, y: ROTATED_BOX.x, w: ROTATED_BOX.height, h: ROTATED_BOX.width };
+    await expectBox(await rotatedPage(), box, [204, 51, 51]);
+  });
+
+  it("crops a page from its CropBox, not its MediaBox", async () => {
+    const box = {
+      x: CROPPED_BOX.x - CROP_BOX.x,
+      y: CROP_BOX.y + CROP_BOX.height - (CROPPED_BOX.y + CROPPED_BOX.height),
+      w: CROPPED_BOX.width,
+      h: CROPPED_BOX.height,
+    };
+    await expectBox(await cropBoxPage(), box, [51, 153, 51]);
   });
 
   it("caps the scale at 600 dpi for a tiny region", async () => {

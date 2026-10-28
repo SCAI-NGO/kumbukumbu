@@ -6,3 +6,4 @@ tsconfig.test.json
 vitest.config.ts
 Dockerfile
 .dockerignore
+vitest.setup.ts
