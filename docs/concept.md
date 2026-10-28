@@ -160,7 +160,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 ### OAuth flow (for reference; as built in step 10 the client uses the connection's own address `/mcp/c/{id}`, the endpoints are `/oauth/authorize` and `/oauth/token`, and clients identify themselves by a client metadata document, with dynamic registration as a fallback; `docs/security-architecture.md` §6)
 1. Client calls `/mcp` without token → `401` pointing to metadata.
 2. Client reads `/.well-known/…` metadata → finds Kumbu² as authorization server.
-3. Client registers itself automatically → `client_id` (verify current MCP spec mechanism).
+3. Client identifies itself: its `client_id` is the HTTPS URL of a client metadata document, which Kumbu² fetches; a client without one registers itself (`POST /oauth/register`, dynamic client registration) and gets a `client_id`, never a secret.
 4. Client opens the **user's browser** at `/authorize` with `client_id`, redirect URI and **PKCE** challenge.
 5. User logs in **at Kumbu²** (client never sees the password) and consents: which vaults, read/write.
 6. Kumbu² redirects back to the client's callback with a one-time **authorization code**.

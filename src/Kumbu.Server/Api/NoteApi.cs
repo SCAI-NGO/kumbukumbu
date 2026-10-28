@@ -491,11 +491,6 @@ public static class NoteApi
     }
 
     /// <summary>
-    /// <c>mode</c>: <c>hybrid</c> (default) and <c>meaning</c> rank as <c>semsearch</c> and <c>semsearch --meaning</c>
-    /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
-    /// <c>path</c> narrows the search to a vault, folder or note; <c>n</c> results, 1 to 50, default 10.
-    /// </summary>
-    /// <summary>
     /// Search in earlier versions: the sections of the notes' history (not their current text) that hold every word of
     /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
     /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
@@ -532,6 +527,11 @@ public static class NoteApi
         return TypedResults.Ok(views.ToArray());
     }
 
+    /// <summary>
+    /// <c>mode</c>: <c>hybrid</c> (default) and <c>meaning</c> rank as <c>semsearch</c> and <c>semsearch --meaning</c>
+    /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
+    /// <c>path</c> narrows the search to a vault, folder or note; <c>n</c> results, 1 to 50, default 10.
+    /// </summary>
     private static async Task<Ok<SearchView>> SearchAsync(string? q, string? mode, string? path, int? n, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
