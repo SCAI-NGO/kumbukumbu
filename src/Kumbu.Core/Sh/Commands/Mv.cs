@@ -27,7 +27,8 @@ public sealed class Mv(NoteMover mover) : ICommand
           the vault's root, as /Folder/Note%20name.md, its text, heading and title kept. The rest of
           each note stays as it was. The output names the notes it changed.
           An attachment (an image or a PDF) moves the same way, its links and embeds with it
-          (![[shot.png]], ![alt](/Screens/shot.png)); its new name keeps its extension.
+          (![[shot.png]], ![alt](/Screens/shot.png)); its new name keeps the extension of its format
+          (shot.jpg may become shot.jpeg, never shot.png: a new name doesn't change the bytes).
         mv [--keep-links] <folder>/ <target>
           Move a folder with every note and attachment below it, keeping the structure: into
           <target> if that folder exists, otherwise renamed to <target>. The '/' after the folder

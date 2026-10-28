@@ -102,13 +102,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             return ShellResult.Error($"mv: notes can't move between vaults ({source.Vault} → {target.Vault}); a vault is its own space");
         }
 
-        if (AttachmentFormat.ForPath(source) is { } format)
+        if (AttachmentFormat.ForPath(source) is not null)
         {
-            // The bytes don't change, so neither may the type the name gives them (.jpg and .jpeg are one).
-            if (AttachmentFormat.ForPath(target)?.MediaType != format.MediaType)
-            {
-                return ShellResult.Error($"mv: {target.Value}: {source.Name} is {format.MediaType}; its new name must keep its extension");
-            }
+            if (AttachmentFormat.RenameProblem(source, target) is { } renameProblem) return ShellResult.Error($"mv: {target.Value}: {renameProblem}");
 
             if (NoteNames.NameProblem(target) is { } nameProblem) return ShellResult.Error($"mv: {target.Value}: {nameProblem}");
         }

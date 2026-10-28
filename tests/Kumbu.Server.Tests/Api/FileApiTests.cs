@@ -92,6 +92,8 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.True(get.Headers.CacheControl!.NoStore);
         Assert.Equal("inline", get.Content.Headers.ContentDisposition!.DispositionType);
         Assert.Equal($"\"{state["version"]!.GetValue<string>()}\"", get.Headers.ETag!.Tag);
+        // Opened in a tab of its own, the file runs nothing at the app's origin.
+        Assert.Equal("sandbox; default-src 'none'; frame-ancestors 'none'", get.Headers.GetValues("Content-Security-Policy").Single());
 
         // A PDF too, and an API key with read access reads it.
         await user.CreateFileAsync("report.pdf", Pdf);
@@ -398,6 +400,27 @@ public sealed class FileApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_move_that_changes_the_files_format_by_name_is_a_400()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("shot.png", Png(4, 4));
+
+        using var refused = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/shot.jpg" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Equal(
+            "shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is).", await RestClient.ErrorAsync(refused));
+        using var kept = await user.GetAsync(user.Url("shot.png", "files"));
+        Assert.Equal("image/png", kept.Content.Headers.ContentType!.MediaType);
+        using var none = await user.GetAsync(user.Url("shot.jpg", "files"));
+        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+
+        // Into a folder, the name stays: allowed.
+        using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/img/" });
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+    }
+
+    [Fact]
     public async Task Activity_and_checkpoints_include_attachments()
     {
         var user = await UserAsync();
@@ -426,10 +449,27 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, held.StatusCode);
         Assert.Equal(bytes, await held.Content.ReadAsByteArrayAsync(Ct));
         Assert.Equal("image/png", held.Content.Headers.ContentType!.MediaType);
+        Assert.Equal(Security.FileContentPolicy, held.Headers.GetValues("Content-Security-Policy").Single());
 
         using var preview = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/before/preview");
         var change = Assert.Single((await JsonAsync(preview))["changes"]!.AsArray());
         Assert.Equal("back", change!["kind"]!.GetValue<string>());
         Assert.Equal("image", change["fileKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_file_whose_bytes_are_gone_is_a_500_not_a_404()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("shot.png", Png(4, 4));
+        // Removed outside Kumbu²: the record stays, its blob doesn't.
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs").DeleteManyAsync(Builders<BsonDocument>.Filter.Eq("vault", vault.Id), Ct);
+
+        using var get = await user.GetAsync(user.Url("shot.png", "files"));
+
+        // A client takes a 404 for a deletion: this file exists, its content is what is missing.
+        Assert.Equal(HttpStatusCode.InternalServerError, get.StatusCode);
+        Assert.Contains("The content of /Arbeit/shot.png doesn't open", await RestClient.ErrorAsync(get), StringComparison.Ordinal);
     }
 }

@@ -26,6 +26,13 @@ public sealed class SameOriginFramesMetadata
     public static readonly SameOriginFramesMetadata Instance = new();
 }
 
+/// <summary>Marks an endpoint that serves an attachment's bytes: its responses get <see cref="Security.FileContentPolicy"/>
+/// instead of the app's policy, so a file opened in a tab of its own runs nothing at the app's origin.</summary>
+public sealed class FileContentMetadata
+{
+    public static readonly FileContentMetadata Instance = new();
+}
+
 /// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints.</summary>
 public static class Security
 {
@@ -45,6 +52,13 @@ public static class Security
 
     /// <summary>The same, for an endpoint marked <see cref="SameOriginFramesMetadata"/>: only its own origin may frame it.</summary>
     public static readonly string SameOriginFramesPolicy = ContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors 'self'", StringComparison.Ordinal);
+
+    /// <summary>
+    /// For an attachment's bytes (<see cref="FileContentMetadata"/>): a document of its own origin that may load nothing
+    /// and run nothing, and that no page may frame. It applies only when the file is opened as a page; the web app
+    /// fetches files and shows them through object URLs, which this policy doesn't reach.
+    /// </summary>
+    public const string FileContentPolicy = "sandbox; default-src 'none'; frame-ancestors 'none'";
 
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
     public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
@@ -71,9 +85,10 @@ public static class Security
                 var headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
                 headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
-                headers.ContentSecurityPolicy = context.GetEndpoint()?.Metadata.GetMetadata<SameOriginFramesMetadata>() is null
-                    ? ContentSecurityPolicy
-                    : SameOriginFramesPolicy;
+                var metadata = context.GetEndpoint()?.Metadata;
+                headers.ContentSecurityPolicy = metadata?.GetMetadata<FileContentMetadata>() is not null ? FileContentPolicy
+                    : metadata?.GetMetadata<SameOriginFramesMetadata>() is not null ? SameOriginFramesPolicy
+                    : ContentSecurityPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.

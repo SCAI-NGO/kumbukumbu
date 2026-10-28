@@ -111,8 +111,8 @@ public class NoteMoverTests
     }
 
     [Theory]
-    [InlineData("/W/Screens/shot.png", "/W/Screens/shot.jpg", "mv: /W/Screens/shot.jpg: shot.png is image/png; its new name must keep its extension")]
-    [InlineData("/W/Screens/shot.png", "/W/Screens/shot.md", "mv: /W/Screens/shot.md: shot.png is image/png; its new name must keep its extension")]
+    [InlineData("/W/Screens/shot.png", "/W/Screens/shot.jpg", "mv: /W/Screens/shot.jpg: shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)")]
+    [InlineData("/W/Screens/shot.png", "/W/Screens/shot.md", "mv: /W/Screens/shot.md: shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)")]
     [InlineData("/W/Screens/shot.png", "/W/Docs/My report.pdf/x.png", "mv: /W/Docs/My report.pdf: Not a directory")]
     [InlineData("/W/Screens/shot.png", "/W/Trip/img/beach.png", "mv: /W/Trip/img/beach.png already exists; rm it first, or choose another name")]
     [InlineData("/W/Screens/shot.png", "/W/.hidden.png", "mv: /W/.hidden.png: '.hidden.png' starts with '.', which hides it in Obsidian")]

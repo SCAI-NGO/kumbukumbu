@@ -49,6 +49,15 @@ public sealed class Cat(INoteReader notes) : ICommand
             return Describe(path, attachment, version);
         }
 
+        // x.png#Layout: a section of an attachment, which has none (a '#' may also be part of a name, as in a#b.png).
+        for (var at = rest[0].IndexOf('#'); at > 0; at = rest[0].IndexOf('#', at + 1))
+        {
+            if (VaultPath.TryParse(rest[0][..at], out var file) && file.IsAttachment && await StoreAttachments.GetAsync(notes, file, ct) is not null)
+            {
+                return ShellResult.Error($"cat: {file.Value} is an attachment, which has no sections; 'cat {SectionLookup.Quote(file)}' describes it");
+            }
+        }
+
         return await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
     }
 

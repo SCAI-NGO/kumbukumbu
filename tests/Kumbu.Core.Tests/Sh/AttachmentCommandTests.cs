@@ -104,6 +104,10 @@ public class AttachmentCommandTests
         Assert.Equal("shot.png: image (PNG), 30×40, 4 KB", (await Run("cat /Work/shot.png")).Output);
         Assert.Equal("shot.png: image (PNG), 10×20, 2 KB", (await Run($"cat --version {first} /Work/shot.png")).Output);
         Assert.Contains("has no version", (await Run("cat --version 000000000000 /Work/shot.png")).Output);
+        // An attachment has no sections: the fragment is refused, not ignored.
+        var section = await Run("cat \"/Work/shot.png#Layout\"");
+        Assert.True(section.IsError);
+        Assert.Equal("cat: /Work/shot.png is an attachment, which has no sections; 'cat /Work/shot.png' describes it", section.Output);
     }
 
     [Fact]
@@ -147,6 +151,23 @@ public class AttachmentCommandTests
     }
 
     [Fact]
+    public async Task Mv_keeps_the_extension_of_the_files_format()
+    {
+        await Upload("/Work/shot.png", Png(64), (1, 1));
+        await Upload("/Work/photo.jpg", [0xFF, 0xD8, 0xFF, 0xE0, .. new byte[60]], (1, 1));
+
+        var refused = await Run("mv /Work/shot.png /Work/shot.jpg");
+
+        Assert.True(refused.IsError);
+        Assert.Equal("mv: /Work/shot.jpg: shot.png is a PNG image; its new name must end in .png (a new name doesn't change what the file is)", refused.Output);
+        Assert.Equal("shot.png: image (PNG), 1×1, 64 B", (await Run("cat /Work/shot.png")).Output);
+        Assert.Contains("must end in .jpg or .jpeg", (await Run("mv /Work/photo.jpg /Work/photo.webp")).Output);
+        // .jpg and .jpeg name one format.
+        Assert.False((await Run("mv /Work/photo.jpg /Work/photo.jpeg")).IsError);
+        Assert.Equal("photo.jpeg: image (JPEG), 1×1, 64 B", (await Run("cat /Work/photo.jpeg")).Output);
+    }
+
+    [Fact]
     public async Task Rm_of_an_unlinked_attachment_reports_no_links()
     {
         await Upload("/Work/unused.png", Png(64), (1, 1));
@@ -165,6 +186,9 @@ public class AttachmentCommandTests
         Assert.Equal(2, history.Length);
         Assert.Matches(@"^\w{12}  2026-10-27 13:00 UTC  dev  image 30×40 4 KB  \(current\)$", history[0]);
         Assert.Equal($"{first}  2026-10-27 11:00 UTC  dev  image 10×20 2 KB", history[1]);
+        // --since keeps the versions written since then, as for a note.
+        Assert.Equal(history[0], (await Run("history --since 1h /Work/shot.png")).Output);
+        Assert.Equal("(no versions of /Work/shot.png written since 2026-10-27 13:30 UTC)", (await Run("history --since 2026-10-27T13:30 /Work/shot.png")).Output);
 
         var folder = (await Run("history /Work")).Output;
         Assert.Contains("/Work/shot.png", folder);

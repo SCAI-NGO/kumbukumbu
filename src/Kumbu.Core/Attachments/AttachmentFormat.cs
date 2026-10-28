@@ -46,6 +46,17 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         return null;
     }
 
+    /// <summary>
+    /// Null when an attachment at <paramref name="source"/> may be named <paramref name="target"/>; otherwise why not.
+    /// Renaming doesn't change the bytes, so the new extension must name their format (.jpg and .jpeg are one).
+    /// </summary>
+    public static string? RenameProblem(VaultPath source, VaultPath target)
+    {
+        if (ForPath(source) is not { } format || ForPath(target)?.MediaType == format.MediaType) return null;
+        var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
+        return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
+    }
+
     /// <summary>What a path holds, as clients tell files apart: "image", "pdf", or "note" for anything else.</summary>
     public static string KindOf(string path) => ForName(path)?.Kind switch
     {

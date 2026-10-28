@@ -67,9 +67,13 @@ public static class FileApi
         api.MapDelete("/files/{vault}/{**path}", DeleteAsync).Errors(400, 401, 403, 404, 409, 503);
     }
 
-    /// <summary>Declares a 200 with an attachment's bytes, in any of the formats Kumbu² keeps.</summary>
+    /// <summary>Declares a 200 with an attachment's bytes, in any of the formats Kumbu² keeps, and a 500 for bytes that
+    /// are gone or don't open (<see cref="ContentMissingException"/>; never a 404, which a client reads as deleted).
+    /// The responses carry <see cref="Security.FileContentPolicy"/>.</summary>
     internal static RouteHandlerBuilder ProducesFile(this RouteHandlerBuilder builder) =>
-        builder.Produces(StatusCodes.Status200OK, typeof(byte[]), MediaTypes[0], MediaTypes[1..]);
+        builder.Produces(StatusCodes.Status200OK, typeof(byte[]), MediaTypes[0], MediaTypes[1..])
+            .Errors(StatusCodes.Status500InternalServerError)
+            .WithMetadata(FileContentMetadata.Instance);
 
     /// <summary>
     /// The file's bytes, typed by its format. <c>version</c>: a token from its history (or, for a session, of a file at
@@ -116,7 +120,8 @@ public static class FileApi
             bytes = null;
         }
 
-        if (bytes is null) throw ApiErrors.NotFound($"The content of {path.Value} doesn't open: it was changed or removed outside Kumbu².");
+        // The file exists, its bytes don't: a fault of the server, not a 404, which a client takes for a deletion.
+        if (bytes is null) throw new ContentMissingException($"The content of {path.Value} doesn't open: it was changed or removed outside Kumbu².");
         response.Headers.ContentDisposition = Disposition(path.Name, download is "1" or "true");
         return TypedResults.Stream(bytes, state.MediaType, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue($"\"{state.Version}\""));
     }

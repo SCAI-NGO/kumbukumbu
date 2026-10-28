@@ -74,7 +74,7 @@ function FolderButton({ folder, count, open, onToggle }: { folder: TreeFolder; c
       <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
       <span className="flex-none font-mono text-[11px] text-dim">
         {count}
-        <span className="sr-only">{count === 1 ? " note" : " notes"}</span>
+        <span className="sr-only">{count === 1 ? " item" : " items"}</span>
       </span>
     </button>
   );

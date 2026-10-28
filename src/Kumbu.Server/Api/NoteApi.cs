@@ -407,6 +407,9 @@ public static class NoteApi
             throw await MissingAsync(store, source, ct);
         }
 
+        // A name that contradicts the file's bytes is the request's fault, not the vault's state.
+        if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
+
         var result = folder
             ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, ct)
             : await mover.MoveAsync(source, target, !body.KeepLinks, ct);

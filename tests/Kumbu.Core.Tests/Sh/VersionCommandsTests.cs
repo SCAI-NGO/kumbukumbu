@@ -134,6 +134,18 @@ public class VersionCommandsTests
         (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : null!, CancellationToken.None))!.Changeset!.Short;
 
     [Fact]
+    public async Task HistoryOfANoteHonoursSince()
+    {
+        _time.Advance(TimeSpan.FromHours(3));
+        await WritePlanV2();
+
+        var since = (await Run("history --since 1h /Demo/plan.md")).Output;
+        Assert.Single(since.Split('\n'));
+        Assert.EndsWith("(current)", since, StringComparison.Ordinal);
+        Assert.Equal(2, (await Run("history /Demo/plan.md")).Output.Split('\n').Length);
+    }
+
+    [Fact]
     public async Task HistoryOfAFolderShowsMovesAsOneRow()
     {
         await Run("mv /Demo/sub/ /Demo/moved/");

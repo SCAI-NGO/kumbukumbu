@@ -17,7 +17,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
     public string Summary => "versions of a note or attachment; of a directory: the latest writes below it";
 
     public string Help => $"""
-        history <path>
+        history [--since T] <path>
           List the versions of a note, newest first: version, time written (UTC), writer, lines.
           The first line is the current version. Up to {NoteWriter.HistoryLimit} earlier versions are kept. Writes by one
           writer close together in time form a changeset (it ends after {Changeset.Idle.TotalMinutes} minutes without a write,
@@ -30,6 +30,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
           or after changing a text back); either line restores the same text.
 
           An attachment (an image or a PDF) lists the same way, with its kind and size instead of lines.
+          --since T lists only the versions written since then (as for a directory, below).
 
         history [--since T] <directory>
           The latest writes below a directory or vault (or / for every vault), newest first: time,
@@ -66,9 +67,9 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
 
         if (await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
         {
-            var versions = NoteHistory.Versions(attachment).Select(v =>
-                $"{v.Version}  {Time(v.WrittenAt)}  {v.Writer}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}");
-            return ShellResult.Ok(Lines.Join(versions));
+            var versions = NoteHistory.Versions(attachment).Where(v => since is not { } s || v.WrittenAt >= s).Select(v =>
+                $"{v.Version}  {Time(v.WrittenAt)}  {v.Writer}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}").ToList();
+            return ShellResult.Ok(versions.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(versions));
         }
 
         var note = await notes.GetAsync(path, ct);
@@ -84,9 +85,12 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         }
 
-        var lines = NoteHistory.Versions(note).Select(v => Line(v.Content, v.Writer, v.WrittenAt) + (v.Current ? "  (current)" : ""));
-        return ShellResult.Ok(Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
+        var lines = NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s)
+            .Select(v => Line(v.Content, v.Writer, v.WrittenAt) + (v.Current ? "  (current)" : "")).ToList();
+        return ShellResult.Ok(lines.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
+
+    private static string NoneSince(VaultPath path, DateTime since) => $"(no versions of {path.Value} written since {Time(since)})";
 
     private static readonly Option[] Spec = [new(null, "since", TakesValue: true)];
 
