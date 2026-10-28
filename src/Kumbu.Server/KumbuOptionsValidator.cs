@@ -16,6 +16,8 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
 
     public const string CheckpointLimitMessage = "Kumbu:Vaults:CheckpointLimit must be 0 or more";
 
+    public const string ConcurrentFileReadsMessage = "Kumbu:Vaults:ConcurrentFileReads must be 1 or more";
+
     public const string PublicUrlMessage =
         "Kumbu:PublicUrl (KUMBU_PUBLIC_URL) must be an absolute http or https URL without a path, e.g. https://kumbu.example.org";
 
@@ -61,6 +63,11 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         if (options.Vaults.CheckpointLimit < 0)
         {
             failures.Add(CheckpointLimitMessage);
+        }
+
+        if (options.Vaults.ConcurrentFileReads < 1)
+        {
+            failures.Add(ConcurrentFileReadsMessage);
         }
 
         if (options.OAuth.AccessTokenMinutes is < 5 or > 1440)

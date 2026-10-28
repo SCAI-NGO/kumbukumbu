@@ -462,4 +462,31 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         await Assert.ThrowsAsync<ContentMissingException>(() => store.TryAddCheckpointAsync(again, [], Ct));
         Assert.DoesNotContain(await later.ListCheckpointsAsync(P("/Work"), Ct), c => c.Name == "again");
     }
+
+    [Fact]
+    public async Task File_reads_beyond_the_servers_slots_wait_for_one_to_be_disposed()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        var catalog = world.Catalog(time: _time, fileReads: 1);
+        await catalog.CreateAsync("Work", Token, (_, _) => Task.CompletedTask, Ct);
+        var store = Store(catalog);
+        var a = await CreateAsync(store, "/Work/a.png", Png(100, 1));
+        var b = await CreateAsync(store, "/Work/b.png", Png(100, 2));
+
+        var first = await store.OpenBlobAsync("Work", a.Current.BlobId, Ct);
+        // Another request of the same server waits until the first stream is disposed.
+        var second = Store(catalog).OpenBlobAsync("Work", b.Current.BlobId, Ct);
+        await Task.Delay(200, Ct);
+        Assert.False(second.IsCompleted);
+
+        await first!.DisposeAsync();
+        var opened = await second.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.NotNull(opened);
+        await opened.DisposeAsync();
+
+        // A blob that isn't there gives its slot back at once.
+        Assert.Null(await store.OpenBlobAsync("Work", Convert.ToBase64String(new byte[32]), Ct));
+        await using var again = await store.OpenBlobAsync("Work", a.Current.BlobId, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.NotNull(again);
+    }
 }

@@ -171,6 +171,10 @@ public sealed class VaultOptions
 
     /// <summary>Named checkpoints a vault keeps at most (concept §4); mkcp beyond it fails.</summary>
     public int CheckpointLimit { get; set; } = Kumbu.Core.Notes.Checkpoints.DefaultLimit;
+
+    /// <summary>Attachments' bytes held in memory at once, server-wide, while they are served (each up to 15 MB, and
+    /// about twice that while it is decrypted); a further read waits for one to finish.</summary>
+    public int ConcurrentFileReads { get; set; } = 4;
 }
 
 public sealed class ProxyOptions

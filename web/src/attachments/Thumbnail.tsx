@@ -61,9 +61,9 @@ function Placeholder({ pdf, alt }: { pdf: boolean; alt: string }) {
 
 const fitClass = { cover: "object-cover", contain: "object-contain" };
 
-/** The image itself, scaled by the browser (there are no thumbnails on the server in this part). */
+/** The image itself, scaled by the browser (there are no thumbnails on the server in this part); fetched in turn. */
 function ImageThumb({ vault, path, at, fit, alt }: Required<Props>) {
-  const url = useAttachmentUrl(vault, inVault(path), at.version, at.checkpoint);
+  const url = useAttachmentUrl(vault, inVault(path), at.version, at.checkpoint, imageThumbTurn);
   const [broken, setBroken] = useState(false);
   if (!url || broken) return <Placeholder pdf={false} alt={alt} />;
   return <img src={url} alt={alt} draggable={false} decoding="async" onError={() => setBroken(true)} className={`absolute inset-0 size-full ${fitClass[fit]}`} />;
@@ -73,31 +73,28 @@ function ImageThumb({ vault, path, at, fit, alt }: Required<Props>) {
 const maxThumbPixels = 1_000_000;
 
 /**
- * At most this many PDF thumbnails fetch and draw at once, the others wait their turn: a history sheet shows all of a
- * PDF's versions at once, each up to 15 MB and a pdf.js worker of its own while it is drawn.
+ * A turn, once one of `max` is free; the function it answers ends the turn (again does nothing). Aborted while
+ * waiting, it leaves the queue and rejects.
  */
-export const maxPdfThumbs = 2;
-let drawing = 0;
-const waiting: (() => void)[] = [];
+export type Turn = (signal: AbortSignal) => Promise<() => void>;
 
-/**
- * A turn to fetch and draw a PDF thumbnail, once one is free; the function it answers ends the turn (again does
- * nothing). Aborted while waiting, it leaves the queue and rejects.
- */
-export function pdfThumbTurn(signal: AbortSignal): Promise<() => void> {
-  return new Promise((resolve, reject) => {
+/** A queue of turns, at most `max` of them taken at once. */
+export function turns(max: number): Turn {
+  let taken = 0;
+  const waiting: (() => void)[] = [];
+  return (signal) => new Promise((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
     const take = () => {
-      drawing++;
+      taken++;
       let ended = false;
       resolve(() => {
         if (ended) return;
         ended = true;
-        drawing--;
+        taken--;
         waiting.shift()?.();
       });
     };
-    if (drawing < maxPdfThumbs) return take();
+    if (taken < max) return take();
     const turn = () => {
       signal.removeEventListener("abort", abort);
       take();
@@ -110,6 +107,21 @@ export function pdfThumbTurn(signal: AbortSignal): Promise<() => void> {
     signal.addEventListener("abort", abort, { once: true });
   });
 }
+
+/**
+ * At most this many PDF thumbnails fetch and draw at once, the others wait their turn: a history sheet shows all of a
+ * PDF's versions at once, each up to 15 MB and a pdf.js worker of its own while it is drawn.
+ */
+export const maxPdfThumbs = 2;
+export const pdfThumbTurn = turns(maxPdfThumbs);
+
+/**
+ * At most this many image thumbnails fetch at once: a folder of phone photos near the screen would otherwise ask the
+ * server for all of their bytes together (behind HTTP/2 no connection limit holds them back), and the server holds
+ * each in memory while it serves it.
+ */
+export const maxImageThumbs = 6;
+export const imageThumbTurn = turns(maxImageThumbs);
 
 /**
  * A PDF's first page at the box's size, drawn by pdf.js; the document is let go of as soon as it is drawn, and the

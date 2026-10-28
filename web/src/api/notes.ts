@@ -216,7 +216,7 @@ export function useDeleteNote() {
 
 /**
  * An attachment's bytes (`path` within `vault`) at `at`: today's, an earlier version's or a checkpoint's; with the
- * session, as the server serves files to signed-in users only.
+ * session (the server serves files to signed-in users and API keys only, so never by a plain URL).
  */
 export function fetchFile<As extends "blob" | "arrayBuffer">(vault: string, path: string, at: FileAt, parseAs: As, signal: AbortSignal) {
   return at.checkpoint
@@ -227,9 +227,16 @@ export function fetchFile<As extends "blob" | "arrayBuffer">(vault: string, path
 /**
  * An attachment's bytes (`path` within `vault`, at `version` if given, or as `checkpoint` held it) as an object URL
  * for an `img` or pdf.js. Undefined while they load, null if they can't be read; the URL is revoked when the
- * component unmounts or asks for another file.
+ * component unmounts or asks for another file. With `turn`, the fetch waits for one and ends it once the bytes are in
+ * (the thumbnails' limit on fetches at once).
  */
-export function useAttachmentUrl(vault: string, path: string, version?: string, checkpoint?: string): string | null | undefined {
+export function useAttachmentUrl(
+  vault: string,
+  path: string,
+  version?: string,
+  checkpoint?: string,
+  turn?: (signal: AbortSignal) => Promise<() => void>,
+): string | null | undefined {
   const key = `${vault}\n${path}\n${version ?? ""}\n${checkpoint ?? ""}`;
   // Kept with the file it was made for, and dropped when its fetch ends: after a change of file (also back to one
   // shown before) the old URL, revoked by then, is never answered.
@@ -237,7 +244,12 @@ export function useAttachmentUrl(vault: string, path: string, version?: string, 
   useEffect(() => {
     const controller = new AbortController();
     let url: string | undefined;
-    fetchFile(vault, path, { version, checkpoint }, "blob", controller.signal)
+    let endTurn: (() => void) | undefined;
+    (turn ? turn(controller.signal) : Promise.resolve(() => {}))
+      .then((end) => {
+        endTurn = end;
+        return fetchFile(vault, path, { version, checkpoint }, "blob", controller.signal);
+      })
       .then(({ data, response }) => {
         if (controller.signal.aborted) return;
         if (!response.ok || !data) return setMade({ key, url: null });
@@ -245,13 +257,15 @@ export function useAttachmentUrl(vault: string, path: string, version?: string, 
         setMade({ key, url });
       })
       // The network failed: no URL. Aborted: another file, or none, is wanted now.
-      .catch(() => !controller.signal.aborted && setMade({ key, url: null }));
+      .catch(() => !controller.signal.aborted && setMade({ key, url: null }))
+      .finally(() => endTurn?.());
     return () => {
       controller.abort();
+      endTurn?.();
       if (url) URL.revokeObjectURL(url);
       setMade(undefined);
     };
-  }, [key, vault, path, version, checkpoint]);
+  }, [key, vault, path, version, checkpoint, turn]);
   return made?.key === key ? made.url : undefined;
 }
 

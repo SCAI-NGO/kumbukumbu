@@ -325,20 +325,44 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             .OrderByDescending(t => t.DeletedAt)];
     }
 
-    /// <summary>The blob read from MongoDB and opened, one at a time; <see cref="VaultUnavailableException"/> if it
-    /// doesn't open (changed or damaged outside Kumbu²).</summary>
+    /// <summary>
+    /// The blob read from MongoDB and opened; <see cref="VaultUnavailableException"/> if it doesn't open (changed or
+    /// damaged outside Kumbu²). Each read takes one of the server's <see cref="VaultCatalog.FileReads"/> slots, waiting
+    /// for one if all are taken, and gives it back when the stream is disposed: a gallery of large photos asked for at
+    /// once holds only that many in memory.
+    /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v || !TryParseBlobId(blobId, out var id)) return null;
-        var doc = await catalog.Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id)).FirstOrDefaultAsync(ct);
-        if (doc is null) return null;
+        await catalog.FileReads.WaitAsync(ct);
+        var held = false;
         try
         {
-            return new MemoryStream(v.OpenBlob(doc), writable: false);
+            var doc = await catalog.Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id)).FirstOrDefaultAsync(ct);
+            if (doc is null) return null;
+            var stream = new HeldStream(v.OpenBlob(doc), catalog.FileReads);
+            held = true;
+            return stream;
         }
         catch (Exception e) when (e is System.Security.Cryptography.CryptographicException or InvalidDataException)
         {
             throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+        }
+        finally
+        {
+            if (!held) catalog.FileReads.Release();
+        }
+    }
+
+    /// <summary>A blob's bytes, read only, that give their read slot back once disposed.</summary>
+    private sealed class HeldStream(byte[] bytes, SemaphoreSlim slot) : MemoryStream(bytes, writable: false)
+    {
+        private int _released;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0) slot.Release();
+            base.Dispose(disposing);
         }
     }
 
