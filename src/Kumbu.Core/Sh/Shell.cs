@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh.Commands;
@@ -30,10 +31,12 @@ public sealed class Shell
     private readonly Checkpoints _checkpoints;
     private readonly Func<DateTime> _now;
     private readonly IShellObserver? _observer;
+    private readonly IAttachmentPixels? _pixels;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null, IAttachmentPixels? pixels = null)
     {
         _observer = observer;
+        _pixels = pixels;
         _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         var files = writer.ForAttachments();
@@ -51,6 +54,9 @@ public sealed class Shell
             _commands[command.Name] = command;
         }
     }
+
+    /// <summary>Adds a command after the built-in ones; for tests of what the shell does with a kind of command.</summary>
+    internal void Register(ICommand command) => _commands[command.Name] = command;
 
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
@@ -72,6 +78,11 @@ public sealed class Shell
         if (stages.Count == 0) return ShellResult.Error("sh: empty command");
 
         _observer?.Ran([.. stages.Select(s => s[0])]);
+
+        if (stages.Count > 1 && stages.Select(s => s[0]).FirstOrDefault(n => _commands.TryGetValue(n, out var c) && c.ProducesImages) is { } shower)
+        {
+            return OutputLimit.Apply(ShellResult.Error($"sh: {shower} shows images and can't be part of a pipeline; run it on its own"));
+        }
 
         string? input = null;
         NoteVersion? version = null;

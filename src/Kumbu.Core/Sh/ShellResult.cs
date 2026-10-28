@@ -34,6 +34,12 @@ public sealed record ShellResult(string Output, bool IsError)
     /// </summary>
     public string? NoMatchHint { get; init; }
 
+    /// <summary>
+    /// Text and images in the order the model should see them; then <see cref="Output"/> is the parts' text joined
+    /// (for logs), and <see cref="OutputLimit"/> leaves the result alone.
+    /// </summary>
+    public IReadOnlyList<ShellPart>? Parts { get; init; }
+
     public static ShellResult Ok(string output) => new(output, false);
 
     public static ShellResult Error(string message) => new(message, true);
