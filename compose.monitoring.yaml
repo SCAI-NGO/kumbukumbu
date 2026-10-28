@@ -1,0 +1,64 @@
+# Prometheus and Grafana for Kumbu², with a provisioned data source and the Kumbu² dashboard.
+#
+#   docker compose -f compose.yaml -f compose.monitoring.yaml up -d
+#
+# (with compose.traefik.yaml as well, if that is your shape). Needs KUMBU_GRAFANA_ADMIN_PASSWORD in .env: without it,
+# this file refuses to start. Grafana listens on 127.0.0.1:${KUMBU_GRAFANA_PORT:-3000} only; reach it through an SSH
+# tunnel (README, "Monitoring"). Prometheus publishes no port: it scrapes kumbu:9464, the metrics port compose.yaml
+# does not publish either, and keeps 90 days.
+#
+# Networks: `monitoring` (Kumbu², Prometheus, Grafana) is internal: neither reaches MongoDB, Prometheus has no way out.
+# Grafana is on `grafana` as well, an ordinary network, because Docker publishes no port of a container that is only on
+# internal networks (and compose.traefik.yaml makes the default network internal).
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      # No default password: Grafana's own (admin/admin) would be the login.
+      GF_SECURITY_ADMIN_PASSWORD: ${KUMBU_GRAFANA_ADMIN_PASSWORD:?Set KUMBU_GRAFANA_ADMIN_PASSWORD in .env}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # Only behind a reverse proxy: the address Grafana is reached at (README, "Monitoring").
+      GF_SERVER_ROOT_URL: ${KUMBU_GRAFANA_ROOT_URL:-}
+    ports:
+      # Localhost only: through an SSH tunnel, ssh -L 3000:127.0.0.1:3000 user@host.
+      - "127.0.0.1:${KUMBU_GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring
+      - grafana
+
+  kumbu:
+    networks:
+      - default
+      - monitoring
+
+networks:
+  monitoring:
+    internal: true
+  grafana:
+
+volumes:
+  prometheus-data:
+  grafana-data:

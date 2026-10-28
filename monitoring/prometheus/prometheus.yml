@@ -1,0 +1,8 @@
+# Scrapes Kumbu²'s metrics port over the compose network; compose.yaml does not publish it.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: kumbu
+    static_configs:
+      - targets: ["kumbu:9464"]

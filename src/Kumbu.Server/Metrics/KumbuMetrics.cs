@@ -50,7 +50,7 @@ public static class KumbuMetrics
         "kumbu_sh_command_duration_seconds", "How long a sh command took, by command name.", new HistogramConfiguration { LabelNames = ["command"], Buckets = Seconds });
 
     private static readonly Counter WriteConflicts = Prometheus.Metrics.CreateCounter(
-        "kumbu_write_conflicts_total", "Note writes refused because the note had changed, by way in.", new CounterConfiguration { LabelNames = ["via"] });
+        "kumbu_write_conflicts_total", "Writes refused as a conflict (a stale version, a name already taken), by way in.", new CounterConfiguration { LabelNames = ["via"] });
 
     public enum ProviderKind { Internal, External }
 
@@ -132,13 +132,21 @@ public static class KumbuMetrics
 
     public static void VaultUnlocked() => VaultUnlocks.Inc();
 
-    public static void VaultLocked(LockReason reason) => VaultLocks.WithLabels(reason == LockReason.Idle ? "idle" : "memory").Inc();
+    public static void VaultLocked(LockReason reason) => VaultLocks.WithLabels(Label(reason)).Inc();
 
-    public static void SignedIn(Outcome outcome) => SignIns.WithLabels(outcome == Outcome.Success ? "success" : "failure").Inc();
+    public static void SignedIn(Outcome outcome) => SignIns.WithLabels(Label(outcome)).Inc();
 
-    public static void OAuthTokenIssued(Grant grant) => OAuthTokens.WithLabels(grant == Grant.RefreshToken ? "refresh_token" : "authorization_code").Inc();
+    public static void OAuthTokenIssued(Grant grant) => OAuthTokens.WithLabels(Label(grant)).Inc();
 
     private static string Label(ProviderKind kind) => kind == ProviderKind.External ? "external" : "internal";
+
+    private static string Label(LockReason reason) => reason == LockReason.Idle ? "idle" : "memory";
+
+    private static string Label(Outcome outcome) => outcome == Outcome.Success ? "success" : "failure";
+
+    private static string Label(Grant grant) => grant == Grant.RefreshToken ? "refresh_token" : "authorization_code";
+
+    private static string Label(WriteVia via) => via == WriteVia.Mcp ? "mcp" : "api";
 
     /// <summary>The shell's command names; the only values the command label can take besides "other". A test compares it with the shell.</summary>
     public static readonly IReadOnlyList<string> KnownCommands =
@@ -170,7 +178,7 @@ public static class KumbuMetrics
 
     public static void ToolFailed(Tool tool, ToolError kind) => ToolErrors.WithLabels(Label(tool), Label(kind)).Inc();
 
-    public static void WriteConflict(WriteVia via) => WriteConflicts.WithLabels(via == WriteVia.Mcp ? "mcp" : "api").Inc();
+    public static void WriteConflict(WriteVia via) => WriteConflicts.WithLabels(Label(via)).Inc();
 
     private static string Label(Tool tool) => tool switch
     {
@@ -191,6 +199,26 @@ public static class KumbuMetrics
         ToolError.Damaged => "damaged",
         _ => "other",
     };
+
+    /// <summary>
+    /// Every value each label of the kumbu_ metrics can take, from the enums and the shell's command names. Not
+    /// <c>endpoint</c>: its values are the app's route templates and <c>none</c>, which only the running app knows.
+    /// The label guard test checks a scrape against it.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedLabels { get; } = new Dictionary<string, IReadOnlySet<string>>
+    {
+        ["tool"] = Values<Tool>(Label),
+        ["kind"] = Values<ToolError>(Label),
+        ["via"] = Values<WriteVia>(Label),
+        ["provider_kind"] = Values<ProviderKind>(Label),
+        ["reason"] = Values<LockReason>(Label),
+        ["outcome"] = Values<Outcome>(Label),
+        ["grant"] = Values<Grant>(Label),
+        ["command"] = new HashSet<string>([.. KnownCommands, "other"], StringComparer.Ordinal),
+    };
+
+    private static HashSet<string> Values<T>(Func<T, string> label) where T : struct, Enum =>
+        new(Enum.GetValues<T>().Select(label), StringComparer.Ordinal);
 
     /// <summary>Sets up the default collectors; call before anything uses the default registry. Idempotent.</summary>
     public static void Configure() => _ = Configured.Value;
