@@ -467,7 +467,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     /// <summary>One transaction: the checkpoint's document, and each content it holds that the vault doesn't
-    /// store yet (an upsert on the content's keyed hash, so equal texts are stored once).</summary>
+    /// store yet (an upsert on the content's keyed hash, so equal texts are stored once). Its attachments name blobs the
+    /// vault holds already; <see cref="BlobSweep"/> keeps them while the checkpoint exists.</summary>
     public async Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
     {
         if (await VaultAsync(checkpoint.Path, ct) is not { } vault) return false;
@@ -503,7 +504,8 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         }, ct);
     }
 
-    /// <summary>One transaction: the checkpoint's document, and the texts no other checkpoint holds.</summary>
+    /// <summary>One transaction: the checkpoint's document, and the texts no other checkpoint holds. The blobs of its
+    /// attachments that nothing else references any more go with the next <see cref="BlobSweep"/>.</summary>
     public async Task<bool> TryRemoveCheckpointAsync(string vaultName, string name, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vaultName), ct) is not { } vault) return false;

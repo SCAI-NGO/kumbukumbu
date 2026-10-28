@@ -253,7 +253,10 @@ public sealed class UnlockedVault
     public byte[] SealCheckpoint(ObjectId docId, Checkpoint checkpoint, IReadOnlyDictionary<VaultPath, byte[]> textIds) =>
         Seal($"checkpoint:{Id}:{docId}", new CheckpointPayload(
             checkpoint.Name, checkpoint.Path.Value, checkpoint.Folder, checkpoint.CreatedBy, checkpoint.CreatedAt,
-            [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))]));
+            [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))],
+            checkpoint.Attachments.Count == 0
+                ? null
+                : [.. checkpoint.Attachments.Select(a => new CheckpointAttachmentPayload(a.Path.Value, AttachmentStatePayload.From(a.State)))]));
 
     /// <summary>Opens a checkpoint and checks its name against the document's name id, as for notes and paths.</summary>
     public StoredCheckpoint OpenCheckpoint(SealedDocument doc)
@@ -266,7 +269,10 @@ public sealed class UnlockedVault
 
         var checkpoint = new Checkpoint(
             p.Name, Payload.Path(p.Path), p.Folder, p.CreatedBy, DateTime.SpecifyKind(p.CreatedAt, DateTimeKind.Utc),
-            [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))]);
+            [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))])
+        {
+            Attachments = [.. (p.Attachments ?? []).Select(a => new CheckpointAttachment(Payload.Path(a.Path), a.State.ToState()))],
+        };
         return new StoredCheckpoint(doc.Id, checkpoint, p.Notes.ToDictionary(n => Payload.Path(n.Path), n => Convert.FromBase64String(n.TextId)));
     }
 
@@ -343,7 +349,8 @@ public sealed class UnlockedVault
                     if (ReferenceEquals(this, to)) return new Resealed(pid, from, SealPlain(context), null, []);
                     var unmapped = new List<string>();
                     var notes = p.Notes.Select(n => n with { TextId = Map(n.TextId, ids.Texts, unmapped) }).ToList();
-                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes }) : [], null, unmapped);
+                    var attachments = p.Attachments?.Select(a => a with { State = MapBlobId(a.State, ids, unmapped) }).ToList();
+                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes, Attachments = attachments }) : [], null, unmapped);
                 }
 
                 case "attachments":
@@ -528,11 +535,17 @@ internal sealed record AttachmentTrashPayload(AttachmentPayload Attachment, long
 
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 
-internal sealed record CheckpointPayload(string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes);
+internal sealed record CheckpointAttachmentPayload(string Path, AttachmentStatePayload State);
+
+/// <remarks>Attachments is missing in checkpoints made before attachments existed, and omitted when there are none.</remarks>
+internal sealed record CheckpointPayload(
+    string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] List<CheckpointAttachmentPayload>? Attachments = null);
 
 internal sealed record TextPayload(string Content);
 
-/// <summary>A checkpoint as the working set holds it: its document and where each note's content is.</summary>
+/// <summary>A checkpoint as the working set holds it: its document and where each note's content is (its attachments
+/// name their blobs themselves).</summary>
 public sealed record StoredCheckpoint(ObjectId Id, Checkpoint Checkpoint, IReadOnlyDictionary<VaultPath, byte[]> TextIds);
 
 internal static class Payload

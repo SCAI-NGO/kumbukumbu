@@ -317,6 +317,35 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_checkpoint_keeps_its_blobs_until_it_is_removed()
+    {
+        var (world, catalog, _) = await WorldAsync();
+        // This process knows the vault from before the checkpoint: only what MongoDB holds tells it about one.
+        var stale = await VaultAsync(catalog);
+        var otherCatalog = world.Catalog(time: _time);
+        var other = Store(otherCatalog);
+        var shot = await CreateAsync(other, "/Work/shot.png", Png(100));
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        Assert.True(await other.TryAddCheckpointAsync(checkpoint, [], Ct));
+        // The attachment is removed and its trash entry expires: the checkpoint alone references the bytes.
+        Assert.Empty(await other.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        _time.Advance(TimeSpan.FromDays(31));
+
+        await Sweep(catalog).RunAsync(stale, Now, Ct);
+        await Sweep(otherCatalog).RunAsync(await VaultAsync(otherCatalog), Now, Ct);
+
+        Assert.Empty(await other.ListAttachmentTrashAsync(null, Ct));
+        Assert.Equal(Png(100), await ReadBlobAsync(other, shot.Current.BlobId));
+        // A second process reads the checkpoint with its attachment.
+        var held = Assert.Single(Assert.Single(await Store(world.Catalog(time: _time)).ListCheckpointsAsync(P("/Work"), Ct)).Attachments);
+        Assert.Equal((shot.Path, shot.Current), (held.Path, held.State));
+
+        Assert.True(await other.TryRemoveCheckpointAsync("Work", "before", Ct));
+        await Sweep(otherCatalog).RunAsync(await VaultAsync(otherCatalog), Now, Ct);
+        Assert.Null(await ReadBlobAsync(other, shot.Current.BlobId));
+    }
+
+    [Fact]
     public async Task History_versions_keep_their_blobs()
     {
         var (_, catalog, store) = await WorldAsync();

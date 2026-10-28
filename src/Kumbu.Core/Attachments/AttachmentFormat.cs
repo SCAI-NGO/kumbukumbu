@@ -46,6 +46,14 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         return null;
     }
 
+    /// <summary>What a path holds, as clients tell files apart: "image", "pdf", or "note" for anything else.</summary>
+    public static string KindOf(string path) => ForName(path)?.Kind switch
+    {
+        AttachmentKind.Image => "image",
+        AttachmentKind.Pdf => "pdf",
+        _ => "note",
+    };
+
     /// <summary>Null when the file is accepted; otherwise the reason to show the user. <paramref name="head"/>
     /// is the start of the content (at least 12 bytes where the file has them).</summary>
     public static string? Problem(VaultPath path, ReadOnlySpan<byte> head)

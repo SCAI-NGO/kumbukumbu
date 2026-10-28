@@ -32,7 +32,8 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
 
             var old = F.Eq(d => d.Vault, vault.Id) & F.Lt(d => d.At, now - Grace);
             var candidates = (await catalog.Blobs.Find(old).Project(d => d.BlobId).ToListAsync(ct)).Select(Convert.ToBase64String).ToHashSet();
-            candidates.ExceptWith(References(vault.Attachments.Values.Select(a => a.Attachment), vault.AttachmentTrash.Select(t => t.Trashed)));
+            candidates.ExceptWith(References(
+                vault.Attachments.Values.Select(a => a.Attachment), vault.AttachmentTrash.Select(t => t.Trashed), vault.Checkpoints.Select(c => c.Checkpoint)));
             if (candidates.Count == 0) return 0;
 
             // The working set may not know what another process wrote: only what MongoDB holds decides.
@@ -51,11 +52,16 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
     }
 
     /// <summary>
-    /// The blob ids that must stay: every state of the attachments (current and history) and of the trash entries within
-    /// their retention. Every kind of record that holds attachment states adds its states here.
+    /// The blob ids that must stay: every state of the attachments (current and history), of the trash entries within
+    /// their retention, and of the checkpoints for as long as they exist. Every kind of record that holds attachment
+    /// states adds its states here.
     /// </summary>
-    internal static HashSet<string> References(IEnumerable<StoredAttachment> attachments, IEnumerable<TrashedAttachment> trash) =>
-        [.. attachments.Concat(trash.Select(t => t.Attachment)).SelectMany(States).Select(s => s.BlobId)];
+    internal static HashSet<string> References(
+        IEnumerable<StoredAttachment> attachments, IEnumerable<TrashedAttachment> trash, IEnumerable<Checkpoint> checkpoints) =>
+        [
+            .. attachments.Concat(trash.Select(t => t.Attachment)).SelectMany(States).Select(s => s.BlobId),
+            .. checkpoints.SelectMany(c => c.Attachments).Select(a => a.BlobId),
+        ];
 
     private static IEnumerable<AttachmentState> States(StoredAttachment a) => a.History.Select(h => h.State).Prepend(a.Current);
 
@@ -68,12 +74,12 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
     }
 
     /// <summary>
-    /// The references in the vault's records and trash as MongoDB holds them; null if one of them doesn't open, since the
-    /// blobs it names can't be known then. Both collections are read at one point in time (a snapshot session): a
-    /// restore, removal or move commits a record and a trash entry in one transaction, so a state that passes from one
-    /// collection to the other between two plain reads would be missed by both. A commit after the snapshot can only
-    /// name a blob some state named in it already, or one put since, whose time is then past the cutoff the deletion
-    /// filters on.
+    /// The references in the vault's records, trash and checkpoints as MongoDB holds them; null if one of them doesn't
+    /// open, since the blobs it names can't be known then. The collections are read at one point in time (a snapshot
+    /// session): a restore, removal or move commits a record and a trash entry in one transaction, so a state that
+    /// passes from one collection to the other between two plain reads would be missed by both. A commit after the
+    /// snapshot can only name a blob some state named in it already, or one put since, whose time is then past the
+    /// cutoff the deletion filters on.
     /// </summary>
     private async Task<HashSet<string>?> StoredReferencesAsync(UnlockedVault vault, CancellationToken ct)
     {
@@ -83,11 +89,12 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
             using var session = await catalog.StartSnapshotSessionAsync(ct);
             var attachments = (await catalog.Attachments.Find(session, f).ToListAsync(ct)).Select(vault.OpenAttachment).ToList();
             var trash = (await catalog.AttachmentTrash.Find(session, f).ToListAsync(ct)).Select(vault.OpenAttachmentTrash).ToList();
-            return References(attachments, trash);
+            var checkpoints = (await catalog.Checkpoints.Find(session, f).ToListAsync(ct)).Select(d => vault.OpenCheckpoint(d).Checkpoint).ToList();
+            return References(attachments, trash, checkpoints);
         }
         catch (Exception e) when (e is CryptographicException or JsonException or InvalidDataException)
         {
-            log.LogWarning("An attachment record of vault {VaultId} does not open; its blobs are kept", vault.Id);
+            log.LogWarning("An attachment record or checkpoint of vault {VaultId} does not open; its blobs are kept", vault.Id);
             return null;
         }
     }

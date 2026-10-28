@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Diffs;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -7,7 +8,8 @@ using Kumbu.Core.Sh.Commands;
 
 namespace Kumbu.Core.Notes;
 
-/// <summary>A previewed restore of a folder: the call that made it and every note in scope, at its version then.</summary>
+/// <summary>A previewed restore of a folder: the call that made it and every note and attachment in scope, at its version
+/// then.</summary>
 public sealed record RestorePlan(string Scope, string Name, IReadOnlyList<(VaultPath Path, string Version)> Current, DateTime Created);
 
 public enum RestoreChangeKind
@@ -26,9 +28,9 @@ public enum RestoreChangeKind
 }
 
 /// <summary>
-/// One note a restore to a checkpoint changes, at its path in the checkpoint. <paramref name="Lines"/>: the lines
-/// added and removed by the restore, for a note whose content changes (null for one that only comes back, goes
-/// to the trash, or moves back unchanged).
+/// One note or attachment a restore to a checkpoint changes, at its path in the checkpoint. <paramref name="Lines"/>:
+/// the lines added and removed by the restore, for a note whose content changes (null for an attachment, and for a note
+/// that only comes back, goes to the trash, or moves back unchanged).
 /// </summary>
 public sealed record RestoreChange(RestoreChangeKind Kind, VaultPath Path, VaultPath? From, (int Added, int Removed)? Lines);
 
@@ -88,23 +90,30 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
                 $"mkcp: {vault} has {existing.Count} checkpoints, the limit; 'lscp /{vault}' lists them, 'rmcp /{vault} <name>' removes one");
         }
 
-        IReadOnlyList<Note> notes;
+        IReadOnlyList<Note> notes = [];
+        IReadOnlyList<StoredAttachment> attachments = [];
         var folder = false;
         if (await store.ReadAsync(path, ct) is { } content) notes = [new Note(path, content)];
+        else if (await StoreAttachments.GetAsync(store, path, ct) is { } attachment) attachments = [attachment];
         else
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("mkcp", path));
             notes = await store.ReadNotesUnderAsync(path, ct);
+            attachments = await StoreAttachments.UnderAsync(store, path, ct);
             folder = true;
-            if (notes.Count == 0 && path.Segments.Count > 1)
+            if (notes.Count == 0 && attachments.Count == 0 && path.Segments.Count > 1)
             {
                 return ShellResult.Error($"mkcp: {path.Value}: No such file or directory{await Moves.HintAsync(store, path, ct)}");
             }
         }
 
+        // An attachment is held by reference to its blob, which the vault keeps while the checkpoint exists.
         var checkpoint = new Checkpoint(
             name, path, folder, writer.Caller.Writer, writer.Now,
-            [.. notes.OrderBy(n => n.Path.Value, TextOrder.Default).Select(n => new CheckpointNote(n.Path, VersionToken.Of(n.Content)))]);
+            [.. notes.OrderBy(n => n.Path.Value, TextOrder.Default).Select(n => new CheckpointNote(n.Path, VersionToken.Of(n.Content)))])
+        {
+            Attachments = [.. attachments.OrderBy(a => a.Path.Value, TextOrder.Default).Select(a => new CheckpointAttachment(a.Path, a.Current))],
+        };
         if (!await store.TryAddCheckpointAsync(checkpoint, notes, ct))
         {
             return ShellResult.Error($"mkcp: checkpoint '{name}' was made by someone else just now; choose another name");
@@ -113,7 +122,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var damaged = folder ? await store.CountDamagedAsync(VaultPath.Root.Child(vault), ct) : 0;
         var note = damaged > 0 ? $"; {Count(damaged, "damaged note")} in {vault} can't be part of it" : "";
         return ShellResult.Ok(
-            $"checkpoint '{name}' of {checkpoint.Scope} ({Count(notes.Count, "note")}){note}; read from it with --checkpoint {name}, "
+            $"checkpoint '{name}' of {checkpoint.Scope} ({Contents(checkpoint)}){note}; read from it with --checkpoint {name}, "
             + $"e.g. {(folder ? "ls" : "cat")} --checkpoint {name} {SectionLookup.Quote(path)}");
     }
 
@@ -129,7 +138,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             var scopeWidth = shown.Max(c => c.Scope.Length);
             var byWidth = shown.Max(c => c.CreatedBy.Length);
             lines.AddRange(shown.Select(c =>
-                $"{c.Name.PadRight(nameWidth)}  {c.Scope.PadRight(scopeWidth)}  {History.Time(c.CreatedAt)}  {c.CreatedBy.PadRight(byWidth)}  {Count(c.Notes.Count, "note")}"));
+                $"{c.Name.PadRight(nameWidth)}  {c.Scope.PadRight(scopeWidth)}  {History.Time(c.CreatedAt)}  {c.CreatedBy.PadRight(byWidth)}  {Contents(c)}"));
         }
 
         if (!path.IsRoot) lines.Add($"{all.Count} of {limit} checkpoints in {path.Segments[0]}");
@@ -159,7 +168,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     public async Task<(CheckpointView? View, ShellResult? Error)> OpenAsync(string command, string vault, string name, CancellationToken ct)
     {
         if (await FindAsync(vault, name, ct) is not { } checkpoint) return (null, ShellResult.Error(Missing(command, vault, name)));
-        return (new CheckpointView(checkpoint, await store.ReadCheckpointAsync(checkpoint, ct)), null);
+        return (new CheckpointView(checkpoint, await store.ReadCheckpointAsync(checkpoint, ct), store as IAttachmentStore), null);
     }
 
     public static string Missing(string command, string vault, string name) =>
@@ -172,7 +181,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     public static VaultPath? Scope(Checkpoint checkpoint, VaultPath path) =>
         checkpoint.Covers(path) ? path : checkpoint.Relates(path) ? checkpoint.Path : null;
 
-    /// <summary><c>diff &lt;folder&gt; --checkpoint name</c>: which notes changed, appeared, went or moved since.</summary>
+    /// <summary><c>diff &lt;folder&gt; --checkpoint name</c>: which notes and attachments changed, appeared, went or moved
+    /// since.</summary>
     public async Task<ShellResult> ChangesAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
@@ -186,6 +196,15 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             rows.Add((to.Value, $"moved    {to.Value} → {now.Path.Value}{(then == now.Content ? "" : "  " + Delta(then, now.Content))}"));
         }
 
+        var files = work.Attachments;
+        foreach (var path in files.Changed.Keys) rows.Add((path.Value, $"changed  {path.Value}"));
+        foreach (var path in files.Back.Keys) rows.Add((path.Value, $"removed  {path.Value}"));
+        foreach (var attachment in files.Trash) rows.Add((attachment.Path.Value, $"new      {attachment.Path.Value}"));
+        foreach (var (to, (now, then)) in files.Moved)
+        {
+            rows.Add((to.Value, $"moved    {to.Value} → {now.Path.Value}{(then.Version == now.Version ? "" : "  changed")}"));
+        }
+
         var where = Where(checkpoint, scope);
         if (rows.Count == 0) return ShellResult.Ok($"(no changes in {where} since checkpoint '{checkpoint.Name}')");
         return ShellResult.Ok(Lines.Join([
@@ -196,9 +215,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     }
 
     /// <summary>
-    /// <c>restore --checkpoint name &lt;path&gt;</c>. A note goes back at once (an undoable write); a folder
-    /// gets a preview and a plan token first, and its apply makes the folder match the checkpoint exactly:
-    /// changed notes get their content then, removed ones come back, newer ones go to the trash.
+    /// <c>restore --checkpoint name &lt;path&gt;</c>. A note or an attachment goes back at once (an undoable write); a
+    /// folder gets a preview and a plan token first, and its apply makes the folder match the checkpoint exactly:
+    /// changed notes and attachments get their content then, removed ones come back, newer ones go to the trash.
     /// </summary>
     public async Task<ShellResult> RestoreAsync(VaultPath path, string name, string? token, CancellationToken ct)
     {
@@ -213,11 +232,12 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             return ShellResult.Error($"restore: {path.Value} is not in checkpoint '{name}' (it covers {checkpoint.Scope})");
         }
 
+        var isAttachment = await view.GetAttachmentAsync(scope, ct) is not null || await StoreAttachments.GetAsync(store, scope, ct) is not null;
         var isNote = (!checkpoint.Folder && scope == checkpoint.Path) || await view.ReadAsync(scope, ct) is not null || await store.ReadAsync(scope, ct) is not null;
-        if (isNote)
+        if (isNote || isAttachment)
         {
             if (token is not null) return ShellResult.Error("restore: --plan is for folders; a note is restored at once");
-            return await RestoreNoteAsync(view, scope, by, ct);
+            return isAttachment ? await RestoreAttachmentAsync(view, scope, by, ct) : await RestoreNoteAsync(view, scope, by, ct);
         }
 
         return token is null ? await PreviewAsync(view, scope, ct) : await ApplyAsync(view, scope, token, by, ct);
@@ -241,16 +261,45 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
             var created = new StoredNote(path, then, 1, label, writer.Now, []);
             return await store.TryCreateAsync(created, ct)
-                ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", created)
+                ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", created.Path, created.Version)
                 : ShellResult.Error($"restore: {path.Value} was created by someone else just now; try again");
         }
 
-        if (existing.Content == then) return Written($"{path.Value} is already as in checkpoint '{name}'", existing);
+        if (existing.Content == then) return Written($"{path.Value} is already as in checkpoint '{name}'", existing.Path, existing.Version);
 
         // In no changeset, like every restore: a checkpoint of its own, so it can be undone on its own.
         var next = NoteWriter.Next(existing, then, label, writer.Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
-            ? Written($"restored {path.Value} to checkpoint '{name}'", next)
+            ? Written($"restored {path.Value} to checkpoint '{name}'", next.Path, next.Version)
+            : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
+    }
+
+    /// <summary>An attachment back to its state in the checkpoint, by the rules of <see cref="RestoreNoteAsync"/>.</summary>
+    private async Task<ShellResult> RestoreAttachmentAsync(CheckpointView view, VaultPath path, string by, CancellationToken ct)
+    {
+        var name = view.Checkpoint.Name;
+        var then = (await view.GetAttachmentAsync(path, ct))?.Current;
+        var existing = await StoreAttachments.GetAsync(store, path, ct);
+        if (then is null)
+        {
+            return ShellResult.Error($"restore: {path.Value} was not in checkpoint '{name}' (created since); rm it to match the checkpoint");
+        }
+
+        var label = $"{by} (restore)";
+        if (existing is null)
+        {
+            if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
+            var created = new StoredAttachment(path, then, 1, label, writer.Now, [], null);
+            return (await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, label, writer.Now, ct)).Count == 0
+                ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", path, created.Version)
+                : ShellResult.Error($"restore: {path.Value} was created by someone else just now; try again");
+        }
+
+        if (existing.Version == then.Version) return Written($"{path.Value} is already as in checkpoint '{name}'", path, existing.Version);
+
+        var next = AttachmentWriter.Next(existing, then, label, writer.Now, changeset: null, keepCurrent: true);
+        return (await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, label, writer.Now, ct)).Count == 0
+            ? Written($"restored {path.Value} to checkpoint '{name}'", path, next.Version)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
     }
 
@@ -258,22 +307,43 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     /// What a folder restore does. <see cref="Moved"/>: notes moved since the checkpoint (by the move records),
     /// by their checkpoint path; they move back, keeping their history, and the links the move rewrote follow
     /// them back (<see cref="Rewrites"/>, in notes outside the scope; notes inside get their content then).
-    /// <see cref="Broken"/>: links outside the scope that would lead nowhere afterwards.
+    /// <see cref="Attachments"/>: the same for the attachments. <see cref="Broken"/>: links outside the scope that
+    /// would lead nowhere afterwards.
     /// </summary>
     private sealed record RestoreWork(
         Dictionary<VaultPath, (StoredNote Now, string Then)> Changed,
         Dictionary<VaultPath, string> Back,
         Dictionary<VaultPath, (StoredNote Now, string Then)> Moved,
         List<StoredNote> Trash,
+        AttachmentWork Attachments,
         Dictionary<VaultPath, List<(Links.NoteLink Link, string Replacement)>> Rewrites,
         List<string> Broken)
     {
-        public bool IsEmpty => Changed.Count == 0 && Back.Count == 0 && Moved.Count == 0 && Trash.Count == 0;
+        public bool IsEmpty => Changed.Count == 0 && Back.Count == 0 && Moved.Count == 0 && Trash.Count == 0 && Attachments.IsEmpty;
 
-        /// <summary>Every note the apply depends on, at the version the preview saw.</summary>
-        public IEnumerable<(VaultPath Path, string Version)> Current(Dictionary<VaultPath, StoredNote> inScope) =>
-            inScope.Values.Concat(Moved.Values.Select(m => m.Now)).DistinctBy(n => n.Path)
-                .OrderBy(n => n.Path.Value, StringComparer.Ordinal).Select(n => (n.Path, n.Version));
+        public int ChangedCount => Changed.Count + Attachments.Changed.Count;
+
+        public int BackCount => Back.Count + Attachments.Back.Count;
+
+        public int MovedCount => Moved.Count + Attachments.Moved.Count;
+
+        public int TrashCount => Trash.Count + Attachments.Trash.Count;
+
+        /// <summary>Every note and attachment the apply depends on, at the version the preview saw.</summary>
+        public IEnumerable<(VaultPath Path, string Version)> Current(InScope inScope) =>
+            inScope.Now.Values.Concat(Moved.Values.Select(m => m.Now)).DistinctBy(n => n.Path).Select(n => (n.Path, n.Version))
+                .Concat(inScope.AttachmentsNow.Values.Concat(Attachments.Moved.Values.Select(m => m.Now)).DistinctBy(a => a.Path).Select(a => (a.Path, a.Version)))
+                .OrderBy(c => c.Path.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>What a folder restore does with attachments, as <see cref="RestoreWork"/> with notes.</summary>
+    private sealed record AttachmentWork(
+        Dictionary<VaultPath, (StoredAttachment Now, AttachmentState Then)> Changed,
+        Dictionary<VaultPath, AttachmentState> Back,
+        Dictionary<VaultPath, (StoredAttachment Now, AttachmentState Then)> Moved,
+        List<StoredAttachment> Trash)
+    {
+        public bool IsEmpty => Changed.Count == 0 && Back.Count == 0 && Moved.Count == 0 && Trash.Count == 0;
     }
 
     private const int MaxMoveHops = 10;
@@ -281,7 +351,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     private async Task<RestoreWork> PlanAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
-        var (then, now) = await BothAsync(view, scope, ct);
+        var both = await BothAsync(view, scope, ct);
+        var (then, now) = (both.Then, both.Now);
         var changed = new Dictionary<VaultPath, (StoredNote, string)>();
         var back = new Dictionary<VaultPath, string>();
         var moved = new Dictionary<VaultPath, (StoredNote Now, string Then)>();
@@ -291,32 +362,51 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             {
                 if (existing.Content != content) changed[path] = (existing, content);
             }
-            else if (await MovedToAsync(path, checkpoint, then, ct) is { } note && moved.Values.All(m => m.Now.Path != note.Path)) moved[path] = (note, content);
+            else if (await MovedToAsync(path, checkpoint, then.ContainsKey, p => store.GetAsync(p, ct), ct) is { } note && moved.Values.All(m => m.Now.Path != note.Path)) moved[path] = (note, content);
             else back[path] = content;
         }
 
-        var leaving = moved.Values.Select(m => m.Now.Path).ToHashSet();
+        var files = new AttachmentWork([], [], [], []);
+        foreach (var (path, state) in both.AttachmentsThen)
+        {
+            if (both.AttachmentsNow.TryGetValue(path, out var existing))
+            {
+                if (existing.Version != state.Version) files.Changed[path] = (existing, state);
+            }
+            else if (await MovedToAsync(path, checkpoint, both.AttachmentsThen.ContainsKey, p => StoreAttachments.GetAsync(store, p, ct), ct) is { } attachment
+                && files.Moved.Values.All(m => m.Now.Path != attachment.Path))
+            {
+                files.Moved[path] = (attachment, state);
+            }
+            else files.Back[path] = state;
+        }
+
+        var leaving = moved.Values.Select(m => m.Now.Path).Concat(files.Moved.Values.Select(m => m.Now.Path)).ToHashSet();
         var trash = now.Values.Where(n => !then.ContainsKey(n.Path) && !leaving.Contains(n.Path)).ToList();
+        files.Trash.AddRange(both.AttachmentsNow.Values.Where(a => !both.AttachmentsThen.ContainsKey(a.Path) && !leaving.Contains(a.Path)));
 
         var rewrites = new Dictionary<VaultPath, List<(Links.NoteLink, string)>>();
         var broken = new List<string>();
         var vault = VaultPath.Root.Child(scope.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
+        var attachments = await StoreAttachments.PathsUnderAsync(store, vault, ct);
         bool Outside(VaultPath p) => !(p == scope || Checkpoint.IsBelow(p, scope)) && !leaving.Contains(p);
-        if (moved.Count > 0)
+        if (moved.Count > 0 || files.Moved.Count > 0)
         {
             var map = moved.ToDictionary(m => m.Value.Now.Path, m => m.Key);
-            foreach (var (path, list) in NoteMover.Rewrites(notes, map))
+            foreach (var (to, (attachment, _)) in files.Moved) map[attachment.Path] = to;
+            foreach (var (path, list) in NoteMover.Rewrites(notes, map, attachments))
             {
                 if (Outside(path)) rewrites[path] = list;
             }
         }
 
-        // Links outside the scope that lead to a note now and nowhere after the restore.
-        var trashed = trash.Select(t => t.Path).ToHashSet();
+        // Links outside the scope that lead to a note or attachment now and nowhere after the restore.
+        var trashed = trash.Select(t => t.Path).Concat(files.Trash.Select(t => t.Path)).ToHashSet();
         var afterPaths = notes.Select(n => n.Path).Where(p => !trashed.Contains(p) && !leaving.Contains(p)).Concat(back.Keys).Concat(moved.Keys).Distinct().ToList();
-        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path));
-        var after = new Links.LinkResolver(vault.Segments[0], afterPaths);
+        var afterAttachments = attachments?.Where(p => !trashed.Contains(p) && !leaving.Contains(p)).Concat(files.Back.Keys).Concat(files.Moved.Keys).Distinct().ToList();
+        var before = new Links.LinkResolver(vault.Segments[0], notes.Select(n => n.Path), attachments);
+        var after = new Links.LinkResolver(vault.Segments[0], afterPaths, afterAttachments);
         foreach (var note in notes.Where(n => Outside(n.Path)).OrderBy(n => n.Path.Value, TextOrder.Default))
         {
             var content = rewrites.TryGetValue(note.Path, out var list) ? NoteMover.Apply(note.Content, list) ?? note.Content : note.Content;
@@ -324,18 +414,23 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             {
                 if (link.Target.Trim().Length == 0) continue;
                 var was = before.Resolve(note.Path, link.Target);
-                if (was.Kind != Links.LinkKind.Note || after.Resolve(note.Path, link.Target).Kind == Links.LinkKind.Note) continue;
+                if (!Leads(was) || Leads(after.Resolve(note.Path, link.Target))) continue;
                 var why = trashed.Contains(was.Target!) ? "going to the trash" : "gone after the restore";
                 broken.Add($"  {note.Path.Value}:{link.Line + 1}: {link.Raw} (now {was.Target!.Value}, {why})");
             }
         }
 
-        return new RestoreWork(changed, back, moved, trash, rewrites, broken);
+        return new RestoreWork(changed, back, moved, trash, files, rewrites, broken);
     }
 
-    /// <summary>The note a checkpoint path was moved to since the checkpoint, following later moves; null if it
-    /// wasn't moved, or the note there now is another one (in the checkpoint at its own path).</summary>
-    private async Task<StoredNote?> MovedToAsync(VaultPath path, Checkpoint checkpoint, Dictionary<VaultPath, string> then, CancellationToken ct)
+    /// <summary>Whether a link leads to one note or attachment.</summary>
+    private static bool Leads(Links.LinkResolution r) => r.Kind is Links.LinkKind.Note or Links.LinkKind.Attachment && r.Target is not null;
+
+    /// <summary>The note or attachment a checkpoint path was moved to since the checkpoint, following later moves; null if
+    /// it wasn't moved, or the one there now is another one (in the checkpoint at its own path, <paramref name="heldThen"/>).</summary>
+    private async Task<T?> MovedToAsync<T>(
+        VaultPath path, Checkpoint checkpoint, Func<VaultPath, bool> heldThen, Func<VaultPath, Task<T?>> get, CancellationToken ct)
+        where T : class
     {
         var at = path;
         var since = checkpoint.CreatedAt;
@@ -344,7 +439,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             if (await store.FindMoveAsync(at, ct) is not { } move || move.MovedAt < since) return null;
             at = move.To;
             since = move.MovedAt;
-            if (await store.GetAsync(at, ct) is { } note) return then.ContainsKey(at) && checkpoint.Covers(at) ? null : note;
+            if (await get(at) is { } found) return heldThen(at) && checkpoint.Covers(at) ? null : found;
         }
 
         return null;
@@ -390,8 +485,13 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             changes.Add(new(RestoreChangeKind.Moved, to, now.Path, now.Content == then ? null : TextDiff.Count(now.Content, then)));
         }
 
-        var (_, inScope) = await BothAsync(view, scope, ct);
-        var current = work.Current(inScope).ToList();
+        var files = work.Attachments;
+        changes.AddRange(files.Changed.Keys.Select(path => new RestoreChange(RestoreChangeKind.Changed, path, null, null)));
+        changes.AddRange(files.Back.Keys.Select(path => new RestoreChange(RestoreChangeKind.Back, path, null, null)));
+        changes.AddRange(files.Trash.Select(a => new RestoreChange(RestoreChangeKind.Trash, a.Path, null, null)));
+        changes.AddRange(files.Moved.Select(m => new RestoreChange(RestoreChangeKind.Moved, m.Key, m.Value.Now.Path, null)));
+
+        var current = work.Current(await BothAsync(view, scope, ct)).ToList();
         var token = work.IsEmpty
             ? null
             : VersionToken.Of(string.Join('\n', [scope.Value, checkpoint.Name, checkpoint.CreatedAt.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), .. current.Select(c => $"{c.Path.Value} {c.Version}")]));
@@ -419,7 +519,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         };
         lines.AddRange(preview.Changes.Select(c => c.Kind switch
         {
-            RestoreChangeKind.Changed => $"  changed     {c.Path.Value}  {Delta(c.Lines!.Value)}",
+            RestoreChangeKind.Changed => $"  changed     {c.Path.Value}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
             RestoreChangeKind.Back => $"  back        {c.Path.Value}",
             RestoreChangeKind.Trash => $"  to trash    {c.Path.Value}  (created since)",
             _ => $"  moved back  {c.From!.Value} → {c.Path.Value}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
@@ -463,8 +563,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         var work = await PlanAsync(view, scope, ct);
-        var (_, inScope) = await BothAsync(view, scope, ct);
-        var current = work.Current(inScope).ToDictionary(c => c.Path, c => c.Version);
+        var current = work.Current(await BothAsync(view, scope, ct)).ToDictionary(c => c.Path, c => c.Version);
         var planned = plan.Current.ToDictionary(c => c.Path, c => c.Version);
         var changed = current.Where(c => planned.GetValueOrDefault(c.Key) != c.Value).Select(c => c.Key)
             .Concat(planned.Keys.Where(p => !current.ContainsKey(p)))
@@ -490,11 +589,25 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         batch.Trashes.AddRange(work.Trash);
+
+        // Attachments by the same rules; a state that comes back names the blob the checkpoint kept.
+        var files = work.Attachments;
+        foreach (var (now1, then) in files.Changed.Values) batch.AttachmentReplaces.Add((now1, AttachmentWriter.Next(now1, then, label, at, changeset: null, keepCurrent: true)));
+        foreach (var (path, then) in files.Back) batch.AttachmentCreates.Add(new StoredAttachment(path, then, 1, label, at, [], null));
+        foreach (var (to, (moving, then)) in files.Moved)
+        {
+            var target = moving.Version == then.Version
+                ? moving with { Path = to, Revision = moving.Revision + 1 }
+                : AttachmentWriter.Next(moving, then, label, at, changeset: null, keepCurrent: true) with { Path = to };
+            batch.AttachmentMoves.Add((moving, target));
+        }
+
+        batch.AttachmentTrashes.AddRange(files.Trash);
         var conflicts = await store.TryCommitAsync(batch, label, at, ct);
         if (conflicts.Count > 0) return Failed(token, string.Join(", ", conflicts.Select(c => c.Value)), at);
 
-        var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {work.Changed.Count} changed, "
-            + $"{work.Back.Count} back, {work.Moved.Count} moved back, {work.Trash.Count} to the trash";
+        var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {work.ChangedCount} changed, "
+            + $"{work.BackCount} back, {work.MovedCount} moved back, {work.TrashCount} to the trash";
         if (work.Rewrites.Count > 0)
         {
             message += $"; rewrote {Count(work.Rewrites.Values.Sum(l => l.Count), "link")} in {string.Join(", ", work.Rewrites.Keys.Select(p => p.Value).Order(StringComparer.Ordinal))}";
@@ -515,9 +628,14 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
     private static string Delta((int Added, int Removed) lines) => $"+{lines.Added} -{lines.Removed}";
 
-    /// <summary>The notes in scope as the checkpoint holds them, and as they are now.</summary>
-    private async Task<(Dictionary<VaultPath, string> Then, Dictionary<VaultPath, StoredNote> Now)> BothAsync(
-        CheckpointView view, VaultPath scope, CancellationToken ct)
+    /// <summary>The notes and attachments in scope as the checkpoint holds them and as they are now.</summary>
+    private sealed record InScope(
+        Dictionary<VaultPath, string> Then,
+        Dictionary<VaultPath, StoredNote> Now,
+        Dictionary<VaultPath, AttachmentState> AttachmentsThen,
+        Dictionary<VaultPath, StoredAttachment> AttachmentsNow);
+
+    private async Task<InScope> BothAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var then = new Dictionary<VaultPath, string>();
         if (await view.ReadAsync(scope, ct) is { } single) then[scope] = single;
@@ -530,14 +648,28 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             if (await store.GetAsync(path, ct) is { } note) now[path] = note;
         }
 
-        return (then, now);
+        var attachmentsThen = view.Checkpoint.Attachments
+            .Where(a => a.Path == scope || Checkpoint.IsBelow(a.Path, scope))
+            .ToDictionary(a => a.Path, a => a.State);
+        IEnumerable<StoredAttachment> attachments = await StoreAttachments.GetAsync(store, scope, ct) is { } file
+            ? [file]
+            : await StoreAttachments.UnderAsync(store, scope, ct);
+        return new InScope(then, now, attachmentsThen, attachments.ToDictionary(a => a.Path));
     }
 
     private static string Where(Checkpoint checkpoint, VaultPath scope) =>
         scope == checkpoint.Path ? checkpoint.Scope : scope.Value + "/";
 
-    private static ShellResult Written(string message, StoredNote note) =>
-        ShellResult.Ok(message) with { Version = new NoteVersion(note.Path.Value, note.Version) };
+    private static ShellResult Written(string message, VaultPath path, string version) =>
+        ShellResult.Ok(message) with { Version = new NoteVersion(path.Value, version) };
+
+    /// <summary>What a checkpoint holds, e.g. "3 notes", "3 notes, 1 attachment" or "1 attachment".</summary>
+    private static string Contents(Checkpoint checkpoint) => (checkpoint.Notes.Count, checkpoint.Attachments.Count) switch
+    {
+        (var notes, 0) => Count(notes, "note"),
+        (0, var attachments) => Count(attachments, "attachment"),
+        var (notes, attachments) => $"{Count(notes, "note")}, {Count(attachments, "attachment")}",
+    };
 
     private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 }

@@ -5,7 +5,8 @@ using Kumbu.Core.Paths;
 namespace Kumbu.Core.Attachments;
 
 /// <summary>The attachments of a note store, for code that is handed one: a store that keeps attachments implements
-/// <see cref="IAttachmentStore"/> as well; a reader that doesn't (a checkpoint's view) has none to offer.</summary>
+/// <see cref="IAttachmentStore"/> as well (so does a checkpoint's view, with the attachments it holds); a reader that
+/// doesn't has none to offer.</summary>
 public static class StoreAttachments
 {
     public static Task<StoredAttachment?> GetAsync(INoteReader notes, VaultPath path, CancellationToken ct) =>

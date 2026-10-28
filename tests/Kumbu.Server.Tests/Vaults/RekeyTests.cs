@@ -322,7 +322,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         return a;
     }
 
-    /// <summary>Every reference to a blob of "Arbeit" (current states, history, trash), with a hash of the
+    /// <summary>Every reference to a blob of "Arbeit" (current states, history, trash, checkpoints), with a hash of the
     /// bytes it opens to (null if there is no such blob), as a second process reads them.</summary>
     private async Task<List<(string Where, string BlobId, string? Bytes)>> BlobReferencesAsync(Account a)
     {
@@ -335,6 +335,11 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         }
 
         states.AddRange((await store.ListAttachmentTrashAsync(null, Ct)).Select(t => ($"{t.Attachment.Path.Value} trash", t.Attachment.Current)));
+        foreach (var checkpoint in await store.ListCheckpointsAsync(Kumbu.Core.Paths.VaultPath.Root, Ct))
+        {
+            states.AddRange(checkpoint.Attachments.Select(c => ($"{c.Path.Value} checkpoint {checkpoint.Name}", c.State)));
+        }
+
         var result = new List<(string, string, string?)>();
         foreach (var (where, state) in states)
         {
@@ -845,6 +850,43 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
         // Still shared: a.png, b.png and the trashed c.png name one blob, and it is stored once.
         Assert.Single(after.Where(r => r.Where != "/Arbeit/a.png history 0").Select(r => r.BlobId).Distinct());
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct));
+
+        // A sweep afterwards finds every blob referenced.
+        _time.Advance(TimeSpan.FromHours(1));
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
+        Assert.Equal(after, await BlobReferencesAsync(a));
+    }
+
+    [Fact]
+    public async Task Rekeying_remaps_the_blob_ids_a_checkpoint_holds()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var store = Store(a);
+        var x = await AttachAsync(store, "/Arbeit/x.png", Png(2000, 3));
+        var y = await AttachAsync(store, "/Arbeit/y.png", Png(2000, 3));
+        var checkpoint = new Checkpoint("cp", P("/Arbeit"), true, "lea", Now, []) { Attachments = [new(x.Path, x.Current), new(y.Path, y.Current)] };
+        Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
+        // x.png goes to the trash, y.png gets other bytes and keeps no history: the shared bytes are left to the trash
+        // entry and the checkpoint.
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { x } }, "lea", Now, Ct));
+        var other = y with { Current = await StateAsync(store, Png(3000, 4)), Revision = 2 };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (y, other) } }, "lea", Now, Ct));
+        var before = await BlobReferencesAsync(a);
+        Assert.Equal(
+            ["/Arbeit/y.png", "/Arbeit/x.png trash", "/Arbeit/x.png checkpoint cp", "/Arbeit/y.png checkpoint cp"],
+            before.Select(r => r.Where));
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        // The trash entry and the checkpoint still name one blob, stored once.
+        Assert.Single(after.Skip(1).Select(r => r.BlobId).Distinct());
         Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct));
 
         // A sweep afterwards finds every blob referenced.
