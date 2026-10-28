@@ -303,7 +303,7 @@ function ExportStep({ vault, checkpoint, onBack, onDone }: { vault: string; chec
       }}
       className="flex flex-col gap-4"
     >
-      <p className="text-text-body">The ZIP holds the notes as plain text, outside Kumbu²'s encryption: your password confirms it.</p>
+      <p className="text-text-body">The ZIP holds the notes, PDFs and images as they are, outside Kumbu²'s encryption: your password confirms it.</p>
       <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
       {exporting.error && <FormError>{exporting.error}</FormError>}
       <div className="flex gap-2.5">

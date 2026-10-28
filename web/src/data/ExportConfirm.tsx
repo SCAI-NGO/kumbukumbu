@@ -3,14 +3,14 @@ import { useState } from "react";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { useExport } from "./useExport";
 
-/** One export (a vault, a checkpoint) after the password: the ZIP is plain text, outside Kumbu²'s encryption. */
+/** One export (a vault, a checkpoint) after the password: the ZIP is plain text and plain files, outside Kumbu²'s encryption. */
 export default function ExportConfirm({ title, href, onClose }: { title: string; href: string; onClose(): void }) {
   const [password, setPassword] = useState("");
   const exporting = useExport();
   return (
     <ConfirmTyped
       title={title}
-      text="The ZIP holds the notes as plain text, outside Kumbu²'s encryption: your password confirms it."
+      text="The ZIP holds the notes, PDFs and images as they are, outside Kumbu²'s encryption: your password confirms it."
       action="Export"
       pending={exporting.pending}
       error={exporting.error}

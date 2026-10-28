@@ -429,7 +429,7 @@ export function YourDataSection() {
   return (
     <Section title="Your data">
       <p className="text-text-body">
-        The export is a ZIP with a folder of Markdown notes for each vault; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
+        The export is a ZIP with a folder for each vault, with its Markdown notes, PDFs and images; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
         Importing such a ZIP makes a vault of each folder, or merges into the vault of that name.
       </p>
       <div className="flex flex-wrap gap-3">
