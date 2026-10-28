@@ -21,6 +21,9 @@ public static class KumbuMetrics
         return true;
     });
 
+    public static readonly Counter RateLimited = Prometheus.Metrics.CreateCounter(
+        "kumbu_http_rate_limited_total", "Requests answered 429, by route template.", new CounterConfiguration { LabelNames = ["endpoint"] });
+
     /// <summary>Sets up the default collectors; call before anything uses the default registry. Idempotent.</summary>
     public static void Configure() => _ = Configured.Value;
 }

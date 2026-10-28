@@ -209,6 +209,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterv
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
+if (app.Services.GetService<MetricsServer>() is not null) app.UseKumbuHttpMetrics();
 app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
