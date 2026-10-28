@@ -262,4 +262,38 @@ public sealed class AdminTests(MongoFixture fixture)
         Assert.False(await Admin().SetRoleAsync(admin, "no-such-user", Roles.User, Ct));
         Assert.False(await Admin().SetActiveAsync(admin, "no-such-user", false, Ct));
     }
+
+    private Invitations Invitations() => new(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+
+    [Fact]
+    public async Task Deactivating_an_admin_revokes_their_open_invitations_and_reactivating_revives_none()
+    {
+        var admin = await UserAsync("anna", Roles.Admin);
+        var lea = await UserAsync("lea", Roles.Admin);
+        var (code, info) = await Invitations().CreateAsync(lea, Roles.Admin, null, null, Ct);
+        var (annas, _) = await Invitations().CreateAsync(admin, Roles.User, null, null, Ct);
+
+        Assert.True(await Admin().SetActiveAsync(admin, lea.Id, false, Ct));
+
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(code, Ct))!.State);
+        Assert.NotNull((await Invitations().ListAsync(admin, Ct)).Single(i => i.Id == info.Id).RevokedAt);
+        Assert.True(await Admin().SetActiveAsync(admin, lea.Id, true, Ct));
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "mallory", Password, Ct));
+        Assert.Equal(InvitationState.Revoked, refused.State);
+        Assert.Equal(InvitationState.Open, (await Invitations().PeekAsync(annas, Ct))!.State);
+    }
+
+    [Fact]
+    public async Task Making_an_admin_a_user_revokes_their_open_invitations()
+    {
+        var admin = await UserAsync("anna", Roles.Admin);
+        var lea = await UserAsync("lea", Roles.Admin);
+        var (code, _) = await Invitations().CreateAsync(lea, Roles.User, null, null, Ct);
+
+        Assert.True(await Admin().SetRoleAsync(admin, lea.Id, Roles.User, Ct));
+        Assert.True(await Admin().SetRoleAsync(admin, lea.Id, Roles.Admin, Ct));
+
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "mallory", Password, Ct));
+        Assert.Equal(InvitationState.Revoked, refused.State);
+    }
 }

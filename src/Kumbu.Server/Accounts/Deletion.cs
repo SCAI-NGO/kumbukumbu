@@ -23,7 +23,7 @@ public sealed record DeletedUser(string Id, string Username, string Display, str
 /// password, so a stolen session alone can't. The log names ids, usernames and counts, never a vault name or content.
 /// <para>
 /// The invitations a user created stay: they are the instance's record of who invited whom (the accounts they made
-/// exist on their own), and the remaining admins see and can revoke an open one, as after a deactivation. The one the
+/// exist on their own); an open one is revoked in the same transaction, as after a deactivation. The one the
 /// user joined with stays as a used invitation, but without its note (which often names the invitee) and without
 /// the link to the user, so nothing in the database still names or points to the person.
 /// </para>
@@ -164,6 +164,7 @@ public sealed class Deletion(
         var keyCount = 0;
         var connectionCount = 0;
         var invitationCount = 0;
+        long revokedCount = 0;
         long documents;
         try
         {
@@ -186,12 +187,16 @@ public sealed class Deletion(
                     i => i.UsedBy == userId,
                     Builders<InvitationDocument>.Update.Unset(i => i.Note).Unset(i => i.UsedBy),
                     cancellationToken: token)).ModifiedCount;
+                // The ones they created stay as the record of who invited whom, but none that is open stays usable.
+                revokedCount = await Invitations.RevokeOpenOfAsync(db, s, userId, time.GetUtcNow().UtcDateTime, token);
             }, ct);
         }
         catch (UserChangedException)
         {
             return null;
         }
+
+        if (revokedCount > 0) log.LogInformation("{Count} open invitations of deleted user {UserId} revoked", revokedCount, userId);
 
         // A vault the user made between the read above and the transaction (from another tab, say) has an owner
         // that no longer exists: it goes too.
