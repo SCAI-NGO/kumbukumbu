@@ -5,6 +5,7 @@ import { useId, useState, type FormEvent } from "react";
 import { api, call } from "../../api/client";
 import { errorText } from "../../api/error-text";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../../components/form";
+import { PasswordField } from "../../components/PasswordField";
 import { useDialog } from "../../hooks/useDialog";
 
 const roles = [
@@ -43,7 +44,7 @@ function Choice<T extends string | number>({ legend, name, options, value, onCha
   );
 }
 
-/** Asks for the role, how long the invitation is valid and an optional note. */
+/** Asks for the role, how long the invitation is valid and an optional note; for an admin, the admin's own password too. */
 export default function NewInvitationDialog({ onClose, onCreated }: { onClose(): void; onCreated(link: string): void }) {
   const id = useId();
   const queryClient = useQueryClient();
@@ -51,10 +52,16 @@ export default function NewInvitationDialog({ onClose, onCreated }: { onClose():
   const [role, setRole] = useState<"user" | "admin">("user");
   const [days, setDays] = useState<1 | 7 | 30>(7);
   const [note, setNote] = useState("");
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
 
   const create = useMutation({
     mutationFn: () =>
-      call(api.POST("/api/admin/invitations", { body: { role, expiresInDays: days, ...(note.trim() ? { note: note.trim() } : {}) } })),
+      call(
+        api.POST("/api/admin/invitations", {
+          body: { role, expiresInDays: days, ...(note.trim() ? { note: note.trim() } : {}), ...(role === "admin" ? { password } : {}) },
+        }),
+      ),
     // The result carries the link: it goes to the reveal's state, not the client-wide mutation cache.
     gcTime: 0,
     onSuccess: (created) => {
@@ -82,6 +89,12 @@ export default function NewInvitationDialog({ onClose, onCreated }: { onClose():
           New invitation
         </h2>
         <Choice<"user" | "admin"> legend="Role" name={`${id}-role`} options={roles} value={role} onChange={setRole} />
+        {role === "admin" && (
+          <div className="flex flex-col gap-1.5">
+            <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+            <p className="text-sm text-muted">An admin can manage every account here: your password confirms the invitation.</p>
+          </div>
+        )}
         <Choice<1 | 7 | 30> legend="Valid for" name={`${id}-days`} options={expiries} value={days} onChange={setDays} />
         <div className="flex flex-col gap-1.5">
           <label htmlFor={`${id}-note`} className={labelClass}>
@@ -95,7 +108,7 @@ export default function NewInvitationDialog({ onClose, onCreated }: { onClose():
           <button type="button" onClick={onClose} className={secondaryButtonClass}>
             Cancel
           </button>
-          <button type="submit" disabled={create.isPending} className={primaryButtonClass}>
+          <button type="submit" disabled={create.isPending || (role === "admin" && !password)} className={primaryButtonClass}>
             Create invitation
           </button>
         </div>

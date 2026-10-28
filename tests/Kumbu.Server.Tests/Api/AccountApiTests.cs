@@ -88,7 +88,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     private async Task<string> InvitationCodeAsync(string role = "user")
     {
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
-        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role }, session: admin);
+        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role, password = Password }, session: admin);
         return (await JsonAsync(created))["code"]!.GetValue<string>();
     }
 
@@ -767,7 +767,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull(row["lastSignInAt"]?.GetValue<DateTime>());
         var id = row["id"]!.GetValue<string>();
 
-        using var role = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { role = "admin" }, session: admin);
+        using var role = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { role = "admin", password = Password }, session: admin);
         Assert.Equal(HttpStatusCode.NoContent, role.StatusCode);
         using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { active = false }, session: admin);
         Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
@@ -803,10 +803,72 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Inviting_an_admin_needs_the_password_and_inviting_a_user_doesnt()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+
+        using var without = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin" }, session: admin);
+        using var wrong = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", password = NewPassword }, session: admin);
+        using var user = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "user" }, session: admin);
+        using var right = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", password = Password }, session: admin);
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        Assert.Equal("Inviting an admin needs your password.", (await JsonAsync(without))["error"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        Assert.Equal("Your password is wrong.", (await JsonAsync(wrong))["error"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, user.StatusCode);
+        Assert.Equal("user", (await JsonAsync(user))["invitation"]!["role"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.Created, right.StatusCode);
+        Assert.Equal("admin", (await JsonAsync(right))["invitation"]!["role"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Password_checks_for_making_an_admin_are_limited_like_a_password_change()
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        for (var i = 0; i < Kumbu.Server.Api.AccountLimits.SignInsPerUsername; i++)
+        {
+            using var wrong = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", password = NewPassword }, session: admin);
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", password = Password }, session: admin);
+        using var promotion = await SendAsync(HttpMethod.Patch, "/api/admin/users/someone", new { role = "admin", password = Password }, session: admin);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.NotNull(limited.Headers.RetryAfter);
+        Assert.Equal(HttpStatusCode.TooManyRequests, promotion.StatusCode);
+    }
+
+    [Fact]
+    public async Task Making_someone_an_admin_needs_the_password_and_without_it_changes_nothing()
+    {
+        // Else an invitation for a user and a promotion would make the admin that a stolen session can't invite.
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        var username = await NewUserAsync();
+        using var list = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
+        var id = (await JsonAsync(list)).AsArray().Single(u => u!["username"]!.GetValue<string>() == username)!["id"]!.GetValue<string>();
+
+        using var without = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { role = "admin", active = false }, session: admin);
+        using var wrong = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { role = "admin", password = NewPassword }, session: admin);
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        Assert.Equal("Making someone an admin needs your password.", (await JsonAsync(without))["error"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        using var after = await SendAsync(HttpMethod.Get, "/api/admin/users", session: admin);
+        var row = (await JsonAsync(after)).AsArray().Single(u => u!["id"]!.GetValue<string>() == id)!;
+        Assert.Equal("user", row["role"]!.GetValue<string>());
+        Assert.True(row["active"]!.GetValue<bool>());
+        // Making someone a user, or deactivating them, needs none.
+        using var deactivate = await SendAsync(HttpMethod.Patch, $"/api/admin/users/{id}", new { role = "user", active = false }, session: admin);
+        Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
+    }
+
+    [Fact]
     public async Task The_admin_lists_and_revokes_invitations()
     {
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
-        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", note = "for Lea", expiresInDays = 2 }, session: admin);
+        using var created = await SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = "admin", note = "for Lea", expiresInDays = 2, password = Password }, session: admin);
         var json = await JsonAsync(created);
         var code = json["code"]!.GetValue<string>();
         var id = json["invitation"]!["id"]!.GetValue<string>();

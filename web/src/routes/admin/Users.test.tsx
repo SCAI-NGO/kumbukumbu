@@ -271,7 +271,36 @@ describe("Admin users", () => {
     });
     renderApp("/admin/users");
     await userEvent.click(await screen.findByRole("button", { name: "Make Bob an admin" }));
-    await vi.waitFor(() => expect(patches).toEqual([{ role: "admin" }]));
+    const dialog = screen.getByRole("alertdialog", { name: "Make Bob an admin?" });
+    expect(within(dialog).getByRole("button", { name: "Make admin" })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery staple");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Make admin" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ role: "admin", password: "correct horse battery staple" }]));
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("makes an admin a user without the password", async () => {
+    const patches: unknown[] = [];
+    api(root, {
+      "PATCH /api/admin/users/u1": async (r) => {
+        patches.push(await r.json());
+        return noContent();
+      },
+    });
+    renderApp("/admin/users");
+    await userEvent.click(await screen.findByRole("button", { name: "Make Ada a user" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ role: "user" }]));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps the promotion open with the server's sentence for a wrong password", async () => {
+    api(admin, { "PATCH /api/admin/users/u2": () => json(400, { error: "Your password is wrong." }) });
+    renderApp("/admin/users");
+    await userEvent.click(await screen.findByRole("button", { name: "Make Bob an admin" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Make Bob an admin?" });
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "not my password");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Make admin" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your password is wrong.");
   });
 
   it("offers to make another admin a user, and shows the server's sentence when it refuses", async () => {
@@ -295,6 +324,8 @@ describe("Admin users", () => {
     const fetch = api(admin, { "PATCH /api/admin/users/u2": () => noContent() });
     renderApp("/admin/users");
     await userEvent.click(await screen.findByRole("button", { name: "Make Bob an admin" }));
+    await userEvent.type(screen.getByLabelText("Your password"), "correct horse battery staple");
+    await userEvent.click(screen.getByRole("button", { name: "Make admin" }));
     // A session read that comes after the PATCH.
     await vi.waitFor(() => {
       const calls = fetch.mock.calls.map(([r]) => `${r.method} ${new URL(r.url).pathname}`);

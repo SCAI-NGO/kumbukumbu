@@ -1156,6 +1156,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         trace?: never;
@@ -1462,6 +1471,15 @@ export interface paths {
                 };
                 /** @description Forbidden */
                 403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -6434,6 +6452,7 @@ export interface components {
             note?: null | string;
             /** Format: int32 */
             expiresInDays?: null | number | string;
+            password?: null | string;
         };
         CreatePairingRequest: {
             /** Format: int32 */
@@ -6823,6 +6842,7 @@ export interface components {
         UpdateUserRequest: {
             active?: null | boolean;
             role?: null | string;
+            password?: null | string;
         };
         UploadConflictView: {
             path: string;
