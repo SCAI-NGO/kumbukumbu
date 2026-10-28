@@ -8,6 +8,8 @@ using Kumbu.Core.Sh;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.OpenApi;
+using Microsoft.OpenApi;
 
 namespace Kumbu.Server.Api;
 
@@ -103,7 +105,17 @@ public static class HistoryApi
     public static void MapHistoryApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapPost("/restore/{vault}/{**path}", RestoreAsync).Errors(400, 401, 403, 404, 409, 503);
+        api.MapPost("/restore/{vault}/{**path}", RestoreAsync).Errors(400, 401, 403, 404, 409, 503)
+            // The generator keeps one shape per status; a note's restore and an attachment's answer differently.
+            .AddOpenApiOperationTransformer((operation, context, _) =>
+            {
+                operation.Responses ??= [];
+                operation.Responses["200"] = OneOf(context, "A note's restore: NoteView; an attachment's: FileStateView", "NoteView", "FileStateView");
+                operation.Responses["409"] = OneOf(
+                    context, "A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError",
+                    "ConflictView", "FileConflictView", "ApiError");
+                return Task.CompletedTask;
+            });
         api.MapGet("/version/{vault}/{**path}", VersionAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404, 503);
         api.MapGet("/vaults/{vault}/trash", TrashAsync).Errors(400, 401, 404, 503);
         api.MapGet("/vaults/{vault}/checkpoints", ListCheckpointsAsync).Errors(400, 401, 404, 503);
@@ -116,6 +128,16 @@ public static class HistoryApi
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);
         api.MapGet("/vaults/{vault}/activity", ActivityAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
     }
+
+    /// <summary>A JSON response that is one of the named component schemas.</summary>
+    private static OpenApiResponse OneOf(OpenApiOperationTransformerContext context, string description, params string[] schemas) => new()
+    {
+        Description = description,
+        Content = new Dictionary<string, OpenApiMediaType>
+        {
+            ["application/json"] = new() { Schema = new OpenApiSchema { OneOf = [.. schemas.Select(s => (IOpenApiSchema)new OpenApiSchemaReference(s, context.Document))] } },
+        },
+    };
 
     /// <summary>
     /// <c>restore &lt;path&gt; [version]</c>: an existing note goes back to a version of its history, as a new

@@ -3487,13 +3487,13 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description OK */
+                /** @description A note's restore: NoteView; an attachment's: FileStateView */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["FileStateView"];
+                        "application/json": components["schemas"]["NoteView"] | components["schemas"]["FileStateView"];
                     };
                 };
                 /** @description Bad Request */
@@ -3532,13 +3532,13 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
-                /** @description Conflict */
+                /** @description A newer version than expected: ConflictView for a note, FileConflictView for an attachment; else ApiError */
                 409: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["ApiError"];
+                        "application/json": components["schemas"]["ConflictView"] | components["schemas"]["FileConflictView"] | components["schemas"]["ApiError"];
                     };
                 };
                 /** @description Service Unavailable */
@@ -4061,6 +4061,15 @@ export interface paths {
                 };
                 /** @description Not Found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -5141,6 +5150,15 @@ export interface paths {
                 };
                 /** @description Not Found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
                     headers: {
                         [name: string]: unknown;
                     };

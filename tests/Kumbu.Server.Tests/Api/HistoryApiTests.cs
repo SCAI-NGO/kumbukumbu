@@ -434,5 +434,13 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
         {
             Assert.Equal(["get"], paths[path]!.AsObject().Select(p => p.Key).Where(k => k != "parameters"));
         }
+
+        // A restore answers a note's view or an attachment's state, and conflicts in the shape of either.
+        var restore = paths["/api/restore/{vault}/{path}"]!["post"]!["responses"]!;
+        Assert.Equal(["#/components/schemas/NoteView", "#/components/schemas/FileStateView"], OneOf(restore["200"]!));
+        Assert.Equal(["#/components/schemas/ConflictView", "#/components/schemas/FileConflictView", "#/components/schemas/ApiError"], OneOf(restore["409"]!));
+
+        static string[] OneOf(JsonNode response) =>
+            [.. response["content"]!["application/json"]!["schema"]!["oneOf"]!.AsArray().Select(s => s!["$ref"]!.GetValue<string>())];
     }
 }

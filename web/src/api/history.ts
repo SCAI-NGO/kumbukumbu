@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "./client";
-import type { NoteView } from "./notes";
 import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
 
@@ -37,8 +36,8 @@ export function useRestoreNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: ["restore"],
-    // A note's restore answers its NoteView, an attachment's its FileStateView; the generated schema names only one.
-    mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }): Promise<NoteView | FileState> =>
+    // A note's restore answers its NoteView, an attachment's its FileStateView (the generated union).
+    mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }) =>
       call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null, ...(expected ? { expected } : {}) } })),
     onSuccess: (restored) => {
       // The restored note itself is what came back.
