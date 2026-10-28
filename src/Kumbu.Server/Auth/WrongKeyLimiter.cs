@@ -80,5 +80,28 @@ public sealed class WrongKeyLimiter : IDisposable
         return new IPAddress(bytes) + "/64";
     }
 
+    /// <summary>
+    /// The network of a client address, wider than <see cref="Partition"/>: for a count that should hold off one
+    /// attacker's whole network and nobody else's (wrong pairing codes). IPv6 by its /48, what a provider usually hands
+    /// a site, and the longest prefix routed between providers, so an attacker's 65,536 /64s count as one. IPv4 by its
+    /// /24, the longest prefix routed between providers: counted per address, as <see cref="Partition"/> does, a /24
+    /// would give its holder 256 counts, and a /24 is what someone with a network of their own has at the least. The
+    /// price is that the neighbours of a host in a shared /24 (a hosting provider's, a carrier-grade NAT's) share its count.
+    /// </summary>
+    public static string Network(IPAddress? address)
+    {
+        if (address is null) return "unknown";
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        var bytes = address.GetAddressBytes();
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            Array.Clear(bytes, 6, 10);
+            return new IPAddress(bytes) + "/48";
+        }
+
+        bytes[^1] = 0;
+        return new IPAddress(bytes) + "/24";
+    }
+
     public void Dispose() => _limiter.Dispose();
 }

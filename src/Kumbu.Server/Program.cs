@@ -68,6 +68,7 @@ builder.Services.AddSingleton<UserCatalog>();
 builder.Services.AddSingleton<UserKeyRotation>();
 builder.Services.AddSingleton<Sessions>();
 builder.Services.AddSingleton<ApiKeys>();
+builder.Services.AddHostedService<ExpiredKeySweep>();
 builder.Services.AddSingleton<Connections>();
 builder.Services.AddClientMetadataFetcher();
 builder.Services.AddSingleton<OAuthClients>();

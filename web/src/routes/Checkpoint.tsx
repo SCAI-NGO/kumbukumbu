@@ -67,7 +67,7 @@ export default function Checkpoint() {
                   type="button"
                   aria-expanded={row.open}
                   onClick={() => setClosed((c) => ({ ...c, [row.folder.path]: row.open }))}
-                  className={`${linkClass} pl-1.5 font-medium`}
+                  className={`${linkClass} pl-1.5 text-left font-medium`}
                 >
                   <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${row.open ? "rotate-90" : ""}`} />
                   <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />

@@ -3,6 +3,7 @@
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
@@ -17,7 +18,7 @@ import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
-import { BarButton, ChangeText, deviceOf, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
+import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
 import BacklinksList from "./BacklinksList";
 import MarkdownView, { type Highlight } from "./MarkdownView";

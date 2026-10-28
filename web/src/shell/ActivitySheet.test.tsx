@@ -84,14 +84,14 @@ describe("the vault's activity", () => {
   it("says_you_in_obsidian_for_a_device_row", async () => {
     api(() =>
       json(200, {
-        rows: [row("Work – Obsidian Laptop", "device", [{ path: "/Work/plan.md", kind: "changed" }]), row("ada", "user", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z")],
+        rows: [row("Work – Obsidian My Obsidian Laptop", "device", [{ path: "/Work/plan.md", kind: "changed" }]), row("ada", "user", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z")],
         more: false,
       }),
     );
     const dialog = await openActivity();
 
     const [device, own] = await rowsOf(dialog);
-    expect(device).toHaveTextContent("You in Obsidian (Laptop)");
+    expect(device).toHaveTextContent("You in Obsidian (My Obsidian Laptop)");
     expect(own).toHaveTextContent(/^You/);
   });
 

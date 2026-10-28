@@ -301,7 +301,7 @@ So `mv` resolves every link in the vault twice, with the notes as they are and a
 
 The move and its link rewrites are one transaction (chapter 7): delete the old path only if nobody wrote in between, insert at the new path (the unique index refuses an existing note), and rewrite the linking notes, or none of it. The history travels with the note; a move changes no text, so the last writer stays who it was.
 
-`mv --keep-links` skips the rewriting. The Obsidian plugin will use it: Obsidian rewrites links itself when a file is renamed and uploads those edits, so a second rewrite on the server would collide with them.
+`mv --keep-links` skips the rewriting. The Obsidian plugin uses it (as `keepLinks` on `POST /api/move`, chapter 13): Obsidian rewrites links itself when a file is renamed and uploads those edits, so a second rewrite on the server would collide with them.
 
 ## 6. Encryption at rest: vault keys and key slots
 
@@ -319,12 +319,12 @@ GCM can also authenticate **associated data** that is not encrypted. Kumbu² put
 
 ### One key per vault, wrapped in slots
 
-Each vault has its own random 32-byte **vault key**. It is never stored as it is. Instead, a **key slot** stores it **wrapped**: sealed with a key-encryption key (KEK) derived from a credential. Step 5 had two kinds of slot (chapter 10 adds the user key, sessions and API keys; step 10 app connections):
+Each vault has its own random 32-byte **vault key**. It is never stored as it is. Instead, a **key slot** stores it **wrapped**: sealed with a key-encryption key (KEK) derived from a credential. Step 5 had two kinds of slot (chapter 10 adds the user key, sessions and API keys; chapter 12 app connections):
 
 - **API-key slot** (the dev token): the KEK is `HKDF(token, "kumbu/v1/key-kek", salt = vault id)`. To find the slot without storing the token, the slot carries a second derivation, `HKDF(token, "kumbu/v1/key-lookup")`. Different labels make two unrelated keys from one secret, so knowing the lookup value says nothing about the KEK.
 - **Recovery slot**: the same with the vault's recovery key.
 
-This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 8); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same. (Step 10 added re-keying anyway, for the case where an old copy of the database is in the wrong hands: revoking a slot doesn't reach that copy; `docs/security-architecture.md` §3.)
+This is how disk encryption like LUKS works: many slots, one key. Revoking a credential means deleting its slot (step 8); changing a credential means adding a new slot with the help of another one. Nothing has to be re-encrypted, because the vault key stays the same. (Step 10 added re-keying anyway, for the case where an old copy of the database is in the wrong hands: revoking a slot doesn't reach that copy; chapter 12 and `docs/security-architecture.md` §3.)
 
 **HKDF** (HMAC-based key derivation) turns a secret that is already random into keys. It is fast, which is fine for random tokens and keys: there is nothing to guess. Passwords are different: people choose guessable ones, so deriving a key from a password must be deliberately slow and memory-hungry. That is what **Argon2id** is for (chapter 10).
 
@@ -511,3 +511,167 @@ This is consistent with the threat model (concept §3): the leak the encryption 
 ### Throttles that cost something
 
 Signing in costs an Argon2 run, 64 MiB of memory for a moment, which an attacker could use to exhaust the server instead of guessing. So the account endpoints are limited per minute: sign-in 5 per username and 20 per client network, joining and recovering 5 per network. Every attempt counts, successful or not. The trade-off is deliberate: someone who knows a username can lock that user out of *signing in* for a minute (keys and live sessions are untouched). Checking the current password behind a session, for a password change, a new recovery key, re-encrypting or deleting, is limited to 5 a minute per username, so a stolen session guesses no faster than signing in would. The limits bound each client, not all of them together: many addresses signing in at once could still start many 64 MiB runs. So Argon2 itself runs **at most once per core** across the process, and further runs wait (asynchronously, holding no thread) for a free one; the server slows down instead of running out of memory. IPv6 addresses count by their /64, since one host usually has a whole /64 and would otherwise get 2^64 times the attempts. And behind a reverse proxy the server sees the proxy's address for everyone unless `KUMBU_TRUSTED_PROXY` is set, in which case one attacker's wrong keys lock out all bearer users for a minute. The README lists these as security notes.
+
+## 11. The web app and the REST API it shares
+
+### One origin for people, agents and devices
+
+Steps 1 to 8 had one way in, MCP, made for models. Step 9 adds people: a web app that works on a phone as well as on a laptop, and, in step 11, an Obsidian plugin (chapter 13). Both need the notes in a form a program can use, not a shell to type into. So next to `/mcp` there is a **REST API** under `/api`, and the web app is a set of static files served from `/`. One container serves all three from one origin: one host name, one certificate, and cookies that stay with the origin that set them. The web app (TypeScript, React, Vite, Tailwind) is built into the server's image, so there is no second service to deploy or to keep at the same version.
+
+### The same code paths, so everyone sees the same vault
+
+The REST API is not a second implementation of notes. `GET /api/notes/Work/plan.md` reads through the same store as `cat /Work/plan.md`; `PUT` on the same path writes through the same writer as the `write` tool, with the same version token, history, changesets and link handling; the search sheet runs the same ranking as `semsearch`. That matters more than it sounds. If the web app had its own idea of a link, or its own way of saving, a person and an agent would disagree about the same note, and every bug report would start with the question which of them is right.
+
+Addresses are paths, as in `sh`: the vault is the first segment, the note's path the rest. A note has no id that would survive a move. Kumbu² has paths and a history, and an id would be a third thing to keep in step with them.
+
+### The API as a contract: OpenAPI
+
+The API was designed from the start for two clients in TypeScript, the web app and the plugin, in two repositories. The server describes it as an **OpenAPI** document, `GET /api/openapi.json`, generated from the endpoints themselves, so it can't drift from the code. The web app generates its types from that document (`pnpm gen:api`, with `openapi-typescript`) and calls the API through a client that checks paths, parameters and answers against them (`openapi-fetch`). Rename a field on the server, regenerate, and the compiler names every place in the web app that still uses the old one. The document is the authority; the design's list of endpoints says so about itself.
+
+### Sessions and keys reach different things
+
+The API takes the callers of chapter 10, the session cookie and bearer keys, but they don't reach the same endpoints. A bearer key (an agent, a script, a paired device) reaches what its slots open: notes, files, search, history and checkpoints of its vaults. Everything that manages access, creating vaults, keys and connections, the account and the admin pages, is **session-only**, and a key gets 403 there. The reason is containment: a leaked key must not be able to make more keys, or a copy of itself that lives longer. A few things need even more than a session: an export, re-encrypting, and deleting a vault or the account ask for the password again. A session is something a browser holds, and browsers get left open.
+
+### CSRF: a cookie is ambient, a header is not
+
+A cookie has one dangerous property: the browser sends it by itself, also when a page on another site makes the request. That is **cross-site request forgery** (CSRF): a page you happen to visit posts to Kumbu² in your name. There are two defences, one behind the other. The cookie is `SameSite=Strict`, so the browser leaves it off every request another site starts. And every state-changing request from a session must carry an `Origin` header equal to the server's public address; a request without one is refused. Bearer callers need neither: a page on another site can't make the browser add an `Authorization` header it doesn't know. The same reasoning keeps the cookie off `/mcp` altogether (chapter 10).
+
+### Saving while typing: version tokens with a person
+
+Chapter 3's optimistic concurrency was made for agents, which read, think and then write. A person typing is different: the editor saves by itself, 800 ms after the last keystroke, many times a minute. Each save sends the version token the previous save returned, never one from the app's cache, which may already hold an agent's newer write, and saves go one at a time, so two of them never race each other.
+
+If an agent wrote the note meanwhile, the save gets a 409 with the note as it is now. The editor stops saving and shows a small toast that doesn't block anything: "Changed elsewhere — reload / keep mine / view diff". Nothing is lost whichever the person chooses: *reload* takes the newer text, *keep mine* writes theirs on top and the agent's version stays in the history, and the diff shows what differs before choosing. This is the version token of chapter 3 doing the same job for a person: a conflict is noticed when it happens, and decided by someone who can see both sides.
+
+The person may also just be reading while an agent writes. The open note asks for its version every five seconds while the page is visible, and says when it changed and who changed it; Read mode can take the new text by itself, a setting. That poll is the one request that doesn't count as using the session: otherwise a tab left open would never reach its 30 idle minutes.
+
+### What did my agents do?
+
+After an agent has worked, the first question is what it changed. The **agent banner** answers it: the changes by API keys and app connections since the person's previous sign-in, with the changed lines highlighted. It is built from the history the notes already have, plus one timestamp on the user, so there are no per-note "read" records to keep. A person's own writes, and those of their Obsidian devices (chapter 13), are left out: they know what they typed.
+
+### Bringing notes in, taking them out
+
+Most people arrive with notes already, often a folder from Obsidian. **Upload** takes Markdown files or a whole folder, keeps its structure, and skips and lists anything that isn't a note. A note that already exists is never overwritten silently: the first request only asks (`onConflict: "ask"`) and lists the notes in the way, and the person chooses to replace them (a new version, the old one stays in the history) or to skip them. A batch is one transaction and one changeset of its writer, so an upload can be looked at, and undone, as one step.
+
+A whole vault comes in as a ZIP, and here the work is done by the browser, not the server: the web app unpacks the ZIP itself and sends the notes up through the ordinary upload, with its limits and path checks. The server never sees the ZIP file, so it never has to defend itself against one, and a ZIP that lies about its sizes to fill memory (a **ZIP bomb**) puts at most the tab that opened it at risk. Only entries that are notes are unpacked, each never beyond the size it declares and at most 1 MiB, and an import at most 256 MB.
+
+The way out is an **export**: a vault, several vaults, or a checkpoint as a ZIP of plain Markdown, the notes byte for byte as they are stored, so they open in Obsidian or any editor. That is the promise of concept §10: Kumbu² holds plain Markdown, and leaving costs nothing. An export is also the one moment the notes leave the encryption at rest in bulk, so it asks for the password again, even in a session. A browser download is a plain `GET`, and a password never goes into a URL, so the password buys a **ticket** first (`POST /api/export/ticket`), good for one export within 30 seconds, and the download carries the ticket instead. A stolen session alone takes nothing out.
+
+### Markdown from strangers
+
+A note may hold text an agent copied from a web page, or a file someone imported. Rendered as HTML, such text could run a script in the app, with the user's session: **cross-site scripting** (XSS). So the web app renders Markdown with `react-markdown` and shows raw HTML in a note as text, never as HTML. A Content Security Policy that allows scripts from the app's own origin only is the second line, should a bug let something through. It is concept §5's rule for agents, applied to the browser: note content is data, not instructions.
+
+### Nothing to find on the device
+
+The web app stores no note and no secret in the browser. Local storage holds the colour scheme and two small switches; unsaved text stays in the tab's memory; API answers are `Cache-Control: no-store`. The app can be installed like an app, through a web manifest, but deliberately without a **service worker**, the usual way to make a web app work offline. A service worker caches the app and often its answers, and a cached copy would outlive a sign-out and a release. Instead, every API answer names the server's build (`X-Kumbu-Version`), and the app reloads itself when that differs from its own.
+
+### Look and feel
+
+The look comes from a clickable prototype of a mobile editor made before step 9, with its spec (`concepts/MOBILE_EDITOR_v1.md`): the tree in a drawer, Read and Write modes, a Markdown toolbar above a phone's keyboard. It was the template for look and feel only; where it differed from the concept (links across vaults, note ids, writes by keys rather than by the user), the concept won. Each user picks a colour scheme: the classic ones of Linux terminals and editors, Catppuccin, Tokyo Night, Gruvbox, Nord and others, in dark and light, 18 in all. Each was adjusted until its text reaches a contrast of 4.5:1 against its backgrounds, the spec's rule, and a test checks every scheme against it.
+
+## 12. Connecting apps: an authorisation server, and new keys
+
+### Why OAuth at all
+
+Claude Code takes an API key as a header. App connectors, Claude on the web, on the desktop and on the phone, ChatGPT and others, can't: the user pastes a URL and nothing else, and the app expects to be sent through **OAuth 2.1** to get a token. MCP's authorisation specification says how. The MCP server is a **protected resource**, an **authorisation server** issues tokens for it, and the app finds both by asking the server. Kumbu² is its own authorisation server, on the same origin; there is no external identity provider (concept §9). A library, OpenIddict, was evaluated and set aside: it can't identify clients by a metadata document (below), and its storage can't share the MongoDB transaction that wraps a token's slots. The endpoints are few, so they are written against the specification and tested end to end with the MCP SDK's own OAuth client.
+
+### A connection is a credential, made in Kumbu²
+
+The usual OAuth design starts in the app: it connects, the user signs in and chooses on a consent screen what to grant. Kumbu² turns that round. The user first creates a **connection** on the Access page, next to the API keys: a name, vaults and a right per vault, an optional expiry, exactly what an API key has. The connection has its own address, `/mcp/c/{id}`, which the user pastes into the app. The consent page then only says what is being connected, and asks Allow or Deny.
+
+There are two reasons. The first is one permission system. A connection has a name (unique across keys and connections, since it becomes the writer label in the history), rights, an expiry, a line in a list and a Revoke button, like a key: nothing new to learn or to audit. The second is subtler. An OAuth request carries no identity of the app's *account*: Kumbu² can't tell someone's work Claude from their private one, both are simply "Claude". With one address for all, a "Reconnect" after an expiry could renew the wrong grant and hand the private account the work vaults. With an address per connection, a reconnect arrives at that same address and renews exactly that connection, with its name and rights; there is no choice to get wrong. The id in the address isn't a secret, though at 16 random characters nobody guesses it either: it says *which* connection is meant, and the token says whether the caller may use it. The plain `/mcp` stays for API keys and offers no OAuth.
+
+### The flow, briefly
+
+1. The app calls the connection's address without a token and gets a real HTTP 401, whose `WWW-Authenticate` header names the **protected resource metadata**. That document names the authorisation server, whose own metadata names its endpoints.
+2. The app identifies itself, preferably with a **client metadata document**: its `client_id` is a URL, and Kumbu² fetches the JSON there to learn the app's name and where it may be sent back to. An app without one registers itself (`POST /oauth/register`, dynamic client registration). Anyone can do that, so a registration stores little, and expires after a day unless an authorisation succeeds.
+3. The browser goes to `/oauth/authorize` with a **PKCE** challenge, and from there to the web app's consent page. The person signs in there if needed, at Kumbu², so the app never sees the password, and allows.
+4. The browser returns to the app with a one-time **code**, which the app exchanges at `/oauth/token`, with the PKCE verifier, for an access token and a refresh token.
+5. Every MCP call carries the access token. When it expires, the refresh token gets a new pair.
+
+**PKCE** (proof key for code exchange) solves a problem of public clients, which have no secret of their own: whoever intercepts the code on its way back could exchange it. So the app makes a random verifier, sends only its SHA-256 (the challenge) when the flow starts, and the verifier itself only at the exchange. Whoever caught the code doesn't have the verifier. Kumbu² takes only the SHA-256 method; the `plain` one would send the verifier at the start.
+
+Fetching a client metadata document is the only request the server makes to an address a stranger chooses. That is a classic way in, **server-side request forgery** (SSRF): point the server at something inside the network it runs in. So the fetch takes `https` only, follows no redirect, refuses private, loopback and link-local addresses, reads little, waits briefly and caches what it got.
+
+### Tokens are slots
+
+Here encryption at rest meets OAuth. A token that only *authorised* a request would not be enough: the request has to open vault keys, and the server keeps none. So each token is a credential with slots of its own, like an API key (chapter 10). At Allow the person is signed in, so the server holds their user key: it opens the connection's vault keys and wraps each, with its right, under a key derived from the **code**, for 60 seconds. The exchange opens those slots with the code, wraps the vault keys again under the new refresh token and the new access token, and deletes the code's slots. The access token's slots carry its expiry, an hour by default, and MongoDB deletes them when it passes; the server checks the expiry itself too, as MongoDB's sweep runs only about once a minute.
+
+Each refresh **rotates** both tokens: the refresh token's slots are wrapped again under its successor and deleted, in one transaction. A refresh token is single-use, and that makes theft visible. If a spent one turns up again, two parties hold it, and Kumbu² can't tell which of them is the thief, so it revokes the connection's tokens and the owner reconnects. One exception comes from practice: apps retry a refresh whose answer got lost, so a spent token presented again within 30 seconds gets the same new pair back, sealed under the spent token so that only its holder can open it.
+
+Revoking means deleting slots, as for a key: once a token's slots are gone it opens nothing, whatever is in memory. The rejected alternative was a self-contained access token carrying the wrapped vault keys, a JWT say: no lookup per request, but no way to revoke it before it expires either.
+
+An honest consequence: the refresh token lives with the app's provider. Anthropic, OpenAI or xAI then hold key material to the granted vaults. That is consistent with the threat model, since they see whatever their model reads anyway, but the README says it plainly.
+
+### Two kinds of "off"
+
+The owner's Revoke is final, like an API key's: the connection's address can't be authorised again. Most other events only revoke the tokens and leave the connection **needing a reconnect**: a password change that revokes the API keys, a recovery, a change of rights, a re-keying, a reused code or refresh token. The app shows "Reconnect", the consent page shows the rights as they are now, and the same connection works again. The list shows each connection's state and the reason, so a "Connected" that quietly stopped working can be explained from Kumbu²'s side; the flow is logged step by step, without any secret, so that a token issued and never used shows as such.
+
+A detail from practice: every user of one app arrives from that provider's few addresses, and access tokens expire every hour. If expired tokens counted as wrong keys (chapter 10's 20 a minute per network), one busy hour would lock out every user of that app. So an expired or revoked token is recognised, its record kept for a day as a **tombstone** without slots, and it doesn't count.
+
+### Re-keying: when deleting a slot is not enough
+
+Everything so far revokes by deleting slots; no key changes (chapter 6). That protects the running server, not an old copy of the database. Whoever has last month's backup and a key that was valid last month opens what that backup holds. And a vault key that was exposed once, through a revoked key's slot in a backup say, opens every later copy of the vault, since the vault key never changes. **Re-keying** closes that, in two stages.
+
+**Stage 1, a new user key.** A new random user key replaces the old one, in one transaction, with everything wrapped under it: the password slot (re-keying asks for the password, so it is at hand), the current session, the user's vault slots, and the sealed names of keys and connections. Other sessions end. The recovery key is the awkward one. Outside a recovery the old recovery key isn't at hand, so its slot can't be wrapped again; kept as it is, it would open a user key that nothing uses any more, and a recovery with it would lock the owner out. So every rotation issues a **new recovery key**, shown once.
+
+**Stage 2, a new vault key.** Every document of the vault is sealed again under a new key: notes with their history, trash, embeddings, checkpoints, attachments and their bytes, with the keyed hashes computed again (a path's hash under the new key is a different one). The natural design is one transaction per vault, and it doesn't fit: everything a MongoDB transaction rewrites must stay in the database's cache until it commits, and in a measurement a transaction managed only about a tenth of the cache, while a vault of 2000 notes with history and embeddings is 40–80 MB. So a run works in batches of at most 500 documents or 4 MiB, between a short start and a short finish, with a **two-key period** in between. The new key sits in a second slot beside the owner's; every document is under exactly one of the two keys; and a crash leaves a state the next run resumes from. Meanwhile nothing writes the vault, and a request for it answers "This vault is being re-encrypted; try again in a moment." A runner in the background re-keys one vault at a time.
+
+**What can't come along.** The server can wrap the new vault key for the owner, whose user key it holds during the request. It can't for an API key or a connection: it never holds those. So re-keying a vault revokes every API key with a slot on it, whole, its other vaults included, and every connection with that vault needs a reconnect. The page lists them before the user confirms. A paired Obsidian device holds an API key, so it pairs again.
+
+**When it runs.** A recovery always re-keys: otherwise the owner and a thief of the recovery key could take turns (chapter 10). "Re-encrypt my vaults" in Settings runs both stages for the account, after a lost laptop say, and "Re-encrypt vault" runs stage 2 for one vault. A password change alone doesn't: it wraps the same user key under a new password.
+
+**What it buys.** An old backup keeps what it held; nothing reaches into a copy that is already out. But what is written to a vault after its re-keying is sealed under a key no old credential reaches. That is the honest limit, and the reason it is called re-keying and not undoing a leak.
+
+## 13. Obsidian sync: pairing, device keys and the sync protocol
+
+### Two copies, one truth
+
+People write where they already write, and many write in Obsidian, on a laptop and on a phone. A Kumbu² vault should be that same set of notes, so that an agent finds what was typed a minute ago and the person sees in Obsidian what the agent changed. That means two copies of every note, one in Obsidian's folder and one on the server, and a protocol that keeps them equal. Mounting the server as a network drive was considered and dropped: Obsidian watches its folder for changes, a network drive works against that, and it doesn't work offline at all. A plugin with a local copy works offline and catches up.
+
+The plugin lives in a repository of its own, since Obsidian installs plugins from GitHub releases; the server's side lives here. One Obsidian vault maps to exactly one Kumbu² vault. The plugin never creates a vault, and needs a key with write on that one. It syncs notes and, since attachments, part 1, PDFs and images; never `.obsidian/` or any other dot folder.
+
+### Pairing: nobody sees the key
+
+The plugin needs an API key. The first idea was to make one on the keys page and paste it into Obsidian, which puts a key on the clipboard, in a chat with oneself, in a note. **Pairing** replaces that. A vault's menu in the web app has "Connect Obsidian…", which shows a code like `K7QM-4XDA`, valid for ten minutes and once. The user types it into the plugin with a name for the device; the plugin exchanges it (`POST /api/pairing/redeem`) for a new key, which goes straight into Obsidian's secret storage. Nobody sees the key.
+
+The code is short, so a person can type it on a phone: 8 characters of **Crockford Base32**, an alphabet without I, L, O and U, so that no character looks like another, and the input ignores case, spaces and dashes. That is 40 bits, far below a key's 256, and enough for what it has to resist: guessing online, for ten minutes, at an endpoint that allows 10 tries a minute per network and closes for everyone once it has seen 100 wrong codes in a minute. At most about a thousand guesses fall into one code's life, against a trillion possible codes. Closing for everyone means anyone can hold off pairing for a while; that is accepted on purpose.
+
+40 bits are not enough against a guess *offline*, and here is the catch. Making a key needs the user key (a key's name is sealed under it, chapter 10). So a code's record must hold a copy of the session's user key until the code is redeemed. Written to MongoDB, that record would be a user key behind 40 bits, waiting for a database dump. So it is written nowhere: it lives in the server's memory only, and goes, with the copy zeroed, when the code is used, replaced or expired, when the user signs out or their credentials change, or when the process ends; eleven minutes at most. Redis was considered and left out for the same reason: it would add a second process, maybe a disk, only to have codes survive a restart. This assumes one server instance, as the cache of unlocked vaults does.
+
+Redeeming is anonymous, and the one state-changing anonymous request exempt from the `Origin` check (chapter 11): the code is its own credential, nothing ambient rides along, and Obsidian sends no `Origin` of ours.
+
+### Device keys: you, not your agent
+
+A paired key is an ordinary API key with write on one vault, named `<Vault> – Obsidian <device>`, one per device, so that a lost phone is revoked without touching the laptop. It has one sealed property more: its **kind**, `device` rather than `agent`. The kind grants nothing. It changes how writes are *told*: the agent banner (chapter 11) leaves a device's writes out, and "changed elsewhere" says "You changed this note in Obsidian (Laptop)". Without it, everything a person typed in Obsidian would show as an agent's change, blurring exactly the line the web app tries to draw. It also shortens the changeset window to 2 minutes, as for a session (chapter 8), since an editor saves every few seconds. The kind is sealed into the key's meta and into its writer label, so a database edit can't turn an agent into "you".
+
+### Asking what changed, with slack
+
+The plugin has to learn what changed on the server. The textbook answer is a **sequence number** per vault and a feed "everything after 5". Its hard part is a race: two writes take the numbers 5 and 6, and 6 commits first. A client that reads at that moment sees 6, remembers "up to 6", and never sees 5. Avoiding that takes a gap rule and retention logic on the server.
+
+Kumbu² does something simpler. `GET /api/vaults/{vault}/versions` lists every note's path and version token, with a `cursor`: the server's time when the answer was read. Next time the plugin sends `since=<cursor>` and gets what changed after the cursor **minus five minutes**. The overlap catches a write stamped just before the cursor and committed just after it. The duplicates it brings are harmless: version tokens are content hashes (chapter 3), so a path whose version the plugin already has needs nothing, and "the same" is a comparison, not bookkeeping.
+
+The change times come from a record the server keeps in memory beside the unlocked vault: after every commit, each path the write, move, deletion or restore touched gets the time, whichever way the change came. When the vault is locked, the record goes with it, and a cursor from before the vault was loaded, or older than 25 days (the trash keeps a deletion for 30), simply gets the full list. That deviates from the design, which planned to read the times from the notes, the trash and the move records in MongoDB: the record in memory catches every way a note changes in one place, after the commit, at the price of a full list now and then. The full list is the safety net and the source of truth anyway: on start, when the app comes back to the foreground, and once an hour. A hash over the whole list (`state`, also the `ETag`) lets an unchanged vault answer 304.
+
+### Hints: a nudge, not the news
+
+Asking every few seconds would be slow to notice and wasteful. So a device also opens a **WebSocket**, a connection on which the server can speak first, and hears `{"type":"changed","vault":"Work"}` whenever a change to its vault commits, and nothing about any other vault. A hint carries no content and no path: it is a nudge to ask for the list. A lost hint is caught by the next list, and a doubled one costs a request that finds nothing new, so the hints need no delivery guarantee. Bursts are thinned to one hint per vault per half second, so an agent writing thirty notes doesn't cause thirty lists.
+
+A WebSocket can't carry an `Authorization` header from every client, so the key doesn't fit. The plugin first gets a **ticket** with its key (`POST /api/ws-ticket`), single-use and good for 30 seconds, and opens the socket with it in the URL. That bends the rule of no secrets in URLs, on purpose: the ticket is worthless half a minute later, and the server keeps only its hash. Every 30 seconds the server checks each socket's key again and closes the socket of a revoked or expired one. When the socket fails three times in a row, the plugin asks for the list every two minutes and keeps trying the socket.
+
+### Deciding a path from three versions
+
+On the device every decision is per path, from three versions, as the seeder's merge in chapter 3 did: **local** (the file now), **remote** (from the list) and **base**, the version both sides last agreed on, kept in the plugin's data. Local changed and remote not: upload, with the base as version token. Remote changed and local not: download. Both changed to the same text: record the new base. Both changed differently: a conflict. Deleted on one side and edited on the other: the edit wins, and nothing is lost.
+
+A few rules keep this honest under races. One queue per vault, so nothing runs in parallel. A download is written only if the file is still at its base at that moment; if the person typed meanwhile, the path is decided again. A 409 from the server is news, not an error: it carries the current version, and the path is decided again. An upload of the device's own that shows up in the next list finds local and remote equal and causes nothing, with no flags and no "ignore the next event". An upload waits two seconds after the last change, so typing isn't a write per keystroke. A rename in Obsidian goes to `/api/move` with `keepLinks: true`, since Obsidian rewrites the links itself and uploads those edits (chapter 5).
+
+The server holds up its side by never rewriting content (concept §4): a note is stored as it was sent, apart from line endings. Any normalisation would come back to Obsidian as an edit, and loop.
+
+### Conflicts are visible, never silent
+
+When both sides changed, Kumbu²'s version stays at the path and the local text becomes a **conflict copy** next to it, `Plan (conflict Laptop 2026-10-27 10-15).md`, starting with a callout that names both writers and links to the original. It syncs like any note, so an agent sees it too. Resolving it is ordinary editing: merge what is needed, delete the copy. Nothing merges text automatically. A merge that looks right and isn't is the worst failure a sync can have, and a person decides better with both versions in front of them. The copy's first state is kept as a version of its own (chapter 8): the evidence of the conflict.
+
+The **first sync** is the one moment without bases. A path on one side only is copied to the other; a path with the same text on both sides becomes the base. Only if notes differ does the plugin ask, once for all of them, since after the third file nobody reads per-file questions any more: keep both (the safe default, with conflict copies), keep local, or keep Kumbu², in which case the local file goes to Obsidian's trash first. Then it reports what happened, also when nothing went wrong: "no conflicts" is a result worth seeing.
+
+### What leaves the server's protection
+
+The synced notes are plain files on the device, outside Kumbu²'s encryption at rest, as an export is. The key sits in Obsidian's `SecretStorage`, never in the plugin's settings file, which lies inside the vault and could be synced somewhere else. What `SecretStorage` does at rest on each platform hasn't been checked, so nothing is promised about it. A lost device is handled like a lost key: revoke its key on the API keys page, or re-encrypt the vault, which revokes it too (chapter 12).

@@ -38,18 +38,27 @@ export const useNoteNow = (path: string, enabled: boolean) =>
     refetchOnReconnect: false,
   });
 
+const pairedInfix = " – Obsidian ";
+
 /**
- * Who wrote, for a person: "You", "You in Obsidian (Laptop)" (the device key's name after "Obsidian "), "Agent liz",
+ * The device of a key paired from Obsidian, named "<vault> – Obsidian <device>" ("Work – Obsidian Laptop" is
+ * "Laptop", "Work – Obsidian My Obsidian Phone" is "My Obsidian Phone"); the whole label for any other name.
+ */
+export function deviceOf(writer: string): string {
+  const at = writer.indexOf(pairedInfix);
+  return at < 0 ? writer : writer.slice(at + pairedInfix.length);
+}
+
+/**
+ * Who wrote, for a person: "You", "You in Obsidian (Laptop)" (the device the key was paired from), "Agent liz",
  * or the writer's name as it is (the server, or a key that no longer exists).
  */
 export function writerText({ writer, writerKind }: Pick<ActivityRow, "writer" | "writerKind">): string {
   switch (writerKind) {
     case "user":
       return "You";
-    case "device": {
-      const at = writer.lastIndexOf("Obsidian ");
-      return `You in Obsidian (${at >= 0 ? writer.slice(at + "Obsidian ".length) : writer})`;
-    }
+    case "device":
+      return `You in Obsidian (${deviceOf(writer)})`;
     case "agent":
       return `Agent ${writer}`;
     default:

@@ -23,8 +23,8 @@ public static class ApiErrors
 
     public static ApiException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);
 
-    public static ApiException TooMany(TimeSpan retryAfter) =>
-        new(StatusCodes.Status429TooManyRequests, "Too many attempts; try again in a minute.", retryAfter);
+    public static ApiException TooMany(TimeSpan retryAfter, string message = "Too many attempts; try again in a minute.") =>
+        new(StatusCodes.Status429TooManyRequests, message, retryAfter);
 
     /// <summary>
     /// The endpoint filter of every <c>/api</c> group: the refusals the account and vault services throw become

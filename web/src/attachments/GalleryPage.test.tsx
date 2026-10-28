@@ -443,12 +443,47 @@ describe("Gallery", () => {
     expect(moves).toEqual(["/W/Screenshots/whiteboard.png", "/W/Projects/Teaser/banner.png", "/W/Screenshots/layout_editor_bad1.png"]);
   });
 
-  it("shows a friendly way to upload when the vault has no images or PDFs", async () => {
-    api({ "GET /api/vaults/W/tree": () => json(200, { damaged: 0, root: { name: "W", path: "/W", folders: [], notes: [] } }) });
+  it("shows a friendly way to upload when the vault has no images or PDFs, and uploads in the gallery", async () => {
+    const root = { name: "W", path: "/W", folders: [], notes: [] as ReturnType<typeof file>[] };
+    const puts: string[] = [];
+    api({
+      "GET /api/vaults/W/tree": () => json(200, { damaged: 0, root }),
+      "PUT /api/files/*": (r) => {
+        const path = decodeURIComponent(new URL(r.url).pathname.slice("/api/files".length));
+        puts.push(path);
+        root.notes.push(file(path, at(28, 11), 4));
+        return json(201, { path, version: "v1", size: 4, kind: "image", mediaType: "image/png", writtenAt: at(28, 11) });
+      },
+    });
     const router = renderApp("/gallery/W");
     expect(await screen.findByText("No images or PDFs in W yet.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Upload files" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+
+    // The sheet opens over the gallery, into the vault's top level.
+    const sheet = await screen.findByRole("dialog", { name: "Upload" });
+    expect(router.state.location.pathname).toBe("/gallery/W");
+    expect(within(sheet).getByText("Into W")).toBeInTheDocument();
+    await userEvent.upload(within(sheet).getByLabelText("Choose files"), [new File(["\x89PNG"], "shot.png")]);
+    await userEvent.click(await within(sheet).findByRole("button", { name: "Upload" }));
+    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(puts).toEqual(["/W/shot.png"]);
+
+    // Done leaves the gallery where it was, now with the new file.
+    await userEvent.click(within(sheet).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog", { name: "Upload" })).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/gallery/W");
+    expect(await screen.findByRole("button", { name: "shot.png" })).toBeInTheDocument();
+  });
+
+  it("the header's Upload opens the sheet over the gallery too", async () => {
+    api();
+    const router = renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "banner.png" });
+    await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+    const sheet = await screen.findByRole("dialog", { name: "Upload" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Upload" })).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/gallery/W");
   });
 
   it("loads a tile only near the screen and lets go of it when it leaves; a PDF's tile frees its document once drawn", async () => {

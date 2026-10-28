@@ -22,9 +22,11 @@ public sealed record ExportTicketView(string Ticket, DateTime ExpiresAt);
 /// <summary>
 /// The export (demo-round design §2): vaults of the session as a ZIP, one top-level folder per vault named as the
 /// vault, its notes verbatim and its attachments byte for byte at their paths below it, each entry dated with its last
-/// write. Only the current notes and files: no history, trash, checkpoints or settings. Unpacked, each folder opens in
-/// Obsidian as a vault; it is also what the import reads. A checkpoint exports the same way, its notes and files as it
-/// holds them (a folder checkpoint below the vault's folder), each entry dated with the time the checkpoint was made.
+/// write. Only the current notes and files: no history, trash, checkpoints or settings. Notes and files whose stored
+/// data doesn't open are counted in a MISSING.txt at the ZIP's root (<see cref="MissingText"/>). Unpacked, each folder
+/// opens in Obsidian as a vault; it is also what the import reads. A checkpoint exports the same way, its notes and files
+/// as it holds them (a folder checkpoint below the vault's folder), each entry dated with the time the checkpoint was
+/// made; one whose content doesn't open is refused whole, before the first byte, as its restore is.
 /// A download of several attachments (<c>GET /api/files/{vault}/zip</c>) is treated as an export too, unless the user
 /// turned its password off. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An
 /// export is a heavyweight operation: it takes the notes out of the encryption at rest in one go, so it needs the
@@ -131,16 +133,20 @@ public static class ExportApi
         if (roots.Select(r => r.Segments[0]).Distinct(StringComparer.Ordinal).Count() != roots.Count) throw ApiErrors.BadRequest("Name each vault once.");
 
         var content = new List<(string Folder, IReadOnlyList<ExportEntry> Entries)>();
+        var damaged = new List<(string Vault, int Count)>();
         foreach (var root in roots)
         {
             await NoteApi.RequireVaultAsync(store, root, ct);
             var entries = new List<ExportEntry>();
             foreach (var path in await store.ListNotesUnderAsync(root, ct))
             {
-                // Only notes that open are listed (a damaged one isn't, and isn't exported); null only if the note
-                // went between the listing and here.
+                // Only notes that open are listed; null only if the note went between the listing and here.
                 if (await store.GetAsync(path, ct) is { } note) entries.Add(ExportEntry.OfNote(note.Path, note.Content, note.LastWriteAt));
             }
+
+            // A damaged note (or file record) isn't listed and can't be exported, but it isn't left out without a word:
+            // the ZIP says so in MISSING.txt.
+            if (await store.CountDamagedAsync(root, ct) is var count and > 0) damaged.Add((root.Segments[0], count));
 
             // Only the records here; each file's bytes are read as its entry is written, one at a time. FileApi.Files
             // fails loudly: a store that keeps no attachments must not export a vault without its files.
@@ -151,10 +157,32 @@ public static class ExportApi
         }
 
         export.Log.LogInformation(
-            "User {UserId} exported {Count} vaults ({VaultIds}): {Notes} notes, {Files} files",
+            "User {UserId} exported {Count} vaults ({VaultIds}): {Notes} notes, {Files} files, {Damaged} that don't open left out",
             export.Caller.User!.Id, content.Count, await export.VaultIdsAsync(roots.Select(r => r.Segments[0])),
-            content.Sum(c => c.Entries.Count(e => e.IsNote)), content.Sum(c => c.Entries.Count(e => !e.IsNote)));
-        return Zip(http, ZipName([.. roots.Select(r => r.Segments[0])], export.Time.GetUtcNow().UtcDateTime), content, Zone(tz), export.Log, ct);
+            content.Sum(c => c.Entries.Count(e => e.IsNote)), content.Sum(c => c.Entries.Count(e => !e.IsNote)), damaged.Sum(d => d.Count));
+        var now = export.Time.GetUtcNow().UtcDateTime;
+        var missing = damaged.Count > 0 ? (MissingText(damaged), now) : default((string, DateTime)?);
+        return Zip(http, ZipName([.. roots.Select(r => r.Segments[0])], now), content, Zone(tz), export.Log, ct, missing: missing);
+    }
+
+    /// <summary>The name of the export's note on what it couldn't read, at the ZIP's root, beside the vault folders
+    /// (where the import looks for none).</summary>
+    internal const string MissingName = "MISSING.txt";
+
+    /// <summary>What <see cref="MissingName"/> says: a damaged document's path is sealed with the rest of it, so the
+    /// notes and files that don't open are counted per vault, as the tree counts them, not named.</summary>
+    internal static string MissingText(IEnumerable<(string Vault, int Count)> damaged)
+    {
+        var text = new StringBuilder(
+            "Kumbu² couldn't read some notes or files of this export, so this ZIP is without them: they were changed or damaged "
+            + "outside Kumbu². Their names are stored with what doesn't open, so they are counted here by vault, not named; "
+            + "the server log has details.\n\n");
+        foreach (var (vault, count) in damaged)
+        {
+            text.Append(vault).Append(": ").Append(count.ToString(CultureInfo.InvariantCulture)).Append(count == 1 ? " note or file\n" : " notes or files\n");
+        }
+
+        return text.ToString();
     }
 
     /// <summary>
@@ -223,17 +251,18 @@ public static class ExportApi
     }
 
     /// <summary><paramref name="content"/>: the entries below each folder (the vault's name and a '/', or "" for none).</summary>
-    /// <paramref name="completed"/>: run once the whole ZIP is out.
+    /// <paramref name="completed"/>: run once the whole ZIP is out. <paramref name="missing"/>: the text of
+    /// <see cref="MissingName"/>, written first, and its time.
     private static IResult Zip(
         HttpContext http, string name, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct,
-        Action? completed = null)
+        Action? completed = null, (string Text, DateTime At)? missing = null)
     {
         var disposition = new ContentDispositionHeaderValue("attachment") { FileName = $"\"{AsciiName(name)}\"", FileNameStar = name };
         http.Response.Headers.ContentDisposition = disposition.ToString();
         return TypedResults.Stream(
             async body =>
             {
-                await WriteAsync(body, content, zone, log, ct);
+                await WriteAsync(body, content, zone, log, missing, ct);
                 completed?.Invoke();
             },
             "application/zip");
@@ -251,14 +280,26 @@ public static class ExportApi
     /// which Kestrel refuses; they go into <see cref="Chunks"/> and reach the response asynchronously in pieces of
     /// about <see cref="DrainAt"/>.</summary>
     private static async Task WriteAsync(
-        Stream body, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log, CancellationToken ct)
+        Stream body, IReadOnlyList<(string Folder, IReadOnlyList<ExportEntry> Entries)> content, TimeZoneInfo zone, ILogger log,
+        (string Text, DateTime At)? missing, CancellationToken ct)
     {
         var chunks = new Chunks();
         var piece = new byte[DrainAt];
+        // A ZIP entry's time has no zone: unpackers read it as their local time. So the reader's clock at the moment of
+        // the write, each entry with its own offset (summer or winter time).
+        DateTimeOffset Local(DateTime utc) => TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)), zone);
         // A null entry-name encoding: names are UTF-8 with the language flag set, so Bücher/Ü².md unpacks as such.
         var zip = await ZipArchive.CreateAsync(chunks, ZipArchiveMode.Create, leaveOpen: true, entryNameEncoding: null, ct);
         try
         {
+            if (missing is var (text, at))
+            {
+                var entry = zip.CreateEntry(MissingName, CompressionLevel.Optimal);
+                entry.LastWriteTime = Local(at);
+                await using var stream = await entry.OpenAsync(ct);
+                await stream.WriteAsync(Encoding.UTF8.GetBytes(text), ct);
+            }
+
             foreach (var (folder, entries) in content)
             {
                 if (folder.Length > 0) zip.CreateEntry(folder);
@@ -270,9 +311,7 @@ public static class ExportApi
                     // Vault paths: checked segments, never '.', '..' or empty, so no entry unpacks outside its folder.
                     // Formats that are compressed already (images, most PDFs) are only stored faster.
                     var entry = zip.CreateEntry(folder + string.Join('/', item.Path.Segments.Skip(1)), item.IsNote ? CompressionLevel.Optimal : CompressionLevel.Fastest);
-                    // A ZIP entry's time has no zone: unpackers read it as their local time. So the reader's clock at
-                    // the moment of the write, each entry with its own offset (summer or winter time).
-                    entry.LastWriteTime = TimeZoneInfo.ConvertTime(new DateTimeOffset(DateTime.SpecifyKind(item.WrittenAt, DateTimeKind.Utc)), zone);
+                    entry.LastWriteTime = Local(item.WrittenAt);
                     await using (var stream = await entry.OpenAsync(ct))
                     {
                         if (bytes is null)
@@ -307,7 +346,8 @@ public static class ExportApi
     /// A file's bytes. If they don't open (changed or damaged outside Kumbu², or gone), the download fails instead of
     /// arriving without the file: an error with the blob id (never a name) and an exception, which, once the response has
     /// begun, makes Kestrel reset it, so the browser shows a failed download, never a ZIP that looks complete. (A damaged
-    /// note is never listed, so never exported; a file the export did list is one the user expects in it.)
+    /// note is never listed, so never exported, and counted in MISSING.txt; a file the export did list is one the user
+    /// expects in it.)
     /// </summary>
     private static async Task<Stream> OpenAsync(ExportEntry file, ILogger log, CancellationToken ct)
     {

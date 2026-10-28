@@ -125,8 +125,8 @@ public sealed record SearchView(IReadOnlyList<SearchResultView> Results, int Not
 public sealed record EarlierResultView(
     string Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before, bool BeforeLost, string? WriterKind);
 
-/// <summary>A note whose last write is by one of the user's agents (<c>writer</c>, the API key's or connection's name).</summary>
-public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version);
+/// <summary>A note whose last write is by one of the user's agents, or by a device back after a long pause (see <c>ChangesAsync</c>).</summary>
+public sealed record ChangeView(string Path, string Writer, DateTime LastWriteAt, string Version, string WriterKind = WriterKinds.Agent, DateTime? QuietSince = null, DateTime? ResumedAt = null);
 
 /// <summary>
 /// The vault and note endpoints under <c>/api</c> (accounts design §4): the same code paths as the <c>sh</c>
@@ -166,7 +166,7 @@ public static class NoteApi
         api.MapGet("/history/{vault}/{**path}", HistoryAsync).Errors(400, 401, 404, 503);
 
         api.MapGet("/search", SearchAsync).Errors(400, 401, 404, 503);
-        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/search/earlier", EarlierAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
@@ -491,18 +491,13 @@ public static class NoteApi
     }
 
     /// <summary>
-    /// <c>mode</c>: <c>hybrid</c> (default) and <c>meaning</c> rank as <c>semsearch</c> and <c>semsearch --meaning</c>
-    /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
-    /// <c>path</c> narrows the search to a vault, folder or note; <c>tag</c> (repeatable) to the notes that carry every
-    /// one of those tags, nested ones included, as <c>semsearch --tag</c> (404 for a tag no note there carries);
-    /// <c>n</c> results, 1 to 50, default 10.
-    /// </summary>
-    /// <summary>
     /// Search in earlier versions: the sections of the notes' history (not their current text) that hold every word of
     /// <c>q</c>, ignoring case, skipping those still in the note today; newest first. <c>path</c> and <c>n</c> as for
-    /// <c>/search</c>. Sessions only: old versions are the owner's to look through.
+    /// <c>/search</c>. Sessions only: old versions are the owner's to look through. Limited with a vault's activity
+    /// (<see cref="AccountLimits.HistoryScansPerUser"/>): both read every note in their scope.
     /// </summary>
-    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(string? q, string? path, int? n, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    private static async Task<Ok<EarlierResultView[]>> EarlierAsync(
+        string? q, string? path, int? n, RequestCaller caller, AccountLimits limits, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
         if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
@@ -514,6 +509,7 @@ public static class NoteApi
             throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
         }
 
+        if (limits.HistoryScan(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter, AccountLimits.HistoryScansRefused);
         var notes = new List<StoredNote>();
         if (!scope.IsRoot && await store.GetAsync(scope, ct) is { } single) notes.Add(single);
         else
@@ -534,6 +530,13 @@ public static class NoteApi
         return TypedResults.Ok(views.ToArray());
     }
 
+    /// <summary>
+    /// <c>mode</c>: <c>hybrid</c> (default) and <c>meaning</c> rank as <c>semsearch</c> and <c>semsearch --meaning</c>
+    /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
+    /// <c>path</c> narrows the search to a vault, folder or note; <c>tag</c> (repeatable) to the notes that carry every
+    /// one of those tags, nested ones included, as <c>semsearch --tag</c> (404 for a tag no note there carries);
+    /// <c>n</c> results, 1 to 50, default 10.
+    /// </summary>
     private static async Task<Ok<SearchView>> SearchAsync(
         string? q, string? mode, string? path, int? n, string[]? tag, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
@@ -619,8 +622,10 @@ public static class NoteApi
     /// <summary>
     /// The agent banner: notes in the caller's vaults whose last write is by one of the user's agents, API keys or
     /// connections (revoked ones too: their writes stay theirs), after <paramref name="since"/>, newest first. A
-    /// device's writes are the user's own (spec §5a) and don't count. The names are sealed under the user key, hence
-    /// sessions only.
+    /// device's writes are the user's own (spec §5a) and don't count, unless the device wrote again after a long pause
+    /// since then (<see cref="WriterKinds.ResumedAsync"/>), so that a stolen device key's writes stand out: those come
+    /// with <c>writerKind</c> <c>device</c>, the device having written nothing between <c>quietSince</c> and
+    /// <c>resumedAt</c>. The names are sealed under the user key, hence sessions only.
     /// </summary>
     private static async Task<Ok<ChangeView[]>> ChangesAsync(DateTimeOffset since, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
@@ -631,6 +636,10 @@ public static class NoteApi
             if (await store.GetAsync(path, ct) is not { } note || note.LastWriteAt <= from) continue;
             var writer = Writers.Identity(note.LastWriter);
             if (await kinds.OfAsync(writer, ct) == WriterKinds.Agent) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
+            else if (await kinds.ResumedAsync(writer, note.LastWriteAt, from, ct) is { } resumed)
+            {
+                changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version, WriterKinds.Device, resumed.QuietSince, resumed.At));
+            }
         }
 
         return TypedResults.Ok(changes.OrderByDescending(c => c.LastWriteAt).ThenBy(c => c.Path, TextOrder.Default).ToArray());

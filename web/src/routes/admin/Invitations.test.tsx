@@ -108,9 +108,33 @@ describe("Admin invitations", () => {
     await userEvent.click(within(dialog).getByLabelText("Admin"));
     await userEvent.click(within(dialog).getByLabelText("30 days"));
     await userEvent.type(within(dialog).getByLabelText("Note (optional)"), "Hi");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse battery staple");
     await userEvent.click(within(dialog).getByRole("button", { name: "Create invitation" }));
     await screen.findByText(link);
-    expect(bodies).toEqual([{ role: "admin", expiresInDays: 30, note: "Hi" }]);
+    expect(bodies).toEqual([{ role: "admin", expiresInDays: 30, note: "Hi", password: "correct horse battery staple" }]);
+  });
+
+  it("asks for the password for an admin only, and creates nothing without it", async () => {
+    const { dialog, fetch } = await createInvitation();
+    expect(within(dialog).queryByLabelText("Your password")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByLabelText("Admin"));
+    expect(within(dialog).getByLabelText("Your password")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Create invitation" })).toBeDisabled();
+    await userEvent.click(within(dialog).getByLabelText("User"));
+    expect(within(dialog).queryByLabelText("Your password")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Create invitation" })).toBeEnabled();
+    expect(fetch.mock.calls.some(([r]) => r.method === "POST")).toBe(false);
+  });
+
+  it("shows the server's sentence for a wrong password and keeps the dialog open", async () => {
+    api({ "POST /api/admin/invitations": () => json(400, { error: "Your password is wrong." }) });
+    renderApp("/admin/invitations");
+    await userEvent.click(await screen.findByRole("button", { name: "New invitation" }));
+    const dialog = screen.getByRole("dialog", { name: "New invitation" });
+    await userEvent.click(within(dialog).getByLabelText("Admin"));
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "not my password");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create invitation" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Your password is wrong.");
   });
 
   it("sends no note when none was typed", async () => {

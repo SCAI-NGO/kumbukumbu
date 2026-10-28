@@ -358,7 +358,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         var (apiKey, _) = await Keys().CreateAsync(lea, key, Now, "agent", new Dictionary<string, KeyRight> { [diary.Id] = KeyRight.Write }, Ct);
         var (bobsKey, _) = await Keys().CreateAsync(bob, bobKey, Now, "agent", new Dictionary<string, KeyRight> { [bobs.Id] = KeyRight.Write }, Ct);
         var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
-        await invitations.CreateAsync(lea, Roles.User, "for Max", null, Ct);
+        var (code, _) = await invitations.CreateAsync(lea, Roles.User, "for Max", null, Ct);
 
         Assert.True(await Deletion().DeleteOwnAccountAsync(lea, key, Password, "Lea", Ct));
 
@@ -374,8 +374,39 @@ public sealed class DeletionTests(MongoFixture fixture)
         await AssertIntactAsync(bobs.Id);
         Assert.NotNull(await Keys().ResolveAsync(bobsKey, Ct));
         Assert.NotNull(await Users().TrySignInAsync("bob", Password, Ct));
+        // Kept as the record of who invited whom, but revoked: it no longer makes an account.
         Assert.Equal(1, await CountAsync("invitations", "createdBy", lea.Id));
+        Assert.Equal(InvitationState.Revoked, (await invitations.PeekAsync(code, Ct))!.State);
         Assert.Equal(["anna", "bob"], (await Admin().ListUsersAsync(anna, Ct)).Select(u => u.Username).Order());
+    }
+
+    [Fact]
+    public async Task Deleting_an_admin_revokes_their_open_invitations_and_leaves_the_others()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, _, _) = await SignedInAsync("lea", Roles.Admin);
+        var invitations = new Invitations(_db, new ServerSecret(_db), Users(), _time, NullLogger<Invitations>.Instance);
+        var (open, openInfo) = await invitations.CreateAsync(lea, Roles.Admin, "for Max", null, Ct);
+        var (used, usedInfo) = await invitations.CreateAsync(lea, Roles.User, null, null, Ct);
+        await invitations.RedeemAsync(used, "max", Password, Ct);
+        var (_, expiredInfo) = await invitations.CreateAsync(lea, Roles.User, null, TimeSpan.FromDays(1), Ct);
+        var (annas, _) = await invitations.CreateAsync(anna, Roles.User, null, null, Ct);
+        _time.Advance(TimeSpan.FromDays(1));
+
+        Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
+
+        var listed = (await invitations.ListAsync(anna, Ct)).ToDictionary(i => i.Id);
+        Assert.Equal(InvitationState.Revoked, listed[openInfo.Id].State);
+        Assert.Equal(Now, listed[openInfo.Id].RevokedAt);
+        Assert.Equal(InvitationState.Used, listed[usedInfo.Id].State);
+        // An expired one stays expired: revoking it would only blur the record.
+        Assert.Equal(InvitationState.Expired, listed[expiredInfo.Id].State);
+        Assert.Null(listed[expiredInfo.Id].RevokedAt);
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => invitations.RedeemAsync(open, "mallory", Password, Ct));
+        Assert.Equal(InvitationState.Revoked, refused.State);
+        Assert.Null(await Users().TrySignInAsync("mallory", Password, Ct));
+        // Another admin's invitation still works.
+        await invitations.RedeemAsync(annas, "bob", Password, Ct);
     }
 
     [Fact]

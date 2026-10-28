@@ -46,16 +46,23 @@ public static class PairingApi
         RedeemPairingRequest body, HttpContext http, Pairings pairings, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.Redeem(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        // Every redeem, right or wrong: letting open codes through would check every guess, and the server-wide count
-        // is what bounds a guess spread over many addresses (spec §4).
-        if (limits.RedeemsBlocked()) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
+        // Every redeem, right or wrong: letting open codes through would check every guess, and the counts per network
+        // and server-wide are what bound a guess spread over many addresses (spec §4).
+        if (limits.RedeemsBlocked(http)) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
         var redeemed = await pairings.RedeemAsync(body.Code, body.Device, ct);
         if (redeemed is null)
         {
-            if (limits.RedeemFailed())
+            // The network goes unnamed, as every address does in the log.
+            switch (limits.RedeemFailed(http))
             {
-                logs.CreateLogger(typeof(PairingApi).FullName!).LogWarning(
-                    "{Count} wrong pairing codes within a minute: every redeem is refused until it eases", AccountLimits.RedeemFailuresPerServer);
+                case RedeemBlock.Network:
+                    logs.CreateLogger(typeof(PairingApi).FullName!).LogWarning(
+                        "{Count} wrong pairing codes within a minute from one network: its redeems are refused until it eases", AccountLimits.RedeemFailuresPerNetwork);
+                    break;
+                case RedeemBlock.Server:
+                    logs.CreateLogger(typeof(PairingApi).FullName!).LogWarning(
+                        "{Count} wrong pairing codes within a minute: every redeem is refused until it eases", AccountLimits.RedeemFailuresPerServer);
+                    break;
             }
 
             throw ApiErrors.NotFound(NotValid);

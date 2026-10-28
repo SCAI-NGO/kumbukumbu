@@ -3,6 +3,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { fetchFile } from "../api/notes";
 import type { FileAt } from "../api/paths";
+import { wheelFactor } from "./gestures";
 import { openPdf, pageLinks, type PageLink } from "./pdf";
 
 /** What the lightbox shows of a PDF: the page in view, how many there are, the zoom. */
@@ -145,7 +146,7 @@ export default function PdfPages({
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      zoomTo(zoomRef.current * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+      zoomTo(zoomRef.current * wheelFactor(e), e.clientX, e.clientY);
     };
     element.addEventListener("touchstart", onTouchStart, { passive: true });
     element.addEventListener("touchmove", onTouchMove, { passive: false });

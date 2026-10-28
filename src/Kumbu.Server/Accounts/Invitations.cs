@@ -100,10 +100,30 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
             Builders<InvitationDocument>.Update.Set(d => d.RevokedAt, Now),
             cancellationToken: ct);
 
+    /// <summary>
+    /// Revokes every open invitation <paramref name="userId"/> created, inside the caller's transaction (or without
+    /// one): when they are deleted, deactivated or made a user. An invitation is an admin's act and must not outlast
+    /// their being one. Returns how many.
+    /// </summary>
+    internal static async Task<long> RevokeOpenOfAsync(IMongoDatabase db, IClientSessionHandle? session, string userId, DateTime now, CancellationToken ct)
+    {
+        var docs = db.GetCollection<InvitationDocument>("invitations");
+        var filter = Builders<InvitationDocument>.Filter.Where(d => d.CreatedBy == userId && d.UsedAt == null && d.RevokedAt == null && d.ExpiresAt > now);
+        var revoke = Builders<InvitationDocument>.Update.Set(d => d.RevokedAt, now);
+        var result = session is null
+            ? await docs.UpdateManyAsync(filter, revoke, cancellationToken: ct)
+            : await docs.UpdateManyAsync(session, filter, revoke, cancellationToken: ct);
+        return result.ModifiedCount;
+    }
+
     /// <summary>The invitation behind a code, for the join page: role, expiry and whether it can be used, or why not.
     /// Null for a code that isn't one.</summary>
-    public async Task<InvitationInfo?> PeekAsync(string code, CancellationToken ct) =>
-        await FindAsync(code, ct) is { } doc ? Info(doc) : null;
+    public async Task<InvitationInfo?> PeekAsync(string code, CancellationToken ct)
+    {
+        if (await FindAsync(code, ct) is not { } doc) return null;
+        var info = Info(doc);
+        return info.Valid && !await CreatorIsAdminAsync(doc, ct) ? info with { State = InvitationState.Revoked } : info;
+    }
 
     /// <summary>
     /// Creates the account an invitation is for and uses the invitation up. Only one redeem of a code can win: the
@@ -128,6 +148,18 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
         {
             var doc = await Docs.Find(d => d.CodeHash == hash).FirstOrDefaultAsync(ct);
             throw new InvitationUnusableException(doc is null ? null : State(doc));
+        }
+
+        // Not cancellable from here on either: the claim is given back or kept, never left half done.
+        if (!await CreatorIsAdminAsync(claimed, CancellationToken.None))
+        {
+            // Revoked with the rest of its creator's when they were deleted, deactivated or made a user, unless it was
+            // made, or claimed, just as that happened: so it is revoked here, and its claim given back as a revocation.
+            await Docs.UpdateOneAsync(
+                d => d.Id == claimed.Id && d.UsedBy == null,
+                Builders<InvitationDocument>.Update.Unset(d => d.UsedAt).Set(d => d.RevokedAt, now),
+                cancellationToken: CancellationToken.None);
+            throw new InvitationUnusableException(InvitationState.Revoked);
         }
 
         (User User, string RecoveryKey) created;
@@ -179,7 +211,10 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
     {
         await AdminRules.RequireAdminAsync(Users, actor, ct);
         await EnsureReadyAsync(ct);
-        return [.. (await Docs.Find(FilterDefinition<InvitationDocument>.Empty).SortByDescending(d => d.CreatedAt).ToListAsync(ct)).Select(Info)];
+        var admins = (await Users.Find(u => u.Active && (u.Role == Roles.Admin || u.Role == Roles.PrimaryAdmin)).Project(u => u.Id).ToListAsync(ct)).ToHashSet();
+        // An open one whose creator is no longer an admin can't be used (RedeemAsync): shown as what it is.
+        return [.. (await Docs.Find(FilterDefinition<InvitationDocument>.Empty).SortByDescending(d => d.CreatedAt).ToListAsync(ct))
+            .Select(d => Info(d) is { Valid: true } info && d.CreatedBy != Bootstrap && !admins.Contains(d.CreatedBy) ? info with { State = InvitationState.Revoked } : Info(d))];
     }
 
     private async Task<(string Code, InvitationInfo Info)> InsertAsync(string createdBy, string role, string? note, TimeSpan validFor, CancellationToken ct)
@@ -209,6 +244,11 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
         var hash = await HashAsync(code, ct);
         return await Docs.Find(d => d.CodeHash == hash).FirstOrDefaultAsync(ct);
     }
+
+    /// <summary>Whether the invitation's creator is still an active admin (or it is the primary admin's, which no user made).</summary>
+    private async Task<bool> CreatorIsAdminAsync(InvitationDocument doc, CancellationToken ct) =>
+        doc.CreatedBy == Bootstrap
+        || await Users.Find(u => u.Id == doc.CreatedBy && u.Active && (u.Role == Roles.Admin || u.Role == Roles.PrimaryAdmin)).AnyAsync(ct);
 
     private static string? CheckNote(string? note)
     {

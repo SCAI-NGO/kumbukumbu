@@ -255,6 +255,32 @@ describe("the note view", () => {
     expect(within(banner).getByRole("button", { name: "Hide" })).toBeInTheDocument();
   });
 
+  it("makes a device's write after a long pause stand out, names the device and leads to Access", async () => {
+    const resumedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    noteApi({
+      "GET /api/changes": () =>
+        json(200, [
+          {
+            path: PLAN,
+            writer: "Work – Obsidian Pixel 9",
+            lastWriteAt: resumedAt,
+            version: "v1",
+            writerKind: "device",
+            quietSince: new Date(Date.parse(resumedAt) - 22 * 86_400_000).toISOString(),
+            resumedAt,
+          },
+        ]),
+      "GET /api/keys": () => json(200, []),
+    });
+    const router = renderApp(planUrl);
+    const banner = await screen.findByRole("region", { name: "Device changes" });
+    expect(screen.queryByRole("region", { name: "Agent changes" })).not.toBeInTheDocument();
+    expect(banner).toHaveTextContent("Obsidian on Pixel 9 wrote here 2 hours ago, for the first time in 3 weeks. If that wasn't you, revoke the device in Access.");
+    expect(within(banner).getByRole("button", { name: "Show" })).toBeInTheDocument();
+    await userEvent.click(within(banner).getByRole("link", { name: "Access" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/keys"));
+  });
+
   it("on Show, tints the blocks changed since the version the user last saw, read through ?version=", async () => {
     const earlier = source.replace("- [x] read", "- [ ] read").replace("See [[Home/garden]] and [[todo]].", "");
     const asked: (string | null)[] = [];

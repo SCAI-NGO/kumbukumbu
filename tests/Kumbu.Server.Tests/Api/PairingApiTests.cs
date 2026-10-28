@@ -20,11 +20,16 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
 
     private WebApplicationFactory<Program>? _api;
 
-    /// <summary>With limits of its own: the server-wide failure count of one test must not reach another's.</summary>
+    /// <summary>Wrong codes a minute per network and server-wide here: few enough to reach in a test, the network's above
+    /// the 10 attempts an address may make.</summary>
+    private const int PerNetwork = 15;
+    private const int PerServer = 40;
+
+    /// <summary>With limits of its own: the failure counts of one test must not reach another's.</summary>
     private WebApplicationFactory<Program> Api => _api ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
     {
         s.RemoveAll<AccountLimits>();
-        s.AddSingleton<AccountLimits>();
+        s.AddSingleton(new AccountLimits(PerNetwork, PerServer));
     }));
 
     public async ValueTask DisposeAsync()
@@ -172,10 +177,99 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.NotNull(limited.Headers.RetryAfter);
     }
 
-    /// <summary>Wrong codes from as many addresses as it takes to use up the server's minute.</summary>
+    [Fact]
+    public async Task Wrong_codes_from_one_network_hold_off_that_network_and_no_other()
+    {
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        // A /48 of the attacker's own: a /64 for each guess, so that no address reaches its own limit.
+        var network = $"2001:db8:{Random.Shared.Next(1, 0xffff):x}";
+        for (var i = 0; i < PerNetwork; i++)
+        {
+            using var wrong = await RedeemAsync("ZZZZ-ZZZZ", "Laptop", $"{network}:{i:x}::1");
+            Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
+        }
+
+        // The right code from a fresh /64 of the same /48 is refused like every other guess from there.
+        using var same = await RedeemAsync(code, "Laptop", $"{network}:ffff::1");
+        Assert.Equal(HttpStatusCode.TooManyRequests, same.StatusCode);
+        Assert.NotNull(same.Headers.RetryAfter);
+
+        // Another network pairs as ever.
+        using var other = await RedeemAsync(code, "Laptop", $"2001:db8:{Random.Shared.Next(1, 0xffff):x}:1::1");
+        Assert.Equal(HttpStatusCode.Created, other.StatusCode);
+    }
+
+    [Fact]
+    public async Task Wrong_codes_from_one_ipv4_network_count_by_its_24()
+    {
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        var network = $"198.31.{Random.Shared.Next(256)}";
+        for (var i = 0; i < PerNetwork; i++)
+        {
+            using var wrong = await RedeemAsync("ZZZZ-ZZZZ", "Laptop", $"{network}.{i + 1}");
+            Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
+        }
+
+        using var same = await RedeemAsync(code, "Laptop", $"{network}.200");
+        using var other = await RedeemAsync(code, "Laptop", $"198.32.{Random.Shared.Next(256)}.1");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, same.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, other.StatusCode);
+    }
+
+    private static Microsoft.AspNetCore.Http.DefaultHttpContext From(string address) =>
+        new() { Connection = { RemoteIpAddress = IPAddress.Parse(address) } };
+
+    [Fact]
+    public void With_the_real_limits_one_network_is_held_off_after_100_wrong_codes_and_everyone_after_10000()
+    {
+        using var limits = new AccountLimits();
+        Assert.Equal(100, AccountLimits.RedeemFailuresPerNetwork);
+        Assert.Equal(10_000, AccountLimits.RedeemFailuresPerServer);
+
+        for (var i = 1; i <= AccountLimits.RedeemFailuresPerNetwork; i++)
+        {
+            Assert.False(limits.RedeemsBlocked(From($"2001:db8:1:{i:x}::1")));
+            Assert.Equal(i < AccountLimits.RedeemFailuresPerNetwork ? RedeemBlock.None : RedeemBlock.Network, limits.RedeemFailed(From($"2001:db8:1:{i:x}::1")));
+        }
+
+        Assert.True(limits.RedeemsBlocked(From("2001:db8:1:ffff:1:2:3:4")));
+        Assert.False(limits.RedeemsBlocked(From("2001:db8:2::1")));
+        Assert.False(limits.RedeemsBlocked(From("2001:db8::1")));
+
+        // Many networks, none of them over its own limit, until the server's backstop holds for everyone.
+        var failed = AccountLimits.RedeemFailuresPerNetwork;
+        var block = RedeemBlock.None;
+        for (var n = 0; failed < AccountLimits.RedeemFailuresPerServer; n++)
+        {
+            for (var i = 0; i < AccountLimits.RedeemFailuresPerNetwork - 1 && failed < AccountLimits.RedeemFailuresPerServer; i++, failed++)
+            {
+                var from = From($"203.{n / 256}.{n % 256}.{i + 1}");
+                Assert.False(limits.RedeemsBlocked(from));
+                block = limits.RedeemFailed(from);
+                Assert.NotEqual(RedeemBlock.Network, block);
+            }
+        }
+
+        Assert.Equal(RedeemBlock.Server, block);
+        Assert.True(limits.RedeemsBlocked(From("2001:db8:2::1")));
+        Assert.True(limits.RedeemsBlocked(From("192.0.2.1")));
+    }
+
+    [Theory]
+    [InlineData("2001:db8:1:2:3:4:5:6", "2001:db8:1::/48")]
+    [InlineData("2001:db8:1:ffff::1", "2001:db8:1::/48")]
+    [InlineData("203.0.113.77", "203.0.113.0/24")]
+    [InlineData("::ffff:203.0.113.77", "203.0.113.0/24")]
+    public void A_network_is_an_ipv6_48_or_an_ipv4_24(string address, string network) =>
+        Assert.Equal(network, Kumbu.Server.Auth.WrongKeyLimiter.Network(IPAddress.Parse(address)));
+
+    /// <summary>Wrong codes from as many networks as it takes to use up the server's minute.</summary>
     private async Task TripTheServerWideLimitAsync()
     {
-        for (var i = 0; i < AccountLimits.RedeemFailuresPerServer; i++)
+        for (var i = 0; i < PerServer; i++)
         {
             using var wrong = await RedeemAsync("ZZZZ-ZZZZ", "Laptop");
             Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);

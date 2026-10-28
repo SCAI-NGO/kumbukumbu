@@ -2,6 +2,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Microsoft.AspNetCore.Mvc.Testing;
 using static Kumbu.Server.Tests.Api.RestClient;
 
@@ -81,5 +82,32 @@ public sealed class EarlierSearchApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.Forbidden, byKey.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, dev.StatusCode);
+    }
+
+    [Fact]
+    public async Task Earlier_search_and_activity_take_sixty_requests_a_minute_per_user_together()
+    {
+        var user = await NewAsync(Api);
+        var other = await NewAsync(Api);
+        var activity = $"/api/vaults/{Uri.EscapeDataString(user.Vault)}/activity";
+        for (var i = 0; i < AccountLimits.HistoryScansPerUser; i++)
+        {
+            using var allowed = await user.GetAsync(i % 2 == 0 ? "/api/search/earlier?q=zebras" : activity);
+            Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        }
+
+        using var search = await user.GetAsync("/api/search/earlier?q=zebras");
+        using var rows = await user.GetAsync(activity);
+        using var elsewhere = await other.GetAsync("/api/search/earlier?q=zebras");
+
+        foreach (var limited in new[] { search, rows })
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+            Assert.True(limited.Headers.RetryAfter?.Delta > TimeSpan.Zero);
+            Assert.Equal(AccountLimits.HistoryScansRefused, Text(await JsonAsync(limited), "error"));
+        }
+
+        // Another user's budget is their own.
+        Assert.Equal(HttpStatusCode.OK, elsewhere.StatusCode);
     }
 }

@@ -4,7 +4,7 @@
 > From *kumbuka*, "to remember". The reduplication intensifies the word: **kumbu × kumbu = kumbu²**.
 > The superscript ² also reads as "second" — a second brain.
 
-**Status:** Concept of October 2026. Steps 1 to 10 of the build order (§12) are built; step 11 (Obsidian sync) is in progress for v0.2.0.
+**Status:** Concept of October 2026. Steps 1 to 11 of the build order (§12) are built and were released with v0.2.0; work continues along the roadmap (§12), v2.5 next.
 **License:** AGPLv3 (it's a hosted network service — exactly the case the AGPL exists for).
 **Command / short name:** `kumbu`
 
@@ -75,7 +75,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - For people (the web app's session, an Obsidian device key) a changeset already ends after **2 minutes** without a write, as their editor saves every few seconds; agents (API keys, app connections, the dev token) keep 10 minutes, and the 1-hour cap is for both. The state a note is **created** with is always a version of its own, never coalesced away, so a conflict copy's first state, the evidence of the conflict, stays in its history. (Decided Oct 26, 2026, after the v0.2.0 dry run, #55.)
 - **Named checkpoints** (v1, decided Oct 24, 2026): `mkcp <path> <name>` marks the current state of a note, a folder or a vault under a name; `lscp [path]` lists checkpoints; `rmcp <path> <name>` removes one. A checkpoint is kept until `rmcp`, never pushed out of the history and never expired, so it pins the content it points at beyond the 10 versions of the history. The manual tells agents to set or remove them **only when the user asks**. In Git terms a changeset is a commit and a checkpoint a tag: a named pointer to a state, set on purpose; unlike Git, which keeps every commit, Kumbu² keeps 10 versions, so a checkpoint must hold on to its content itself.
   - **Browse a checkpoint like the current state:** `--checkpoint <name>` on reading commands, as `--version` for one note, but also on `ls` and `rg` over folders, since a checkpoint covers a tree. `diff` against a checkpoint; `restore` to one, for a folder with a preview and plan token as `replace`.
-  - **Web UI, v2 (0.2.0):** browse a checkpoint like the current state, as GitHub shows a repository at a commit, and **export** it (a zip of the notes as they were). Step 9 built making, restoring and removing checkpoints only; looking into a checkpoint (open it read-only, copy a note for the AI, export it as ZIP) comes with v0.2.0.
+  - **Web UI, v2 (0.2.0):** browse a checkpoint like the current state, as GitHub shows a repository at a commit, and **export** it (a zip of the notes as they were). Step 9 built making, restoring and removing checkpoints only; looking into a checkpoint (open it read-only, copy a note for the AI, export it as ZIP) came with v0.2.0.
   - **Limit:** 10 named checkpoints per vault by default, configurable: `Kumbu:Vaults:CheckpointLimit`, in `.env` as `KUMBU_CHECKPOINT_LIMIT` (documented in `.env.example` and the README). `mkcp` beyond the limit fails and names `lscp` and `rmcp`.
   - Built in step 6b, together with changesets.
 - `rm` is a soft delete into trash; **trash expiry 30 days**.
@@ -160,7 +160,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 ### OAuth flow (for reference; as built in step 10 the client uses the connection's own address `/mcp/c/{id}`, the endpoints are `/oauth/authorize` and `/oauth/token`, and clients identify themselves by a client metadata document, with dynamic registration as a fallback; `docs/security-architecture.md` §6)
 1. Client calls `/mcp` without token → `401` pointing to metadata.
 2. Client reads `/.well-known/…` metadata → finds Kumbu² as authorization server.
-3. Client registers itself automatically → `client_id` (verify current MCP spec mechanism).
+3. Client identifies itself: its `client_id` is the HTTPS URL of a client metadata document, which Kumbu² fetches; a client without one registers itself (`POST /oauth/register`, dynamic client registration) and gets a `client_id`, never a secret.
 4. Client opens the **user's browser** at `/authorize` with `client_id`, redirect URI and **PKCE** challenge.
 5. User logs in **at Kumbu²** (client never sees the password) and consents: which vaults, read/write.
 6. Kumbu² redirects back to the client's callback with a one-time **authorization code**.
@@ -182,7 +182,7 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 ## 10. Obsidian compatibility
 
 - **Export:** near-trivial — it's Markdown. Link resolution must follow Obsidian's rules (shortest unique name) or be exported in fully-qualified form.
-- **Import:** notes are stored as they come (content is never rewritten, §4). Plugin syntax preserved as is, otherwise ignored. A ZIP import of whole vaults comes with v0.2.0.
+- **Import:** notes are stored as they come (content is never rewritten, §4). Plugin syntax preserved as is, otherwise ignored. A ZIP import of whole vaults came with v0.2.0; the browser unpacks it, and the notes go up through the ordinary upload.
 - The work project (Obsidian + Nextcloud, plain files) is a **separate thing**. Import/export is the bridge.
 
 ## 11. Tech stack
@@ -206,9 +206,9 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 6b. Changesets (with changeset ids in the history) and named checkpoints (`mkcp`, `lscp`, `rmcp`, `--checkpoint`), plus the fixes from the phase 6 test (`docs/notes-test-phase6.md`).
 7. Embeddings + hybrid search; first, the decisions and fixes from the phase 6b test (`docs/notes-test-phase6b.md`): a folder restore moves moved notes back and rewrites their links; `replace` warns about links that would lead to another note and names the note named after the old text; small fixes.
 8. Users, admin, invites, API keys. **Built** (users with a user key, sessions as slots, API keys with per-vault rights sealed into their slots, invitations, the `bootstrap-admin` command, admin tools, and the REST API under `/api`; `CONCEPTS.md` chapter 10).
-9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. **Built** (`web/`, served from the image). The prototype is the template for look and feel only; where it differs from this concept (links across vaults, per-chunk authorship, note ids, keys instead of the user), the concept wins. TypeScript. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
-10. OAuth authorization server for app connectors, and re-keying. **Built** (connections at `/mcp/c/{id}`; `docs/security-architecture.md` §3 and §6).
-11. Obsidian sync plugin. In progress for v0.2.0 (`docs/superpowers/specs/2026-10-26-obsidian-sync-design.md`).
+9. Web UI and the REST API it shares with the Obsidian plugin (OpenAPI), designed with sync in mind. Direction (Chris, Oct 24, 2026): the mobile editor in `concepts/` (spec `MOBILE_EDITOR_v1.md` and a clickable prototype, made with Claude instead of Claude Design); the rest of the UI (admin, API keys, settings) is built around it. **Built** (`web/`, served from the image; `CONCEPTS.md` chapter 11). The prototype is the template for look and feel only; where it differs from this concept (links across vaults, per-chunk authorship, note ids, keys instead of the user), the concept wins. TypeScript. Colour schemes per user: the classic Linux schemes, Catppuccin and Tokyo Night among them, and light ones, each adjusted to the spec's contrast rules.
+10. OAuth authorisation server for app connectors, and re-keying. **Built** (connections at `/mcp/c/{id}`; `docs/security-architecture.md` §3 and §6; `CONCEPTS.md` chapter 12).
+11. Obsidian sync plugin. **Built** for v0.2.0 (the plugin in its own repository; on the server pairing codes and device keys, the version list with `since`, hints over a WebSocket; on the device conflict copies and the first-sync merge; `docs/superpowers/specs/2026-10-26-obsidian-sync-design.md`, `docs/security-architecture.md` §6 "Device pairing and sync", `CONCEPTS.md` chapter 13). Since attachments, part 1, it syncs PDFs and images too.
 
 Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidian plugin moved from "later" to the end of the build order, after the core is done and deployable. Documents written before that date use the old numbers: their step 6 is now 7, 7 is 8, 8 is 9 and 9 is 10. Step 6b was added on Oct 24, 2026 without renumbering, so step numbers stay stable from here on.
 
@@ -216,17 +216,17 @@ Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidia
 
 **Roadmap** (decided by Chris, Oct 26, 2026; the versions are the release numbers):
 - **v1 (0.1.0):** the base, done; an internal test version.
-- **v2 (0.2.0):** the first public release. Obsidian sync with pairing codes and device keys, install as an app with self-update, export and import as ZIP, welcome vault, activity and search in earlier versions, GDPR deletion, looking into a checkpoint (open it read-only, copy it for your AI, export it as ZIP).
+- **v2 (0.2.0):** the first public release, released in October 2026. Obsidian sync with pairing codes and device keys, install as an app with self-update, export and import as ZIP, welcome vault, activity and search in earlier versions, GDPR deletion, looking into a checkpoint (open it read-only, copy it for your AI, export it as ZIP).
 - **v2.5 (0.2.5):** Kanban boards, markdown links in `links`, `backlinks` and `mv`, attachments, and tags (read as Obsidian reads them, listed with `tags`, a filter on `rg`, `semsearch` and the web app's search).
 - **v3 (0.3.0):** OKF bundles, TOTP/2FA, OIDC single sign-on, passkeys with PRF.
 - **v4 (0.4.0):** sharing vaults and collaboration. It extends the crypto model (asymmetric keys, slots for other users, revocation), gets its own section in `docs/security-architecture.md` and an independent review before it is built. Under discussion: Kumbu² as a skills repository.
 - **v5 (1.0.0):** "Time Machine": automatic checkpoints, and browsing a vault as it was on a date without a checkpoint made beforehand (today: 10 versions per note, 30 days of trash, at most 10 named checkpoints).
 
-v1 is text only, on purpose. Attachments (images, PDFs) come in v2.5, to be designed with the same care as the text core, not added on the side. They are read by the AI as image parts plus extracted text, page by page; research in `docs/attachments-client-research.md`. Decided so far: the paragraphs below; still open: the size steps' numbers (from the test in §6 of the research) and the way in, uploading an attachment.
+v1 is text only, on purpose. Attachments (images, PDFs) come in v2.5, to be designed with the same care as the text core, not added on the side. They are read by the AI as image parts plus extracted text, page by page; research in `docs/attachments-client-research.md`. Decided so far: the paragraphs below; still open: the size steps' numbers (from the test in §6 of the research). The way in, uploading an attachment, came with attachments, part 1.
 
 **Attachments, part 1: built** (Oct 28, 2026; `docs/superpowers/specs/2026-10-27-attachments-foundation-design.md`, hands-on in `docs/notes-attachments-hands-on.md`). PDFs and images (PNG, JPEG, GIF, WebP, up to 15 MB) are stored as a small sealed record per file, kept and versioned where notes are, and their bytes as sealed blobs of their own, named by an HMAC under a key derived from the vault key and read on demand only, never into an unlocked vault's working set (`docs/security-architecture.md` §5.4). The Obsidian plugin syncs them both ways like notes, with conflict copies, and a notice for a file over 15 MB. Tickets turned out to be needed only for downloading several files at once as a ZIP, which is treated as an export; the web app and the plugin fetch single files with their session or key, so the question of tickets in URLs above is settled for people and programs. `img` and PDF text are the next two packages.
 
-**Attachments reach the model as content it can fetch and interpret, never as hex or base64 in a tool's text output** (decided by Chris, Oct 24, 2026). Encoded bytes in text cost a fortune in tokens and mean nothing to the model. The precedent is an earlier expert system of Chris's: base64 was considered there first, then replaced by **download tickets**, which worked much better. **Revised on Oct 27, 2026:** that precedent fetched images to *show* them to a person, and so do Kumbu²'s tickets: downloads in the web app, Obsidian sync, export. For the *model*, the research found that no major chat client fetches a link by itself, while MCP's `image` content does reach the model as an image: base64 is only the packing on the wire, and the client hands it to the model API as an image block. So the model gets images as `image` content, and tickets serve people and programs. Still to settle for them: how a ticket squares with "no keys in URLs" (§9; a ticket is a bearer secret for one file, so short-lived, single-use, scoped, and kept out of logs).
+**Attachments reach the model as content it can fetch and interpret, never as hex or base64 in a tool's text output** (decided by Chris, Oct 24, 2026). Encoded bytes in text cost a fortune in tokens and mean nothing to the model. The precedent is an earlier expert system of Chris's: base64 was considered there first, then replaced by **download tickets**, which worked much better. **Revised on Oct 27, 2026:** that precedent fetched images to *show* them to a person, and so do Kumbu²'s tickets: downloads in the web app, Obsidian sync, export. For the *model*, the research found that no major chat client fetches a link by itself, while MCP's `image` content does reach the model as an image: base64 is only the packing on the wire, and the client hands it to the model API as an image block. So the model gets images as `image` content, and tickets serve people and programs. How a ticket squares with "no keys in URLs" (§9) was settled by attachments, part 1 (above): single files are fetched with the session or key, and a ticket is needed only for downloading several at once as a ZIP, which is treated as an export.
 
 **Images in v2.5: `img`, an image viewer for the model** (decided by Chris, Oct 27, 2026). Kumbu² can't know a model's image limits (MCP names the client at most, never the model), so the agent chooses and the server tells it enough to choose well:
 
@@ -243,7 +243,7 @@ v3 brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 
 
 v2.5 brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. One vault carries at most one board, and cards are on a par with notes. A card is a note, with tools for atomic card operations (design of Oct 27, 2026, §13).
 
-Each step = a chapter in `CONCEPTS.md` (steps 9 and 10 are still missing theirs).
+Each step = a chapter in `CONCEPTS.md`, numbered on its own (steps 8 to 11 are chapters 10 to 13).
 
 ## 13. Open questions
 
