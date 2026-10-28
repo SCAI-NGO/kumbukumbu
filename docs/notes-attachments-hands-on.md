@@ -90,6 +90,8 @@ Nothing that loses or corrupts data, and nothing fixed in code beyond texts. Poi
 
 ## Offen für Chris
 
+The items below are kept verbatim, in German, as they were written for the maintainer during the build. ImageSharp was dropped for a header-only parser of our own; the first item is the record of that decision.
+
 - **ImageSharp braucht einen Lizenzschlüssel.** SixLabors.ImageSharp 3.2 und 4.x brechen den Release-Build ohne `SixLaborsLicenseKey` ab (CI und Dockerfile bauen Release); 3.1.12 hat bekannte Sicherheitslücken (NU1902/NU1903). Gewählt: ein eigener Header-Parser ohne Abhängigkeit (PNG, JPEG mit EXIF-Orientierung, GIF, WebP), der nur Header liest. Für morgen (`img` dekodiert Pixel) brauchst du eine Entscheidung: Six-Labors-Community-Schlüssel holen und einbinden, oder eine andere Bibliothek (z. B. SkiaSharp/libvips-Bindings).
 - **Passwort-Abfrage beim Mehrfach-Download abschalten verlangt das Passwort.** Sonst könnte eine gestohlene Sitzung den Schutz erst abschalten und dann alles herunterladen. Einschalten geht ohne Passwort. Wenn du das nicht willst: ein `if` in `AccountApi.SetPreferencesAsync` entfernen, der Einstellungsdialog fragt dann nicht mehr.
 - **Beschädigte Notizen fehlen still im Export (schon vor diesem Branch so).** Anhänge, deren Bytes sich nicht öffnen lassen, brechen den Download jetzt sichtbar ab (Spec-Anti-Ziel „Datei kommt still nicht an"). Notizen, die sich nicht öffnen lassen, lässt der Export weiterhin ohne Hinweis weg. Soll das angeglichen werden (Abbruch oder Liste im ZIP)?
