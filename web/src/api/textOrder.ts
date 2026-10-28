@@ -3,7 +3,12 @@
 // The server's order for text (`TextOrder.Default`, Kumbu.Core/Sh/TextOrder.cs): the invariant culture's comparison,
 // which is ICU's root collation (Ü next to U, case after letters and accents, no numeric order: "img10" before
 // "img2"), and ties broken by code unit, as .NET's ordinal comparison does, so the order is total.
-const collator = new Intl.Collator("und");
+// "en" and not "und": an undetermined locale falls back to the browser's own, and a tailored one (Swedish, Turkish)
+// would put Ö after z. English is untailored, CLDR's root order.
+const collator = new Intl.Collator("en");
+
+/** The collator's locale, for the test that it doesn't follow the runtime's. */
+export const textOrderLocale = () => collator.resolvedOptions().locale;
 
 export const textOrder = (a: string, b: string): number => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
 

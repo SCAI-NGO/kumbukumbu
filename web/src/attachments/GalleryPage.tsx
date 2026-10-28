@@ -125,6 +125,7 @@ export default function GalleryPage() {
   // A dialog keeps the files it was opened for: the selection changes under it as they move or go.
   const [dialog, setDialog] = useState<{ kind: "download" | "move" | "delete"; files: GalleryFile[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const queryClient = useQueryClient();
 
   const files = useMemo(() => (tree.data ? filesOf(tree.data.root) : []), [tree.data]);
@@ -178,10 +179,13 @@ export default function GalleryPage() {
     if (chosen.length === 1) return downloadFile(chosen[0].path);
     const files = chosen;
     // Asked afresh: a setting turned back on elsewhere must not leave a ZIP without its ticket. Unknown, it asks.
+    // Meanwhile the button waits, so that a second tap doesn't start a second ZIP.
+    setAsking(true);
     const ask = await queryClient
       .fetchQuery({ ...preferencesQuery, staleTime: 0 })
       .then((p) => p.askPasswordForDownloads)
-      .catch(() => true);
+      .catch(() => true)
+      .finally(() => setAsking(false));
     if (ask) setDialog({ kind: "download", files });
     else void downloadZip(zipFrame, vault, files.map((f) => f.path));
   };
@@ -269,7 +273,7 @@ export default function GalleryPage() {
               <X size={20} aria-hidden />
             </button>
             <p className="min-w-0 flex-1 truncate text-sm text-text">{chosen.length === 0 ? "Tap files to select them" : `${chosen.length} selected · ${sizeText(total)}`}</p>
-            <BarButton label="Download" disabled={chosen.length === 0 || chosen.length > maxZipFiles} onClick={() => void download()}>
+            <BarButton label="Download" disabled={asking || chosen.length === 0 || chosen.length > maxZipFiles} onClick={() => void download()}>
               <Download size={20} aria-hidden />
             </BarButton>
             <BarButton label="Move" disabled={chosen.length === 0} onClick={() => setDialog({ kind: "move", files: chosen })}>

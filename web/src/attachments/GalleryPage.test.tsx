@@ -278,6 +278,24 @@ describe("Gallery", () => {
     expect(preferences).toHaveBeenCalledTimes(2);
   });
 
+  it("the download button waits for the setting, so a double tap starts one ZIP", async () => {
+    let answer: (r: Response) => void = () => {};
+    api({ "GET /api/account/preferences": () => new Promise<Response>((resolve) => (answer = resolve)) });
+    const { forms } = downloads();
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await longPress("whiteboard.png");
+    await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
+    const button = within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" });
+    await userEvent.click(button);
+    expect(button).toBeDisabled();
+    await userEvent.click(button);
+
+    answer(json(200, { askPasswordForDownloads: false }));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(forms).toHaveLength(1);
+  });
+
   it("an error answer in the download frame is shown in the gallery, and the frame emptied", async () => {
     api({ "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }) });
     const { forms } = downloads();

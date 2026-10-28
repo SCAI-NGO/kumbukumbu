@@ -71,4 +71,5 @@ export function zipFrameError(frame: HTMLIFrameElement): string | null {
 /** The account's preferences (`GET /api/account/preferences`): whether several files need the password. */
 export const preferencesQuery = { queryKey: ["preferences"], queryFn: () => call(api.GET("/api/account/preferences")) };
 
-export const usePreferences = () => useQuery(preferencesQuery);
+/** For showing the setting; a download asks the server afresh (`fetchQuery` with `staleTime: 0`). */
+export const usePreferences = () => useQuery({ ...preferencesQuery, staleTime: 60_000 });
