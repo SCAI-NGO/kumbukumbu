@@ -72,7 +72,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
     setView({ kind: "reading" });
     let read: ImportVault[];
     try {
-      read = await readImport(new Uint8Array(await file.arrayBuffer()), file.name);
+      read = await readImport(file, file.name);
     } catch (err) {
       setView({ kind: "pick", error: err instanceof ImportTooLarge ? err.message : "This file isn't a ZIP, or it is damaged. Choose another." });
       return;

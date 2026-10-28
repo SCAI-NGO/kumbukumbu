@@ -8,7 +8,7 @@ import { planImport, runImport, summaryText, type Choice, type ImportApi, type V
 const note = (path: string, version = `v-${path}`, content = `text of ${path}`): ImportNote => ({ path, content, version });
 const vault = (name: string, notes: ImportNote[], skipped: ImportVault["skipped"] = [], files: ImportFile[] = []): ImportVault => ({ name, notes, files, skipped });
 const bytesOf = (path: string) => new TextEncoder().encode(`bytes of ${path}`);
-const file = (path: string, version = `v-${path}`): ImportFile => ({ path, size: bytesOf(path).length, version, read: () => bytesOf(path) });
+const file = (path: string, version = `v-${path}`): ImportFile => ({ path, size: bytesOf(path).length, version, read: async () => bytesOf(path) });
 
 interface Put {
   vault: string;
@@ -310,11 +310,16 @@ describe("runImport with images and PDFs", () => {
     const putFile = api.putFile;
     api.putFile = vi.fn(async (v: string, path: string, bytes: Uint8Array, version: string | null) => {
       if (path === "fake.png") throw new HttpError(400, "fake.png isn't a PNG image (its content doesn't match its name)");
+      // A 409 without a file state: the path can't hold a file.
+      if (path === "a.md/x.png") throw new HttpError(409, "/Work/a.md is a note, so no file can be below it.");
       return putFile(v, path, bytes, version);
     });
-    const summary = await run(planImport([vault("Work", [], [], [file("fake.png"), file("ok.pdf")])], []), {}, api);
+    const summary = await run(planImport([vault("Work", [], [], [file("fake.png"), file("a.md/x.png"), file("ok.pdf")])], []), {}, api);
     expect(summary).toMatchObject({ vaults: 1, files: 1, failed: [] });
-    expect(summary.skipped).toEqual([{ path: "Work/fake.png", reason: "fake.png isn't a PNG image (its content doesn't match its name)" }]);
+    expect(summary.skipped).toEqual([
+      { path: "Work/fake.png", reason: "fake.png isn't a PNG image (its content doesn't match its name)" },
+      { path: "Work/a.md/x.png", reason: "/Work/a.md is a note, so no file can be below it." },
+    ]);
   });
 });
 

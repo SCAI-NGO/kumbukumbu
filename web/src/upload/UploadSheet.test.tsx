@@ -362,16 +362,25 @@ describe("images and PDFs", () => {
   });
 
   it("a file the server refuses is listed with its sentence, and the rest goes on", async () => {
-    const { puts } = uploadApi([], { refuse: { "fake.png": [400, "fake.png isn't a PNG image (its content doesn't match its name)"] } });
+    const { puts } = uploadApi([], {
+      refuse: {
+        "fake.png": [400, "fake.png isn't a PNG image (its content doesn't match its name)"],
+        // A 409 without a file state: the path is a folder already.
+        "shots.png": [409, "/Work/shots.png is a folder."],
+      },
+    });
     renderApp("/notes/Work/inbox.md");
     const sheet = await openFromDock();
-    await pickFiles(sheet, [new File(["MZ"], "fake.png"), new File(["%PDF-"], "ok.pdf")]);
+    await pickFiles(sheet, [new File(["MZ"], "fake.png"), new File(["x"], "shots.png"), new File(["%PDF-"], "ok.pdf")]);
     await userEvent.click(await within(sheet).findByRole("button", { name: "Upload" }));
 
-    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 1 file skipped")).toBeInTheDocument();
-    expect(puts.map((p) => p.url)).toEqual(["/api/files/Work/fake.png", "/api/files/Work/ok.pdf"]);
-    await userEvent.click(within(sheet).getByText("1 file skipped"));
-    expect(within(sheet).getByRole("list", { name: "Skipped files" })).toHaveTextContent("fake.png isn't a PNG image (its content doesn't match its name)");
+    expect(await within(sheet).findByText("0 notes and 1 file uploaded, 0 replaced, 2 files skipped")).toBeInTheDocument();
+    expect(puts.map((p) => p.url)).toEqual(["/api/files/Work/fake.png", "/api/files/Work/shots.png", "/api/files/Work/ok.pdf"]);
+    await userEvent.click(within(sheet).getByText("2 files skipped"));
+    expect(within(within(sheet).getByRole("list", { name: "Skipped files" })).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "fake.pngfake.png isn't a PNG image (its content doesn't match its name)",
+      "shots.png/Work/shots.png is a folder.",
+    ]);
   });
 
   it("the file input lists concrete types, not image/*", async () => {

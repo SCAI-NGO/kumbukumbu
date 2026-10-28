@@ -50,7 +50,8 @@ export interface ImportApi {
   upload(vault: string, files: UploadFile[], onConflict: Choice): Promise<{ written: number | string; replaced: number | string; skipped: Skipped[] }>;
   /**
    * An image or PDF to its path below the vault: to a free path without `version`, else only over that version
-   * ("conflict" otherwise). A refusal throws an `HttpError` (400 or 413 for the file itself, 404 when it is gone).
+   * ("conflict" otherwise). A refusal throws an `HttpError` (400, 413 or a 409 about the path for the file itself, 404
+   * when it is gone).
    */
   putFile(vault: string, path: string, bytes: Uint8Array, version: string | null): Promise<"created" | "replaced" | "conflict">;
 }
@@ -189,9 +190,10 @@ export async function runImport(
       if (!file) return;
       let result;
       try {
-        result = await importApi.putFile(name, path, file.read(), version);
+        result = await importApi.putFile(name, path, await file.read(), version);
       } catch (err) {
-        const refused = err instanceof HttpError && (err.status === 400 || err.status === 413);
+        // 409 here (no file state to compare): the path is a folder, or a note sits below it.
+        const refused = err instanceof HttpError && (err.status === 400 || err.status === 409 || err.status === 413);
         const gone = err instanceof HttpError && err.status === 404 && version !== null;
         if (!refused && !gone) throw err;
         if (gone) summary.kept++;

@@ -9,8 +9,9 @@ export type PutResult = { kind: "created" | "replaced"; state: FileState } | { k
 
 /**
  * Uploads an image's or PDF's bytes to `path` in the vault (`PUT /api/files/{vault}/{path}`). Without `version`
- * only a free path is written; with it, only the file at that version is replaced. Any other refusal (a format or
- * size problem, 400 or 413, with the server's sentence) throws an `HttpError`.
+ * only a free path is written; with it, only the file at that version is replaced. Any other refusal throws an
+ * `HttpError` with the server's sentence: a format or size problem (400, 413), or a 409 without a file state (the
+ * path is a folder, or a note sits below it).
  */
 export async function putFile(vault: string, path: string, bytes: Uint8Array, version?: string): Promise<PutResult> {
   const { data, error, response } = await api.PUT("/api/files/{vault}/{path}", {

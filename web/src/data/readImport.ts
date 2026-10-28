@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { unzipSync, type UnzipFileInfo } from "fflate";
+import { readDirectory, readEntry, type ZipEntry } from "./zipReader";
 import { isAttachmentName, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
@@ -10,14 +10,14 @@ export interface ImportNote {
 }
 
 /**
- * An image or PDF to import, at its path below the vault. Its bytes stay packed until it is sent: `read` unpacks them
- * (again) each time, so the ZIP's files are never all unpacked at once.
+ * An image or PDF to import, at its path below the vault. Its bytes stay in the ZIP until it is sent: `read` reads and
+ * unpacks them (again) each time, so no more than one file's bytes are in memory at once.
  */
 export interface ImportFile {
   path: string;
   size: number;
   version: string;
-  read(): Uint8Array;
+  read(): Promise<Uint8Array>;
 }
 
 /** A vault of the ZIP: a top-level folder, or the whole ZIP when it has notes or files at its root. */
@@ -106,20 +106,16 @@ const isSystem = (name: string) => /^__MACOSX(\/|$)/.test(name) || name.startsWi
 /**
  * The vaults of an import ZIP: each top-level folder is one, or, when any note, image or PDF sits at the ZIP's root (an
  * Obsidian vault zipped directly), the whole ZIP is one, named after the file. Which entries are unpacked is decided by
- * name and size alone, so other files are never inflated. Images and PDFs (up to 15 MB) are unpacked one at a time for
- * their version and dropped again; `read` unpacks one when it is sent. Notes that aren't UTF-8 are skipped, never
- * imported with replacement characters. Names come in NFC, as the server stores them (macOS writes NFD). Rejects when
- * the bytes aren't a ZIP, and with `ImportTooLarge` when the notes would unpack to more than `budget` bytes.
+ * name and size alone, so other files are never inflated. The ZIP is read in slices, never whole (`zipReader`): its
+ * directory, then one entry at a time. Images and PDFs (up to 15 MB) are unpacked one at a time for their version and
+ * dropped again; `read` unpacks one when it is sent. Notes that aren't UTF-8 are skipped, never imported with
+ * replacement characters. Names come in NFC, as the server stores them (macOS writes NFD). Rejects when the bytes
+ * aren't a ZIP, and with `ImportTooLarge` when the notes would unpack to more than `budget` bytes.
  */
-export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_IMPORT_BYTES): Promise<ImportVault[]> {
-  // A first pass reads the central directory only: the filter sees every entry and lets none be unpacked.
-  const entries: UnzipFileInfo[] = [];
-  unzipSync(zip, {
-    filter: (entry) => {
-      entries.push(entry);
-      return false;
-    },
-  });
+export async function readImport(source: Blob | Uint8Array, zipName: string, budget = MAX_IMPORT_BYTES): Promise<ImportVault[]> {
+  const zip = source instanceof Uint8Array ? new Blob([source as Uint8Array<ArrayBuffer>]) : source;
+  // The central directory only: nothing is unpacked yet.
+  const entries = await readDirectory(zip);
 
   // Old Windows tools separate folders with "\\": in a ZIP with no "/" at all, that is what it means.
   const backslashed = !entries.some((e) => e.name.includes("/")) && entries.some((e) => e.name.includes("\\"));
@@ -127,7 +123,7 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
     const name = entryName(raw).normalize("NFC");
     return backslashed ? name.replaceAll("\\", "/") : name;
   };
-  const isFile = (e: UnzipFileInfo) => !nameOf(e.name).endsWith("/");
+  const isFile = (e: ZipEntry) => !nameOf(e.name).endsWith("/");
   // A name in the ZIP twice (an appended ZIP): which copy is meant can't be told, so neither is imported.
   const seen = new Map<string, number>();
   for (const e of entries) seen.set(e.name, (seen.get(e.name) ?? 0) + 1);
@@ -143,11 +139,10 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
   const whole = zipName.replace(/\.zip$/i, "").normalize("NFC").trim();
 
   // Where each entry goes: its vault and path below it, and why it is skipped, if it is.
-  const wanted = new Map<string, { into: ImportVault; path: string; target: string }>();
-  const files = new Map<string, { into: ImportVault; path: string }>();
+  const wanted = new Map<ZipEntry, { into: ImportVault; path: string; target: string }>();
+  const files = new Map<ZipEntry, { into: ImportVault; path: string }>();
   let bytes = 0;
   for (const entry of entries) {
-    // `entry.name` stays the key the second pass knows the entry by.
     const name = nameOf(entry.name);
     if (/^__MACOSX(\/|$)/.test(name)) continue;
     let vault: string;
@@ -181,25 +176,26 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
     paths.add(path);
     // An image or PDF keeps its name, and is unpacked later, apart from the notes and outside their budget.
     if (!note) {
-      files.set(entry.name, { into: target, path });
+      files.set(entry, { into: target, path });
       continue;
     }
     bytes += entry.originalSize;
-    wanted.set(entry.name, { into: target, path, target: relative });
+    wanted.set(entry, { into: target, path, target: relative });
   }
-  // The budget is summed from the sizes the ZIP declares. That bounds memory because fflate (pinned to 0.8.3 in
-  // package.json for this) allocates each entry's output at exactly its declared size and never grows it; a lying
+  // The budget is summed from the sizes the ZIP declares. That bounds memory because `readEntry` has fflate's
+  // inflateSync (pinned to 0.8.3 in package.json for this) write into a buffer of exactly the declared size, which it
+  // never grows; a lying
   // size truncates the note instead. A stored entry is cut at its compressed size, so it is never larger than the ZIP,
   // and the size check below still refuses it. readImport.test.ts pins all three with lying ZIPs: run it before
   // moving to another fflate version.
   if (bytes > budget) throw new ImportTooLarge();
 
-  // Only the notes are unpacked.
-  const unpacked = unzipSync(zip, { filter: (entry) => wanted.has(entry.name) });
-  for (const [name, { into, path, target }] of wanted) {
+  // The notes, one at a time.
+  for (const [entry, { into, path, target }] of wanted) {
+    const raw = await readEntry(zip, entry);
     let content: string;
     try {
-      content = strictUtf8.decode(unpacked[name]);
+      content = strictUtf8.decode(raw);
     } catch {
       into.skipped.push({ path: target, reason: NOT_UTF8 });
       continue;
@@ -213,14 +209,13 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
 
   // Files one at a time: each is unpacked for its version and dropped, and again when it is sent. Its declared size
   // bounds what fflate allocates, as for notes; a stored entry that lies is caught by the size check.
-  const unpack = (name: string) => unzipSync(zip, { filter: (entry) => entry.name === name })[name];
-  for (const [name, { into, path }] of files) {
-    const bytes = unpack(name);
+  for (const [entry, { into, path }] of files) {
+    const bytes = await readEntry(zip, entry);
     if (bytes.length > MAX_ATTACHMENT_BYTES) {
       into.skipped.push({ path, reason: TOO_LARGE_FILE });
       continue;
     }
-    into.files.push({ path, size: bytes.length, version: await versionOfBytes(bytes), read: () => unpack(name) });
+    into.files.push({ path, size: bytes.length, version: await versionOfBytes(bytes), read: () => readEntry(zip, entry) });
   }
   return [...vaults.values()].map((v) => v.vault);
 }

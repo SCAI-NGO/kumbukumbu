@@ -51,8 +51,13 @@ export const browserCanvas: Canvas = {
   async encode(image, width, height, type, quality) {
     if (typeof OffscreenCanvas !== "undefined") {
       const canvas = new OffscreenCanvas(width, height);
-      draw(canvas.getContext("2d")!, image, width, height, type);
-      return canvas.convertToBlob({ type, quality });
+      try {
+        draw(canvas.getContext("2d")!, image, width, height, type);
+        return await canvas.convertToBlob({ type, quality });
+      } finally {
+        // Its pixels are freed now, not when it is collected: 20 rounds of a 50 MP canvas add up.
+        canvas.width = canvas.height = 0;
+      }
     }
     const canvas = document.createElement("canvas");
     canvas.width = width;

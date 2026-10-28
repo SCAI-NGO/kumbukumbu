@@ -239,9 +239,10 @@ export default function UploadSheet({ folder, dropped }: { folder: string; dropp
     try {
       result = await putFile(vault, inVault ? `${inVault}/${step.path}` : step.path, new Uint8Array(await step.file.arrayBuffer()), step.version);
     } catch (err) {
-      // A refusal of this file alone (its format, content or size; replaced, it was deleted meanwhile): listed, and the
-      // rest goes on.
-      const alone = err instanceof HttpError && (err.status === 400 || err.status === 413 || (err.status === 404 && step.version !== undefined));
+      // A refusal of this file alone (its format, content or size; its path a folder or above a note, 409 without a
+      // file state; replaced, it was deleted meanwhile): listed, and the rest goes on.
+      const alone =
+        err instanceof HttpError && (err.status === 400 || err.status === 409 || err.status === 413 || (err.status === 404 && step.version !== undefined));
       if (!alone) throw err;
       r.skipped.push({ path: step.path, reason: errorText(err) });
       return;

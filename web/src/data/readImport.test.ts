@@ -141,7 +141,7 @@ describe("readImport", () => {
       ["scan.PDF", pdf.length, await versionOfBytes(pdf)],
     ]);
     expect(await versionOfBytes(pdf)).not.toBe(await versionOf("%PDF-1.7\r\nbody\r\n"));
-    expect(work.files.map((f) => Array.from(f.read()))).toEqual([Array.from(png), Array.from(pdf)]);
+    expect(await Promise.all(work.files.map(async (f) => Array.from(await f.read())))).toEqual([Array.from(png), Array.from(pdf)]);
     expect(work.skipped).toEqual([
       { path: "report.docx", reason: NOT_SUPPORTED },
       { path: "huge.jpg", reason: TOO_LARGE_FILE },
@@ -152,6 +152,28 @@ describe("readImport", () => {
   it("two images that land at the same path (vault folders differing in case): the second is skipped", async () => {
     const vaults = await readImport(zip({ "Work/a.png": "1", "work/a.png": "2" }), "export.zip");
     expect(vaults.map((v) => [v.files.map((f) => f.path), v.skipped])).toEqual([[["a.png"], [{ path: "a.png", reason: "another file of this upload has the same path" }]]]);
+  });
+
+  it("reads the ZIP in slices, never whole: the directory, then one entry at a time", async () => {
+    const photo = new Uint8Array(2 * 1024 * 1024).map((_, i) => (i * 7919) % 251);
+    const bytes = zipSync({ "Work/a.md": strToU8("A"), "Work/one.png": photo, "Work/two.png": photo.slice().reverse() }, { level: 0 });
+    const blob = new Blob([bytes]);
+    const slices: number[] = [];
+    // A Blob that only slices: reading it whole would throw.
+    const counting = {
+      size: blob.size,
+      slice: (start?: number, end?: number) => {
+        const part = blob.slice(start, end);
+        slices.push(part.size);
+        return part;
+      },
+      arrayBuffer: () => Promise.reject(new Error("read whole")),
+    } as unknown as Blob;
+    const [work] = await readImport(counting, "export.zip");
+    expect(work.files.map((f) => f.path)).toEqual(["one.png", "two.png"]);
+    expect(Array.from(await work.files[1].read())).toEqual(Array.from(photo.slice().reverse()));
+    // No slice is larger than one entry: the two photos are never in memory together.
+    expect(Math.max(...slices)).toBe(photo.length);
   });
 
   it("a zipped vault with only an image at its root is one vault too", async () => {
