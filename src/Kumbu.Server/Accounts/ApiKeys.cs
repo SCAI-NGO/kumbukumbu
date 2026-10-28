@@ -40,7 +40,7 @@ public enum ApiKeyKind
 /// <c>ExpiresAt</c> is null for a key that doesn't expire.</summary>
 public sealed record ApiKeyInfo(
     string Id, string Name, string Prefix, IReadOnlyDictionary<string, KeyRight> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? RevokedAt,
-    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent);
+    DateTime? ExpiresAt = null, ApiKeyKind Kind = ApiKeyKind.Agent, WriteResumption? Resumed = null);
 
 /// <summary>A key that was presented and checked: whose it is, the name its writes carry, and whether a device holds it.</summary>
 public sealed record ResolvedApiKey(User User, string Id, string Name, ApiKeyKind Kind = ApiKeyKind.Agent);
@@ -370,7 +370,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         doc.LastUsedAt,
         doc.RevokedAt,
         doc.ExpiresAt,
-        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent);
+        meta.Kind == DeviceKind ? ApiKeyKind.Device : ApiKeyKind.Agent, Resumption(doc));
 
     private const string DeviceKind = "device";
 
@@ -454,7 +454,42 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
         [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
+
+    /// <summary>A key that wrote nothing for longer than this and writes again has resumed (<see cref="RecordWriteAsync"/>).</summary>
+    public static readonly TimeSpan LongPause = TimeSpan.FromDays(14);
+
+    /// <summary>
+    /// After a write by the key has committed: its <c>lastWriteAt</c>, at most once a minute like <c>lastUsedAt</c>
+    /// (a device polls all the time, so only a write says that someone wrote with it). A write more than
+    /// <see cref="LongPause"/> after the previous one is a resumption, kept until the next one: the web app makes a
+    /// device's writes since then stand out. A key's first write starts the record and resumes nothing. Best effort:
+    /// the write stands whatever happens here.
+    /// </summary>
+    public async Task RecordWriteAsync(string keyId)
+    {
+        try
+        {
+            var now = Now;
+            var last = await Keys.Find(k => k.Id == keyId).Project(k => k.LastWriteAt).FirstOrDefaultAsync(CancellationToken.None);
+            if (last is { } previous && now - previous < LastUsedGranularity) return;
+            var update = Builders<ApiKeyDocument>.Update.Set(k => k.LastWriteAt, now);
+            if (last is { } quiet && now - quiet > LongPause) update = update.Set(k => k.QuietSince, quiet).Set(k => k.ResumedAt, now);
+            // Conditional on the value read, so of concurrent writes only one records a resumption.
+            await Keys.UpdateOneAsync(k => k.Id == keyId && k.LastWriteAt == last, update, cancellationToken: CancellationToken.None);
+        }
+        catch (MongoException e)
+        {
+            log.LogWarning(e, "The write of API key {KeyId} could not be recorded", keyId);
+        }
+    }
+
+    private static WriteResumption? Resumption(ApiKeyDocument doc) =>
+        doc is { QuietSince: { } quiet, ResumedAt: { } resumed } ? new WriteResumption(quiet, resumed) : null;
 }
+
+/// <summary>A key wrote again at <paramref name="At"/> after writing nothing since <paramref name="QuietSince"/>, more
+/// than <see cref="ApiKeys.LongPause"/> before: its latest return after a long pause (<see cref="ApiKeys.RecordWriteAsync"/>).</summary>
+public sealed record WriteResumption(DateTime QuietSince, DateTime At);
 
 /// <summary>An API key (collection <c>api_keys</c>). Nothing here is the key; name and vaults are sealed.</summary>
 [BsonIgnoreExtraElements]
@@ -494,6 +529,17 @@ public sealed class ApiKeyDocument
 
     [BsonElement("revokedAt"), BsonIgnoreIfNull]
     public DateTime? RevokedAt { get; set; }
+
+    /// <summary>The key's latest write, up to a minute late (<see cref="ApiKeys.RecordWriteAsync"/>).</summary>
+    [BsonElement("lastWriteAt"), BsonIgnoreIfNull]
+    public DateTime? LastWriteAt { get; set; }
+
+    /// <summary>With <see cref="ResumedAt"/>: the key's latest return after a long pause in writing, and its last write before it.</summary>
+    [BsonElement("quietSince"), BsonIgnoreIfNull]
+    public DateTime? QuietSince { get; set; }
+
+    [BsonElement("resumedAt"), BsonIgnoreIfNull]
+    public DateTime? ResumedAt { get; set; }
 
     /// <summary>From then on the key is refused, as if revoked. Bound into the seal of <see cref="Writer"/>.</summary>
     [BsonElement("expiresAt"), BsonIgnoreIfNull]
