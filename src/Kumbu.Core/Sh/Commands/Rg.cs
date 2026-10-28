@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -38,6 +39,8 @@ public sealed class Rg(INoteReader notes) : ICommand
           print as path-line-text, and '--' separates groups that are not adjacent.
           Right of a pipe, rg filters the piped lines instead and prints them without a prefix.
           If nothing matches in the text but note names do, a hint line lists them (not when piped).
+          Images and PDFs are not searched, and --files does not list them: rg reads notes only
+          ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
 
@@ -141,6 +144,11 @@ public sealed class Rg(INoteReader notes) : ICommand
             if (below.Count == 0 && !path.IsRoot)
             {
                 var content = await notes.ReadAsync(path, ct);
+                if (content is null && await StoreAttachments.GetAsync(notes, path, ct) is not null)
+                {
+                    return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes only");
+                }
+
                 if (content is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
                 below = [new Note(path, content)];
             }

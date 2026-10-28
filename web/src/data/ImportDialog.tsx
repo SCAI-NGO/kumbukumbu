@@ -7,11 +7,19 @@ import { useVaults } from "../api/notes";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useHoldUpdates } from "../update/apply";
+import { isAttachmentName } from "../upload/planUpload";
 import { SkippedList } from "../upload/UploadSheet";
 import { ImportTooLarge, readImport, vaultKey, type ImportVault } from "./readImport";
 import { planImport, runImport, serverImportApi, summaryText, type Choice, type ImportApi, type ImportSummary, type VaultPlan } from "./runImport";
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "2 notes", "1 file", "2 notes and 1 file": of paths below a vault. */
+function itemsText(paths: string[]) {
+  const files = paths.filter((p) => isAttachmentName(p.slice(p.lastIndexOf("/") + 1))).length;
+  const notes = paths.length - files;
+  return files === 0 ? count(notes, "note", "notes") : notes === 0 ? count(files, "file", "files") : `${count(notes, "note", "notes")} and ${count(files, "file", "files")}`;
+}
 
 type View =
   | { kind: "pick"; error?: string }
@@ -19,8 +27,8 @@ type View =
   | { kind: "preview"; vaults: ImportVault[]; error?: string }
   | { kind: "checking" }
   | { kind: "ask"; plans: VaultPlan[]; asking: VaultPlan[]; choices: Map<string, Choice> }
-  | { kind: "running"; done: number; total: number }
-  | { kind: "done"; summary: ImportSummary };
+  | { kind: "running"; done: number; total: number; files: boolean }
+  | { kind: "done"; summary: ImportSummary; files: boolean };
 
 // Vaults and notes appear and change: the vault list, every tree, search and any open note are asked again.
 const touched = [["vaults"], ["tree"], ["search"], ["note"], ["links"], ["backlinks"], ["history"], ["changes"]];
@@ -64,7 +72,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
     setView({ kind: "reading" });
     let read: ImportVault[];
     try {
-      read = await readImport(new Uint8Array(await file.arrayBuffer()), file.name);
+      read = await readImport(file, file.name);
     } catch (err) {
       setView({ kind: "pick", error: err instanceof ImportTooLarge ? err.message : "This file isn't a ZIP, or it is damaged. Choose another." });
       return;
@@ -104,10 +112,12 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
   }
 
   async function start(plans: VaultPlan[], choices: Map<string, Choice>) {
-    setView({ kind: "running", done: 0, total: 0 });
-    const summary = await runImport(plans, choices, importApi, (done, total) => setView({ kind: "running", done, total }));
+    // With images or PDFs, the counts are of notes and files.
+    const files = plans.some((p) => p.vault.files.length > 0);
+    setView({ kind: "running", done: 0, total: 0, files });
+    const summary = await runImport(plans, choices, importApi, (done, total) => setView({ kind: "running", done, total, files }));
     for (const queryKey of touched) void queryClient.invalidateQueries({ queryKey });
-    setView({ kind: "done", summary });
+    setView({ kind: "done", summary, files });
   }
 
   return (
@@ -128,7 +138,8 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
           <>
             <p className="text-text-body">
               A ZIP such as Kumbu²'s export: each top-level folder becomes a vault. A ZIP of one Obsidian vault becomes one vault, named after the file.
-              History, trash and checkpoints aren't carried; only Markdown notes are imported.
+              History, trash and checkpoints aren't carried; only Markdown notes, PDFs and images (.pdf, .png, .jpg, .jpeg, .gif, .webp, up to 15 MB) are
+              imported.
             </p>
             {view.error && <FormError>{view.error}</FormError>}
             <label
@@ -174,7 +185,8 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
                     />
                     <span className="min-w-0 flex-1 break-words text-text">{v.name}</span>
                     <span className="shrink-0 text-sm text-muted">
-                      {blocker(v.name) ?? `${count(v.notes.length, "note", "notes")}${mine(v.name) ? " · exists: merge or skip" : ""}`}
+                      {blocker(v.name) ??
+                        `${count(v.notes.length, "note", "notes")}${v.files.length ? `, ${count(v.files.length, "file", "files")}` : ""}${mine(v.name) ? " · exists: merge or skip" : ""}`}
                     </span>
                   </label>
                 </li>
@@ -207,7 +219,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
         {view.kind === "ask" && (
           <>
             <p className="text-text">
-              {`${count(view.asking[0].differing.length, "note", "notes")} in ${view.asking[0].target} ${view.asking[0].differing.length === 1 ? "differs" : "differ"} from the ZIP.`}
+              {`${itemsText(view.asking[0].differing)} in ${view.asking[0].target} ${view.asking[0].differing.length === 1 ? "differs" : "differ"} from the ZIP.`}
             </p>
             <p className="text-text-body">Replace all with the ZIP's (the history keeps the old versions), or skip all and keep yours. Nothing is written yet.</p>
             <div className="flex flex-wrap gap-3">
@@ -227,7 +239,7 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
 
         {view.kind === "running" && (
           <div role="status" className="flex flex-col gap-2">
-            <p className="text-text">{`${view.done} of ${count(view.total, "note", "notes")}`}</p>
+            <p className="text-text">{view.files ? `${view.done} of ${view.total} notes and files` : `${view.done} of ${count(view.total, "note", "notes")}`}</p>
             <div
               role="progressbar"
               aria-label="Import progress"
@@ -247,13 +259,15 @@ export default function ImportDialog({ onClose, importApi = serverImportApi }: {
               {summaryText(view.summary)}
             </p>
             {view.summary.unchanged > 0 && (
-              <p className="text-text-body">{`${count(view.summary.unchanged, "note was", "notes were")} there already, as ${view.summary.unchanged === 1 ? "it is" : "they are"}.`}</p>
+              <p className="text-text-body">{`${count(view.summary.unchanged, view.files ? "note or file was" : "note was", view.files ? "notes and files were" : "notes were")} there already, as ${view.summary.unchanged === 1 ? "it is" : "they are"}.`}</p>
             )}
             {view.summary.failed.length > 0 && (
               <ul aria-label="Failed vaults" className="flex flex-col gap-1.5">
                 {view.summary.failed.map((f) => (
                   <li key={f.vault} className="flex flex-col">
-                    <span className="text-text">{f.written > 0 ? `${f.vault} (${count(f.written, "note", "notes")} written before it stopped)` : f.vault}</span>
+                    <span className="text-text">
+                      {f.written > 0 ? `${f.vault} (${count(f.written, view.files ? "note or file" : "note", view.files ? "notes and files" : "notes")} written before it stopped)` : f.vault}
+                    </span>
                     <span className="text-sm text-muted">{f.reason}</span>
                   </li>
                 ))}

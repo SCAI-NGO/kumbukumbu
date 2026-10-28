@@ -216,6 +216,7 @@ app.MapNoteApi();
 app.MapHistoryApi();
 app.MapBoardApi();
 app.MapUploadApi();
+app.MapFileApi();
 app.MapSyncApi();
 app.MapPairingApi();
 app.MapExportApi();

@@ -44,7 +44,6 @@ public class MarkdownLinkTests
     [InlineData("[a](mailto:a@b.c)")]
     [InlineData("[a](obsidian://open?file=x)")]
     [InlineData("[a](//cdn.x/y.md)")]
-    [InlineData("![a](plan.md)")]
     [InlineData("[a][ref]")]
     [InlineData("`[a](plan.md)`")]
     [InlineData("```\n[a](plan.md)\n```\n")]
@@ -54,13 +53,16 @@ public class MarkdownLinkTests
 
     // An escaped '!' is plain text, so a link follows it; an escaped backslash leaves the '!' live.
     [Theory]
-    [InlineData("\\![a](x.md)", true)]
-    [InlineData("\\\\![a](x.md)", false)]
-    [InlineData("![a](x.md)", false)]
-    public void OnlyAnUnescapedBangMakesAnImage(string line, bool isLink)
+    [InlineData("\\![a](x.md)", false)]
+    [InlineData("\\\\![a](x.md)", true)]
+    [InlineData("![a](x.md)", true)]
+    [InlineData("`!`[a](x.md)", false)]
+    public void OnlyAnUnescapedBangMakesAnEmbed(string line, bool embed)
     {
-        var links = MarkdownLink.Parse(line);
-        Assert.Equal(isLink ? ["x.md"] : [], links.Select(l => l.Target));
+        var link = Assert.Single(MarkdownLink.Parse(line));
+        Assert.Equal(("x.md", embed), (link.Target, link.Embed));
+        Assert.Equal(line[link.Start..], link.Raw);
+        Assert.Equal(embed ? '!' : '[', link.Raw[0]);
     }
 
     [Theory]

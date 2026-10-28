@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { completeLink, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
+import { completeLink, embedsAsImage, linkQuery, linkTarget, rankNotes } from "./linkCompletion";
 
 describe("linkQuery", () => {
   it("finds an open [[ on the caret's line", () => {
@@ -62,5 +62,34 @@ describe("completeLink", () => {
   it("replaces the typed part, and the ]] the toolbar left, with the whole link", () => {
     expect(completeLink("See [[pl", 8, { start: 4, query: "pl" }, "plan")).toEqual({ start: 4, end: 8, text: "[[plan]]", selStart: 12, selEnd: 12 });
     expect(completeLink("See [[pl]] x", 8, { start: 4, query: "pl" }, "plan")).toMatchObject({ start: 4, end: 10 });
+  });
+});
+
+describe("attachments", () => {
+  const all = ["/W/plan.md", "/W/Screenshots/shot.png", "/W/report.pdf", "/W/old/shot.png", "/W/shots.md"];
+
+  it("completion offers images with an embed", () => {
+    expect(rankNotes(all, "shot")).toEqual(["/W/old/shot.png", "/W/Screenshots/shot.png", "/W/shots.md"]);
+    // Attachments are named with their extension; the same name in two folders takes a folder, as notes do.
+    expect(linkTarget("/W/Screenshots/shot.png", all)).toBe("Screenshots/shot.png");
+    expect(linkTarget("/W/report.pdf", all)).toBe("report.pdf");
+
+    expect(completeLink("See [[sh", 8, { start: 4, query: "sh" }, "Screenshots/shot.png", true)).toEqual({
+      start: 4,
+      end: 8,
+      text: "![[Screenshots/shot.png]]",
+      selStart: 29,
+      selEnd: 29,
+    });
+    // Typed as an embed already: the `!` stays as it is.
+    expect(completeLink("See ![[sh]]", 9, { start: 5, query: "sh" }, "Screenshots/shot.png", true)).toMatchObject({ start: 5, end: 11, text: "[[Screenshots/shot.png]]" });
+  });
+
+  it("links a PDF without an embed", () => {
+    expect(rankNotes(all, "rep")).toEqual(["/W/report.pdf"]);
+    expect(completeLink("[[rep", 5, { start: 0, query: "rep" }, "report.pdf")).toMatchObject({ text: "[[report.pdf]]" });
+    expect(embedsAsImage("/W/report.pdf")).toBe(false);
+    expect(embedsAsImage("/W/Screenshots/shot.PNG")).toBe(true);
+    expect(embedsAsImage("/W/plan.md")).toBe(false);
   });
 });

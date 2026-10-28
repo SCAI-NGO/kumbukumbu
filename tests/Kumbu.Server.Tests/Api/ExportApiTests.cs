@@ -4,11 +4,19 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Auth;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Kumbu.Server.Vaults;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
-/// <summary><c>GET /api/vaults/{vault}/export</c> and <c>GET /api/export?vault=…</c>: vaults as ZIP folders of their notes.</summary>
+/// <summary><c>GET /api/vaults/{vault}/export</c> and <c>GET /api/export?vault=…</c>: vaults as ZIP folders of their notes
+/// and files; <c>GET /api/files/{vault}/zip</c>: several files of a vault as a ZIP.</summary>
 [Collection("app")]
 public sealed class ExportApiTests(KumbuAppFactory app)
 {
@@ -418,5 +426,330 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
         Assert.Equal("Ideas checkpoint before-cleanup 2026-10-20.zip", ExportApi.CheckpointZipName("Ideas", "before-cleanup", at, TimeZoneInfo.FindSystemTimeZoneById("Europe/Vienna")));
         Assert.Equal("Ideas checkpoint before-cleanup 2026-10-19.zip", ExportApi.CheckpointZipName("Ideas", "before-cleanup", at, TimeZoneInfo.Utc));
+    }
+
+    private static byte[] Png(int width, int height) => FileApiTests.Png(width, height);
+
+    private static readonly byte[] Pdf = "%PDF-1.4\n1 0 obj << >> endobj\ntrailer << >>\n%%EOF\n"u8.ToArray();
+
+    private static byte[] Bytes(ZipArchiveEntry entry)
+    {
+        using var stream = entry.Open();
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    private static string ZipUrl(RestClient user, params string[] paths) =>
+        $"/api/files/{user.Vault}/zip?" + string.Join('&', paths.Select(p => "path=" + Uri.EscapeDataString(p)));
+
+    private static async Task TurnPasswordOffAsync(RestClient user)
+    {
+        using var off = await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_zip_of_several_files_needs_a_ticket_by_default()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var png = Png(4, 3);
+        await user.CreateFileAsync("a.png", png);
+        await user.CreateFileAsync("Bücher/b.pdf", Pdf);
+        await user.CreateAsync("n.md", "not asked for\n");
+
+        using var without = await user.GetAsync(ZipUrl(user, "a.png", "Bücher/b.pdf"));
+        var before = DateTime.UtcNow;
+        using var with = await ExportAsync(user, ZipUrl(user, "Bücher/b.pdf", "/a.png", "a.png"));
+
+        Assert.Equal(HttpStatusCode.Forbidden, without.StatusCode);
+        Assert.Contains("POST /api/export/ticket", await RestClient.ErrorAsync(without), StringComparison.Ordinal);
+        using var zip = await ZipAsync(with);
+        // At their paths in the vault, no vault folder on top; a file named twice is there once.
+        Assert.Equal(["Bücher/b.pdf", "a.png"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        Assert.Equal(png, Bytes(zip.GetEntry("a.png")!));
+        Assert.Equal(Pdf, Bytes(zip.GetEntry("Bücher/b.pdf")!));
+        AssertDated("Arbeit files {date}.zip", with.Content.Headers.ContentDisposition!.FileNameStar, before);
+    }
+
+    [Fact]
+    public async Task With_the_preference_off_no_ticket_is_needed_and_the_download_is_still_logged()
+    {
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var user = await RestClient.NewAsync(logged, "Geheimprojekt");
+        await user.CreateFileAsync("plan.png", Png(2, 2));
+        await user.CreateFileAsync("x/scan.pdf", Pdf);
+        using var asking = await ExportAsync(user, ZipUrl(user, "plan.png", "x/scan.pdf"));
+        await TurnPasswordOffAsync(user);
+
+        using var response = await user.GetAsync(ZipUrl(user, "plan.png", "x/scan.pdf"));
+
+        using var zip = await ZipAsync(response);
+        Assert.Equal(2, zip.Entries.Count);
+        var lines = log.Lines.Where(l => l.Contains($"User {user.User.Id} downloaded 2 files", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, lines.Count);
+        Assert.Contains("with the password", lines[0], StringComparison.Ordinal);
+        Assert.Contains("without the password", lines[1], StringComparison.Ordinal);
+        Assert.Contains(log.Lines, l => l.Contains($"User {user.User.Id} turned off the password", StringComparison.Ordinal));
+        // Ids and counts, never a vault or file name.
+        foreach (var name in new[] { "Geheimprojekt", "plan", "scan" }) Assert.DoesNotContain(log.Lines, l => l.Contains(name, StringComparison.Ordinal));
+    }
+
+    /// <summary>The web app's form post: a session with its own Origin, the fields in a form body.</summary>
+    private static Task<HttpResponseMessage> PostZipAsync(RestClient user, IEnumerable<string> paths, string? ticket = null, string? bearer = null)
+    {
+        var fields = paths.Select(p => new KeyValuePair<string, string>("path", p)).Append(new("tz", "Europe/Vienna"));
+        if (ticket is not null) fields = fields.Append(new("ticket", ticket));
+        return user.SendContentAsync(HttpMethod.Post, $"/api/files/{user.Vault}/zip", new FormUrlEncodedContent(fields), bearer);
+    }
+
+    [Fact]
+    public async Task A_zip_posted_as_a_form_takes_the_same_checks_as_the_get()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var png = Png(4, 3);
+        await user.CreateFileAsync("a.png", png);
+        await user.CreateFileAsync("Bücher/b.pdf", Pdf);
+
+        using var without = await PostZipAsync(user, ["a.png", "Bücher/b.pdf"]);
+        using var with = await PostZipAsync(user, ["a.png", "Bücher/b.pdf"], await TicketAsync(user));
+        using var tooMany = await PostZipAsync(user, Enumerable.Range(0, 101).Select(i => $"f{i}.png"), await TicketAsync(user));
+        using var json = await user.SendAsync(HttpMethod.Post, $"/api/files/{user.Vault}/zip", new { path = new[] { "a.png" } });
+        using var key = await PostZipAsync(user, ["a.png"], bearer: await user.KeyAsync("w", KeyRight.Write));
+
+        Assert.Equal(HttpStatusCode.Forbidden, without.StatusCode);
+        Assert.Contains("POST /api/export/ticket", await RestClient.ErrorAsync(without), StringComparison.Ordinal);
+        using var zip = await ZipAsync(with);
+        Assert.Equal(["Bücher/b.pdf", "a.png"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        Assert.Equal(png, Bytes(zip.GetEntry("a.png")!));
+        Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+        Assert.Contains("at most 100 files", await RestClient.ErrorAsync(tooMany), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadRequest, json.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, key.StatusCode);
+        Assert.Contains("signed-in session", await RestClient.ErrorAsync(key), StringComparison.Ordinal);
+
+        // The gallery posts into a hidden frame of its own and reads an error there: only this route may be framed,
+        // and only by the app's own origin.
+        string Frames(HttpResponseMessage r) => r.Headers.GetValues("Content-Security-Policy").Single().Split("; ").Single(d => d.StartsWith("frame-ancestors", StringComparison.Ordinal));
+        Assert.Equal("frame-ancestors 'self'", Frames(without));
+        Assert.Equal("frame-ancestors 'self'", Frames(with));
+        using var get = await user.GetAsync(ZipUrl(user, "a.png"));
+        Assert.Equal("frame-ancestors 'none'", Frames(get));
+
+        // With the preference off, no ticket.
+        await TurnPasswordOffAsync(user);
+        using var off = await PostZipAsync(user, ["a.png"]);
+        Assert.Single((await ZipAsync(off)).Entries);
+    }
+
+    [Fact]
+    public async Task A_zip_form_from_another_origin_is_refused()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateFileAsync("a.png", Png(1, 1));
+        await TurnPasswordOffAsync(user);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/files/{user.Vault}/zip")
+        {
+            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("path", "a.png")]),
+        };
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={user.Session}");
+        request.Headers.Add("Origin", "https://elsewhere.example");
+        using var client = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+
+        using var response = await client.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("Kumbu's own pages", await RestClient.ErrorAsync(response), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_zip_of_101_files_is_a_400()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateFileAsync("a.png", Png(1, 1));
+        var paths = Enumerable.Range(0, 101).Select(i => $"f{i}.png").ToArray();
+
+        using var tooMany = await ExportAsync(user, ZipUrl(user, paths));
+        using var hundred = await ExportAsync(user, ZipUrl(user, [.. Enumerable.Repeat("a.png", 100)]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+        Assert.Contains("at most 100 files", await RestClient.ErrorAsync(tooMany), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.OK, hundred.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_zip_refuses_bad_paths_missing_files_and_notes_before_the_first_byte()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateFileAsync("a.png", Png(1, 1));
+        await user.CreateAsync("n.md", "n\n");
+
+        using var none = await ExportAsync(user, $"/api/files/{user.Vault}/zip");
+        using var missing = await ExportAsync(user, ZipUrl(user, "a.png", "gone.png"));
+        using var note = await ExportAsync(user, ZipUrl(user, "a.png", "n.md"));
+        using var escape = await ExportAsync(user, ZipUrl(user, "a.png", "../Fremd/b.png"));
+        using var unsupported = await ExportAsync(user, ZipUrl(user, "a.svg"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, none.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal("application/json", missing.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.BadRequest, note.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, escape.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, unsupported.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_zip_of_another_users_vault_is_not_found_and_keys_cannot_download_one()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var other = await RestClient.NewAsync(Api, vault: "Fremd" + Guid.NewGuid().ToString("N")[..6]);
+        await other.CreateFileAsync("a.png", Png(1, 1));
+        await user.CreateFileAsync("a.png", Png(1, 1));
+
+        using var foreign = await ExportAsync(user, $"/api/files/{other.Vault}/zip?path=a.png");
+        using var key = await user.GetAsync(ZipUrl(user, "a.png"), bearer: await user.KeyAsync("w", KeyRight.Write));
+
+        Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, key.StatusCode);
+        Assert.Contains("signed-in session", await RestClient.ErrorAsync(key), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_zip_route_leaves_a_folder_named_zip_to_the_file_api()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var png = Png(5, 5);
+        await user.CreateFileAsync("zip/x.png", png);
+        await TurnPasswordOffAsync(user);
+
+        using var read = await user.GetAsync(user.Url("zip/x.png", "files"));
+        using var zipped = await user.GetAsync(ZipUrl(user, "zip/x.png"));
+        // No file can be named "zip": it has no extension, so a write to it is refused as any such name is.
+        using var put = await user.PutFileAsync("zip", png);
+
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.Equal(png, await read.Content.ReadAsByteArrayAsync(Ct));
+        using var zip = await ZipAsync(zipped);
+        Assert.Equal(png, Bytes(zip.GetEntry("zip/x.png")!));
+        Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_vault_export_contains_its_attachments()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var png = Png(7, 3);
+        await user.CreateAsync("a.md", "![[shots/s.png]]\n");
+        await user.CreateFileAsync("shots/s.png", png);
+        await user.CreateFileAsync("Bücher/ü.pdf", Pdf);
+
+        using var one = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
+        using var several = await ExportAsync(user, $"/api/export?vault={user.Vault}");
+
+        foreach (var response in new[] { one, several })
+        {
+            using var zip = await ZipAsync(response);
+            Assert.Equal(["Arbeit/", "Arbeit/Bücher/ü.pdf", "Arbeit/a.md", "Arbeit/shots/s.png"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+            Assert.Equal(png, Bytes(zip.GetEntry("Arbeit/shots/s.png")!));
+            Assert.Equal(Pdf, Bytes(zip.GetEntry("Arbeit/Bücher/ü.pdf")!));
+        }
+    }
+
+    [Fact]
+    public async Task A_checkpoint_export_contains_its_attachments_as_they_were()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var then = Png(3, 3);
+        var version = await user.CreateFileAsync("s.png", then);
+        await MakeCheckpointAsync(user, "cp");
+        using var rewritten = await user.PutFileAsync("s.png", Png(9, 9), version);
+        Assert.Equal(HttpStatusCode.OK, rewritten.StatusCode);
+        await user.CreateFileAsync("later.png", Png(1, 1));
+
+        using var response = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/cp/export");
+
+        using var zip = await ZipAsync(response);
+        Assert.Equal(["Arbeit/", "Arbeit/s.png"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        Assert.Equal(then, Bytes(zip.GetEntry("Arbeit/s.png")!));
+    }
+
+    [Fact]
+    public async Task A_large_file_streams_through_the_zip_intact()
+    {
+        var user = await RestClient.NewAsync(Api);
+        // A PDF of a few MB of incompressible bytes: written in pieces, not as one buffer.
+        var pdf = new byte[3 * 1024 * 1024 + 17];
+        Random.Shared.NextBytes(pdf);
+        "%PDF-1.4\n"u8.CopyTo(pdf);
+        await user.CreateFileAsync("big.pdf", pdf);
+        await user.CreateFileAsync("small.png", Png(1, 1));
+
+        using var response = await ExportAsync(user, ZipUrl(user, "big.pdf", "small.png"));
+
+        using var zip = await ZipAsync(response);
+        Assert.Equal(pdf, Bytes(zip.GetEntry("big.pdf")!));
+    }
+
+    /// <summary>Breaks the stored bytes of the smallest blob of the user's vault, as a change outside Kumbu² would.</summary>
+    private async Task BreakSmallestBlobAsync(RestClient user)
+    {
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var blobs = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs");
+        var smallest = (await blobs.Find(Builders<BsonDocument>.Filter.Eq("vault", vault.Id)).ToListAsync(Ct)).MinBy(d => d["blob"].AsByteArray.Length)!;
+        var broken = smallest["blob"].AsByteArray.ToArray();
+        broken[^1] ^= 0xFF;
+        await blobs.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", smallest["_id"]), Builders<BsonDocument>.Update.Set("blob", broken), cancellationToken: Ct);
+    }
+
+    /// <summary>The download either fails outright or isn't a 200 with a ZIP that opens holding every one of <paramref name="expected"/>.</summary>
+    private static async Task AssertNoCompleteZipAsync(Func<Task<HttpResponseMessage>> download, params string[] expected)
+    {
+        HttpResponseMessage response;
+        byte[] bytes;
+        try
+        {
+            response = await download();
+            bytes = await response.Content.ReadAsByteArrayAsync(Ct);
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException)
+        {
+            return;
+        }
+
+        using (response)
+        {
+            if (response.StatusCode != HttpStatusCode.OK) return;
+            try
+            {
+                using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
+                Assert.False(expected.All(n => zip.GetEntry(n) is not null), "A ZIP missing nothing arrived although a file's content doesn't open.");
+            }
+            catch (InvalidDataException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_file_whose_content_does_not_open_fails_the_download_instead_of_leaving_it_out()
+    {
+        var log = new CapturedLog();
+        await using var logged = Api.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var user = await RestClient.NewAsync(logged);
+        // A large first file, so the response has begun when the broken one comes.
+        var big = new byte[512 * 1024];
+        Random.Shared.NextBytes(big);
+        "%PDF-1.4\n"u8.CopyTo(big);
+        await user.CreateFileAsync("a.pdf", big);
+        await user.CreateFileAsync("b.png", Png(2, 2));
+        await BreakSmallestBlobAsync(user);
+        await TurnPasswordOffAsync(user);
+
+        await AssertNoCompleteZipAsync(() => user.GetAsync(ZipUrl(user, "a.pdf", "b.png")), "a.pdf", "b.png");
+        await AssertNoCompleteZipAsync(() => ExportAsync(user, $"/api/vaults/{user.Vault}/export"), "Arbeit/a.pdf", "Arbeit/b.png");
+
+        Assert.Contains(log.Lines, l => l.Contains("A ZIP download was cut off", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, l => l.Contains($"User {user.User.Id} downloaded", StringComparison.Ordinal));
     }
 }

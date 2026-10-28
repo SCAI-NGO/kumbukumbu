@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using Kumbu.Core.Attachments;
 
 namespace Kumbu.Core.Paths;
 
@@ -29,6 +30,9 @@ public sealed record VaultPath
     public string Name => IsRoot ? "/" : Segments[^1];
 
     public bool IsNote => !IsRoot && Name.EndsWith(".md", StringComparison.Ordinal);
+
+    /// <summary>A PDF or image file (by extension, case-insensitive).</summary>
+    public bool IsAttachment => AttachmentFormat.ForPath(this) is not null;
 
     /// <summary>Parses an absolute path. Returns false only for relative or blank input,
     /// or input containing invalid UTF-16 (lone surrogates). Never throws.</summary>

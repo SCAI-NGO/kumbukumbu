@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "./client";
-import type { NoteView } from "./notes";
 import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
 
@@ -11,6 +10,7 @@ export type RestorePreview = components["schemas"]["RestorePreviewView"];
 export type NoteVersion = components["schemas"]["NoteVersionView"];
 export type CheckpointTree = components["schemas"]["CheckpointTreeView"];
 export type CheckpointNote = components["schemas"]["CheckpointNoteView"];
+export type FileState = components["schemas"]["FileStateView"];
 
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
@@ -36,12 +36,15 @@ export function useRestoreNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: ["restore"],
+    // A note's restore answers its NoteView, an attachment's its FileStateView (the generated union).
     mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }) =>
       call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null, ...(expected ? { expected } : {}) } })),
-    onSuccess: (note: NoteView) => {
+    onSuccess: (restored) => {
       // The restored note itself is what came back.
-      queryClient.setQueryData(["note", note.path], note);
-      vaultChanged(queryClient, vaultOf(note.path), { notes: false });
+      if ("content" in restored) queryClient.setQueryData(["note", restored.path], restored);
+      // A restored attachment's size, dimensions and version are its info's (the lightbox's).
+      else void queryClient.invalidateQueries({ queryKey: ["version", restored.path] });
+      vaultChanged(queryClient, vaultOf(restored.path), { notes: false });
     },
   });
 }
@@ -110,10 +113,11 @@ export function useRemoveCheckpoint(vault: string) {
  * A checkpoint's tree as it was. Default staleness on purpose: a checkpoint removed and made again under the same
  * name must not show the old one's notes, and the keys stay out of `vaultChanged` (a checkpoint never changes).
  */
-export const useCheckpointTree = (vault: string, name: string) =>
+export const useCheckpointTree = (vault: string, name: string, enabled = true) =>
   useQuery({
     queryKey: ["checkpoint-tree", vault, name],
     queryFn: () => call(api.GET("/api/vaults/{vault}/checkpoints/{name}/tree", { params: { path: { vault, name } } })),
+    enabled,
     refetchOnWindowFocus: false,
     retry: false,
     gcTime: 0,

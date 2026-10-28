@@ -68,6 +68,11 @@ public static class ApiErrors
             SetRetryAfter(context.HttpContext, BusyRetryAfter);
             return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
         }
+        // An attachment's bytes are gone or don't open: the server's fault, not a deletion (a client reads 404 as one).
+        catch (Kumbu.Server.Vaults.ContentMissingException e)
+        {
+            return Result(StatusCodes.Status500InternalServerError, e.Message);
+        }
         // A vault this user key can't re-key (not the user's own, or a dev-token vault): the request is at fault.
         catch (Kumbu.Server.Vaults.VaultNotRekeyableException e)
         {
@@ -117,9 +122,9 @@ public static class ApiErrors
                 await context.Response.WriteAsJsonAsync(new ApiError(e.StatusCode switch
                 {
                     StatusCodes.Status415UnsupportedMediaType => "Send the body as JSON (Content-Type: application/json).",
-                    StatusCodes.Status413PayloadTooLarge => context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase)
-                        ? UploadApi.Limits
-                        : "The request body is too large.",
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase) => UploadApi.Limits,
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase) => FileApi.TooLarge,
+                    StatusCodes.Status413PayloadTooLarge => "The request body is too large.",
                     _ => "The request body is missing, not JSON, or lacks a required field.",
                 }));
             }

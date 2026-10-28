@@ -249,6 +249,8 @@ public void Problem_checks_extension_and_magic_bytes(string path, byte[] head, s
 - [ ] **Step 4: Run** — PASS; check `pnpm -C web build` emits the worker as a same-origin asset.
 - [ ] **Step 5: Commit** `git commit -m "Add the lightbox with zoom and pan, and the PDF viewer"`
 
+Built (the builder's choices): no lightbox library; the gestures are the app's own (`web/src/attachments/gestures.ts`), as a PDF needs the browser's scrolling with the app's pinch, which a library's carousel and image-only zoom would fight, and the move and delete dialogs would have to live inside its portal. pdf.js 6.4, legacy build (the modern one needs JavaScript older phones lack), without WebAssembly and with its plain-script image decoders, so the CSP gains only an explicit `worker-src 'self'`. Links in a PDF are read from its annotations and drawn by the app, without pdf.js's annotation layer. The info's dimensions come from `GET /api/version`, which now carries an image's `width` and `height`.
+
 ### Task 14: Gallery and the download preference
 
 **Files:**

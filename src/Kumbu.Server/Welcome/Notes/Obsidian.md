@@ -1,6 +1,6 @@
 # Obsidian
 
-Kumbu² Sync keeps an Obsidian vault and a Kumbu² vault the same, on a laptop or on a phone. It syncs text notes only: images and PDFs stay on your device, and are counted as "not synced".
+Kumbu² Sync keeps an Obsidian vault and a Kumbu² vault the same, on a laptop or on a phone. It syncs notes, PDFs and images (PNG, JPEG, GIF, WebP). A PDF or image over 15 MB stays on your device, with a notice once, and other files stay there too; both are counted as "not synced". (Kumbu² Sync 0.1.1 and older sync text notes only.)
 
 ## Connecting a vault, step by step
 

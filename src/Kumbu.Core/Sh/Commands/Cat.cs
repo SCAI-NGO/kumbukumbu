@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -22,6 +23,8 @@ public sealed class Cat(INoteReader notes) : ICommand
           The version token comes separately, always for the whole note; pass it to 'edit' or 'write'.
           --version V   print an earlier version from 'history <path>' instead (no version token: an
                         earlier version can be compared with 'diff' and brought back with 'restore')
+          An attachment (an image or a PDF) prints one line instead of its bytes: its kind, pixel size
+          and file size ('cat /Work/shot.png' → shot.png: image (PNG), 1440×3120, 412 KB).
           A whole note too long for one call (about 8000 tokens) prints its outline instead; read it in
           parts with cat "<path>#Section", head -n 40 <path> or rg -n. In a pipeline, cat passes the
           whole note on (cat <path> | tail -n 50).
@@ -40,7 +43,40 @@ public sealed class Cat(INoteReader notes) : ICommand
         if (rest.Count == 0) return ShellResult.Error("cat: missing operand");
         if (rest.Count > 1) return ShellResult.Error($"cat: too many arguments{CommandArgs.QuoteHint}");
 
+        var (pathText, _) = SectionAddress.Split(rest[0]);
+        if (VaultPath.TryParse(pathText, out var path) && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
+        {
+            return Describe(path, attachment, version);
+        }
+
+        // x.png#Layout: a section of an attachment, which has none (a '#' may also be part of a name, as in a#b.png).
+        for (var at = rest[0].IndexOf('#'); at > 0; at = rest[0].IndexOf('#', at + 1))
+        {
+            if (VaultPath.TryParse(rest[0][..at], out var file) && file.IsAttachment && await StoreAttachments.GetAsync(notes, file, ct) is not null)
+            {
+                return ShellResult.Error($"cat: {file.Value} is an attachment, which has no sections; 'cat {SectionLookup.Quote(file)}' describes it");
+            }
+        }
+
         return await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
+    }
+
+    private static ShellResult Describe(VaultPath path, StoredAttachment attachment, string? version)
+    {
+        var state = attachment.Current;
+        if (version is not null)
+        {
+            var entry = NoteHistory.Versions(attachment).FirstOrDefault(v => v.Version == version);
+            if (entry is null)
+            {
+                return ShellResult.Error($"cat: {path.Value} has no version {version} ('history {SectionLookup.Quote(path)}' lists them)");
+            }
+
+            state = entry.State;
+        }
+
+        // No version block: a text tool can't write an attachment, so there is nothing to pass it to.
+        return ShellResult.Ok(AttachmentText.Line(path.Name, state));
     }
 
     /// <summary>

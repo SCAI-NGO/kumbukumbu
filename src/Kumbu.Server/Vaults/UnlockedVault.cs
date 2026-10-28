@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Immutable;
 using System.Text.Json;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -19,6 +20,7 @@ public sealed class UnlockedVault
     private readonly byte[] _contentKey;
     private readonly byte[] _pathKey;
     private readonly byte[] _textKey;
+    private readonly byte[] _blobKey;
     private long _lastUsed;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
@@ -31,6 +33,7 @@ public sealed class UnlockedVault
         KeyId = VaultCrypto.Derive(vaultKey, "kumbu/v1/key-id", []);
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
+        _blobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/blob-id", []);
         Horizon = now;
         Touch(now);
     }
@@ -71,6 +74,12 @@ public sealed class UnlockedVault
 
     public ImmutableList<MoveRecord> Moves { get; set; } = [];
 
+    /// <summary>The attachments' records, small; their bytes stay in MongoDB until a request reads them.</summary>
+    public ImmutableDictionary<VaultPath, (ObjectId Id, StoredAttachment Attachment)> Attachments { get; set; } =
+        ImmutableDictionary<VaultPath, (ObjectId, StoredAttachment)>.Empty;
+
+    public ImmutableList<(ObjectId Id, TrashedAttachment Trashed)> AttachmentTrash { get; set; } = [];
+
     /// <summary>The embeddings of the notes, for search by meaning; filled and kept current by the search index.</summary>
     public ImmutableDictionary<VaultPath, NoteEmbeddings> Embeddings { get; set; } = ImmutableDictionary<VaultPath, NoteEmbeddings>.Empty;
 
@@ -87,17 +96,26 @@ public sealed class UnlockedVault
     /// <summary>The named checkpoints; their notes' content stays in MongoDB until a command reads it.</summary>
     public ImmutableList<StoredCheckpoint> Checkpoints { get; set; } = [];
 
-    /// <summary>Path ids of notes whose documents don't open. Their paths are sealed, so the path id is all
-    /// that's known; it is enough to tell a request that asks for that path.</summary>
+    /// <summary>Path ids of notes and attachment records whose documents don't open. Their paths are sealed, so the
+    /// path id is all that's known; it is enough to tell a request that asks for that path.</summary>
     public ImmutableHashSet<string> DamagedPathIds { get; set; } = [];
+
+    /// <summary>Those of <see cref="DamagedPathIds"/> that are attachment records: a client that knows no attachments
+    /// isn't told about them.</summary>
+    public ImmutableHashSet<string> DamagedAttachmentIds { get; set; } = [];
+
+    /// <summary>How many notes (not attachment records) don't open.</summary>
+    public int DamagedNotes => DamagedPathIds.Except(DamagedAttachmentIds).Count;
 
     public bool IsDamaged(VaultPath path) => DamagedPathIds.Contains(Convert.ToBase64String(PathId(path)));
 
     public DateTime LastUsed => new(Interlocked.Read(ref _lastUsed), DateTimeKind.Utc);
 
-    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included).</summary>
+    /// <summary>Roughly what the working set holds in memory (UTF-16, history and trash included); of attachments only
+    /// their records, never their bytes.</summary>
     public long ApproxBytes =>
-        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length));
+        Notes.Values.Sum(n => Size(n.Note)) + Trash.Sum(t => Size(t.Trashed.Note)) + Embeddings.Values.Sum(e => 4L * e.Chunks.Sum(c => c.Vector.Length))
+        + Attachments.Values.Sum(a => Size(a.Attachment)) + AttachmentTrash.Sum(t => Size(t.Trashed.Attachment));
 
     public void Touch(DateTime now) => Interlocked.Exchange(ref _lastUsed, now.Ticks);
 
@@ -152,6 +170,53 @@ public sealed class UnlockedVault
         return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset());
     }
 
+    /// <summary>An attachment's record, bound to its revision as a note is (<see cref="SealNote"/>).</summary>
+    public byte[] SealAttachment(ObjectId docId, StoredAttachment attachment) =>
+        Seal($"attachment:{Id}:{docId}:{attachment.Revision}", AttachmentPayload.From(attachment));
+
+    /// <summary>Opens an attachment's record and checks its path against the document's path id, as for notes.</summary>
+    public StoredAttachment OpenAttachment(SealedDocument doc)
+    {
+        var attachment = Open<AttachmentPayload>($"attachment:{Id}:{doc.Id}:{doc.Revision}", doc.Blob).ToAttachment(doc.Revision);
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(PathId(attachment.Path), doc.PathId))
+        {
+            throw new InvalidDataException($"Path id of attachment {doc.Id} does not match its sealed path");
+        }
+
+        return attachment;
+    }
+
+    public byte[] SealAttachmentTrash(ObjectId docId, TrashedAttachment trashed) =>
+        Seal($"attachtrash:{Id}:{docId}", new AttachmentTrashPayload(
+            AttachmentPayload.From(trashed.Attachment), trashed.Attachment.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
+
+    public TrashedAttachment OpenAttachmentTrash(SealedDocument doc)
+    {
+        var p = Open<AttachmentTrashPayload>($"attachtrash:{Id}:{doc.Id}", doc.Blob);
+        return new TrashedAttachment(p.Attachment.ToAttachment(p.Revision), p.DeletedBy, DateTime.SpecifyKind(p.DeletedAt, DateTimeKind.Utc), p.Changeset?.ToChangeset());
+    }
+
+    /// <summary>A keyed hash of an attachment's bytes: the id its blob is stored under. Equal bytes give equal ids
+    /// within the vault, so they are stored once; without the vault key the id can't be matched to known content.</summary>
+    public byte[] BlobId(ReadOnlySpan<byte> bytes) => VaultCrypto.Mac(_blobKey, bytes);
+
+    /// <summary>The bytes as they are, sealed under the blob's id: the context binds them to it and to the vault.</summary>
+    public byte[] SealBlob(byte[] blobId, ReadOnlySpan<byte> bytes) => VaultCrypto.Seal(_contentKey, bytes, BlobContext(blobId));
+
+    /// <summary>Opens a blob and checks the bytes against its id, so bytes changed in the database don't open.</summary>
+    public byte[] OpenBlob(BlobDocument doc)
+    {
+        var bytes = VaultCrypto.Open(_contentKey, doc.Blob, BlobContext(doc.BlobId));
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(BlobId(bytes), doc.BlobId))
+        {
+            throw new InvalidDataException($"Blob {doc.Id} does not match its id");
+        }
+
+        return bytes;
+    }
+
+    private string BlobContext(byte[] blobId) => $"blob:{Id}:{Convert.ToBase64String(blobId)}";
+
     /// <summary>The embeddings of a note, under the note's path id; the context binds them to that path.</summary>
     public byte[] SealEmbeddings(VaultPath path, NoteEmbeddings embeddings) =>
         Seal($"embeddings:{Id}:{Convert.ToBase64String(PathId(path))}", new EmbeddingsPayload(
@@ -195,7 +260,10 @@ public sealed class UnlockedVault
     public byte[] SealCheckpoint(ObjectId docId, Checkpoint checkpoint, IReadOnlyDictionary<VaultPath, byte[]> textIds) =>
         Seal($"checkpoint:{Id}:{docId}", new CheckpointPayload(
             checkpoint.Name, checkpoint.Path.Value, checkpoint.Folder, checkpoint.CreatedBy, checkpoint.CreatedAt,
-            [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))]));
+            [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))],
+            checkpoint.Attachments.Count == 0
+                ? null
+                : [.. checkpoint.Attachments.Select(a => new CheckpointAttachmentPayload(a.Path.Value, AttachmentStatePayload.From(a.State)))]));
 
     /// <summary>Opens a checkpoint and checks its name against the document's name id, as for notes and paths.</summary>
     public StoredCheckpoint OpenCheckpoint(SealedDocument doc)
@@ -208,7 +276,10 @@ public sealed class UnlockedVault
 
         var checkpoint = new Checkpoint(
             p.Name, Payload.Path(p.Path), p.Folder, p.CreatedBy, DateTime.SpecifyKind(p.CreatedAt, DateTimeKind.Utc),
-            [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))]);
+            [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))])
+        {
+            Attachments = [.. (p.Attachments ?? []).Select(a => new CheckpointAttachment(Payload.Path(a.Path), a.State.ToState()))],
+        };
         return new StoredCheckpoint(doc.Id, checkpoint, p.Notes.ToDictionary(n => Payload.Path(n.Path), n => Convert.FromBase64String(n.TextId)));
     }
 
@@ -231,11 +302,12 @@ public sealed class UnlockedVault
     /// <paramref name="collection"/> under this object's key, with the AAD its clear fields give and without checking its
     /// <c>pid</c>, and seals what it holds under <paramref name="to"/>'s key, keeping <c>_id</c> and <c>rev</c>. The pid
     /// is computed under <paramref name="to"/> from what is sealed inside, whatever the stored one says; where the AAD
-    /// holds the pid (embeddings, texts), the new seal has the new one. A checkpoint sealed under another key than
-    /// <paramref name="to"/>'s gets its text ids through <paramref name="textIds"/> (base64 of the old id → new id);
-    /// one not found there stays as it is, and is named in <c>Unmapped</c>. Null if the document doesn't open.
+    /// holds the pid (embeddings, texts, blobs), the new seal has the new one; a blob's <c>bid</c> stands in for its pid.
+    /// A checkpoint or an attachment record sealed under another key than <paramref name="to"/>'s gets its text or blob
+    /// ids through <paramref name="ids"/>; one not found there stays as it is, and is named in <c>Unmapped</c>. Null if
+    /// the document doesn't open.
     /// </summary>
-    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, IReadOnlyDictionary<string, byte[]> textIds, bool seal = true)
+    internal Resealed? Reseal(string collection, SealedDocument doc, UnlockedVault to, RekeyIds ids, bool seal = true)
     {
         var context = collection switch
         {
@@ -245,6 +317,9 @@ public sealed class UnlockedVault
             "embeddings" => $"embeddings:{Id}:{Convert.ToBase64String(doc.PathId)}",
             "checkpoints" => $"checkpoint:{Id}:{doc.Id}",
             "checkpoint_texts" => $"cptext:{Id}:{Convert.ToBase64String(doc.PathId)}",
+            "attachments" => $"attachment:{Id}:{doc.Id}:{doc.Revision}",
+            "attachment_trash" => $"attachtrash:{Id}:{doc.Id}",
+            "blobs" => BlobContext(doc.PathId),
             _ => throw new ArgumentException($"No sealed documents in {collection}", nameof(collection)),
         };
         byte[] plain;
@@ -280,13 +355,35 @@ public sealed class UnlockedVault
                     var (pid, from) = (to.NameId(p.Name), NameId(p.Name));
                     if (ReferenceEquals(this, to)) return new Resealed(pid, from, SealPlain(context), null, []);
                     var unmapped = new List<string>();
-                    var notes = p.Notes.Select(n =>
-                    {
-                        if (textIds.TryGetValue(n.TextId, out var mapped)) return n with { TextId = Convert.ToBase64String(mapped) };
-                        unmapped.Add(n.TextId);
-                        return n;
-                    }).ToList();
-                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes }) : [], null, unmapped);
+                    var notes = p.Notes.Select(n => n with { TextId = Map(n.TextId, ids.Texts, unmapped) }).ToList();
+                    var attachments = p.Attachments?.Select(a => a with { State = MapBlobId(a.State, ids, unmapped) }).ToList();
+                    return new Resealed(pid, from, seal ? to.Seal(context, p with { Notes = notes, Attachments = attachments }) : [], null, unmapped);
+                }
+
+                case "attachments":
+                {
+                    var p = Parse<AttachmentPayload>(plain);
+                    var path = Payload.Path(p.Path);
+                    if (ReferenceEquals(this, to)) return Same(path);
+                    var unmapped = new List<string>();
+                    var mapped = MapBlobIds(p, ids, unmapped);
+                    return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
+                }
+
+                case "attachment_trash":
+                {
+                    var p = Parse<AttachmentTrashPayload>(plain);
+                    var path = Payload.Path(p.Attachment.Path);
+                    if (ReferenceEquals(this, to)) return Same(path);
+                    var unmapped = new List<string>();
+                    var mapped = p with { Attachment = MapBlobIds(p.Attachment, ids, unmapped) };
+                    return new Resealed(to.PathId(path), PathId(path), seal ? to.Seal(context, mapped) : [], null, unmapped);
+                }
+
+                case "blobs":
+                {
+                    var pid = to.BlobId(plain);
+                    return new Resealed(pid, BlobId(plain), SealPlain(to.BlobContext(pid)), null, []) { Bytes = seal ? null : plain };
                 }
 
                 default:
@@ -309,9 +406,48 @@ public sealed class UnlockedVault
         byte[] SealPlain(string newContext) => seal ? VaultCrypto.Seal(to._contentKey, plain, newContext) : [];
     }
 
+    /// <summary>
+    /// The ids keyed by content that a re-keying run has learnt, base64 of the id under the old key → the id under the
+    /// new one: checkpoint texts' (<see cref="TextId"/>) and blobs' (<see cref="BlobId"/>). Their passes come first, so
+    /// the documents that name them find every one.
+    /// </summary>
+    internal sealed class RekeyIds
+    {
+        public Dictionary<string, byte[]> Texts { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, byte[]> Blobs { get; } = new(StringComparer.Ordinal);
+    }
+
     /// <summary>What <see cref="Reseal"/> made of a document: its pid and blob under the new key, the pid it should have
-    /// had under the key it opened with, a text's content, and the text ids of a checkpoint that had no new one.</summary>
-    internal sealed record Resealed(byte[] PathId, byte[] FromPathId, byte[] Blob, string? Content, IReadOnlyList<string> Unmapped);
+    /// had under the key it opened with, a text's content, and the text or blob ids it names that had no new one.</summary>
+    internal sealed record Resealed(byte[] PathId, byte[] FromPathId, byte[] Blob, string? Content, IReadOnlyList<string> Unmapped)
+    {
+        /// <summary>A blob's bytes when it was opened but not sealed (<c>seal: false</c>): its id under the old key is
+        /// computed from them.</summary>
+        public byte[]? Bytes { get; init; }
+    }
+
+    /// <summary>Every blob id an attachment record names, current and history, mapped to the new key's.</summary>
+    private static AttachmentPayload MapBlobIds(AttachmentPayload p, RekeyIds ids, List<string> unmapped) => p with
+    {
+        Current = MapBlobId(p.Current, ids, unmapped),
+        History = [.. p.History.Select(h => h with { State = MapBlobId(h.State, ids, unmapped) })],
+    };
+
+    /// <summary>
+    /// The one place a sealed reference to a blob is mapped to the new key's id when a vault is re-keyed: whatever comes
+    /// to hold attachment states (records, their trash, checkpoints) maps each state through it.
+    /// </summary>
+    private static AttachmentStatePayload MapBlobId(AttachmentStatePayload state, RekeyIds ids, List<string> unmapped) =>
+        state with { BlobId = Map(state.BlobId, ids.Blobs, unmapped) };
+
+    /// <summary>An id under the old key mapped to the new key's; one not found stays as it is, named in <paramref name="unmapped"/>.</summary>
+    private static string Map(string id, Dictionary<string, byte[]> ids, List<string> unmapped)
+    {
+        if (ids.TryGetValue(id, out var mapped)) return Convert.ToBase64String(mapped);
+        unmapped.Add(id);
+        return id;
+    }
 
     private static T Parse<T>(byte[] plain) => JsonSerializer.Deserialize<T>(plain) ?? throw new InvalidDataException("Empty payload");
 
@@ -323,6 +459,11 @@ public sealed class UnlockedVault
         ?? throw new InvalidDataException($"Empty payload in {context}");
 
     private static long Size(StoredNote n) => 2L * (n.Content.Length + n.History.Sum(h => h.Content.Length));
+
+    /// <summary>A record's strings and a rough allowance per state for the rest.</summary>
+    private static long Size(StoredAttachment a) => 2L * (a.Path.Value.Length + a.LastWriter.Length) + StateBytes * (1 + a.History.Count);
+
+    private const long StateBytes = 256;
 }
 
 internal sealed record ChangesetPayload(string Id, DateTime Started)
@@ -374,13 +515,44 @@ public sealed record EmbeddedChunk(int StartLine, string Hash, float[] Vector);
 /// don't compare.</summary>
 public sealed record NoteEmbeddings(string Model, string Version, IReadOnlyList<EmbeddedChunk> Chunks);
 
+internal sealed record AttachmentStatePayload(string MediaType, long Size, int? Width, int? Height, string Version, string BlobId)
+{
+    public static AttachmentStatePayload From(AttachmentState s) => new(s.MediaType, s.Size, s.Width, s.Height, s.Version, s.BlobId);
+
+    public AttachmentState ToState() => new(MediaType, Size, Width, Height, Version, BlobId);
+}
+
+internal sealed record AttachmentVersionPayload(AttachmentStatePayload State, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset);
+
+internal sealed record AttachmentPayload(
+    string Path, AttachmentStatePayload Current, string LastWriter, DateTime LastWriteAt, List<AttachmentVersionPayload> History, ChangesetPayload? Changeset)
+{
+    public static AttachmentPayload From(StoredAttachment a) => new(
+        a.Path.Value, AttachmentStatePayload.From(a.Current), a.LastWriter, a.LastWriteAt,
+        [.. a.History.Select(h => new AttachmentVersionPayload(AttachmentStatePayload.From(h.State), h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset)))],
+        ChangesetPayload.From(a.Changeset));
+
+    public StoredAttachment ToAttachment(long revision) => new(
+        Payload.Path(Path), Current.ToState(), revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
+        [.. History.Select(h => new AttachmentVersion(h.State.ToState(), h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset()))],
+        Changeset?.ToChangeset());
+}
+
+internal sealed record AttachmentTrashPayload(AttachmentPayload Attachment, long Revision, string DeletedBy, DateTime DeletedAt, ChangesetPayload? Changeset);
+
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 
-internal sealed record CheckpointPayload(string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes);
+internal sealed record CheckpointAttachmentPayload(string Path, AttachmentStatePayload State);
+
+/// <remarks>Attachments is missing in checkpoints made before attachments existed, and omitted when there are none.</remarks>
+internal sealed record CheckpointPayload(
+    string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] List<CheckpointAttachmentPayload>? Attachments = null);
 
 internal sealed record TextPayload(string Content);
 
-/// <summary>A checkpoint as the working set holds it: its document and where each note's content is.</summary>
+/// <summary>A checkpoint as the working set holds it: its document and where each note's content is (its attachments
+/// name their blobs themselves).</summary>
 public sealed record StoredCheckpoint(ObjectId Id, Checkpoint Checkpoint, IReadOnlyDictionary<VaultPath, byte[]> TextIds);
 
 internal static class Payload

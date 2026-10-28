@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ChevronRight, FileText, Folder, SquareKanban } from "lucide-react";
+import { ChevronRight, Folder, SquareKanban } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { findFolder, type TreeFolder } from "../api/notes";
 import { useCheckpointTree } from "../api/history";
-import { boardUrl, checkpointUrl, crumbOf, pathFromRoute, titleOf } from "../api/paths";
+import { boardUrl, checkpointUrl, crumbOf, fileKindOf, folderOf, isAttachment, pathFromRoute, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { fileKindIcon } from "../components/fileKindIcon";
 import { timeText } from "../components/Sheet";
 import CheckpointNote from "../note/CheckpointNote";
 import { rows } from "../shell/TreeDrawer";
@@ -15,7 +16,8 @@ const linkClass =
 
 /**
  * A vault as a checkpoint held it, read-only by construction: this page mounts neither the shell, the editor nor
- * the autosave, and asks only for the checkpoint's own tree and notes.
+ * the autosave, and asks only for the checkpoint's own tree and notes. Its images and PDFs open in the lightbox as
+ * the checkpoint held them, paging through their folder's.
  */
 export default function Checkpoint() {
   const { vault = "", name = "", "*": rest } = useParams();
@@ -72,10 +74,7 @@ export default function Checkpoint() {
                   <span className="min-w-0 flex-1 truncate">{row.folder.name}</span>
                 </button>
               ) : (
-                <Link to={checkpointUrl(vault, name, row.path)} className={`${linkClass} pl-[22px]`}>
-                  <FileText size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
-                  <span className="min-w-0 flex-1 truncate">{titleOf(row.path)}</span>
-                </Link>
+                <FileLink root={tree.data.root} vault={vault} name={name} path={row.path} />
               )}
             </li>
           ))}
@@ -93,6 +92,23 @@ export default function Checkpoint() {
         </>
       )}
     </div>
+  );
+}
+
+function FileLink({ root, vault, name, path }: { root: TreeFolder; vault: string; name: string; path: string }) {
+  const kind = fileKindOf(path);
+  const Icon = fileKindIcon[kind];
+  const attachments = kind === "note" ? [] : (findFolder(root, folderOf(path))?.notes.filter((n) => isAttachment(n.path)).map((n) => n.path) ?? [path]);
+  return (
+    <Link
+      to={kind === "note" ? checkpointUrl(vault, name, path) : viewUrl(path, { checkpoint: name })}
+      state={kind === "note" ? undefined : ({ paths: attachments } satisfies LightboxState)}
+      data-file-kind={kind}
+      className={`${linkClass} pl-[22px]`}
+    >
+      <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
+      <span className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
+    </Link>
   );
 }
 

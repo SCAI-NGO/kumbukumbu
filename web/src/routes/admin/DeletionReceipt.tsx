@@ -30,6 +30,7 @@ export function receiptText(r: Receipt): string {
     `Deleted by: ${r.deletedBy}`,
     `Vaults: ${r.vaults}`,
     `Notes: ${r.notes}`,
+    `Attachments (PDFs, images): ${r.attachments}`,
     `API keys (incl. revoked): ${r.apiKeys}`,
     `App connections (incl. revoked): ${r.connections}`,
     ...(Number(r.invitations) > 0 ? [`Invitation they joined with: kept as used, its note and link to them erased (${r.invitations})`] : []),

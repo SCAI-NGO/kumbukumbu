@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -16,20 +17,22 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
     public string Help => """
         links <path>[#section]
-          List the [[wikilinks]], ![[embeds]] and Markdown links [text](target) of a note (or of one
-          section), one per line: line, the link as written, and where it leads: a note's path,
-          'not found', 'ambiguous' with the candidates, 'attachment' for files that are not notes,
-          or 'this note' for [[#Heading]].
+          List the [[wikilinks]], ![[embeds]], Markdown links [text](target) and images ![alt](target)
+          of a note (or of one section), one per line: line, the link as written, and where it leads: a note's or an
+          attachment's path, 'not found', 'ambiguous' with the candidates, 'attachment' for other
+          files, or 'this note' for [[#Heading]].
           Links in code don't count. --version V lists the links of an earlier version, resolved
           against the notes as they are now.
           A link resolves within its vault, ignoring case: the note whose path ends with the link
           ([[kumbu]] or [[projects/kumbu]] → /Demo/projects/kumbu.md); if several match, the one in the
-          linking note's folder; './' and '../' are relative to it.
+          linking note's folder; './' and '../' are relative to it. An attachment is named with its
+          extension: ![[shot.png]], [[report.pdf]].
           A Markdown link target may be '/Folder/Note.md' (the path inside the vault, without the
           vault's name: /Demo/projects/plan.md is '/projects/plan.md'), './note.md', '../note.md' or
           a bare name; spaces as %20 or the target in <...>. A path without a leading '/' is matched
           like a wikilink (relative to the note's folder, then from the vault root, then the end of
-          a path). External URLs are ignored. New links are best written as [text](/Folder/Note.md).
+          a path). External URLs, images too, are ignored and never fetched. New links are best
+          written as [text](/Folder/Note.md).
         links <directory>
           Check every note below a directory (or a whole vault) and list only the links that lead
           nowhere or are ambiguous, as path:line: link → problem.
@@ -51,6 +54,13 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         var (pathText, fragment) = SectionAddress.Split(rest[0]);
         if (!CommandArgs.TryParsePath(Name, pathText, out var path, out var pathError)) return pathError!;
         if (path.IsRoot) return ShellResult.Error("links: give a vault or a directory, e.g. links /Demo");
+
+        if (await StoreAttachments.GetAsync(notes, path, ct) is not null)
+        {
+            return version is null && fragment is null
+                ? ShellResult.Ok("(no links: an attachment holds none; 'backlinks' lists the notes that link to it)")
+                : ShellResult.Error($"links: {path.Value} is an attachment; it has no versions or sections to read links from");
+        }
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var content = await notes.ReadAsync(path, ct);
@@ -80,7 +90,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
     private async Task<ShellResult> CheckDirectoryAsync(VaultPath vault, VaultPath dir, CancellationToken ct)
     {
         var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path));
+        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
         var prefix = dir.Value + "/";
         var output = new List<string>();
         foreach (var source in all.Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal)).OrderBy(n => n.Path.Value, TextOrder.Default))
@@ -100,7 +110,7 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
 
     private static string Describe(LinkResolution r) => r.Kind switch
     {
-        LinkKind.Note => r.Target!.Value,
+        LinkKind.Note or LinkKind.Attachment when r.Target is not null => r.Target.Value,
         LinkKind.Self => "this note",
         LinkKind.Ambiguous => "ambiguous: " + string.Join(", ", r.Candidates.Select(c => c.Value).Order(TextOrder.Default)),
         LinkKind.Attachment => "attachment (not a note)",

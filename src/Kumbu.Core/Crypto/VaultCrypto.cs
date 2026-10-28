@@ -6,7 +6,7 @@ namespace Kumbu.Core.Crypto;
 
 /// <summary>
 /// The cryptographic building blocks, all from .NET itself: AES-256-GCM for sealing, HKDF-SHA256 for
-/// deriving keys from high-entropy secrets, HMAC-SHA256 for path ids.
+/// deriving keys from high-entropy secrets, HMAC-SHA256 for path and blob ids.
 /// </summary>
 public static class VaultCrypto
 {
@@ -63,4 +63,6 @@ public static class VaultCrypto
         Derive(Encoding.UTF8.GetBytes(secret), label, salt);
 
     public static byte[] Mac(ReadOnlySpan<byte> key, string value) => HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(value));
+
+    public static byte[] Mac(ReadOnlySpan<byte> key, ReadOnlySpan<byte> data) => HMACSHA256.HashData(key, data);
 }

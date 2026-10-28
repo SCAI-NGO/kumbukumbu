@@ -8,6 +8,7 @@ interface MdNode {
   type: string;
   value?: string;
   url?: string;
+  alt?: string | null;
   children?: MdNode[];
   position?: { start: { line: number; offset?: number }; end?: { offset?: number } };
   data?: { hName?: string; hProperties?: Record<string, unknown> };
@@ -18,6 +19,16 @@ const external = /^([A-Za-z][A-Za-z0-9+.-]*:|\/\/)/;
 
 // As the server finds them (Kumbu.Core WikiLink): `[[target#Heading|alias]]`, an embed with `!`.
 const wikiLink = /!?\[\[([^[\]\n]+?)\]\]/g;
+
+/** The last segment of a link's URL, percent-decoded where it is well-formed (`my%20shot.png` → `my shot.png`). */
+function fileNameOf(url: string) {
+  const name = url.split(/[?#]/)[0].split("/").pop() ?? "";
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
 
 /** Markdown's backslash escapes (CommonMark: before any ASCII punctuation) taken out. */
 const unescape = (raw: string) => raw.replace(/\\([!-/:-@[-`{-~])/g, "$1");
@@ -33,8 +44,9 @@ export function linkLabel(raw: string) {
 
 /**
  * A remark plugin that finds the wiki links in the text (code is never text, so links in code stay as written)
- * and the Markdown links that aren't external (`[the plan](/Work/plan.md)`), and marks each with the index of its
- * entry in `links`, the API's answer for this note. Resolution is the server's
+ * and the Markdown links and images that aren't external (`[the plan](/Work/plan.md)`, `![](/Screenshots/shot.png)`),
+ * and marks each with the index of its entry in `links`, the API's answer for this note. An image the answer
+ * doesn't have stays an image (shown as its name, never loaded). Resolution is the server's
  * alone (the same code path as the `links` command, never across vaults): a link is matched to the answer by
  * its line and its place among the same links on that line, never by its name. A link the answer doesn't have
  * stays plain text.
@@ -69,6 +81,12 @@ export function remarkWikiLinks({ links }: { links: LinkView[] }) {
       if (node.type === "link" && !external.test(node.url ?? "") && start?.offset !== undefined && end?.offset !== undefined) {
         const index = indexOf(start.line, String(file.value).slice(start.offset, end.offset));
         return [{ type: "wikiLink", data: { hName: "span", hProperties: { dataWikiLink: index } }, children: (node.children ?? []).flatMap(replace) }];
+      }
+      if (node.type === "image" && !external.test(node.url ?? "") && start?.offset !== undefined && end?.offset !== undefined) {
+        const index = indexOf(start.line, String(file.value).slice(start.offset, end.offset));
+        if (index < 0) return [node];
+        const label = node.alt || fileNameOf(node.url ?? "");
+        return [{ type: "wikiLink", data: { hName: "span", hProperties: { dataWikiLink: index, dataEmbed: "inline" } }, children: [{ type: "text", value: label }] }];
       }
       if (node.type !== "text" || !node.value || !node.position) {
         if (node.children) node.children = node.children.flatMap(replace);

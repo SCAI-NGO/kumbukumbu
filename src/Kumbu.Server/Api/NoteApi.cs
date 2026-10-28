@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json.Serialization;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -44,15 +46,26 @@ public sealed record CreateVaultRequest(string Name);
 /// <summary>The owner's current password, and <c>confirm</c>: the vault's name, typed out exactly.</summary>
 public sealed record DeleteVaultRequest(string Password, string Confirm);
 
-/// <summary>A vault's notes as folders and notes, each level folders first, then notes, both in text order (as <c>ls</c>).
+/// <summary>A vault's notes and attachments as folders and files, each level folders first, then files, both in text order (as <c>ls</c>).
 /// <c>damaged</c>: stored notes of the vault that don't open (their paths are what doesn't open, so they aren't in the tree).</summary>
 public sealed record TreeView(TreeFolder Root, int Damaged);
 
-/// <summary><c>path</c> is the folder's path from the root of the vault tree, e.g. <c>/Work/projects</c>.</summary>
+/// <summary><c>path</c> is the folder's path from the root of the vault tree, e.g. <c>/Work/projects</c>; <c>notes</c>
+/// holds its files, notes and attachments together.</summary>
 public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFolder> Folders, IReadOnlyList<TreeNote> Notes);
 
-/// <summary><c>size</c> in bytes (UTF-8).</summary>
-public sealed record TreeNote(string Name, string Path, int Size);
+/// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
+/// <c>pdf</c>; <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment
+/// also has its <c>version</c> and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows);
+/// a note has neither, its entry is as before.</summary>
+public sealed record TreeNote(
+    string Name,
+    string Path,
+    int Size,
+    string Kind = "note",
+    string MediaType = NoteApi.NoteMediaType,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Version = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? WrittenAt = null);
 
 /// <summary>A note; <c>path</c> from the root of the vault tree (<c>/Work/plan.md</c>), <c>version</c> what a write sends back.
 /// Read with <c>?version=</c>, it is that version: <c>current</c> false for an earlier one (whose token a write
@@ -72,24 +85,29 @@ public sealed record CurrentNoteView(string Content, string Version);
 /// <summary>A write that lost against another one: the note as it is now, for the web app to show or merge.</summary>
 public sealed record ConflictView(string Error, CurrentNoteView Current);
 
-/// <summary>Paths from the root of the vault tree. A <c>from</c> ending in <c>/</c> moves the folder with every note
-/// below it; a <c>to</c> ending in <c>/</c> (or naming an existing folder) moves into it. Links that the move would
+/// <summary>Paths from the root of the vault tree, of a note, an attachment or a folder. A <c>from</c> ending in
+/// <c>/</c> moves the folder with every note and attachment below it; a <c>to</c> ending in <c>/</c> (or naming an existing folder) moves into it. Links that the move would
 /// break are rewritten, unless <c>keepLinks</c>.</summary>
 public sealed record MoveRequest(string From, string To, bool KeepLinks = false);
 
-/// <summary><c>path</c> and <c>version</c> of the moved note; null for a folder move.</summary>
+/// <summary><c>path</c> and <c>version</c> of the moved note or attachment; null for a folder move.</summary>
 public sealed record MovedView(string Message, string? Path, string? Version);
 
 /// <summary>A link as written, 1-based <c>line</c>. <c>kind</c>: <c>note</c> (<c>path</c> is where it leads), <c>self</c>
-/// (<c>[[#Heading]]</c>), <c>ambiguous</c> (<c>candidates</c>), <c>attachment</c> or <c>not_found</c>.</summary>
+/// (<c>[[#Heading]]</c>), <c>ambiguous</c> (<c>candidates</c>), <c>attachment</c> (<c>path</c> is the vault's attachment it
+/// leads to; null for a file the vault doesn't keep, e.g. a .docx) or <c>not_found</c>.</summary>
 public sealed record LinkView(int Line, string Raw, string Target, string Kind, string? Path, IReadOnlyList<string> Candidates);
 
 /// <summary>A line linking to the note, 1-based; <c>ambiguous</c>: its link matches several notes, this one among them.</summary>
 public sealed record BacklinkView(string Path, int Line, string Text, bool Ambiguous);
 
-/// <summary>A version of a note, newest first; <c>size</c> in bytes (UTF-8), <c>changeset</c> the short id of its
-/// changeset, if it is in one. <c>writerKind</c>, for sessions only, as <c>lastWriterKind</c> on a note.</summary>
-public sealed record HistoryEntryView(string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null);
+/// <summary>A version of a note or attachment, newest first; <c>size</c> in bytes (a note's UTF-8), <c>changeset</c> the
+/// short id of its changeset, if it is in one. <c>writerKind</c>, for sessions only, as <c>lastWriterKind</c> on a note.
+/// <c>kind</c> and <c>mediaType</c> as in the tree; an attachment has no <c>lines</c> (0), and its version's bytes
+/// come from <c>GET /api/files</c> with <c>?version=</c>.</summary>
+public sealed record HistoryEntryView(
+    string Version, DateTime WrittenAt, string Writer, int Lines, int Size, bool Current, string? Changeset, string? WriterKind = null,
+    string Kind = "note", string MediaType = NoteApi.NoteMediaType);
 
 /// <summary>A section found; lines 1-based and inclusive. <c>score</c>: comparable within one search, 1.0 for every
 /// exact match, null when ranked by words only. <c>reason</c>: <c>title</c> (the query is in the note's name),
@@ -122,6 +140,9 @@ public static class NoteApi
     private const int DefaultResults = 10;
     private const int MaxResults = 50;
     private const int MaxVaultName = 64;
+
+    /// <summary>What a note is, beside the attachments' media types.</summary>
+    public const string NoteMediaType = "text/markdown";
 
     public static void MapNoteApi(this IEndpointRouteBuilder app)
     {
@@ -242,11 +263,19 @@ public static class NoteApi
         var root = ApiPaths.Parse(vault, null, note: false);
         await RequireVaultAsync(store, root, ct);
         var notes = await store.ReadNotesUnderAsync(root, ct);
-        return TypedResults.Ok(new TreeView(TreeOf(root, notes), await store.CountDamagedAsync(root, ct)));
+        var attachments = await StoreAttachments.UnderAsync(store, root, ct);
+        return TypedResults.Ok(new TreeView(TreeOf(root, notes, attachments), await store.CountDamagedAsync(root, ct)));
     }
 
     /// <summary>The folder <paramref name="dir"/> and everything below it as a tree; the checkpoints' tree is built the same way.</summary>
-    internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> below)
+    internal static TreeFolder TreeOf(VaultPath dir, IEnumerable<Note> notes, IEnumerable<StoredAttachment> attachments) =>
+        TreeOf(dir, notes.Select(n => (n.Path, new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content))))
+            .Concat(attachments.Select(a => (a.Path, TreeFile(a)))));
+
+    private static TreeNote TreeFile(StoredAttachment file) =>
+        new(file.Path.Name, file.Path.Value, (int)file.Current.Size, AttachmentFormat.KindOf(file.Path.Name), file.Current.MediaType, file.Current.Version, file.LastWriteAt);
+
+    private static TreeFolder TreeOf(VaultPath dir, IEnumerable<(VaultPath Path, TreeNote File)> below)
     {
         var depth = dir.Segments.Count;
         var groups = below.GroupBy(n => n.Path.Segments.Count > depth + 1).ToDictionary(g => g.Key, g => g.ToList());
@@ -257,7 +286,7 @@ public static class NoteApi
             .ToList();
         var files = groups.GetValueOrDefault(false, [])
             .OrderBy(n => n.Path.Name, TextOrder.Default)
-            .Select(n => new TreeNote(n.Path.Name, n.Path.Value, Encoding.UTF8.GetByteCount(n.Content)))
+            .Select(n => n.File)
             .ToList();
         return new TreeFolder(dir.Name, dir.Value, folders, files);
     }
@@ -372,10 +401,14 @@ public static class NoteApi
         // The trailing '/' says "the folder", as in mv: a mistyped note name never moves a folder.
         var folder = body.From.EndsWith('/');
         if (!folder && body.To.EndsWith('/')) target = target.Child(source.Name);
-        if (await store.GetAsync(source, ct) is null && (await store.ListNotesUnderAsync(source, ct)).Count == 0)
+        if (await store.GetAsync(source, ct) is null && await StoreAttachments.GetAsync(store, source, ct) is null
+            && (await store.ListNotesUnderAsync(source, ct)).Count == 0 && (await StoreAttachments.UnderAsync(store, source, ct)).Count == 0)
         {
             throw await MissingAsync(store, source, ct);
         }
+
+        // A name that contradicts the file's bytes is the request's fault, not the vault's state.
+        if (!folder && AttachmentFormat.RenameProblem(source, target) is { } renameProblem) throw ApiErrors.BadRequest(renameProblem + ".");
 
         var result = folder
             ? await mover.MoveFolderAsync(source, target, !body.KeepLinks, ct)
@@ -386,9 +419,15 @@ public static class NoteApi
         return TypedResults.Ok(new MovedView(result.Output, result.Version?.Path, result.Version?.Token));
     }
 
+    /// <summary>The links of a note; an attachment holds none (its <c>backlinks</c> are the notes that lead to it).</summary>
     private static async Task<Ok<LinkView[]>> LinksAsync(string vault, string? path, INoteStore store, CancellationToken ct)
     {
-        var notePath = ApiPaths.Parse(vault, path, note: true);
+        var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
+        if (notePath.IsAttachment)
+        {
+            return await StoreAttachments.GetAsync(store, notePath, ct) is not null ? TypedResults.Ok(Array.Empty<LinkView>()) : throw await MissingAsync(store, notePath, ct);
+        }
+
         var content = await store.ReadAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
         return TypedResults.Ok(await LinkViewsAsync(store, notePath, content, ct));
     }
@@ -415,8 +454,9 @@ public static class NoteApi
 
     private static async Task<Ok<BacklinkView[]>> BacklinksAsync(string vault, string? path, INoteStore store, CancellationToken ct)
     {
-        var notePath = ApiPaths.Parse(vault, path, note: true);
-        if (await store.GetAsync(notePath, ct) is null) throw await MissingAsync(store, notePath, ct);
+        var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
+        var exists = notePath.IsAttachment ? await StoreAttachments.GetAsync(store, notePath, ct) is not null : await store.GetAsync(notePath, ct) is not null;
+        if (!exists) throw await MissingAsync(store, notePath, ct);
         return TypedResults.Ok((await NoteLinks.ToAsync(store, notePath, ct))
             .Select(b => new BacklinkView(b.Source.Value, b.Line + 1, b.Text, b.Ambiguous))
             .ToArray());
@@ -424,7 +464,21 @@ public static class NoteApi
 
     private static async Task<Ok<HistoryEntryView[]>> HistoryAsync(string vault, string? path, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
-        var notePath = ApiPaths.Parse(vault, path, note: true);
+        var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
+        if (notePath.IsAttachment)
+        {
+            var attachment = await StoreAttachments.GetAsync(store, notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
+            var versions = new List<HistoryEntryView>();
+            foreach (var v in NoteHistory.Versions(attachment))
+            {
+                versions.Add(new HistoryEntryView(
+                    v.Version, v.WrittenAt, v.Writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, await kinds.OfAsync(v.Writer, ct),
+                    AttachmentFormat.KindOf(notePath.Name), v.State.MediaType));
+            }
+
+            return TypedResults.Ok(versions.ToArray());
+        }
+
         var note = await store.GetAsync(notePath, ct) ?? throw await MissingAsync(store, notePath, ct);
         var entries = new List<HistoryEntryView>();
         foreach (var v in NoteHistory.Versions(note))
@@ -590,29 +644,48 @@ public static class NoteApi
     internal static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
         ApiErrors.NotFound(await store.IsDamagedAsync(path, ct)
             ? Damage.Message("read", path)
-            : $"There is no note at {path.Value}{await Moves.HintAsync(store, path, ct)} (if it was removed, it is in the trash).");
+            : $"There is no {(path.IsAttachment ? "file" : "note")} at {path.Value}{await Moves.HintAsync(store, path, ct)} (if it was removed, it is in the trash).");
 }
 
-/// <summary>Note and folder paths in URLs: <c>{vault}/{path}</c>, each segment URL-encoded.</summary>
+/// <summary>What a URL's path must name.</summary>
+internal enum PathKind
+{
+    Folder,
+    Note,
+    Attachment,
+    NoteOrAttachment,
+}
+
+/// <summary>Note, attachment and folder paths in URLs: <c>{vault}/{path}</c>, each segment URL-encoded.</summary>
 internal static class ApiPaths
 {
+    public static VaultPath Parse(string vault, string? rest, bool note) => Parse(vault, rest, note ? PathKind.Note : PathKind.Folder);
+
     /// <summary>
     /// The path of <paramref name="rest"/> in <paramref name="vault"/> (a trailing '/' allowed for a folder). Empty,
     /// '.' and '..' segments and backslashes are refused rather than resolved: a URL names one path exactly, and
-    /// one that steps out of its vault is a mistake or an attempt.
+    /// one that steps out of its vault is a mistake or an attempt. Each segment is NFC-normalised (<see cref="VaultPath.Child"/>),
+    /// so a name a phone sends decomposed names the same note or file as its composed spelling.
     /// </summary>
-    public static VaultPath Parse(string vault, string? rest, bool note)
+    public static VaultPath Parse(string vault, string? rest, PathKind kind)
     {
         var segments = new List<string> { vault };
-        if (!string.IsNullOrEmpty(rest)) segments.AddRange((note ? rest : rest.TrimEnd('/')).Split('/'));
+        if (!string.IsNullOrEmpty(rest)) segments.AddRange((kind == PathKind.Folder ? rest.TrimEnd('/') : rest).Split('/'));
         if (segments.Any(s => s is "" or "." or ".." || s.Contains('\\')))
         {
             throw ApiErrors.BadRequest(Refused);
         }
 
         var path = segments.Aggregate(VaultPath.Root, (p, s) => p.Child(s));
-        if (note && !path.IsNote) throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md.");
-        return path;
+        return kind switch
+        {
+            PathKind.Note when !path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is no note: note paths end in .md."),
+            PathKind.Attachment when path.IsNote => throw ApiErrors.BadRequest($"{path.Value} is a note: /api/notes reads and writes it."),
+            PathKind.Attachment when !path.IsAttachment => throw ApiErrors.BadRequest($"{path.Value}: {AttachmentFormat.UnsupportedMessage}."),
+            PathKind.NoteOrAttachment when !path.IsNote && !path.IsAttachment =>
+                throw ApiErrors.BadRequest($"{path.Value} is neither a note (.md) nor a file Kumbu² keeps (PDF, PNG, JPEG, GIF, WebP)."),
+            _ => path,
+        };
     }
 
     private const string Refused = "A path may not contain empty, '.' or '..' segments or backslashes.";

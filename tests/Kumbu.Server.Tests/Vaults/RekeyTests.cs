@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
@@ -30,7 +31,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 {
     private const string Password = "correct horse battery staple";
 
-    private static readonly string[] Collections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts"];
+    private static readonly string[] Collections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -212,6 +213,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
                 "moves" => v.PathId(v.OpenMove(doc).From),
                 "embeddings" => v.PathId(v.OpenEmbeddings(doc).Path),
                 "checkpoints" => v.NameId(v.OpenCheckpoint(doc).Checkpoint.Name),
+                "attachments" => v.PathId(v.OpenAttachment(doc).Path),
+                "attachment_trash" => v.PathId(v.OpenAttachmentTrash(doc).Attachment.Path),
                 _ => v.TextId(v.OpenText(doc)),
             };
             return CryptographicOperations.FixedTimeEquals(pid, doc.PathId);
@@ -283,6 +286,92 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         };
     }
 
+    private static byte[] Png(int size, byte fill)
+    {
+        var bytes = new byte[size];
+        Array.Fill(bytes, fill);
+        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }.CopyTo(bytes, 0);
+        return bytes;
+    }
+
+    private async Task<AttachmentState> StateAsync(EncryptedNoteStore store, byte[] bytes) =>
+        new("image/png", bytes.Length, 1, 1, VersionToken.Of(bytes), await store.PutBlobAsync("Arbeit", bytes, Ct));
+
+    private async Task<StoredAttachment> AttachAsync(EncryptedNoteStore store, string path, byte[] bytes)
+    {
+        var attachment = new StoredAttachment(P(path), await StateAsync(store, bytes), 1, "lea", Now, [], null);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea", Now, Ct));
+        return attachment;
+    }
+
+    /// <summary>
+    /// In "Arbeit": a.png, whose earlier bytes are in its history, and b.png with the same bytes as a.png now, and c.png
+    /// with them too, trashed. Two blobs: the shared bytes and the earlier ones.
+    /// </summary>
+    private async Task<Account> SharedBlobsAsync()
+    {
+        var a = await AccountAsync("Arbeit");
+        var store = Store(a);
+        var first = await AttachAsync(store, "/Arbeit/a.png", Png(2000, 2));
+        var next = first with { Current = await StateAsync(store, Png(3000, 1)), Revision = 2, History = [new AttachmentVersion(first.Current, "lea", Now, null)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, "lea", Now, Ct));
+        await AttachAsync(store, "/Arbeit/b.png", Png(3000, 1));
+        var c = await AttachAsync(store, "/Arbeit/c.png", Png(3000, 1));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { c } }, "lea", Now, Ct));
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", a.Id("Arbeit")), cancellationToken: Ct));
+        return a;
+    }
+
+    /// <summary>Every reference to a blob of "Arbeit" (current states, history, trash, checkpoints), with a hash of the
+    /// bytes it opens to (null if there is no such blob), as a second process reads them.</summary>
+    private async Task<List<(string Where, string BlobId, string? Bytes)>> BlobReferencesAsync(Account a)
+    {
+        var store = Store(a, NewCatalog());
+        var states = new List<(string, AttachmentState)>();
+        foreach (var attachment in (await store.ListAttachmentsUnderAsync(Kumbu.Core.Paths.VaultPath.Root, Ct)).OrderBy(x => x.Path.Value, StringComparer.Ordinal))
+        {
+            states.Add((attachment.Path.Value, attachment.Current));
+            states.AddRange(attachment.History.Select((h, i) => ($"{attachment.Path.Value} history {i}", h.State)));
+        }
+
+        states.AddRange((await store.ListAttachmentTrashAsync(null, Ct)).Select(t => ($"{t.Attachment.Path.Value} trash", t.Attachment.Current)));
+        foreach (var checkpoint in await store.ListCheckpointsAsync(Kumbu.Core.Paths.VaultPath.Root, Ct))
+        {
+            states.AddRange(checkpoint.Attachments.Select(c => ($"{c.Path.Value} checkpoint {checkpoint.Name}", c.State)));
+        }
+
+        var result = new List<(string, string, string?)>();
+        foreach (var (where, state) in states)
+        {
+            await using var stream = await store.OpenBlobAsync("Arbeit", state.BlobId, Ct);
+            string? hash = null;
+            if (stream is not null) hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, Ct));
+            result.Add((where, state.BlobId, hash));
+        }
+
+        return result;
+    }
+
+    /// <summary>Of the vault's blobs, how many open under <paramref name="vaultKey"/>.</summary>
+    private async Task<int> BlobsOpeningAsync(byte[] vaultKey, string vaultId)
+    {
+        var v = new UnlockedVault(vaultId, "", vaultKey, DateTime.UtcNow, new VaultLocks());
+        var opening = 0;
+        foreach (var doc in await _db.GetCollection<BlobDocument>("blobs").Find(d => d.Vault == vaultId).ToListAsync(Ct))
+        {
+            try
+            {
+                v.OpenBlob(doc);
+                opening++;
+            }
+            catch (Exception e) when (e is CryptographicException or InvalidDataException)
+            {
+            }
+        }
+
+        return opening;
+    }
+
     [Fact]
     public async Task Everything_opens_with_the_new_key_and_reads_the_same()
     {
@@ -333,7 +422,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             Assert.NotEqual(before[doc.Id], doc.PathId);
             // Nor does the blob open under the old key with any pid.
             var old = new UnlockedVault(id, "", oldKey, Now, new VaultLocks());
-            Assert.Null(old.Reseal(collection, doc, old, new Dictionary<string, byte[]>()));
+            Assert.Null(old.Reseal(collection, doc, old, new UnlockedVault.RekeyIds()));
         }
 
         var meta = (await Raw("vaults").Find(new BsonDocument("_id", id)).SingleAsync(Ct))["meta"].AsByteArray;
@@ -710,6 +799,140 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(7, batches.Sum(b => b.Documents));
         Assert.True(batches.Count >= 4, $"{batches.Count} batches");
         Assert.Equal(new string('z', 100_000), await Store(a).ReadAsync(P("/Arbeit/big.md"), Ct));
+    }
+
+    [Fact]
+    public async Task Rekeying_a_vault_with_a_blob_larger_than_a_batch_keeps_every_attachment()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var store = Store(a);
+        await AttachAsync(store, "/Arbeit/big.png", Png(200_000, 1));
+        for (var i = 0; i < 5; i++) await AttachAsync(store, $"/Arbeit/{i}.png", Png(10_000, (byte)(10 + i)));
+        var before = await BlobReferencesAsync(a);
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        Catalog().BatchBytes = 30_000;
+        var (batches, reads) = (new List<(int Documents, long Bytes)>(), new List<(int Documents, long Bytes)>());
+        Catalog().RekeyBatchCommitted = (_, n, bytes) => batches.Add((n, bytes));
+        Catalog().RekeyChunkRead = (_, n, bytes) => reads.Add((n, bytes));
+
+        var summary = await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        // Six blobs and six records.
+        Assert.Equal((12, 0), (summary.Documents, summary.Damaged));
+        Assert.Contains(batches, b => b is { Documents: 1, Bytes: > 200_000 });
+        Assert.All(batches.Where(b => b.Bytes > 30_000), b => Assert.Equal(1, b.Documents));
+        // Nor is more read at once: the large blob alone.
+        Assert.Contains(reads, r => r is { Documents: 1, Bytes: > 200_000 });
+        Assert.All(reads.Where(r => r.Bytes > 30_000), r => Assert.Equal(1, r.Documents));
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        var newKey = await VaultKeyAsync(a.Key, id);
+        Assert.Equal((6, 0), (await BlobsOpeningAsync(newKey, id), await BlobsOpeningAsync(oldKey, id)));
+        Assert.All(await DocumentsAsync(id), d => Assert.True(Opens(newKey, d.Collection, d.Doc), d.Collection));
+    }
+
+    [Fact]
+    public async Task Rekeying_remaps_shared_blob_ids_for_every_referrer()
+    {
+        var a = await SharedBlobsAsync();
+        var id = a.Id("Arbeit");
+        var before = await BlobReferencesAsync(a);
+        Assert.Equal(["/Arbeit/a.png", "/Arbeit/a.png history 0", "/Arbeit/b.png", "/Arbeit/c.png trash"], before.Select(r => r.Where));
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        // Still shared: a.png, b.png and the trashed c.png name one blob, and it is stored once.
+        Assert.Single(after.Where(r => r.Where != "/Arbeit/a.png history 0").Select(r => r.BlobId).Distinct());
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct));
+
+        // A sweep afterwards finds every blob referenced.
+        _time.Advance(TimeSpan.FromHours(1));
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
+        Assert.Equal(after, await BlobReferencesAsync(a));
+    }
+
+    [Fact]
+    public async Task Rekeying_remaps_the_blob_ids_a_checkpoint_holds()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var store = Store(a);
+        var x = await AttachAsync(store, "/Arbeit/x.png", Png(2000, 3));
+        var y = await AttachAsync(store, "/Arbeit/y.png", Png(2000, 3));
+        var checkpoint = new Checkpoint("cp", P("/Arbeit"), true, "lea", Now, []) { Attachments = [new(x.Path, x.Current), new(y.Path, y.Current)] };
+        Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
+        // x.png goes to the trash, y.png gets other bytes and keeps no history: the shared bytes are left to the trash
+        // entry and the checkpoint.
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { x } }, "lea", Now, Ct));
+        var other = y with { Current = await StateAsync(store, Png(3000, 4)), Revision = 2 };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (y, other) } }, "lea", Now, Ct));
+        var before = await BlobReferencesAsync(a);
+        Assert.Equal(
+            ["/Arbeit/y.png", "/Arbeit/x.png trash", "/Arbeit/x.png checkpoint cp", "/Arbeit/y.png checkpoint cp"],
+            before.Select(r => r.Where));
+
+        await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Empty(after.Select(r => r.BlobId).Intersect(before.Select(r => r.BlobId)));
+        // The trash entry and the checkpoint still name one blob, stored once.
+        Assert.Single(after.Skip(1).Select(r => r.BlobId).Distinct());
+        Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct));
+
+        // A sweep afterwards finds every blob referenced.
+        _time.Advance(TimeSpan.FromHours(1));
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
+        Assert.Equal(after, await BlobReferencesAsync(a));
+    }
+
+    [Fact]
+    public async Task An_interrupted_rekeying_of_blobs_resumes_and_no_sweep_releases_them_meanwhile()
+    {
+        var a = await SharedBlobsAsync();
+        var id = a.Id("Arbeit");
+        var before = await BlobReferencesAsync(a);
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        // Every blob past its grace: a sweep that ran would release what it doesn't see referenced.
+        _time.Advance(TimeSpan.FromHours(1));
+        var stale = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var sweep = new BlobSweep(Catalog(), NullLogger.Instance);
+        Catalog().BatchDocuments = 1;
+        int? sweptDuringRun = null;
+        Catalog().RekeyFaultAt = async p =>
+        {
+            if (p != "after-batch" || sweptDuringRun is not null) return;
+            sweptDuringRun = await sweep.RunAsync(stale, Now, Ct);
+            throw new InvalidOperationException("crash after the first blob");
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+
+        Assert.Equal(0, sweptDuringRun);
+        var newKey = await VaultKeyAsync(a.Key, id, SlotDocument.UserNext);
+        // One blob under each key, the records all under the old one: nothing is served meanwhile, nor swept.
+        Assert.Equal((1, 1), (await BlobsOpeningAsync(newKey, id), await BlobsOpeningAsync(oldKey, id)));
+        Assert.Equal(0, await sweep.RunAsync(stale, Now, Ct));
+        await Assert.ThrowsAsync<VaultBusyException>(() => Store(a).OpenBlobAsync("Arbeit", before[0].BlobId, Ct));
+
+        // Resumed by another process, as after a restart.
+        Catalog().RekeyFaultAt = null;
+        await NewCatalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var after = await BlobReferencesAsync(a);
+        Assert.Equal(before.Select(r => (r.Where, r.Bytes)), after.Select(r => (r.Where, r.Bytes)));
+        Assert.All(after, r => Assert.NotNull(r.Bytes));
+        Assert.Equal((2, 0), (await BlobsOpeningAsync(newKey, id), await BlobsOpeningAsync(oldKey, id)));
     }
 
     [Fact]

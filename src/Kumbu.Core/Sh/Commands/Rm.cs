@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class Rm(NoteWriter writer) : ICommand
+public sealed class Rm(NoteWriter writer, AttachmentWriter? files = null) : ICommand
 {
     public string Name => "rm";
 
     public string Usage => "rm <path>";
 
-    public string Summary => "move a note to the trash";
+    public string Summary => "move a note or an attachment to the trash";
 
     public string Help => $"""
         rm <path>
-          Move one note to the trash. It stays there for {NoteWriter.TrashRetention.Days} days; 'restore <path>' brings it back.
+          Move one note, image or PDF to the trash. It stays there for {NoteWriter.TrashRetention.Days} days; 'restore <path>' brings it back.
           Directories can't be removed, and there is no -r.
 
           rm /Demo/old.md
+          rm /Demo/Screens/shot.png
         """;
 
     public bool ReadsInput => false;
@@ -28,6 +30,6 @@ public sealed class Rm(NoteWriter writer) : ICommand
         if (args.Count > 1) return ShellResult.Error("rm: too many arguments (rm removes one note at a time)");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        return await writer.RemoveAsync(path, ct);
+        return files is not null && path.IsAttachment ? await files.RemoveAsync(path.Value, ct) : await writer.RemoveAsync(path, ct);
     }
 }

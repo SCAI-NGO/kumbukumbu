@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { timeText } from "../components/Sheet";
 import { checkpointExportUrl } from "../data/exportUrl";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -298,6 +299,37 @@ describe("checkpoints", () => {
     expect(await restore!.json()).toEqual({ plan: "p1an" });
   });
 
+  it("count and restore images and PDFs as files", async () => {
+    const fetch = api({
+      "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [{ ...checkpoint, attachments: 2 }] }),
+      "POST /api/vaults/Work/checkpoints/before-cleanup/preview": () =>
+        json(200, {
+          scope: "/Work/",
+          changes: [
+            { kind: "changed", path: "/Work/shot.png", from: null, added: null, removed: null, fileKind: "image" },
+            { kind: "back", path: "/Work/report.pdf", from: null, added: null, removed: null, fileKind: "pdf" },
+          ],
+          rewrittenLinks: 0,
+          rewrittenIn: [],
+          broken: [],
+          plan: "p1an",
+        }),
+      "POST /api/vaults/Work/checkpoints/before-cleanup/restore": () => json(200, { message: "restored /Work/ to checkpoint 'before-cleanup': 1 changed, 1 back" }),
+    });
+    await openVaultMenu("Checkpoints");
+    expect(await within(sheet("Checkpoints")).findByRole("list", { name: "Checkpoints" })).toHaveTextContent("/Work/ · 3 notes · 2 files");
+    await userEvent.click(within(sheet("Checkpoints")).getByRole("button", { name: "Restore before-cleanup" }));
+
+    const changes = await within(sheet("Restore before-cleanup?")).findByRole("list", { name: "What changes" });
+    expect(changes).toHaveTextContent("/Work/shot.png goes back to how it was then");
+    expect(changes).toHaveTextContent("/Work/report.pdf comes back (it was removed since)");
+    await userEvent.click(within(sheet("Restore before-cleanup?")).getByRole("button", { name: "Restore 2 files" }));
+
+    expect(await within(sheet("Checkpoints")).findByRole("status")).toHaveTextContent("Restored /Work/ to checkpoint 'before-cleanup': 1 changed, 1 back.");
+    const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.url.endsWith("/restore"));
+    expect(await restore!.json()).toEqual({ plan: "p1an" });
+  });
+
   it("says when there is nothing to restore", async () => {
     api({
       "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [checkpoint] }),
@@ -360,5 +392,198 @@ describe("checkpoints", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Open before-cleanup" }));
     expect(await screen.findByRole("region", { name: "Checkpoint" })).toHaveTextContent("Checkpoint before-cleanup");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("an attachment's history, the trash and the activity", () => {
+  const SHOT = "/Work/shots/shot.png";
+  const shotTree = {
+    damaged: 0,
+    root: {
+      name: "Work",
+      path: "/Work",
+      folders: [{ name: "shots", path: "/Work/shots", folders: [], notes: [{ name: "shot.png", path: SHOT, size: 421_888, kind: "image", mediaType: "image/png", version: "s2" }] }],
+      notes: [{ name: "inbox.md", path: INBOX, size: 10 }],
+    },
+  };
+  const shotHistory = [
+    { version: "s2", writtenAt: "2026-10-25T09:00:00Z", writer: "ada", lines: 0, size: 421_888, current: true, changeset: null, kind: "image", mediaType: "image/png" },
+    { version: "s1", writtenAt: "2026-10-24T09:00:00Z", writer: "liz", lines: 0, size: 300_000, current: false, changeset: null, kind: "image", mediaType: "image/png" },
+  ];
+  const fileInfo = { path: SHOT, version: "s2", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z", kind: "image", mediaType: "image/png", size: 421_888, width: 1440, height: 3120 };
+  const png = () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "Content-Type": "image/png" } });
+  /** The versions of the shot fetched, "" for today's, in order. */
+  let fetched: string[] = [];
+  const { createObjectURL, revokeObjectURL } = URL;
+
+  beforeEach(() => {
+    fetched = [];
+    let n = 0;
+    URL.createObjectURL = vi.fn(() => `blob:file-${++n}`);
+    URL.revokeObjectURL = vi.fn();
+  });
+  afterEach(() => {
+    // Unmounted first: the files' URLs are revoked on the way out.
+    cleanup();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+  });
+
+  function shotApi(extra: Parameters<typeof fakeApi>[0] = {}) {
+    return api({
+      "GET /api/vaults/Work/tree": () => json(200, shotTree),
+      "GET /api/files/Work/shots/shot.png": (r) => {
+        fetched.push(new URL(r.url).searchParams.get("version") ?? "");
+        return png();
+      },
+      "GET /api/version/Work/shots/shot.png": () => json(200, fileInfo),
+      "GET /api/history/Work/shots/shot.png": () => json(200, shotHistory),
+      ...extra,
+    });
+  }
+
+  async function openShotHistory() {
+    const router = renderApp(["/notes/Work/inbox.md", { pathname: "/view/Work/shots/shot.png", state: { paths: [SHOT] } }]);
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for shot.png" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const dialog = await screen.findByRole("dialog", { name: "History" });
+    return { router, dialog, versions: await within(dialog).findByRole("list", { name: "Versions" }) };
+  }
+
+  it("an image's history shows thumbnails and restores a version", async () => {
+    const fetch = shotApi({ "POST /api/restore/Work/shots/shot.png": () => json(200, { ...fileInfo, version: "s3", writtenAt: "2026-10-28T09:00:00Z", writtenBy: "ada" }) });
+    const { versions } = await openShotHistory();
+
+    const rows = within(versions).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Current version");
+    expect(rows[1]).toHaveTextContent("by liz");
+    expect(rows[1]).toHaveTextContent("293.0 KB");
+    // Each version as its picture: the current one as it is, the earlier one at its version.
+    await waitFor(() => expect(rows.map((r) => r.querySelector("img")?.getAttribute("src"))).toEqual([expect.stringMatching(/^blob:/), expect.stringMatching(/^blob:/)]));
+    expect(fetched).toContain("s1");
+
+    await userEvent.click(within(rows[1]).getByRole("button", { name: (n) => n.startsWith(timeText("2026-10-24T09:00:00Z")) }));
+    await userEvent.click(await screen.findByRole("button", { name: "Restore this version" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
+    expect(new URL(restore!.url).pathname).toBe("/api/restore/Work/shots/shot.png");
+    expect(await restore!.json()).toEqual({ version: "s1", expected: "s2" });
+    // The lightbox shows the file anew, as the restore left it.
+    await waitFor(() => expect(fetched.filter((v) => v === "").length).toBeGreaterThanOrEqual(3));
+  });
+
+  it("a tap on a version's picture opens it read only in the lightbox", async () => {
+    shotApi();
+    const { router, versions } = await openShotHistory();
+
+    await userEvent.click(within(versions).getByRole("button", { name: `Show the version of ${timeText("2026-10-24T09:00:00Z")}` }));
+
+    await waitFor(() => expect(router.state.location.search).toBe("?version=s1"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText(`Version of ${timeText("2026-10-24T09:00:00Z")} · read only`)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "shot.png" })).toBeInTheDocument();
+    expect(fetched.at(-1)).toBe("s1");
+    expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/files/Work/shots/shot.png?version=s1&download=1");
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename or move" })).not.toBeInTheDocument();
+
+    // Closing goes back to the file as it is now.
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.search).toBe(""));
+    expect(router.state.location.pathname).toBe("/view/Work/shots/shot.png");
+  });
+
+  it("a version's info is its own, not today's", async () => {
+    shotApi();
+    renderApp(["/notes/Work/inbox.md", { pathname: "/view/Work/shots/shot.png", state: { paths: [SHOT] } }]);
+    const infoPanel = () => document.querySelector<HTMLElement>("dl[aria-label='Info']")!;
+    // Today's info first: it is in the cache when the version is shown.
+    await userEvent.click(await screen.findByRole("button", { name: "Info" }));
+    await waitFor(() => expect(infoPanel()).toHaveTextContent("412.0 KB"));
+    expect(infoPanel()).toHaveTextContent("1440 × 3120");
+
+    await userEvent.click(screen.getByRole("button", { name: "Actions for shot.png" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    await userEvent.click(await screen.findByRole("button", { name: `Show the version of ${timeText("2026-10-24T09:00:00Z")}` }));
+
+    await screen.findByText(`Version of ${timeText("2026-10-24T09:00:00Z")} · read only`);
+    const info = infoPanel();
+    expect(info).toHaveTextContent("293.0 KB");
+    expect(info).toHaveTextContent(timeText("2026-10-24T09:00:00Z"));
+    expect(info).toHaveTextContent("liz");
+    expect(info).not.toHaveTextContent("412.0 KB");
+    expect(info).not.toHaveTextContent("1440 × 3120");
+    expect(info).not.toHaveTextContent("ada");
+  });
+
+  it("comparing two image versions shows both images", async () => {
+    shotApi();
+    const { versions } = await openShotHistory();
+
+    await userEvent.click(within(within(versions).getAllByRole("listitem")[1]).getByRole("button", { name: (n) => n.startsWith(timeText("2026-10-24T09:00:00Z")) }));
+
+    expect(await screen.findByRole("img", { name: "shot.png, This version" })).toHaveAttribute("src", expect.stringMatching(/^blob:/));
+    expect(screen.getByRole("img", { name: "shot.png, Now" })).toHaveAttribute("src", expect.stringMatching(/^blob:/));
+    expect(screen.getByRole("heading", { name: "This version" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Now" })).toBeInTheDocument();
+    expect(fetched).toContain("s1");
+    // No computed difference, and nothing to restore from the current version.
+    expect(screen.queryByRole("list", { name: "Changes since" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "All versions" }));
+    await userEvent.click(within(within(screen.getByRole("list", { name: "Versions" })).getAllByRole("listitem")[0]).getByRole("button", { name: /^Current version/ }));
+    expect(await screen.findByRole("img", { name: "shot.png, This version" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "shot.png, Now" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore this version" })).not.toBeInTheDocument();
+  });
+
+  it("trash lists an image with size and restores it", async () => {
+    const trash = {
+      retentionDays: 30,
+      notes: [
+        {
+          path: SHOT,
+          version: "s2",
+          deletedAt: new Date(Date.now() - 86_400_000).toISOString(),
+          deletedBy: "ada",
+          expiresAt: new Date(Date.now() + 29 * 86_400_000).toISOString(),
+          lines: 0,
+          size: 421_888,
+          kind: "image",
+          mediaType: "image/png",
+        },
+      ],
+    };
+    let restored = false;
+    const fetch = shotApi({
+      "GET /api/vaults/Work/trash": () => json(200, restored ? { ...trash, notes: [] } : trash),
+      "POST /api/restore/Work/shots/shot.png": () => {
+        restored = true;
+        return json(200, { ...fileInfo, writtenAt: "2026-10-25T09:00:00Z", writtenBy: "ada" });
+      },
+    });
+    renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Trash" }));
+    const dialog = await screen.findByRole("dialog", { name: "Trash" });
+
+    const list = await within(dialog).findByRole("list", { name: "Removed notes" });
+    const [row] = within(list).getAllByRole("listitem");
+    expect(row).toHaveAttribute("data-file-kind", "image");
+    expect(row.querySelector("svg")).not.toBeNull();
+    expect(row).toHaveTextContent("shot.png");
+    expect(row).toHaveTextContent("412.0 KB");
+    await userEvent.click(within(row).getByRole("button", { name: "Restore shot.png" }));
+
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("Restored shot.png to Work / shots.");
+    const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
+    expect(await restore!.json()).toEqual({ version: "s2" });
+
+    // Opened from there, it is in the lightbox, not a note.
+    await userEvent.click(within(within(dialog).getByRole("list", { name: "Restored notes" })).getByRole("button", { name: "Open" }));
+    expect(await screen.findByRole("heading", { name: "shot.png" })).toBeInTheDocument();
+    expect(screen.getByRole("main", { name: "shot.png" })).toBeInTheDocument();
   });
 });

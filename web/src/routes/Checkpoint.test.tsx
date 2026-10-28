@@ -2,7 +2,7 @@
 import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aiPrompt } from "../note/copyForAi";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -229,5 +229,80 @@ describe("a checkpoint in the web app", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't copy. Select the text and copy it by hand.");
     expect(screen.queryByText(/^Copied/)).toBeNull();
+  });
+
+  describe("with attachments", () => {
+    const { createObjectURL, revokeObjectURL } = URL;
+    const png = () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { headers: { "Content-Type": "image/png" } });
+    const image = (name: string) => ({ name, path: `/Work/shots/${name}`, size: 2048, kind: "image", mediaType: "image/png", version: "c1", writtenAt: "2026-10-18T08:00:00Z" });
+    const withShots = {
+      ...tree,
+      checkpoint: { ...checkpoint, attachments: 2 },
+      root: { ...tree.root, folders: [...tree.root.folders, { name: "shots", path: "/Work/shots", folders: [], notes: [image("a.png"), image("b.png")] }] },
+    };
+    /** The checkpoint's files asked for, in order. */
+    let asked: string[] = [];
+
+    beforeEach(() => {
+      asked = [];
+      URL.createObjectURL = vi.fn(() => "blob:file");
+      URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      cleanup();
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+    });
+
+    const shotsApi = (extra: Parameters<typeof fakeApi>[0] = {}) =>
+      api({
+        "GET /api/vaults/Work/checkpoints/before-cleanup/tree": () => json(200, withShots),
+        "GET /api/vaults/Work/checkpoints/before-cleanup/files/*": (r) => {
+          asked.push(new URL(r.url).pathname.slice("/api/vaults/Work/checkpoints/before-cleanup/files/".length));
+          return png();
+        },
+        ...extra,
+      });
+
+    it("a checkpoint shows its attachments", async () => {
+      shotsApi();
+      const router = renderApp("/checkpoints/Work/before-cleanup");
+      const link = await screen.findByRole("link", { name: "a.png" });
+      expect(link).toHaveAttribute("data-file-kind", "image");
+      expect(link).toHaveAttribute("href", "/view/Work/shots/a.png?checkpoint=before-cleanup");
+      await userEvent.click(link);
+
+      // The lightbox on the checkpoint's bytes, read only, paging through the folder as the checkpoint held it.
+      expect(await screen.findByRole("img", { name: "a.png" })).toHaveAttribute("src", "blob:file");
+      expect(asked).toEqual(["shots/a.png"]);
+      expect(screen.getByText("Checkpoint before-cleanup · read only")).toBeInTheDocument();
+      expect(screen.getByText("1 / 2")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/vaults/Work/checkpoints/before-cleanup/files/shots/a.png?download=1");
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Rename or move" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Copy link" })).toBeNull();
+
+      await userEvent.click(screen.getByRole("button", { name: "Next" }));
+      expect(await screen.findByRole("heading", { name: "b.png" })).toBeInTheDocument();
+      expect(router.state.location.search).toBe("?checkpoint=before-cleanup");
+      await waitFor(() => expect(asked).toEqual(["shots/a.png", "shots/b.png"]));
+
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(await screen.findByRole("link", { name: "a.png" })).toBeInTheDocument();
+    });
+
+    it("opens a note's attachment chip on the checkpoint's bytes", async () => {
+      shotsApi({
+        "GET /api/vaults/Work/checkpoints/before-cleanup/notes/plan.md": () =>
+          json(200, { path: "/Work/plan.md", content: "# Plan\n\n![[a.png]]\n", links: [{ line: 3, raw: "![[a.png]]", kind: "attachment", path: "/Work/shots/a.png" }] }),
+      });
+      renderApp("/checkpoints/Work/before-cleanup/plan.md");
+
+      await userEvent.click(await screen.findByRole("link", { name: "Open the image a.png" }));
+
+      expect(await screen.findByRole("img", { name: "a.png" })).toBeInTheDocument();
+      expect(asked).toEqual(["shots/a.png"]);
+      expect(screen.getByText("Checkpoint before-cleanup · read only")).toBeInTheDocument();
+    });
   });
 });

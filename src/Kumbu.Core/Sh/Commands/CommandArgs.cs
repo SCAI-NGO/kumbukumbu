@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -48,6 +49,10 @@ internal static class CommandArgs
         }
 
         if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(command, path));
+        if (await StoreAttachments.GetAsync(notes, path, ct) is not null)
+        {
+            return ShellResult.Error($"{command}: {path.Value} is an attachment, not a note ('cat {SectionLookup.Quote(path)}' says what it is)");
+        }
 
         var below = await notes.ListNotesUnderAsync(path, ct);
         return below.Count > 0 || path.IsRoot || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))

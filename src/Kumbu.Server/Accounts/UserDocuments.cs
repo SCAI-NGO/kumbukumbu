@@ -98,6 +98,11 @@ public sealed class UserDocument
     [BsonElement("vaultsRekeyed")]
     public long VaultsRekeyed { get; set; }
 
+    /// <summary>"Ask for my password when downloading several files": stored only when turned off, so a user
+    /// without the field (every user before it existed) is asked.</summary>
+    [BsonElement("askPasswordForDownloads"), BsonDefaultValue(true), BsonIgnoreIfDefault]
+    public bool AskPasswordForDownloads { get; set; } = true;
+
     public User ToUser() => new(Id, Username, Display, Role, Active, CreatedAt, LastSignInAt, PreviousSignInAt);
 }
 

@@ -9,6 +9,7 @@ import ConfirmTyped from "../components/ConfirmTyped";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
+import { usePreferences } from "../attachments/downloadFiles";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
@@ -32,6 +33,7 @@ export default function Settings() {
       <SessionsSection />
       <VaultsSection />
       <YourDataSection />
+      <DownloadsSection />
       <DeleteAccountSection />
       <InstallSection />
       <AboutSection />
@@ -358,6 +360,68 @@ function VaultsSection() {
   );
 }
 
+/**
+ * Whether several files downloaded at once (the gallery's ZIP) need the password, as an export does. On by default;
+ * turning it off takes the password (a stolen session alone can't), turning it back on none. One file never needs it.
+ */
+function DownloadsSection() {
+  const id = useId();
+  const queryClient = useQueryClient();
+  const preferences = usePreferences();
+  const [asking, setAsking] = useState(false);
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  const set = useMutation({
+    mutationFn: (ask: boolean) =>
+      call(api.PUT("/api/account/preferences", { body: ask ? { askPasswordForDownloads: true } : { askPasswordForDownloads: false, password } })),
+    onSuccess: (view) => {
+      queryClient.setQueryData(["preferences"], view);
+      setPassword("");
+      setAsking(false);
+    },
+  });
+  const on = preferences.data?.askPasswordForDownloads ?? true;
+  const close = () => {
+    set.reset();
+    setPassword("");
+    setAsking(false);
+  };
+
+  return (
+    <Section title="Downloads">
+      <label className="flex min-h-11 cursor-pointer items-start gap-3 text-text">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={!preferences.data || set.isPending}
+          aria-describedby={`${id}-what`}
+          onChange={(e) => (e.target.checked ? set.mutate(true) : setAsking(true))}
+          className="mt-0.5 size-5 shrink-0 accent-accent"
+        />
+        Ask for my password when downloading several files
+      </label>
+      <p id={`${id}-what`} className="text-sm text-text-body">
+        Several images or PDFs from the gallery come as one ZIP, outside Kumbu²'s encryption. A single file never asks.
+      </p>
+      {preferences.isError && <FormError>{errorText(preferences.error)}</FormError>}
+      {set.isError && !asking && <FormError>{errorText(set.error)}</FormError>}
+      {asking && (
+        <ConfirmTyped
+          title="Download several files without the password?"
+          text="Anyone with this session could then take many files at once. Your password confirms it."
+          action="Turn off"
+          pending={set.isPending}
+          error={set.isError ? errorText(set.error) : null}
+          password={password}
+          onPasswordChange={setPassword}
+          onConfirm={() => set.mutate(false)}
+          onClose={close}
+        />
+      )}
+    </Section>
+  );
+}
+
 /** Taking one's notes out (and, later, bringing them in): rarely used, so it lives here and not in the menus. */
 export function YourDataSection() {
   const [exporting, setExporting] = useState(false);
@@ -365,7 +429,7 @@ export function YourDataSection() {
   return (
     <Section title="Your data">
       <p className="text-text-body">
-        The export is a ZIP with a folder of Markdown notes for each vault; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
+        The export is a ZIP with a folder for each vault, with its Markdown notes, PDFs and images; each folder opens in Obsidian as a vault (no history, trash or checkpoints).
         Importing such a ZIP makes a vault of each folder, or merges into the vault of that name.
       </p>
       <div className="flex flex-wrap gap-3">

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Tests.Fakes;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Kumbu.Core.Tests.Notes;
 
@@ -236,4 +239,39 @@ public class ActivityTests
         Assert.Equal(("/W/b.md", V("first"), true), (file.Path, file.Version, file.Trashed));
     }
 
+    [Fact]
+    public async Task Activity_lists_an_upload_a_move_and_a_removal_of_an_image()
+    {
+        var store = new InMemoryNoteStore(("/W/plan.md", "plan\n"));
+        var time = new FakeTimeProvider(T0);
+        var caller = new FixedCaller(Writers.Dev);
+        var files = new AttachmentWriter(store, store, time, caller);
+        var ct = CancellationToken.None;
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1];
+        var version = (await files.WriteAsync("/W/shot.png", png, (4, 3), null, ct)).Result.Version!.Token;
+        await files.WriteAsync("/W/report.pdf", "%PDF-1.7"u8.ToArray(), null, null, ct);
+        await new NoteWriter(store, time, caller).WriteAsync("/W/plan.md", "plan ![[shot.png]]\n", V("plan\n"), ct);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await new NoteMover(store, time, caller).MoveAsync(P("/W/shot.png"), P("/W/pics/shot.png"), rewriteLinks: false, ct)).IsError);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await files.RemoveAsync("/W/pics/shot.png", ct)).IsError);
+
+        var notes = new List<StoredNote>();
+        foreach (var path in await store.ListNotesUnderAsync(P("/W"), ct)) notes.Add((await store.GetAsync(path, ct))!);
+        var rows = Activity.Rows(
+            notes, await store.ListTrashAsync(P("/W"), ct), await store.ListMovesAsync(P("/W"), ct), null, 50,
+            attachments: await store.ListAttachmentsUnderAsync(P("/W"), ct), attachmentTrash: await store.ListAttachmentTrashAsync(P("/W"), ct));
+
+        // The removal, the move, the upload; then the seed of plan.md.
+        Assert.Equal(4, rows.Count);
+        var removal = Assert.Single(rows[0].Files);
+        Assert.Equal(("/W/pics/shot.png", ActivityFileKind.Deleted, version, true, "image"), (removal.Path, removal.Kind, removal.Before, removal.Trashed, removal.FileKind));
+        var move = Assert.Single(rows[1].Files);
+        Assert.Equal(("/W/pics/shot.png", ActivityFileKind.Renamed, "/W/shot.png", version, "image"), (move.Path, move.Kind, move.From, move.Version, move.FileKind));
+        // The upload shares the writer's changeset with the note written beside it.
+        Assert.Equal(
+            [("/W/pics/shot.png", ActivityFileKind.Added, "image"), ("/W/plan.md", ActivityFileKind.Changed, "note"), ("/W/report.pdf", ActivityFileKind.Added, "pdf")],
+            rows[2].Files.Select(f => (f.Path, f.Kind, f.FileKind)));
+        Assert.Equal((version, (string?)null), (rows[2].Files[0].Version, rows[2].Files[0].Before));
+    }
 }

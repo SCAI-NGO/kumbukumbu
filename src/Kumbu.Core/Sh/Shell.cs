@@ -34,12 +34,13 @@ public sealed class Shell
     {
         _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
+        var files = writer.ForAttachments();
         ICommand[] commands =
         [
             .. ReadingCommands(notes, _now),
             new Semsearch(notes, search ?? new Search.NoSearchIndex()),
-            new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints),
-            new Mv(mover), new Rm(writer), new Trash(notes),
+            new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
+            new Mv(mover), new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
             new Help(_commands),
         ];

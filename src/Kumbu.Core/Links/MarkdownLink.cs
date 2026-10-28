@@ -8,18 +8,20 @@ using Kumbu.Core.Sh;
 namespace Kumbu.Core.Links;
 
 /// <summary>
-/// An inline Markdown link to a note as written: <c>[text](destination "title")</c>. Keeps the exact source
-/// text of each part, so a rewrite can change the path and leave everything else byte for byte.
+/// An inline Markdown link to a note or attachment as written: <c>[text](destination "title")</c>, or an embed
+/// <c>![alt](destination)</c>. Keeps the exact source text of each part, so a rewrite can change the path and leave
+/// everything else byte for byte.
 /// </summary>
 /// <param name="Line">0-based line of the note.</param>
-/// <param name="Start">Character index of the link's '[' in that line.</param>
+/// <param name="Start">Character index of the link's '[' (its '!' for an embed) in that line.</param>
 /// <param name="Target">The decoded path ("Meeting Notes.md" for <c>Meeting%20Notes.md</c>); empty for <c>(#Heading)</c>.</param>
 /// <param name="Subpath">"#Heading", "#^block" or "", as written (still percent-encoded).</param>
 /// <param name="Text">The link text with its brackets, e.g. "[see *this*]".</param>
 /// <param name="Destination">The destination as written, angle brackets and subpath included.</param>
 /// <param name="Rest">Everything after the destination up to and including ')': whitespace and title.</param>
+/// <param name="Embed">An image or embed, <c>![alt](destination)</c>.</param>
 public sealed partial record MarkdownLink(
-    int Line, int Start, string Raw, string Target, string Subpath, string Text, string Destination, string Rest)
+    int Line, int Start, string Raw, string Target, string Subpath, string Text, string Destination, string Rest, bool Embed = false)
     : NoteLink(Line, Start, Raw, Target, Subpath)
 {
     /// <summary>The same link pointing to <paramref name="note"/> by its absolute, encoded path; text,
@@ -61,9 +63,9 @@ public sealed partial record MarkdownLink(
     private static bool NeedsEncoding(Rune rune) =>
         Rune.IsControl(rune) || (rune.IsAscii && " %#?()<>[]^|\\`\"{}".Contains((char)rune.Value));
 
-    /// <summary>All inline Markdown links to notes, in order. External links (with a scheme or "//"), images
-    /// and reference-style links don't count, nor anything in fenced code blocks, inline code or a wikilink;
-    /// frontmatter does, as for wikilinks.</summary>
+    /// <summary>All inline Markdown links and embeds to notes and attachments, in order. External links and images
+    /// (with a scheme or "//", never fetched nor read as a vault path) and reference-style links don't count, nor
+    /// anything in fenced code blocks, inline code or a wikilink; frontmatter does, as for wikilinks.</summary>
     public static new IReadOnlyList<MarkdownLink> Parse(string content)
     {
         var lines = Lines.Split(content);
@@ -84,19 +86,19 @@ public sealed partial record MarkdownLink(
         for (var start = 0; start < line.Length; start++)
         {
             if (line[start] != '[' || code.Concat(wikilinks).Any(s => start >= s.Start && start < s.End)) continue;
-            if (start > 0 && line[start - 1] == '!' && !Escaped(line, start - 1)) continue;
             if (Escaped(line, start)) continue;
-            if (TryParse(index, line, start) is not { } link) continue;
+            var embed = start > 0 && line[start - 1] == '!' && !Escaped(line, start - 1) && !code.Any(s => start - 1 >= s.Start && start - 1 < s.End);
+            if (TryParse(index, line, start, embed) is not { } link) continue;
             // With a wikilink anywhere in it, "[see [[x]]](y.md)" or "[a](x[[y]].md)", Obsidian reads the
             // wikilink, not a Markdown link.
-            var end = start + link.Raw.Length;
+            var end = link.Start + link.Raw.Length;
             if (wikilinks.Any(w => w.Start < end && start < w.End)) continue;
             result.Add(link);
-            start += link.Raw.Length - 1;
+            start = link.Start + link.Raw.Length - 1;
         }
     }
 
-    private static MarkdownLink? TryParse(int index, string line, int start)
+    private static MarkdownLink? TryParse(int index, string line, int start, bool embed)
     {
         // Link text: brackets balance, backslash escapes don't count.
         var i = start + 1;
@@ -160,9 +162,9 @@ public sealed partial record MarkdownLink(
         var path = hash >= 0 ? inner[..hash] : inner;
         var subpath = hash >= 0 ? inner[hash..] : "";
         if (path.Length == 0 && subpath.Length <= 1) return null;
-        var raw = line[start..(i + 1)];
-        return new MarkdownLink(index, start, raw, Decode(path), subpath, text,
-            line[destinationStart..destinationEnd], line[destinationEnd..(i + 1)]);
+        var from = embed ? start - 1 : start;
+        return new MarkdownLink(index, from, line[from..(i + 1)], Decode(path), subpath, text,
+            line[destinationStart..destinationEnd], line[destinationEnd..(i + 1)], embed);
     }
 
     private static int SkipSpaces(string line, int i)

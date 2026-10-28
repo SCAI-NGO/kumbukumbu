@@ -93,7 +93,8 @@ public sealed class SlotDocument
 }
 
 /// <summary>
-/// A note (collection <c>notes</c>), a trashed note (<c>trash</c>) or a move record (<c>moves</c>).
+/// A note (collection <c>notes</c>), a trashed note (<c>trash</c>), a move record (<c>moves</c>), an attachment's record
+/// (<c>attachments</c>) or a trashed one (<c>attachment_trash</c>), among others.
 /// Only what MongoDB itself needs is in the clear: the vault id, a keyed hash of the path (for the unique
 /// index and lookups), the revision (for compare-and-swap) and the times the TTL indexes expire on.
 /// </summary>
@@ -120,4 +121,29 @@ public sealed class SealedDocument
 
     [BsonElement("at"), BsonIgnoreIfNull]
     public DateTime? At { get; set; }
+}
+
+/// <summary>
+/// The bytes of an attachment version (collection <c>blobs</c>), sealed, once per vault and content. In the clear: the
+/// vault id, a keyed hash of the bytes (<see cref="UnlockedVault.BlobId"/>, never a plain hash: that would let anyone
+/// with the database confirm that a vault holds a known file) and when the bytes were last put, so that a sweep leaves
+/// an upload whose record isn't committed yet alone (<see cref="BlobSweep"/>).
+/// </summary>
+[BsonIgnoreExtraElements]
+public sealed class BlobDocument
+{
+    [BsonId]
+    public ObjectId Id { get; set; }
+
+    [BsonElement("vault")]
+    public string Vault { get; set; } = "";
+
+    [BsonElement("bid")]
+    public byte[] BlobId { get; set; } = [];
+
+    [BsonElement("blob")]
+    public byte[] Blob { get; set; } = [];
+
+    [BsonElement("at")]
+    public DateTime At { get; set; }
 }

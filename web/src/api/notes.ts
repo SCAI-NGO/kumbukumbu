@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { api, call } from "./client";
-import { folderOf, inVault, untitledName, vaultOf } from "./paths";
+import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
 import type { components } from "./schema";
 
 export type TreeFolder = components["schemas"]["TreeFolder"];
@@ -194,7 +195,8 @@ export function useDeleteNote() {
         queryKey: ["tree", vault],
         queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault } } })),
       });
-      const siblings = findFolder(tree.root, folderOf(path))?.notes.map((n) => n.path) ?? [];
+      // The tree's `notes` hold the folder's attachments too; the way on is to a note.
+      const siblings = findFolder(tree.root, folderOf(path))?.notes.filter((n) => n.path === path || !isAttachment(n.path)).map((n) => n.path) ?? [];
       const at = siblings.indexOf(path);
       const next = siblings[at + 1] ?? (at > 0 ? siblings[at - 1] : undefined) ?? null;
       await call(api.DELETE("/api/notes/{vault}/{path}", { params: params(path) }));
@@ -208,6 +210,85 @@ export function useDeleteNote() {
       void queryClient.invalidateQueries({ queryKey: ["links"] });
       void queryClient.invalidateQueries({ queryKey: ["backlinks"] });
       void queryClient.invalidateQueries({ queryKey: ["changes"] });
+    },
+  });
+}
+
+/**
+ * An attachment's bytes (`path` within `vault`) at `at`: today's, an earlier version's or a checkpoint's; with the
+ * session (the server serves files to signed-in users and API keys only, so never by a plain URL).
+ */
+export function fetchFile<As extends "blob" | "arrayBuffer">(vault: string, path: string, at: FileAt, parseAs: As, signal: AbortSignal) {
+  return at.checkpoint
+    ? api.GET("/api/vaults/{vault}/checkpoints/{name}/files/{path}", { params: { path: { vault, name: at.checkpoint, path } }, parseAs, signal })
+    : api.GET("/api/files/{vault}/{path}", { params: { path: { vault, path }, query: at.version ? { version: at.version } : {} }, parseAs, signal });
+}
+
+/**
+ * An attachment's bytes (`path` within `vault`, at `version` if given, or as `checkpoint` held it) as an object URL
+ * for an `img` or pdf.js. Undefined while they load, null if they can't be read; the URL is revoked when the
+ * component unmounts or asks for another file. With `turn`, the fetch waits for one and ends it once the bytes are in
+ * (the thumbnails' limit on fetches at once).
+ */
+export function useAttachmentUrl(
+  vault: string,
+  path: string,
+  version?: string,
+  checkpoint?: string,
+  turn?: (signal: AbortSignal) => Promise<() => void>,
+): string | null | undefined {
+  const key = `${vault}\n${path}\n${version ?? ""}\n${checkpoint ?? ""}`;
+  // Kept with the file it was made for, and dropped when its fetch ends: after a change of file (also back to one
+  // shown before) the old URL, revoked by then, is never answered.
+  const [made, setMade] = useState<{ key: string; url: string | null }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    let url: string | undefined;
+    let endTurn: (() => void) | undefined;
+    (turn ? turn(controller.signal) : Promise.resolve(() => {}))
+      .then((end) => {
+        endTurn = end;
+        return fetchFile(vault, path, { version, checkpoint }, "blob", controller.signal);
+      })
+      .then(({ data, response }) => {
+        if (controller.signal.aborted) return;
+        if (!response.ok || !data) return setMade({ key, url: null });
+        url = URL.createObjectURL(data as Blob);
+        setMade({ key, url });
+      })
+      // The network failed: no URL. Aborted: another file, or none, is wanted now.
+      .catch(() => !controller.signal.aborted && setMade({ key, url: null }))
+      .finally(() => endTurn?.());
+    return () => {
+      controller.abort();
+      endTurn?.();
+      if (url) URL.revokeObjectURL(url);
+      setMade(undefined);
+    };
+  }, [key, vault, path, version, checkpoint, turn]);
+  return made?.key === key ? made.url : undefined;
+}
+
+/** An attachment as it is, without its bytes (`GET /api/version`): size, dimensions, version and last write. */
+export const fileInfoQuery = (path: string) => ({
+  queryKey: ["version", path],
+  queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })),
+});
+
+export const useFileInfo = (path: string, enabled = true) => useQuery({ ...fileInfoQuery(path), enabled });
+
+/**
+ * Moves an attachment to the vault's trash, only if it is still at `version` (else a 409: it changed meanwhile).
+ * The notes that link to it are told apart by the dialog before; their links lead nowhere afterwards.
+ */
+export function useDeleteFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, version }: { path: string; version: string }) =>
+      call(api.DELETE("/api/files/{vault}/{path}", { params: { ...params(path), query: { version } } })),
+    onSuccess: (_, { path }) => {
+      queryClient.removeQueries({ queryKey: ["version", path] });
+      for (const key of ["tree", "vaults", "trash", "links", "backlinks", "activity", "history"]) void queryClient.invalidateQueries({ queryKey: [key] });
     },
   });
 }

@@ -66,6 +66,8 @@ describe("Export as ZIP in the vault menu", () => {
   it("downloads the active vault after the password", async () => {
     api();
     const confirm = await openConfirm();
+    // The ZIP carries the vault's PDFs and images too, so the question names them.
+    expect(confirm).toHaveTextContent("The ZIP holds the notes, PDFs and images as they are, outside Kumbu²'s encryption");
     expect(within(confirm).getByRole("button", { name: "Export" })).toBeDisabled();
 
     await userEvent.type(within(confirm).getByLabelText("Your password"), "secret");
@@ -93,7 +95,7 @@ describe("Export my vaults… in Settings", () => {
     api();
     renderApp("/settings");
     const section = await screen.findByRole("region", { name: "Your data" });
-    expect(section).toHaveTextContent(/a folder of Markdown notes for each vault/);
+    expect(section).toHaveTextContent(/a folder for each vault, with its Markdown notes, PDFs and images/);
     await userEvent.click(within(section).getByRole("button", { name: "Export my vaults…" }));
     return screen.findByRole("dialog", { name: "Export my vaults" });
   }

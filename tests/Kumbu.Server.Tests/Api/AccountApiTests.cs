@@ -425,9 +425,10 @@ public sealed class AccountApiTests(KumbuAppFactory app)
                      (HttpMethod.Get, "/api/admin/users"), (HttpMethod.Get, "/api/keys"), (HttpMethod.Post, "/api/keys"),
                      (HttpMethod.Post, "/api/recovery-key"), (HttpMethod.Get, "/api/session"), (HttpMethod.Post, "/api/account/delete"),
                      (HttpMethod.Post, "/api/vaults/Notizen/delete"), (HttpMethod.Post, "/api/admin/users/someone/delete"),
+                     (HttpMethod.Get, "/api/account/preferences"), (HttpMethod.Put, "/api/account/preferences"),
                  })
         {
-            using var response = await SendAsync(method, path, method == HttpMethod.Post ? new { } : null, origin: null, bearer: key);
+            using var response = await SendAsync(method, path, method != HttpMethod.Get ? new { } : null, origin: null, bearer: key);
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
             Assert.Contains("signed-in session", (await JsonAsync(response))["error"]!.GetValue<string>(), StringComparison.Ordinal);
         }
@@ -566,6 +567,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(adminName, json["deletedBy"]!.GetValue<string>());
         Assert.Equal(1, json["vaults"]!.GetValue<int>());
         Assert.Equal(1, json["notes"]!.GetValue<long>());
+        Assert.Equal(0, json["attachments"]!.GetValue<long>());
         Assert.Equal(0, json["apiKeys"]!.GetValue<int>());
         Assert.Equal(0, json["connections"]!.GetValue<int>());
         Assert.Equal(0, json["invitations"]!.GetValue<int>());
@@ -1069,7 +1071,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Equal("same-origin", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.Equal(
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+            "default-src 'self'; img-src 'self' data: blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
             response.Headers.GetValues("Content-Security-Policy").Single());
         Assert.Equal(Hsts, response.Headers.GetValues("Strict-Transport-Security").Single());
     }
@@ -1202,5 +1204,43 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull(paths["/api/recovery-key"]!["post"]!["responses"]!["429"]);
         Assert.Contains("currentPassword", (await JsonAsync(response))["components"]!["schemas"]!["RegenerateRecoveryKeyRequest"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
         Assert.DoesNotContain("reason", (await JsonAsync(response))["components"]!["schemas"]!["InvitationPeekView"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Preferences_default_to_asking()
+    {
+        var user = await RestClient.NewAsync(Api);
+
+        using var read = await user.GetAsync("/api/account/preferences");
+
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.True((await JsonAsync(read))["askPasswordForDownloads"]!.GetValue<bool>());
+        // Absent in the database, not stored as true: every user before the setting existed reads the same.
+        var stored = await Api.Services.GetRequiredService<UserCatalog>().Users.Find(u => u.Id == user.User.Id).Project(Builders<UserDocument>.Projection.As<MongoDB.Bson.BsonDocument>()).SingleAsync(Ct);
+        Assert.False(stored.Contains("askPasswordForDownloads"));
+    }
+
+    [Fact]
+    public async Task Turning_the_password_for_downloads_off_needs_the_password_and_on_does_not()
+    {
+        var user = await RestClient.NewAsync(Api);
+
+        using var without = await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false });
+        using var wrong = await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password = "not the password at all" });
+        using var stillOn = await user.GetAsync("/api/account/preferences");
+        using var off = await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password = RestClient.Password });
+        using var readOff = await user.GetAsync("/api/account/preferences");
+        using var on = await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = true });
+        using var readOn = await user.GetAsync("/api/account/preferences");
+
+        Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        Assert.Equal("The password is wrong.", (await JsonAsync(wrong))["error"]!.GetValue<string>());
+        Assert.True((await JsonAsync(stillOn))["askPasswordForDownloads"]!.GetValue<bool>());
+        Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+        Assert.False((await JsonAsync(off))["askPasswordForDownloads"]!.GetValue<bool>());
+        Assert.False((await JsonAsync(readOff))["askPasswordForDownloads"]!.GetValue<bool>());
+        Assert.Equal(HttpStatusCode.OK, on.StatusCode);
+        Assert.True((await JsonAsync(readOn))["askPasswordForDownloads"]!.GetValue<bool>());
     }
 }

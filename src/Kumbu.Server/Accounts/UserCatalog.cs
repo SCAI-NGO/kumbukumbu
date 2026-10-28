@@ -214,6 +214,17 @@ public sealed class UserCatalog(
             && CryptographicOperations.FixedTimeEquals(opened, userKey);
     }
 
+    /// <summary>The user's "Ask for my password when downloading several files"; true for a user it never touched.</summary>
+    internal async Task<bool> AsksPasswordForDownloadsAsync(string userId, CancellationToken ct) =>
+        (await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct))?.AskPasswordForDownloads ?? true;
+
+    /// <summary>Sets the preference; on is stored as the field's absence, as every user had it before it existed.</summary>
+    internal Task SetAsksPasswordForDownloadsAsync(string userId, bool ask, CancellationToken ct) =>
+        Users.UpdateOneAsync(
+            u => u.Id == userId,
+            ask ? Builders<UserDocument>.Update.Unset(u => u.AskPasswordForDownloads) : Builders<UserDocument>.Update.Set(u => u.AskPasswordForDownloads, false),
+            cancellationToken: ct);
+
     /// <summary>
     /// A new recovery key for <paramref name="userKey"/>, which the caller has checked is the user's with the password
     /// slot <paramref name="passwordUsed"/>. The slot is replaced in one write, so there is always exactly one recovery

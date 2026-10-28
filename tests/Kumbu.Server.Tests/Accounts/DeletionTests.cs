@@ -19,7 +19,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     private const string Password = "correct horse battery staple";
 
     /// <summary>Every collection that holds a vault's documents under their "vault" field.</summary>
-    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts"];
+    private static readonly string[] ContentCollections = ["notes", "trash", "moves", "embeddings", "checkpoints", "checkpoint_texts", "attachments", "attachment_trash", "blobs"];
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -472,6 +472,31 @@ public sealed class DeletionTests(MongoFixture fixture)
         Assert.Equal(1, result.Summary.Notes);
         Assert.Equal(1, result.Summary.ApiKeys);
         Assert.Equal(0, await CountAsync("users", "_id", lea.Id));
+        await AssertGoneAsync(diary.Id);
+    }
+
+    [Fact]
+    public async Task Deleting_a_vault_removes_attachments_and_blobs_and_the_receipt_counts_them()
+    {
+        var (anna, annaKey, _) = await SignedInAsync("anna", Roles.Admin);
+        var (lea, key, _) = await SignedInAsync("lea");
+        var diary = await Catalog().CreateForUserAsync("Tagebuch", lea.Id, key, Ct);
+        var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
+        var batch = new NoteBatch();
+        foreach (var (path, bytes) in new[] { ("/Tagebuch/a.png", new byte[] { 1, 2, 3 }), ("/Tagebuch/b.png", [1, 2, 3]), ("/Tagebuch/c.pdf", [4, 5]) })
+        {
+            var state = new Kumbu.Core.Attachments.AttachmentState("image/png", bytes.Length, 1, 1, VersionToken.Of(bytes), await store.PutBlobAsync("Tagebuch", bytes, Ct));
+            batch.AttachmentCreates.Add(new Kumbu.Core.Attachments.StoredAttachment(P(path), state, 1, lea.Username, Now, [], null));
+        }
+
+        Assert.Empty(await store.TryCommitAsync(batch, lea.Username, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { batch.AttachmentCreates[2] } }, lea.Username, Now, Ct));
+        Assert.Equal(2, await CountAsync("blobs", "vault", diary.Id));
+
+        var result = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.Summary.Attachments);
         await AssertGoneAsync(diary.Id);
     }
 

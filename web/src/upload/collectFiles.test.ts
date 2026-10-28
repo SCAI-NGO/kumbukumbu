@@ -56,4 +56,9 @@ describe("collectFromInput", () => {
     const single = new File(["x"], "a.md");
     expect(collectFromInput([inFolder, single]).map((p) => p.path)).toEqual(["Vault/notes/b.md", "a.md"]);
   });
+
+  it("names picked in NFD (macOS, iOS) come in NFC, as the server stores paths", () => {
+    const nfd = new File(["x"], "Bespre\u0301chung.png");
+    expect(collectFromInput([nfd])[0].path).toBe("Bespr\u00e9chung.png");
+  });
 });

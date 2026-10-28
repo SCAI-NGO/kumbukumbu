@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Links;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -26,6 +27,8 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         const string tool = "replace";
         if (SectionAddress.Split(pathText).Fragment is not null) return ShellResult.Error("replace: works on whole notes; to change one section, use edit");
         if (!VaultPath.TryParse(pathText, out var path)) return ShellResult.Error($"replace: {pathText}: paths must be absolute, e.g. /Work/projects");
+        // A folder may be named like a file (/Work/d.png/), so only an attachment that exists is refused.
+        if (await StoreAttachments.GetAsync(store, path, ct) is not null && NoteWriter.NotText(tool, path) is { } attachment) return attachment;
         if (caller.Refuse(tool, path) is { } refused) return refused;
         if (path.IsRoot) return ShellResult.Error("replace: works within one vault; give a vault, a folder or a note, e.g. /Work");
         oldText = oldText.Replace("\r\n", "\n", StringComparison.Ordinal);

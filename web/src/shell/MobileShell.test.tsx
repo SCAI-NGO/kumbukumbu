@@ -146,10 +146,10 @@ describe("the shell", () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     await openDrawer();
-    await waitFor(() => expect(rows()).toEqual(["projects3 notes", "zeta1 note", "inbox", "readme"]));
+    await waitFor(() => expect(rows()).toEqual(["projects3 items", "zeta1 item", "inbox", "readme"]));
 
     await userEvent.click(within(drawer()).getByRole("button", { name: /^projects/ }));
-    expect(rows()).toEqual(["projects3 notes", "deep1 note", "roadmap", "Untitled", "zeta1 note", "inbox", "readme"]);
+    expect(rows()).toEqual(["projects3 items", "deep1 item", "roadmap", "Untitled", "zeta1 item", "inbox", "readme"]);
   });
 
   it("expands the folder chain of the open note and marks it", async () => {
@@ -385,7 +385,7 @@ describe("the shell", () => {
     renderApp("/");
     await userEvent.click(await screen.findByRole("button", { name: /^Work/ }));
     expect(useEditor.getState().activeVault).toBe("Work");
-    await waitFor(() => expect(rows()).toEqual(["projects3 notes", "zeta1 note", "inbox", "readme"]));
+    await waitFor(() => expect(rows()).toEqual(["projects3 items", "zeta1 item", "inbox", "readme"]));
   });
 
   it("shows a vault being re-encrypted as such, and its tree as busy for a moment", async () => {

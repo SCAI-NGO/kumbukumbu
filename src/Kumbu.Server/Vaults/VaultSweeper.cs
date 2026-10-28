@@ -9,7 +9,7 @@ public sealed class VaultSweeper(VaultCatalog catalog) : BackgroundService
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            catalog.Sweep();
+            catalog.SweepUntil(stoppingToken);
         }
     }
 }

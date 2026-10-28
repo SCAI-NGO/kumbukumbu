@@ -105,6 +105,26 @@ public sealed class RestClient
 
     public Task<HttpResponseMessage> GetAsync(string path, string? bearer = null) => SendAsync(HttpMethod.Get, path, bearer: bearer);
 
+    /// <summary>A request with <paramref name="content"/> as its body as it is (an attachment's bytes), as the session or <paramref name="bearer"/>.</summary>
+    public Task<HttpResponseMessage> SendContentAsync(HttpMethod method, string path, HttpContent content, string? bearer = null) =>
+        SendAsync(_api, method, path, null, bearer is null ? Session : null, bearer, content: content);
+
+    /// <summary>Uploads an attachment's bytes through <c>PUT /api/files</c>; <paramref name="version"/> to overwrite.</summary>
+    public Task<HttpResponseMessage> PutFileAsync(string filePath, byte[] bytes, string? version = null, string? bearer = null) =>
+        SendContentAsync(
+            HttpMethod.Put,
+            Url(filePath, "files") + (version is null ? "" : $"?version={Uri.EscapeDataString(version)}"),
+            new ByteArrayContent(bytes) { Headers = { ContentType = new MediaTypeHeaderValue("application/octet-stream") } },
+            bearer);
+
+    /// <summary>Creates an attachment and returns its version.</summary>
+    public async Task<string> CreateFileAsync(string filePath, byte[] bytes)
+    {
+        using var response = await PutFileAsync(filePath, bytes);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return (await JsonAsync(response))["version"]!.GetValue<string>();
+    }
+
     /// <summary>The URL of a note: <c>/api/{kind}/{vault}/{path}</c>, each segment escaped.</summary>
     public string Url(string notePath, string kind = "notes") =>
         $"/api/{kind}/{Uri.EscapeDataString(Vault)}/{string.Join('/', notePath.Split('/').Select(Uri.EscapeDataString))}";
@@ -131,11 +151,13 @@ public sealed class RestClient
         (await JsonAsync(response))["error"]!.GetValue<string>();
 
     private static async Task<HttpResponseMessage> SendAsync(
-        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer, IReadOnlyDictionary<string, string>? headers = null)
+        WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer,
+        IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null)
     {
         using var request = new HttpRequestMessage(method, path);
         foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.TryAddWithoutValidation(name, value);
         if (body is not null) request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+        if (content is not null) request.Content = content;
         if (session is not null) request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
         if (bearer is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         else request.Headers.Add("Origin", Origin);

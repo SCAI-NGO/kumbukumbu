@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Notes;
@@ -45,14 +46,17 @@ public sealed record Changeset(string Id, DateTime Started)
 
     /// <summary>
     /// For <see cref="INoteStore.LatestChangesetAsync"/>: the newest changeset of <paramref name="writer"/> among a
-    /// vault's current note states, moves and trash records, with its time. Moves and removals count, so removing two
-    /// notes in a row is one changeset even without another write.
+    /// vault's current note and attachment states, moves and trash records, with its time. Moves and removals count, so
+    /// removing two notes in a row is one changeset even without another write; notes and attachments share it.
     /// </summary>
     public static (Changeset Changeset, DateTime LastWrite)? Latest(
-        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer) =>
+        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer,
+        IEnumerable<StoredAttachment>? attachments = null, IEnumerable<TrashedAttachment>? attachmentTrash = null) =>
         notes.Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer).Select(n => (n.Changeset!, n.LastWriteAt))
             .Concat(trash.Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
             .Concat(moves.Where(m => m.Changeset is not null && Writers.Identity(m.MovedBy) == writer).Select(m => (m.Changeset!, m.MovedAt)))
+            .Concat((attachments ?? []).Where(a => a.Changeset is not null && Writers.Identity(a.LastWriter) == writer).Select(a => (a.Changeset!, a.LastWriteAt)))
+            .Concat((attachmentTrash ?? []).Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
             .OrderByDescending(x => x.Item2)
             .Select(x => ((Changeset, DateTime)?)x)
             .FirstOrDefault();
@@ -83,3 +87,13 @@ public sealed record StoredNote(
 /// <param name="Changeset">The writer's changeset the removal belongs to; null for a restore, or a removal recorded
 /// before trash records carried one.</param>
 public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null);
+
+/// <param name="Changeset">The writer's changeset the removal belongs to; null for a removal without one.</param>
+public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset)
+{
+    /// <summary>Whether <paramref name="other"/> names the same trash entry: same path, state and removal time. Record
+    /// equality won't do, since it compares the history list by reference.</summary>
+    public bool IsSameEntry(TrashedAttachment other) =>
+        Attachment.Path == other.Attachment.Path && Attachment.Revision == other.Attachment.Revision
+        && Attachment.Version == other.Attachment.Version && DeletedAt == other.DeletedAt;
+}

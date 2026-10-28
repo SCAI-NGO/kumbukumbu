@@ -419,15 +419,28 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
                      ("post", "/api/vaults/{vault}/checkpoints/{name}/preview"), ("post", "/api/vaults/{vault}/checkpoints/{name}/restore"),
                      ("delete", "/api/vaults/{vault}/checkpoints/{name}"),
                      ("get", "/api/vaults/{vault}/checkpoints/{name}/tree"), ("get", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}"),
+                     ("get", "/api/vaults/{vault}/checkpoints/{name}/files/{path}"),
                  })
         {
             Assert.True(paths[path]?[method] is not null, $"{method} {path} is missing");
         }
 
         // Looking into a checkpoint never writes.
-        foreach (var path in new[] { "/api/vaults/{vault}/checkpoints/{name}/tree", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}" })
+        foreach (var path in new[]
+                 {
+                     "/api/vaults/{vault}/checkpoints/{name}/tree", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}",
+                     "/api/vaults/{vault}/checkpoints/{name}/files/{path}",
+                 })
         {
             Assert.Equal(["get"], paths[path]!.AsObject().Select(p => p.Key).Where(k => k != "parameters"));
         }
+
+        // A restore answers a note's view or an attachment's state, and conflicts in the shape of either.
+        var restore = paths["/api/restore/{vault}/{path}"]!["post"]!["responses"]!;
+        Assert.Equal(["#/components/schemas/NoteView", "#/components/schemas/FileStateView"], OneOf(restore["200"]!));
+        Assert.Equal(["#/components/schemas/ConflictView", "#/components/schemas/FileConflictView", "#/components/schemas/ApiError"], OneOf(restore["409"]!));
+
+        static string[] OneOf(JsonNode response) =>
+            [.. response["content"]!["application/json"]!["schema"]!["oneOf"]!.AsArray().Select(s => s!["$ref"]!.GetValue<string>())];
     }
 }

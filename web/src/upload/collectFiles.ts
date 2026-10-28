@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-/** A file to upload, with its path relative to the folder uploaded into ('/' between folders). */
+/**
+ * A file to upload, with its path relative to the folder uploaded into ('/' between folders), in NFC as the server
+ * stores paths: macOS, iOS and some Android pickers name files in NFD.
+ */
 export interface Picked {
   path: string;
   file: File;
@@ -20,7 +23,7 @@ async function entriesOf(dir: FileSystemDirectoryEntry) {
 }
 
 async function walk(entry: FileSystemEntry): Promise<Picked[]> {
-  if (entry.isFile) return [{ path: entry.fullPath.replace(/^\//, ""), file: await fileOf(entry as FileSystemFileEntry) }];
+  if (entry.isFile) return [{ path: entry.fullPath.replace(/^\//, "").normalize("NFC"), file: await fileOf(entry as FileSystemFileEntry) }];
   const children = await entriesOf(entry as FileSystemDirectoryEntry);
   return (await Promise.all(children.map(walk))).flat();
 }
@@ -37,11 +40,11 @@ export function collectFromDrop(items: DataTransferItemList): Promise<Picked[]> 
     if (entry) pending.push(walk(entry));
     else {
       const file = item.getAsFile();
-      if (file) pending.push([{ path: file.name, file }]);
+      if (file) pending.push([{ path: file.name.normalize("NFC"), file }]);
     }
   }
   return Promise.all(pending).then((lists) => lists.flat());
 }
 
 /** The files of `<input type="file">`: with `webkitdirectory`, each path within the picked folder (its name first). */
-export const collectFromInput = (files: ArrayLike<File>): Picked[] => Array.from(files, (file) => ({ path: file.webkitRelativePath || file.name, file }));
+export const collectFromInput = (files: ArrayLike<File>): Picked[] => Array.from(files, (file) => ({ path: (file.webkitRelativePath || file.name).normalize("NFC"), file }));

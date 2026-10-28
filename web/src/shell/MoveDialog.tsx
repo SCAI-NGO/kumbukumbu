@@ -3,13 +3,13 @@ import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { findFolder, useMove, useTree, type TreeFolder } from "../api/notes";
-import { folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { fileKindOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { movedPath, useEditor } from "../state/editor";
 
-/** What is being moved: a note (`/Work/plan.md`) or a folder (`/Work/projects`). */
-export type MoveSubject = { kind: "note" | "folder"; path: string };
+/** What is being moved: a note (`/Work/plan.md`), an image or PDF (`/Work/shot.png`) or a folder (`/Work/projects`). */
+export type MoveSubject = { kind: "note" | "attachment" | "folder"; path: string };
 
 const allFolders = (f: TreeFolder): TreeFolder[] => [f, ...f.folders.flatMap(allFolders)];
 
@@ -23,25 +23,31 @@ function linksSentence(message: string) {
 }
 
 /**
- * Renames a note or folder, or moves it to another folder of its vault (`POST /api/move`). The server rewrites
- * every link the move would break, in the same batch, so links keep leading to it; the dialog says so before,
- * and names the notes it changed after.
+ * Renames a note, attachment or folder, or moves it to another folder of its vault (`POST /api/move`). The server
+ * rewrites every link the move would break, in the same batch, so links keep leading to it; the dialog says so
+ * before, and names the notes it changed after. An attachment keeps its extension, which says what it holds: the
+ * name is edited without it. `onMoved` hears the new path.
  */
-export default function MoveDialog({ subject, onClose }: { subject: MoveSubject; onClose(): void }) {
+export default function MoveDialog({ subject, onClose, onMoved }: { subject: MoveSubject; onClose(): void; onMoved?(path: string): void }) {
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
   const tree = useTree(vaultOf(subject.path));
   const move = useMove();
   const navigate = useNavigate();
   const isNote = subject.kind === "note";
-  const [name, setName] = useState(isNote ? titleOf(subject.path) : subject.path.slice(subject.path.lastIndexOf("/") + 1));
+  const isFile = subject.kind !== "folder";
+  const baseName = subject.path.slice(subject.path.lastIndexOf("/") + 1);
+  const extension = subject.kind === "attachment" ? baseName.slice(baseName.lastIndexOf(".")) : "";
+  const [name, setName] = useState(isNote ? titleOf(subject.path) : baseName.slice(0, baseName.length - extension.length));
   const [parent, setParent] = useState(folderOf(subject.path));
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
 
   // A folder can't go into itself or below itself.
-  const folders = tree.data ? allFolders(tree.data.root).filter((f) => isNote || (f.path !== subject.path && !f.path.startsWith(`${subject.path}/`))) : [];
-  const fileName = isNote && !/\.md$/i.test(name.trim()) ? `${name.trim()}.md` : name.trim();
+  const folders = tree.data ? allFolders(tree.data.root).filter((f) => isFile || (f.path !== subject.path && !f.path.startsWith(`${subject.path}/`))) : [];
+  // An attachment's extension typed in as well is taken as the one it keeps, not doubled.
+  const stem = extension && name.trim().toLowerCase().endsWith(extension.toLowerCase()) ? name.trim().slice(0, -extension.length) : name.trim();
+  const fileName = isNote && !/\.md$/i.test(name.trim()) ? `${name.trim()}.md` : stem + extension;
   const target = `${parent}/${fileName}`;
   const unchanged = target === subject.path;
 
@@ -53,13 +59,15 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
     // Moving onto a folder would put it inside that folder: the server's `mv`, not what this dialog says. The folder
     // itself is no such folder (a rename that changes only case).
     if (there?.folders.some((f) => f.path.toLowerCase() === target.toLowerCase() && f.path !== subject.path)) return setProblem(`There is a folder named “${fileName}” there already.`);
-    if (there?.notes.some((n) => n.path.toLowerCase() === target.toLowerCase() && n.path !== subject.path)) return setProblem(`There is a note named “${fileName}” there already.`);
+    if (there?.notes.some((n) => n.path.toLowerCase() === target.toLowerCase() && n.path !== subject.path)) {
+      return setProblem(`There is ${isNote ? "a note" : "a file"} named “${fileName}” there already.`);
+    }
 
     // The open note's pending text is saved first: once moved, a save to the old path would make a new note there.
     const save = useEditor.getState().beforeRead;
     if (save && !(await save())) return setProblem("The open note has changes that can't be saved yet. Resolve them first.");
 
-    const from = isNote ? subject.path : `${subject.path}/`;
+    const from = isFile ? subject.path : `${subject.path}/`;
     move.mutate(
       { from, to: target },
       {
@@ -67,13 +75,14 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
           const { currentPath } = useEditor.getState();
           useEditor.getState().moved(from, target);
           if (currentPath && movedPath(currentPath, from, target) !== currentPath) navigate(noteUrl(movedPath(currentPath, from, target)), { replace: true });
+          onMoved?.(target);
           setDone(linksSentence(result.message) ?? "Moved.");
         },
       },
     );
   };
 
-  const what = isNote ? "note" : "folder";
+  const what = isNote ? "note" : !isFile ? "folder" : fileKindOf(subject.path) === "pdf" ? "PDF" : "image";
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 p-3 sm:items-center">
       <form
@@ -85,7 +94,7 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
         className="k-sheet flex w-full max-w-md flex-col gap-4 rounded-[16px] border border-line bg-surface p-[18px] pb-[max(18px,env(safe-area-inset-bottom))]"
       >
         <h2 id={`${id}-title`} className="text-[20px] font-bold break-words text-text">
-          {done ? `${isNote ? "Note" : "Folder"} moved` : `Rename or move ${isNote ? titleOf(subject.path) : name}`}
+          {done ? `${what[0].toUpperCase()}${what.slice(1)} moved` : `Rename or move ${isFile ? titleOf(subject.path) : name}`}
         </h2>
         {done ? (
           <>
@@ -100,17 +109,20 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
               <label htmlFor={`${id}-name`} className={labelClass}>
                 Name
               </label>
-              <input
-                id={`${id}-name`}
-                data-autofocus
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="off"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                className={inputClass}
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id={`${id}-name`}
+                  data-autofocus
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className={`${inputClass} min-w-0 flex-1`}
+                />
+                {extension && <span className="flex-none font-mono text-text-body">{extension}</span>}
+              </div>
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`${id}-folder`} className={labelClass}>
@@ -125,7 +137,7 @@ export default function MoveDialog({ subject, onClose }: { subject: MoveSubject;
               </select>
             </div>
             <p className="text-sm text-muted">
-              Links to this {what} in other notes{isNote ? "" : " and to the notes in it"} are updated to the new place, so they keep working. It stays in this vault.
+              Links to this {what} in {isNote ? "other " : ""}notes{isFile ? "" : " and to the notes in it"} are updated to the new place, so they keep working. It stays in this vault.
             </p>
             {problem && <FormError>{problem}</FormError>}
             {move.isError && <FormError>{errorText(move.error)}</FormError>}

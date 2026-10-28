@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
+
 namespace Kumbu.Core.Sh.Commands;
 
 public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : ICommand
@@ -12,7 +14,8 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
     string ICommand.Help => """
         help [command]
           List the commands, or show the options and examples of one. 'cmd --help' does the same.
-          'help checkpoints' explains reading, comparing and restoring named checkpoints.
+          'help checkpoints' explains reading, comparing and restoring named checkpoints;
+          'help attachments' what Kumbu² keeps besides notes (images and PDFs) and what works on them.
         """;
 
     /// <summary>Topics that are not commands: explained once here, so each reader's help only points to them.</summary>
@@ -34,6 +37,41 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               ls --checkpoint before-cleanup /Demo/projects/
               cat --checkpoint before-cleanup /Demo/plan.md | rg -n TODO
               links --checkpoint before-cleanup /Demo/welcome.md
+            """,
+        ["attachments"] = $"""
+            attachments
+              Besides notes, a vault keeps images and PDFs: .png, .jpg, .jpeg, .gif, .webp and .pdf, up to
+              15 MB each. Nothing else is accepted. People upload them (the web app, Obsidian); the write,
+              edit and replace tools refuse an attachment path, since they only write text.
+              A note links to one by its name with the extension: ![[shot.png]], ![alt](/Screens/shot.png),
+              [[report.pdf]]; the rules are those of 'help links'.
+
+              What works on an attachment:
+                ls         lists it with its kind and size, an image with its pixel size:
+                             shot.png  image 1440×3120 412 KB
+                cat        prints one line instead of bytes: shot.png: image (PNG), 1440×3120, 412 KB
+                mv         moves or renames it (a folder move takes it along); links and embeds follow
+                rm         moves it to the trash ({NoteWriter.TrashRetention.Days} days) and says which links now lead nowhere
+                trash, restore, history   as for notes: an earlier version, or one from the trash, comes back
+                links, backlinks          backlinks lists the notes that link to it or embed it
+              What doesn't: rg and semsearch skip attachments (they search the text of notes only, and
+              'rg --files' lists notes only); head, tail, wc, sort and outline read notes, not attachments.
+              A checkpoint holds the attachments too (see 'help checkpoints').
+
+              ls /Work/Screens
+              cat /Work/Screens/shot.png
+              backlinks /Work/Screens/shot.png
+              mv /Work/Screens/shot.png /Work/archive/
+            """,
+        ["img"] = """
+            img
+              Coming in 0.2.5: looking at an image from the shell. Until then, 'cat <path>' says what an
+              image is (format, pixel size, file size); see 'help attachments'.
+            """,
+        ["pdf"] = """
+            pdf
+              Coming in 0.2.5: reading a PDF from the shell. Until then, 'cat <path>' says what a PDF
+              is (its size); see 'help attachments'.
             """,
     };
 
@@ -66,7 +104,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
 
             '|' pipes the output of one command into the next; right of a pipe only {filters} work.
             All paths are absolute (there is no working directory). Run 'help <command>' for details,
-            'help checkpoints' for reading a checkpoint.
+            'help checkpoints' for reading a checkpoint, 'help attachments' for images and PDFs.
             """));
     }
 }

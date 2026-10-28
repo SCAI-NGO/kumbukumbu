@@ -25,6 +25,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }]),
+    "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
     ...overrides,
   });
 }
@@ -471,5 +472,50 @@ describe("Settings", () => {
     const form = await screen.findByRole("region", { name: "Delete account" });
     expect(form).toHaveTextContent("the server always needs one");
     expect(within(form).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("asks for the password before downloads of several files go without it", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "PUT /api/account/preferences": async (r) => {
+        const body = (await r.json()) as { askPasswordForDownloads: boolean; password?: string };
+        bodies.push(body);
+        if (body.password === "wrong") return json(400, { error: "The password is wrong." });
+        return json(200, { askPasswordForDownloads: body.askPasswordForDownloads });
+      },
+    });
+    renderApp("/settings");
+    const downloads = await screen.findByRole("region", { name: "Downloads" });
+    const box = within(downloads).getByRole("checkbox", { name: "Ask for my password when downloading several files" });
+    await waitFor(() => expect(box).toBeChecked());
+
+    await userEvent.click(box);
+    let dialog = await screen.findByRole("alertdialog", { name: "Download several files without the password?" });
+    // Nothing changes before the password is given.
+    expect(box).toBeChecked();
+    expect(bodies).toEqual([]);
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "wrong");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(box).toBeChecked();
+
+    // Cancelled: it stays on.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(box).toBeChecked();
+
+    await userEvent.click(box);
+    dialog = await screen.findByRole("alertdialog", { name: "Download several files without the password?" });
+    expect(within(dialog).getByLabelText("Your password")).toHaveValue("");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Turn off" }));
+    await waitFor(() => expect(box).not.toBeChecked());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(bodies.at(-1)).toEqual({ askPasswordForDownloads: false, password: "secret" });
+
+    // Back on needs no password.
+    await userEvent.click(box);
+    await waitFor(() => expect(box).toBeChecked());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(bodies.at(-1)).toEqual({ askPasswordForDownloads: true });
   });
 });

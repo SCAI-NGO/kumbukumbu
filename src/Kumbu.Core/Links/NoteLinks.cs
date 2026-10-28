@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -8,20 +9,21 @@ namespace Kumbu.Core.Links;
 /// <summary>A link of a note and where it leads.</summary>
 public sealed record ResolvedLink(NoteLink Link, LinkResolution Resolution);
 
-/// <summary>A line of another note that links to a note; <paramref name="Line"/> 0-based. <paramref name="Ambiguous"/>:
-/// the link matches several notes, this one among them.</summary>
+/// <summary>A line of another note that links to a note or attachment; <paramref name="Line"/> 0-based.
+/// <paramref name="Ambiguous"/>: the link matches several, this one among them.</summary>
 public sealed record Backlink(VaultPath Source, int Line, string Text, bool Ambiguous);
 
-/// <summary>The links of a note and the notes that link to it, resolved within the vault: what <c>links</c>,
-/// <c>backlinks</c> and the REST API answer from.</summary>
+/// <summary>The links of a note and the notes that link to a note or attachment, resolved within the vault: what
+/// <c>links</c>, <c>backlinks</c> and the REST API answer from.</summary>
 public static class NoteLinks
 {
     /// <summary>The links in <paramref name="content"/> (the note at <paramref name="path"/>, or a version of it),
-    /// resolved against the notes of its vault as they are now.</summary>
+    /// resolved against the notes and attachments of its vault as they are now.</summary>
     public static async Task<IReadOnlyList<ResolvedLink>> OfAsync(INoteReader notes, VaultPath path, string content, CancellationToken ct)
     {
-        var vault = path.Segments[0];
-        var resolver = new LinkResolver(vault, await notes.ListNotesUnderAsync(VaultPath.Root.Child(vault), ct));
+        var vault = VaultPath.Root.Child(path.Segments[0]);
+        var resolver = new LinkResolver(
+            vault.Segments[0], await notes.ListNotesUnderAsync(vault, ct), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
         return [.. NoteLink.Parse(content).Select(link => new ResolvedLink(link, resolver.Resolve(path, link.Target)))];
     }
 
@@ -31,7 +33,7 @@ public static class NoteLinks
     {
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var all = await notes.ReadNotesUnderAsync(vault, ct);
-        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path));
+        var resolver = new LinkResolver(vault.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
         var exact = new List<Backlink>();
         var maybe = new List<Backlink>();
         foreach (var source in all.OrderBy(n => n.Path.Value, TextOrder.Default))

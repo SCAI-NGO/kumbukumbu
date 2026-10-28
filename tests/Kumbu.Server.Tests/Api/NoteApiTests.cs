@@ -215,6 +215,47 @@ public sealed class NoteApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_tree_lists_attachments_with_kind_and_media_type()
+    {
+        var user = await UserAsync();
+        var png = FileApiTests.Png(4, 4);
+        await user.CreateAsync("plan.md", "# Plan\n");
+        await user.CreateFileAsync("shot.png", png);
+        await user.CreateFileAsync("Berichte/q3.pdf", "%PDF-1.4\n"u8.ToArray());
+
+        using var response = await user.GetAsync($"/api/vaults/{user.Vault}/tree");
+
+        var root = (await JsonAsync(response))["root"]!;
+        Assert.Equal(["Berichte"], Strings(root["folders"], "name"));
+        Assert.Equal(["plan.md", "shot.png"], Strings(root["notes"], "name"));
+        Assert.Equal(["note", "image"], Strings(root["notes"], "kind"));
+        Assert.Equal(["text/markdown", "image/png"], Strings(root["notes"], "mediaType"));
+        Assert.Equal(png.Length, root["notes"]![1]!["size"]!.GetValue<int>());
+        var pdf = root["folders"]![0]!["notes"]![0]!;
+        Assert.Equal("/Arbeit/Berichte/q3.pdf", pdf["path"]!.GetValue<string>());
+        Assert.Equal("pdf", pdf["kind"]!.GetValue<string>());
+        Assert.Equal("application/pdf", pdf["mediaType"]!.GetValue<string>());
+
+        // An attachment has its version and time of writing (the gallery's date order); a note's entry has neither.
+        using var state = await user.GetAsync(user.Url("shot.png", "version"));
+        var shot = root["notes"]![1]!;
+        Assert.Equal((await JsonAsync(state))["version"]!.GetValue<string>(), shot["version"]!.GetValue<string>());
+        Assert.True(DateTime.UtcNow - shot["writtenAt"]!.GetValue<DateTime>().ToUniversalTime() < TimeSpan.FromMinutes(1));
+        var note = root["notes"]![0]!.AsObject();
+        Assert.False(note.ContainsKey("version"));
+        Assert.False(note.ContainsKey("writtenAt"));
+
+        // A move changes no bytes: the time of writing stays (as a note's last write does), the one the lightbox shows.
+        using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/Berichte/shot.png", keepLinks = false });
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        using var after = await user.GetAsync($"/api/vaults/{user.Vault}/tree");
+        var there = (await JsonAsync(after))["root"]!["folders"]![0]!["notes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == "shot.png")!;
+        Assert.Equal(shot["writtenAt"]!.GetValue<DateTime>(), there["writtenAt"]!.GetValue<DateTime>());
+        using var info = await user.GetAsync(user.Url("Berichte/shot.png", "version"));
+        Assert.Equal(there["writtenAt"]!.GetValue<DateTime>(), (await JsonAsync(info))["lastWriteAt"]!.GetValue<DateTime>());
+    }
+
+    [Fact]
     public async Task A_deleted_note_goes_to_the_trash()
     {
         var user = await UserAsync();
@@ -275,7 +316,8 @@ public sealed class NoteApiTests(KumbuAppFactory app)
 
         var links = (await JsonAsync(linksResponse)).AsArray();
         Assert.Equal(["[[kumbu]]", "[[missing]]", "[[a]]", "[[#Top]]", "![[pic.png]]"], Strings(links, "raw"));
-        Assert.Equal(["note", "not_found", "ambiguous", "self", "attachment"], Strings(links, "kind"));
+        // The vault keeps PNGs and holds no pic.png, so the embed leads nowhere.
+        Assert.Equal(["note", "not_found", "ambiguous", "self", "not_found"], Strings(links, "kind"));
         Assert.Equal("/Arbeit/projects/kumbu.md", links[0]!["path"]!.GetValue<string>());
         Assert.Equal(1, links[0]!["line"]!.GetValue<int>());
         Assert.Equal(["/Arbeit/dup/a.md", "/Arbeit/other/a.md"], links[2]!["candidates"]!.AsArray().Select(c => c!.GetValue<string>()));
@@ -488,6 +530,7 @@ public sealed class NoteApiTests(KumbuAppFactory app)
                      ("post", "/api/move"), ("get", "/api/links/{vault}/{path}"), ("get", "/api/backlinks/{vault}/{path}"),
                      ("get", "/api/history/{vault}/{path}"), ("get", "/api/search"), ("get", "/api/changes"),
                      ("post", "/api/upload/{vault}/{folder}"), ("put", "/api/vaults/{vault}/embeddings"), ("get", "/api/embeddings"),
+                     ("get", "/api/files/{vault}/{path}"), ("put", "/api/files/{vault}/{path}"), ("delete", "/api/files/{vault}/{path}"),
                  })
         {
             Assert.True(paths[path]?[method] is not null, $"{method} {path} is missing");
@@ -496,6 +539,12 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         var put = paths["/api/notes/{vault}/{path}"]!["put"]!["responses"]!;
         Assert.NotNull(put["409"]!["content"]?["application/json"]?["schema"]);
         Assert.NotNull(document["components"]!["schemas"]!["ConflictView"]);
+        var putFile = paths["/api/files/{vault}/{path}"]!["put"]!;
+        Assert.NotNull(putFile["requestBody"]);
+        Assert.NotNull(putFile["responses"]!["409"]!["content"]?["application/json"]?["schema"]);
+        Assert.NotNull(putFile["responses"]!["413"]);
+        Assert.NotNull(document["components"]!["schemas"]!["FileConflictView"]);
+        Assert.NotNull(document["components"]!["schemas"]!["FileStateView"]);
     }
 
     [Fact]

@@ -31,6 +31,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     private readonly ConcurrentDictionary<string, UnlockedVault> _open = new();
     private readonly SemaphoreSlim _loading = new(1, 1);
 
+    /// <summary>The attachments' blobs read and decrypted at once, server-wide (<see cref="VaultOptions.ConcurrentFileReads"/>):
+    /// a slot from before a blob is read until its bytes are open.</summary>
+    internal SemaphoreSlim FileReads { get; } = new(Math.Max(1, options.Value.Vaults.ConcurrentFileReads));
+
     /// <summary>Tombstones: the ids of vaults deleted in this process (<see cref="DeleteVaultsAsync"/>). Random ids,
     /// one entry per deleted vault, kept for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _deleted = new();
@@ -86,10 +90,27 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>The content checkpoints hold, once per vault and text, the keyed hash of the content in "pid".</summary>
     internal IMongoCollection<SealedDocument> CheckpointTexts { get; } = db.GetCollection<SealedDocument>("checkpoint_texts");
 
+    /// <summary>The attachments' records, one per path, as notes are: loaded with the vault.</summary>
+    internal IMongoCollection<SealedDocument> Attachments { get; } = db.GetCollection<SealedDocument>("attachments");
+
+    /// <summary>Trashed attachments. No TTL index: <see cref="BlobSweep"/> expires them, so it can release their blobs.</summary>
+    internal IMongoCollection<SealedDocument> AttachmentTrash { get; } = db.GetCollection<SealedDocument>("attachment_trash");
+
+    /// <summary>The attachments' bytes, once per vault and content; never loaded with the vault, read on demand only.</summary>
+    internal IMongoCollection<BlobDocument> Blobs { get; } = db.GetCollection<BlobDocument>("blobs");
+
+    /// <summary><see cref="Blobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> BlobsByVault { get; } = db.GetCollection<SealedDocument>("blobs");
+
     internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>A session for one transaction over several documents.</summary>
     internal Task<IClientSessionHandle> StartSessionAsync(CancellationToken ct) => db.Client.StartSessionAsync(cancellationToken: ct);
+
+    /// <summary>A session whose reads all see one point in time (snapshot read concern), for reads of several collections
+    /// that must agree with each other.</summary>
+    internal Task<IClientSessionHandle> StartSnapshotSessionAsync(CancellationToken ct) =>
+        db.Client.StartSessionAsync(new ClientSessionOptions { Snapshot = true }, ct);
 
     /// <summary>The vaults <paramref name="secret"/> has a slot for, unlocked. A vault in the cache is used only
     /// for a secret whose slot was found here, so the cache saves work but never replaces authorization.</summary>
@@ -505,12 +526,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
-    internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections => [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts];
+    internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
+        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
-    /// their texts), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// their texts, attachments with their trash and blobs), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -771,10 +793,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// Runs once a minute (<see cref="VaultSweeper"/>). Locks vaults idle for longer than the timeout, then the
     /// least recently used ones while the working sets exceed the memory cap; a vault used within
     /// <see cref="InUse"/> stays, even above the cap. Also drops trash and move records MongoDB has expired, and change
-    /// times older than any cursor the version list answers.
+    /// times older than any cursor the version list answers, and starts <see cref="BlobSweep"/> over the vaults still
+    /// unlocked (in the background; one round at a time).
     /// Keys go with the vault, not zeroed: a request still holding it must not see its key change.
     /// </summary>
-    public void Sweep()
+    public void Sweep() => SweepUntil(CancellationToken.None);
+
+    /// <summary><see cref="Sweep"/>, whose blob sweep stops with <paramref name="ct"/> (the server shutting down).</summary>
+    public void SweepUntil(CancellationToken ct)
     {
         var o = options.Value.Vaults;
         var now = Now;
@@ -811,6 +837,41 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                     vault.Gate.Release();
                 }
             }
+        }
+
+        if (Interlocked.Exchange(ref _sweepingBlobs, 1) == 0)
+        {
+            var vaults = _open.Values.ToList();
+            _ = Task.Run(() => SweepBlobsAsync(vaults, now, ct), CancellationToken.None);
+        }
+    }
+
+    private int _sweepingBlobs;
+
+    private async Task SweepBlobsAsync(IReadOnlyList<UnlockedVault> vaults, DateTime now, CancellationToken ct)
+    {
+        try
+        {
+            var sweep = new BlobSweep(this, log);
+            foreach (var vault in vaults)
+            {
+                try
+                {
+                    await sweep.RunAsync(vault, now, ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception e)
+                {
+                    log.LogError(e, "Sweeping the blobs of vault {VaultId} failed", vault.Id);
+                }
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _sweepingBlobs, 0);
         }
     }
 
@@ -858,8 +919,33 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         if (RefreshFaultAt is { } fault) await fault();
         var pathId = vault.PathId(path);
-        var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
         var key = Convert.ToBase64String(pathId);
+        if (path.IsAttachment)
+        {
+            var record = await Attachments.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
+            if (record is null)
+            {
+                vault.Attachments = vault.Attachments.Remove(path);
+                vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Remove(key);
+            }
+            else if (TryOpen(vault, () => vault.OpenAttachment(record), record) is { } attachment)
+            {
+                vault.Attachments = vault.Attachments.SetItem(path, (record.Id, attachment));
+                vault.DamagedPathIds = vault.DamagedPathIds.Remove(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Remove(key);
+            }
+            else
+            {
+                vault.Attachments = vault.Attachments.Remove(path);
+                vault.DamagedPathIds = vault.DamagedPathIds.Add(key);
+                vault.DamagedAttachmentIds = vault.DamagedAttachmentIds.Add(key);
+            }
+
+            return;
+        }
+
+        var doc = await Notes.Find(Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, pathId)).FirstOrDefaultAsync(ct);
         if (doc is null)
         {
             vault.Notes = vault.Notes.Remove(path);
@@ -923,7 +1009,6 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             vault.Notes = notes.ToImmutable();
-            vault.DamagedPathIds = damaged.ToImmutable();
             vault.Trash = [.. (await Trash.Find(n => n.Vault == id).ToListAsync(ct))
                 .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenTrash(d), d)))
                 .Where(t => t.Trashed is not null)
@@ -939,6 +1024,24 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 .Select(d => TryOpen(vault, () => vault.OpenCheckpoint(d), d))
                 .OfType<StoredCheckpoint>()
                 .OrderBy(c => c.Checkpoint.CreatedAt)];
+            // The records only: blobs are read on demand, never held with the vault. A record that doesn't open is marked
+            // damaged under its path id, as a note is.
+            var attachments = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, Kumbu.Core.Attachments.StoredAttachment)>();
+            var damagedAttachments = ImmutableHashSet.CreateBuilder<string>();
+            foreach (var d in await Attachments.Find(n => n.Vault == id).ToListAsync(ct))
+            {
+                if (TryOpen(vault, () => vault.OpenAttachment(d), d) is { } attachment) attachments[attachment.Path] = (d.Id, attachment);
+                else damagedAttachments.Add(Convert.ToBase64String(d.PathId));
+            }
+
+            vault.Attachments = attachments.ToImmutable();
+            damaged.UnionWith(damagedAttachments);
+            vault.DamagedPathIds = damaged.ToImmutable();
+            vault.DamagedAttachmentIds = damagedAttachments.ToImmutable();
+            vault.AttachmentTrash = [.. (await AttachmentTrash.Find(n => n.Vault == id).ToListAsync(ct))
+                .Select(d => (d.Id, Trashed: TryOpen(vault, () => vault.OpenAttachmentTrash(d), d)))
+                .Where(t => t.Trashed is not null)
+                .Select(t => (t.Id, t.Trashed!))];
 
             RecordKey(vault);
             _open[id] = vault;
@@ -1056,6 +1159,25 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         await CheckpointTexts.Indexes.CreateOneAsync(
             new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
             cancellationToken: ct);
+        await Attachments.Indexes.CreateOneAsync(
+            new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        // No TTL on deletedAt: the blob sweep expires attachment trash, and releases the blobs only it held.
+        await AttachmentTrash.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.PathId)),
+                new CreateIndexModel<SealedDocument>(sealedKeys.Ascending(d => d.Vault).Ascending(d => d.DeletedAt)),
+            ],
+            ct);
+        await Blobs.Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<BlobDocument>(Builders<BlobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
+                // The sweep's candidates by age, without fetching them (BlobSweep.CandidateIndex).
+                new CreateIndexModel<BlobDocument>(BlobSweep.CandidateIndex),
+                // Whether blobs exist, and since when, without fetching them (EncryptedNoteStore.RequireBlobsAsync).
+                new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
+            ],
+            ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),

@@ -4,7 +4,7 @@ No lock-in: your notes are plain Markdown, and you can take them with you at any
 
 ## Export one vault
 
-The vault's ⋯ menu → **Export as ZIP…**, then your password: the ZIP holds the notes as plain text, outside Kumbu²'s encryption. Unpacked, the folder opens in Obsidian as a vault.
+The vault's ⋯ menu → **Export as ZIP…**, then your password: the ZIP holds the notes, PDFs and images as they are, outside Kumbu²'s encryption. Unpacked, the folder opens in Obsidian as a vault.
 
 ## Export all your vaults
 

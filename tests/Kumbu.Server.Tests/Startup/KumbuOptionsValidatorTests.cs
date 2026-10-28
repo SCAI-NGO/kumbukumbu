@@ -38,6 +38,15 @@ public sealed class KumbuOptionsValidatorTests
         Assert.Equal(["Kumbu:Vaults:CheckpointLimit must be 0 or more"], Validate(options).Failures);
     }
 
+    [Fact]
+    public void Rejects_no_concurrent_file_reads()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Vaults.ConcurrentFileReads = 0;
+
+        Assert.Equal(["Kumbu:Vaults:ConcurrentFileReads must be 1 or more"], Validate(options).Failures);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("  ")]

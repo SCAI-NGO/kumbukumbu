@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMemo, useState } from "react";
+import Thumbnail from "../attachments/Thumbnail";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useNoteVersion } from "../api/notes";
 import { useNoteNow } from "../api/activity";
+import { isAttachment, titleOf, vaultOf } from "../api/paths";
 import { FormError } from "../components/form";
 import { lineDiff, type DiffLine } from "../note/lineDiff";
 
@@ -24,11 +26,32 @@ type Props = {
   versionLabel?: string;
 };
 
+const tabClass = (on: boolean) =>
+  `min-h-11 flex-1 rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
+
+function ModeSwitch({ mode, onMode }: { mode: CompareMode; onMode(mode: CompareMode): void }) {
+  return (
+    <div role="group" aria-label="Compare" className="flex gap-1 rounded-[12px] border border-line p-1">
+      <button type="button" aria-pressed={mode === "before"} onClick={() => onMode("before")} className={tabClass(mode === "before")}>
+        Against the version before
+      </button>
+      <button type="button" aria-pressed={mode === "now"} onClick={() => onMode("now")} className={tabClass(mode === "now")}>
+        Against now
+      </button>
+    </div>
+  );
+}
+
 /**
  * Two versions of a note side by side (stacked on a phone), switchable between "against the version before" and
  * "against now". Removed lines are marked on the left, added ones on the right, in the agent highlights' colours.
+ * Two versions of an image or PDF are shown as they are (a PDF's first page), without a computed difference.
  */
-export default function CompareVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
+export default function CompareVersions(props: Props) {
+  return isAttachment(props.path) ? <CompareFileVersions {...props} /> : <CompareNoteVersions {...props} />;
+}
+
+function CompareNoteVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
   const [mode, setMode] = useState<CompareMode>(initial);
   const againstNow = mode === "now";
   const left = useNoteVersion(path, againstNow ? version : before);
@@ -60,21 +83,11 @@ export default function CompareVersions({ path, version, before, trashed, before
   const leftOnly = useMemo(() => (rightMissing && left.data ? lineDiff(left.data.content, left.data.content) : null), [rightMissing, left.data]);
   const unchanged = !againstNow && before !== null && before === version;
   const error = [left.error, againstNow ? (gone ? null : now.error) : right.error].find((e) => e && !(e instanceof HttpError && e.status === 404));
-
-  const tabClass = (on: boolean) =>
-    `min-h-11 flex-1 rounded-[10px] px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${on ? "bg-accent text-on-accent" : "text-text-body"}`;
   const labels = againstNow ? [versionLabel, "Now"] : ["Before", versionLabel];
 
   return (
     <>
-      <div role="group" aria-label="Compare" className="flex gap-1 rounded-[12px] border border-line p-1">
-        <button type="button" aria-pressed={!againstNow} onClick={() => setMode("before")} className={tabClass(!againstNow)}>
-          Against the version before
-        </button>
-        <button type="button" aria-pressed={againstNow} onClick={() => setMode("now")} className={tabClass(againstNow)}>
-          Against now
-        </button>
-      </div>
+      <ModeSwitch mode={mode} onMode={setMode} />
       {error && <FormError>{errorText(error)}</FormError>}
       {unchanged && <p className="text-sm text-text-body">The text didn't change in this change.</p>}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -109,5 +122,50 @@ function Column({ label, message, lines }: { label: string; message: string | nu
         <p className="text-sm text-muted">Loading …</p>
       )}
     </section>
+  );
+}
+
+function CompareFileVersions({ path, version, before, trashed, beforeLost, initial = "before", versionLabel = "After this change" }: Props) {
+  const [mode, setMode] = useState<CompareMode>(initial);
+  const notKept = "This version is no longer kept";
+  const sides: FileSide[] =
+    mode === "now"
+      ? [
+          { label: versionLabel, version, message: version === null ? notKept : null },
+          { label: "Now", version: null, message: trashed ? "This file is in the trash now" : null },
+        ]
+      : [
+          { label: "Before", version: before, message: before === null ? (beforeLost ? "Earlier versions are no longer kept" : "Added in this change") : null },
+          { label: versionLabel, version, message: version === null ? notKept : null },
+        ];
+  return (
+    <>
+      <ModeSwitch mode={mode} onMode={setMode} />
+      {mode === "before" && before !== null && before === version && <p className="text-sm text-text-body">The file didn't change in this change.</p>}
+      <CompareFiles path={path} sides={sides} />
+    </>
+  );
+}
+
+/** One side of a comparison of files: its version (null: the file as it is now), or why there is none to show. */
+export type FileSide = { label: string; version: string | null; message?: string | null };
+
+/** Versions of an image or PDF side by side (stacked on a phone), each whole in its box; a PDF shows its first page. */
+export function CompareFiles({ path, sides }: { path: string; sides: FileSide[] }) {
+  return (
+    <div className={`grid grid-cols-1 gap-2 ${sides.length > 1 ? "sm:grid-cols-2" : ""}`}>
+      {sides.map((side) => (
+        <section key={side.label} className="flex min-w-0 flex-col gap-1">
+          <h3 className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{side.label}</h3>
+          {side.message ? (
+            <p className="rounded-[10px] border border-dashed border-line px-3 py-2 text-sm text-muted">{side.message}</p>
+          ) : (
+            <div className="relative aspect-[4/3] overflow-hidden rounded-[10px] border border-line bg-bg">
+              <Thumbnail vault={vaultOf(path)} path={path} at={side.version === null ? {} : { version: side.version }} fit="contain" alt={`${titleOf(path)}, ${side.label}`} />
+            </div>
+          )}
+        </section>
+      ))}
+    </div>
   );
 }

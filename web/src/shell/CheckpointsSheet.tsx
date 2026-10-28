@@ -119,7 +119,7 @@ function ListStep({
   return (
     <>
       <p className="text-sm text-text-body">
-        A checkpoint keeps the state of every note in {vault} under a name, until you remove it. Unlike the history, it never runs out. Open one to read it as it was, or export it as a ZIP.
+        A checkpoint keeps the state of every note and file in {vault} under a name, until you remove it. Unlike the history, it never runs out. Open one to read it as it was, or export it as a ZIP.
       </p>
       {done && (
         <p role="status" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
@@ -168,7 +168,8 @@ function ListStep({
                 <span className="flex-none text-[12px] text-dim">{ago(c.createdAt)}</span>
               </div>
               <p className="text-sm text-muted">
-                {c.scope} · {Number(c.notes) === 1 ? "1 note" : `${c.notes} notes`} · {timeText(c.createdAt)} by {c.createdBy}
+                {c.scope} · {count(Number(c.notes), "note")}
+                {Number(c.attachments ?? 0) > 0 && ` · ${count(Number(c.attachments), "file")}`} · {timeText(c.createdAt)} by {c.createdBy}
               </p>
               <div className="flex gap-2">
                 <button
@@ -205,12 +206,12 @@ function ListStep({
 
 const count = (n: number, noun: string) => (n === 1 ? `1 ${noun}` : `${n} ${noun}s`);
 
-/** What the preview says, note by note: what happens to it. */
+/** What the preview says, file by file: what happens to it. */
 function changeText(c: RestorePreview["changes"][number]) {
   const lines = c.added !== null && c.removed !== null ? ` (+${c.added} −${c.removed} lines)` : "";
   switch (c.kind) {
     case "changed":
-      return `gets its text from then${lines}`;
+      return c.fileKind === "image" || c.fileKind === "pdf" ? "goes back to how it was then" : `gets its text from then${lines}`;
     case "back":
       return "comes back (it was removed since)";
     case "trash":
@@ -226,6 +227,8 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
   const data = preview.data;
   const changes = data?.changes ?? [];
   const rewritten = Number(data?.rewrittenLinks ?? 0);
+  // Said as notes while only notes change, else as files (notes, images and PDFs alike).
+  const noun = changes.every((c) => c.fileKind === "note" || !c.fileKind) ? "note" : "file";
 
   return (
     <>
@@ -239,7 +242,7 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
         <>
           <div role="note" className="flex flex-col gap-2 rounded-[12px] border border-accent bg-surface-2 p-3 text-text-body">
             <p>
-              <strong className="text-text">Restoring makes {data.scope} match the checkpoint exactly.</strong> {count(changes.length, "note")} change:
+              <strong className="text-text">Restoring makes {data.scope} match the checkpoint exactly.</strong> {count(changes.length, noun)} change:
             </p>
             <ul aria-label="What changes" className="flex max-h-60 flex-col gap-1 overflow-y-auto">
               {changes.map((c) => (
@@ -264,8 +267,8 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
               </div>
             )}
             <p className="text-sm">
-              Nothing is lost: each note keeps the text it had before in its history, and notes going to the trash stay there for 30 days. If a note changes
-              before you confirm, nothing is restored.
+              Nothing is lost: each note or file keeps what it had before in its history, and what goes to the trash stays there for 30 days. If anything
+              changes before you confirm, nothing is restored.
             </p>
           </div>
           {restore.isError && <FormError>{errorText(restore.error)}</FormError>}
@@ -277,7 +280,7 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
         </button>
         {data?.plan && (
           <button type="button" disabled={restore.isPending} onClick={() => restore.mutate(data.plan!, { onSuccess: (r) => onDone(sentence(r.message)) })} className={dangerButton}>
-            Restore {count(changes.length, "note")}
+            Restore {count(changes.length, noun)}
           </button>
         )}
       </div>
@@ -300,7 +303,7 @@ function ExportStep({ vault, checkpoint, onBack, onDone }: { vault: string; chec
       }}
       className="flex flex-col gap-4"
     >
-      <p className="text-text-body">The ZIP holds the notes as plain text, outside Kumbu²'s encryption: your password confirms it.</p>
+      <p className="text-text-body">The ZIP holds the notes, PDFs and images as they are, outside Kumbu²'s encryption: your password confirms it.</p>
       <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
       {exporting.error && <FormError>{exporting.error}</FormError>}
       <div className="flex gap-2.5">
