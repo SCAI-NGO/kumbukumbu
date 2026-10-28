@@ -87,7 +87,7 @@ tags <tag> [path]
 ## Server
 
 - A tag extractor in `Kumbu.Core` (pure, unit-tested): note text in, tags with their line numbers out.
-- The working set keeps a note's extracted tags with its version, computed on first use, so a search over a vault doesn't parse every note each time. The plan measures a vault of 2,000 notes with and without that cache and keeps the cache only if it's needed.
+- The working set keeps a note's extracted tags with its version, computed on first use, so a search over a vault doesn't parse every note each time. Measured on 2,000 generated notes (8 MB, half with a tags property, a tag, a wikilink and inline code on most lines): reading all of them takes about 100 ms once warm (500 ms on the first pass after start), with the cache under 1 ms, so the cache stays. It is keyed by the note's text itself (a weak table on the string the unlocked vault holds for the current version), so an entry goes with its version and is never invalidated by hand.
 - REST, both readable with an API key that may read the vault, as the other readers are:
   - `GET /api/tags?path=/Work` → `[{ tag, count }]`.
   - `GET /api/tags/notes?tag=research&path=/Work` → the notes with their lines.

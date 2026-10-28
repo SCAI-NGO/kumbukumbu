@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Board;
@@ -18,6 +19,14 @@ public sealed record TagUse(string Tag, int Line);
 /// </summary>
 public static partial class TagReader
 {
+    // Keyed by the content string itself: an unlocked vault keeps each note's current text as one string until the note
+    // changes, so an entry lives exactly as long as that version does and never needs invalidating. A pass over 2,000
+    // notes (8 MB) takes about 100 ms without it, under 1 ms with it (measured for the tags design).
+    private static readonly ConditionalWeakTable<string, IReadOnlyList<TagUse>> Cache = new();
+
+    /// <summary>The tags of a note's text, remembered for as long as that text is held.</summary>
+    public static IReadOnlyList<TagUse> Of(string content) => Cache.GetValue(content, Read);
+
     public static IReadOnlyList<TagUse> Read(string content)
     {
         var lines = Lines.Split(content);
@@ -108,54 +117,69 @@ public static partial class TagReader
         {
             if (fenced[i] || indented[i]) continue;
             var line = lines[i];
+            // Most lines hold no '#' and open no comment: nothing to look at.
+            if (comment is null && line.AsSpan().IndexOfAny('#', '%', '<') < 0) continue;
+
             var skip = Skipped(line);
-            for (var p = 0; p < line.Length; p++)
+            var s = 0;
+            var p = 0;
+            while (p < line.Length)
             {
                 if (comment is not null)
                 {
                     var close = line.IndexOf(comment, p, StringComparison.Ordinal);
                     if (close < 0) break;
-                    p = close + comment.Length - 1;
+                    p = close + comment.Length;
                     comment = null;
                     continue;
                 }
 
-                if (skip.FirstOrDefault(s => s.Start == p) is { End: > 0 } span)
+                var next = line.AsSpan(p).IndexOfAny('#', '%', '<');
+                if (next < 0) break;
+                p += next;
+                while (s < skip.Count && skip[s].End <= p) s++;
+                if (s < skip.Count && skip[s].Start <= p)
                 {
-                    p = span.End - 1;
+                    p = skip[s].End;
                     continue;
                 }
 
                 if (string.CompareOrdinal(line, p, "<!--", 0, 4) == 0)
                 {
                     comment = "-->";
-                    p += 3;
+                    p += 4;
                     continue;
                 }
 
                 if (string.CompareOrdinal(line, p, "%%", 0, 2) == 0)
                 {
                     comment = "%%";
-                    p += 1;
+                    p += 2;
                     continue;
                 }
 
-                if (line[p] != '#' || (p > 0 && !char.IsWhiteSpace(line[p - 1]))) continue;
+                if (line[p] != '#' || (p > 0 && !char.IsWhiteSpace(line[p - 1])))
+                {
+                    p++;
+                    continue;
+                }
+
                 var stop = p + 1;
                 while (stop < line.Length && IsTagChar(line[stop])) stop++;
                 var tag = line[(p + 1)..stop].TrimEnd('/');
                 if (IsTag(tag)) result.Add(new TagUse(tag.Normalize(NormalizationForm.FormC), i));
-                p = stop - 1;
+                p = stop;
             }
         }
     }
 
-    /// <summary>What a tag can't stand in on one line: inline code, wikilinks and HTML tags, as (start, end).</summary>
+    /// <summary>What a tag can't stand in on one line: inline code, wikilinks and HTML tags, as (start, end) by start.</summary>
     private static List<(int Start, int End)> Skipped(string line)
     {
-        var spans = NoteLink.CodeSpans(line);
+        var spans = line.Contains('`') ? NoteLink.CodeSpans(line) : [];
         if (line.Contains("[[", StringComparison.Ordinal)) spans.AddRange(WikiLink.LinkRegex().Matches(line).Select(m => (m.Index, m.Index + m.Length)));
         if (line.Contains('<')) spans.AddRange(HtmlTagRegex().Matches(line).Select(m => (m.Index, m.Index + m.Length)));
+        spans.Sort();
         return spans;
     }
 
