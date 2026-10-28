@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
@@ -65,6 +66,8 @@ builder.Services.AddHttpClient();
 builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2) });
 builder.Services.AddSingleton<PdfAnalyses>();
+builder.Services.AddSingleton<PdfAnalysisRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PdfAnalysisRunner>());
 builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
@@ -137,6 +140,7 @@ builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
+builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped<Shell>();
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.

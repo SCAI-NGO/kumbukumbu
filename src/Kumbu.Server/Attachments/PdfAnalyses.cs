@@ -129,6 +129,62 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         }
     }
 
+    /// <summary>
+    /// Queues the blobs for analysis (collection <c>pdf_jobs</c>, durable, no content), once per blob, leaving out
+    /// those that have an analysis unless <paramref name="evenIfAnalysed"/> (an outdated one asked for). Nothing while
+    /// the vault can't be written. Returns how many jobs are new.
+    /// </summary>
+    public async Task<int> EnqueueAsync(UnlockedVault vault, IReadOnlyCollection<byte[]> blobIds, bool evenIfAnalysed, CancellationToken ct)
+    {
+        if (blobIds.Count == 0 || !catalog.MayIndex(vault)) return 0;
+        IEnumerable<byte[]> wanted = blobIds;
+        if (!evenIfAnalysed)
+        {
+            var analysed = (await catalog.PdfParts.Find(F.Eq(d => d.Vault, vault.Id) & F.In(d => d.BlobId, blobIds) & F.Eq(d => d.Part, 0))
+                .Project(d => d.BlobId).ToListAsync(ct)).Select(Convert.ToBase64String).ToHashSet();
+            wanted = blobIds.Where(b => !analysed.Contains(Convert.ToBase64String(b)));
+        }
+
+        var added = 0;
+        var j = Builders<PdfJobDocument>.Filter;
+        foreach (var blobId in wanted)
+        {
+            try
+            {
+                var result = await catalog.PdfJobs.UpdateOneAsync(
+                    j.Eq(d => d.Vault, vault.Id) & j.Eq(d => d.BlobId, blobId),
+                    Builders<PdfJobDocument>.Update.SetOnInsert(d => d.At, catalog.Now).SetOnInsert(d => d.Tries, 0),
+                    new UpdateOptions { IsUpsert = true },
+                    ct);
+                if (result.UpsertedId is not null) added++;
+            }
+            catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Queued by someone else at the same moment.
+            }
+        }
+
+        return added;
+    }
+
+    /// <summary>The vault's jobs, oldest first.</summary>
+    public Task<List<PdfJobDocument>> JobsAsync(string vaultId, CancellationToken ct) =>
+        catalog.PdfJobs.Find(Builders<PdfJobDocument>.Filter.Eq(d => d.Vault, vaultId)).SortBy(d => d.At).ToListAsync(ct);
+
+    public Task DeleteJobAsync(string vaultId, byte[] blobId, CancellationToken ct) =>
+        catalog.PdfJobs.DeleteOneAsync(Builders<PdfJobDocument>.Filter.Eq(d => d.Vault, vaultId) & Builders<PdfJobDocument>.Filter.Eq(d => d.BlobId, blobId), ct);
+
+    /// <summary>Counts a failed try; returns the tries so far (0 if the job is gone).</summary>
+    public async Task<int> CountTryAsync(string vaultId, byte[] blobId, CancellationToken ct)
+    {
+        var job = await catalog.PdfJobs.FindOneAndUpdateAsync(
+            Builders<PdfJobDocument>.Filter.Eq(d => d.Vault, vaultId) & Builders<PdfJobDocument>.Filter.Eq(d => d.BlobId, blobId),
+            Builders<PdfJobDocument>.Update.Inc(d => d.Tries, 1),
+            new FindOneAndUpdateOptions<PdfJobDocument> { ReturnDocument = ReturnDocument.After },
+            ct);
+        return job?.Tries ?? 0;
+    }
+
     private async Task<HeaderRecord?> ReadHeaderAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
     {
         var doc = await catalog.PdfParts.Find(F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.Eq(d => d.Part, 0)).FirstOrDefaultAsync(ct);

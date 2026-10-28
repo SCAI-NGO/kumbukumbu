@@ -918,6 +918,32 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>How many vaults are unlocked now.</summary>
     public int UnlockedCount => _open.Count;
 
+    /// <summary>The unlocked vaults that may be written and indexed now (<see cref="MayIndex"/>).</summary>
+    internal IReadOnlyList<UnlockedVault> UnlockedVaults => [.. _open.Values.Where(MayIndex)];
+
+    /// <summary>
+    /// A blob's bytes, read from MongoDB and opened; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/>
+    /// if it doesn't open (changed or damaged outside Kumbu²). The read and the decryption take one of the server's
+    /// <see cref="FileReads"/> slots, waiting for one if all are taken; the slot goes back before the bytes are returned.
+    /// </summary>
+    internal async Task<byte[]?> ReadBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
+    {
+        await FileReads.WaitAsync(ct);
+        try
+        {
+            var doc = await Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct);
+            return doc is null ? null : vault.OpenBlob(doc);
+        }
+        catch (Exception e) when (e is CryptographicException or InvalidDataException)
+        {
+            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+        }
+        finally
+        {
+            FileReads.Release();
+        }
+    }
+
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => UnlockedCount;
 
