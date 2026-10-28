@@ -59,6 +59,7 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         builder.UseSetting("Kumbu:Recovery:Path", RecoveryPath);
         // No download in tests: words hashed into vectors stand in for the model.
         builder.UseSetting("Kumbu:Search:Enabled", "false");
+        builder.UseSetting("Kumbu:Metrics:Url", "http://127.0.0.1:0");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<Kumbu.Server.Search.IEmbeddingDriver>();

@@ -9,6 +9,7 @@ using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
@@ -39,6 +40,15 @@ builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
+
+// /metrics is served on a listener of its own, not on the app's port: a proxy forwards whatever Host header a client
+// sends, so a route on the public port could not be told apart from the scraper's. Not in the bootstrap command.
+if (!bootstrapCommand && builder.Configuration.GetValue("Kumbu:Metrics:Enabled", true))
+{
+    KumbuMetrics.Configure();
+    builder.Services.AddSingleton<MetricsServer>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricsServer>());
+}
 
 builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ClientSettings()));

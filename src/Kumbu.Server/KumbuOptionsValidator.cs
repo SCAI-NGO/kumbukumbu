@@ -24,6 +24,9 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
     public const string ProxyNeedsPublicUrlMessage =
         "Kumbu:Proxy:Trusted (KUMBU_TRUSTED_PROXY) needs Kumbu:PublicUrl (KUMBU_PUBLIC_URL): behind a proxy that terminates TLS, the web app's requests are checked against it";
 
+    public const string MetricsUrlMessage =
+        "Kumbu:Metrics:Url must be an http URL with a host and a port and no path, e.g. http://127.0.0.1:9464";
+
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {
         var failures = new List<string>();
@@ -95,8 +98,19 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
             failures.Add($"Kumbu:Embeddings:Default (KUMBU_EMBEDDINGS_DEFAULT) must be '{EmbeddingProviders.Internal}' or the name of a provider under Kumbu:Embeddings:Providers ({names})");
         }
 
+        if (options.Metrics.Enabled && !IsUsableMetricsUrl(options.Metrics.Url))
+        {
+            failures.Add(MetricsUrlMessage);
+        }
+
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
+
+    // The port must be written out (0 is allowed, for tests): Uri.Port would fill in 80 for a bare http URL.
+    private static bool IsUsableMetricsUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == "http" && uri.Host != ""
+        && !uri.IsDefaultPort && uri.AbsolutePath == "/" && uri.Query == "" && uri.Fragment == "" && uri.UserInfo == ""
+        && !url.EndsWith("/metrics", StringComparison.Ordinal);
 
     /// <summary>
     /// What is wrong with an external embedding provider's settings. Fails closed: a provider that would send notes

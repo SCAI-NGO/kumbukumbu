@@ -171,6 +171,31 @@ public sealed class KumbuOptionsValidatorTests
         Assert.True(Validate(options).Succeeded);
     }
 
+    [Theory]
+    [InlineData("ftp://x:1")]
+    [InlineData("http://127.0.0.1")]
+    [InlineData("http://127.0.0.1:9464/metrics")]
+    public void Rejects_a_metrics_url_that_isnt_an_http_url_with_a_port_and_no_path(string url)
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Metrics.Url = url;
+
+        Assert.Equal([KumbuOptionsValidator.MetricsUrlMessage], Validate(options).Failures);
+        Assert.Equal(
+            "Kumbu:Metrics:Url must be an http URL with a host and a port and no path, e.g. http://127.0.0.1:9464",
+            KumbuOptionsValidator.MetricsUrlMessage);
+    }
+
+    [Fact]
+    public void Disabled_metrics_skip_the_url_check()
+    {
+        var options = Options(KumbuAppFactory.Token, ValidMongo);
+        options.Metrics.Url = "nonsense";
+        options.Metrics.Enabled = false;
+
+        Assert.True(Validate(options).Succeeded);
+    }
+
     /// <summary>A key file of its own per test; the validator reads it.</summary>
     private static string KeyFile(string content = "sk-test-key")
     {
