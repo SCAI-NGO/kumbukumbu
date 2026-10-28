@@ -115,6 +115,59 @@ public sealed class ModelFilesTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task AFileMatchesBySizeAndSha256Only()
+    {
+        var path = Path.Combine(_dir, "fake.onnx");
+        await File.WriteAllTextAsync(path, "a small fake model", TestContext.Current.CancellationToken);
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("a small fake model"u8));
+        var ct = TestContext.Current.CancellationToken;
+
+        Assert.True(await ModelFiles.MatchesAsync(path, new ModelFile("fake.onnx", "fake.onnx", 18, sha), ct));
+        // The same size, other bytes: what a check by size alone would have loaded.
+        await File.WriteAllTextAsync(path, "a small fake modem", ct);
+        Assert.False(await ModelFiles.MatchesAsync(path, new ModelFile("fake.onnx", "fake.onnx", 18, sha), ct));
+        Assert.False(await ModelFiles.MatchesAsync(path, new ModelFile("fake.onnx", "fake.onnx", 19, sha), ct));
+        Assert.False(await ModelFiles.MatchesAsync(Path.Combine(_dir, "missing"), new ModelFile("missing", "missing", 18, sha), ct));
+    }
+
+    [Fact]
+    public async Task AModelFileOfTheRightSizeButTheWrongChecksumIsNeverLoadedButDownloadedAgain()
+    {
+        // The tokenizer comes first; its size is right, its bytes (zeros) are not.
+        var model = ModelFiles.Get(ModelFiles.Default);
+        Directory.CreateDirectory(Path.Combine(_dir, ModelFiles.Default));
+        var tokenizer = Path.Combine(_dir, ModelFiles.Default, ModelFiles.Tokenizer);
+        using (var f = File.Create(tokenizer)) f.SetLength(model.Files[0].Size);
+        var http = new RefusingHttp();
+        var options = Microsoft.Extensions.Options.Options.Create(new KumbuOptions { Search = new SearchOptions { ModelPath = _dir } });
+        using var embedder = new OnnxEmbedder(options, http, NullLogger<OnnxEmbedder>.Instance);
+
+        await embedder.StartAsync(TestContext.Current.CancellationToken);
+        for (var i = 0; i < 200 && embedder.State != SemanticState.Off; i++) await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticState.Off, embedder.State);
+        Assert.False(File.Exists(tokenizer));
+        Assert.Equal([model.Url(model.Files[0])], http.Requested);
+        await embedder.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    private sealed class RefusingHttp : IHttpClientFactory
+    {
+        public List<string> Requested { get; } = [];
+
+        public HttpClient CreateClient(string name) => new(new Refusing(Requested));
+
+        private sealed class Refusing(List<string> requested) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                lock (requested) requested.Add(request.RequestUri!.ToString());
+                throw new HttpRequestException("offline in this test");
+            }
+        }
+    }
+
     private static bool CanWrite(string dir)
     {
         try

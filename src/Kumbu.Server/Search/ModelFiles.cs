@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Security.Cryptography;
+
 namespace Kumbu.Server.Search;
 
 /// <summary>One model of the <see cref="ModelFiles.Catalogue"/>, pinned to a revision.</summary>
@@ -37,6 +39,18 @@ public static class ModelFiles
         if (!File.Exists(path)) return false;
         using var handle = File.OpenHandle(path);
         return RandomAccess.GetLength(handle) == size;
+    }
+
+    /// <summary>
+    /// Whether the file has <paramref name="file"/>'s size and SHA-256. It reads the whole file: arctic-m's model,
+    /// 613 MB, took about 0.65 s from the page cache on a 4-core machine with SHA extensions, arctic-l's twice that, and
+    /// a cold disk adds its read time; loading the model reads it once more anyway.
+    /// </summary>
+    public static async Task<bool> MatchesAsync(string path, ModelFile file, CancellationToken ct)
+    {
+        if (!HasSize(path, file.Size)) return false;
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, ct)) == file.Sha256;
     }
 
     public static EmbeddingModel Get(string key) => Catalogue[key];
