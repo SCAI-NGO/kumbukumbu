@@ -42,6 +42,25 @@ public sealed class HttpMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_unusual_request_method_is_not_a_label_value()
+    {
+        using var client = app.CreateClient();
+        using var request = new HttpRequestMessage(new HttpMethod("ZZMETHODMARKER"), "/api/notes");
+        await client.SendAsync(request, Ct);
+
+        Assert.DoesNotContain("ZZMETHODMARKER", await Scrape.TextAsync(app));
+    }
+
+    [Fact]
+    public async Task An_unmatched_path_is_not_a_label_value()
+    {
+        using var client = app.CreateClient();
+        await client.GetAsync("/zzunmatchedmarker/x", Ct);
+
+        Assert.DoesNotContain("zzunmatchedmarker", await Scrape.TextAsync(app));
+    }
+
+    [Fact]
     public async Task A_429_is_counted()
     {
         const string series = "kumbu_http_rate_limited_total{endpoint=\"/api/session\"}";

@@ -43,7 +43,8 @@ builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValida
 
 // /metrics is served on a listener of its own, not on the app's port: a proxy forwards whatever Host header a client
 // sends, so a route on the public port could not be told apart from the scraper's. Not in the bootstrap command.
-if (!bootstrapCommand && builder.Configuration.GetValue("Kumbu:Metrics:Enabled", true))
+var metricsEnabled = !bootstrapCommand && builder.Configuration.GetValue("Kumbu:Metrics:Enabled", true);
+if (metricsEnabled)
 {
     KumbuMetrics.Configure();
     builder.Services.AddSingleton<MetricsServer>();
@@ -209,7 +210,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterv
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
-if (app.Services.GetService<MetricsServer>() is not null) app.UseKumbuHttpMetrics();
+if (metricsEnabled) app.UseKumbuHttpMetrics();
 app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);
