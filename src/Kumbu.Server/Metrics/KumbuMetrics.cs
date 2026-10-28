@@ -20,8 +20,39 @@ public static class KumbuMetrics
         });
         Prometheus.Metrics.ConfigureMeterAdapter(o => o.InstrumentFilterPredicate = i => i.Meter.Name == "System.Runtime");
         Prometheus.Metrics.DefaultFactory.ExemplarBehavior = ExemplarBehavior.NoExemplars();
+        CreateSeries();
         return true;
     });
+
+    /// <summary>Every series a label can have exists from the start, at 0: a panel shows a 0, not "No data", until the first event.</summary>
+    private static void CreateSeries()
+    {
+        foreach (var tool in Enum.GetValues<Tool>())
+        {
+            ToolCalls.WithLabels(Label(tool));
+            ToolDuration.WithLabels(Label(tool));
+            foreach (var kind in Enum.GetValues<ToolError>()) ToolErrors.WithLabels(Label(tool), Label(kind));
+        }
+
+        foreach (var command in KnownCommands)
+        {
+            ShCommands.WithLabels(command);
+            ShCommandDuration.WithLabels(command);
+        }
+
+        ShCommands.WithLabels("other");
+        foreach (var via in Enum.GetValues<WriteVia>()) WriteConflicts.WithLabels(Label(via));
+        foreach (var kind in Enum.GetValues<ProviderKind>())
+        {
+            EmbeddingBatches.WithLabels(Label(kind));
+            EmbeddingBatchDuration.WithLabels(Label(kind));
+            EmbeddingErrors.WithLabels(Label(kind));
+        }
+
+        foreach (var reason in Enum.GetValues<LockReason>()) VaultLocks.WithLabels(Label(reason));
+        foreach (var outcome in Enum.GetValues<Outcome>()) SignIns.WithLabels(Label(outcome));
+        foreach (var grant in Enum.GetValues<Grant>()) OAuthTokens.WithLabels(Label(grant));
+    }
 
     public static readonly Counter RateLimited = Prometheus.Metrics.CreateCounter(
         "kumbu_http_rate_limited_total", "Requests answered 429, by route template.", new CounterConfiguration { LabelNames = ["endpoint"] });
