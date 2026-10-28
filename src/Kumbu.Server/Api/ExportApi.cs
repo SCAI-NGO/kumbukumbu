@@ -51,6 +51,11 @@ public static class ExportApi
         api.MapGet("/files/{vault}/zip", FilesZipAsync)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
+        // The same as a form post (the web app's): a hundred paths would make the GET's request line too long. The
+        // Origin check (Security.UseCallerRules) is its CSRF guard, as for every state-changing session request.
+        api.MapPost("/files/{vault}/zip", FilesZipFormAsync)
+            .Produces(StatusCodes.Status200OK, contentType: "application/zip")
+            .Errors(400, 401, 403, 404, 503);
     }
 
     /// <summary>The most files one download of several takes.</summary>
@@ -156,11 +161,23 @@ public static class ExportApi
     /// like an export (attachments design, "Server API"): it needs a ticket, unless the user turned "Ask for my password
     /// when downloading several files" off, and it is logged either way. Every file is checked before the first byte.
     /// </summary>
-    private static async Task<IResult> FilesZipAsync(
-        string vault, [FromQuery(Name = "path")] string[]? path, string? tz, string? ticket, UserCatalog users, [AsParameters] Export export)
+    private static Task<IResult> FilesZipAsync(
+        string vault, [FromQuery(Name = "path")] string[]? path, string? tz, string? ticket, UserCatalog users, [AsParameters] Export export) =>
+        ZipFilesAsync(vault, path ?? [], tz, ticket, users, export);
+
+    /// <summary><c>POST /api/files/{vault}/zip</c>: the same, its fields in an <c>application/x-www-form-urlencoded</c>
+    /// body (<c>path</c> once per file, <c>tz</c>, <c>ticket</c>). Read by hand: the form binder would bring antiforgery
+    /// tokens, which the Origin check makes unneeded.</summary>
+    private static async Task<IResult> FilesZipFormAsync(string vault, UserCatalog users, [AsParameters] Export export)
+    {
+        if (!export.Http.Request.HasFormContentType) throw ApiErrors.BadRequest("Send the files as a form: path=<path in the vault>, once per file.");
+        var form = await export.Http.Request.ReadFormAsync(export.Ct);
+        return await ZipFilesAsync(vault, [.. form["path"].OfType<string>()], form["tz"].FirstOrDefault(), form["ticket"].FirstOrDefault(), users, export);
+    }
+
+    private static async Task<IResult> ZipFilesAsync(string vault, string[] asked, string? tz, string? ticket, UserCatalog users, Export export)
     {
         var (store, http, ct) = (export.Store, export.Http, export.Ct);
-        var asked = path ?? [];
         if (asked.Length == 0) throw ApiErrors.BadRequest("Name at least one file: ?path=<path in the vault>, once per file.");
         if (asked.Length > MaxFiles) throw ApiErrors.BadRequest($"A download takes at most {MaxFiles} files at once; this asked for {asked.Length}.");
         // Parsed (NFC, no '.' or '..') before anything is read; one file named twice is one entry.

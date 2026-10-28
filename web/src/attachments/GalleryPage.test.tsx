@@ -73,13 +73,18 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
   });
 }
 
-/** The hrefs the app made the browser download, in order. */
+/** What the app made the browser download, in order: the links it clicked, and the forms it posted. */
 function downloads() {
-  const hrefs: string[] = [];
+  const links: string[] = [];
+  const forms: { method: string; action: string; fields: [string, string][] }[] = [];
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-    hrefs.push(this.getAttribute("href") ?? "");
+    links.push(this.getAttribute("href") ?? "");
   });
-  return hrefs;
+  vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
+    const fields = [...this.querySelectorAll("input")].map((i) => [i.name, i.value] as [string, string]);
+    forms.push({ method: this.method, action: this.getAttribute("action") ?? "", fields });
+  });
+  return { links, forms };
 }
 
 const sections = () => screen.getAllByRole("region").filter((r) => r.closest("[data-testid=gallery]"));
@@ -212,14 +217,14 @@ describe("Gallery", () => {
       return json(200, { ticket: "t1" });
     });
     api({ "POST /api/export/ticket": ticket });
-    const hrefs = downloads();
+    const { links, forms } = downloads();
     renderApp("/gallery/W");
     await screen.findByRole("button", { name: "whiteboard.png" });
 
     // One file needs no password: it comes as it is.
     await longPress("whiteboard.png");
     await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" }));
-    expect(hrefs).toEqual(["/api/files/W/Screenshots/whiteboard.png?download=1"]);
+    expect(links).toEqual(["/api/files/W/Screenshots/whiteboard.png?download=1"]);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "sketch.png" }));
@@ -228,32 +233,45 @@ describe("Gallery", () => {
     await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
     await userEvent.click(within(dialog).getByRole("button", { name: "Download" }));
 
-    await waitFor(() => expect(hrefs).toHaveLength(2));
-    const zip = new URL(hrefs[1], "http://x");
-    expect(zip.pathname).toBe("/api/files/W/zip");
-    expect(zip.searchParams.getAll("path")).toEqual(["Screenshots/whiteboard.png", "Sketches/sketch.png"]);
-    expect(zip.searchParams.get("ticket")).toBe("t1");
-    expect(zip.searchParams.get("tz")).toBeTruthy();
+    // A form posted, not a link: a hundred paths wouldn't fit in an address.
+    await waitFor(() => expect(forms).toHaveLength(1));
+    expect(forms[0].method).toBe("post");
+    expect(forms[0].action).toBe("/api/files/W/zip");
+    expect(forms[0].fields.filter(([name]) => name === "path").map(([, value]) => value)).toEqual(["Screenshots/whiteboard.png", "Sketches/sketch.png"]);
+    expect(forms[0].fields.find(([name]) => name === "ticket")?.[1]).toBe("t1");
+    expect(forms[0].fields.find(([name]) => name === "tz")?.[1]).toBeTruthy();
+    expect(links).toHaveLength(1);
     expect(ticket).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    // The form doesn't stay in the page.
+    expect(document.querySelector("form[action$='/zip']")).toBeNull();
   });
 
   it("with the preference off it downloads without asking", async () => {
     const ticket = vi.fn(() => json(200, { ticket: "t1" }));
-    api({ "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }), "POST /api/export/ticket": ticket });
-    const hrefs = downloads();
+    let ask = false;
+    const preferences = vi.fn(() => json(200, { askPasswordForDownloads: ask }));
+    api({ "GET /api/account/preferences": preferences, "POST /api/export/ticket": ticket });
+    const { forms } = downloads();
     renderApp("/gallery/W");
     await screen.findByRole("button", { name: "whiteboard.png" });
     await longPress("whiteboard.png");
     await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
-    await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" }));
+    const bar = () => within(screen.getByRole("region", { name: "Selection" }));
+    await userEvent.click(bar().getByRole("button", { name: "Download" }));
 
-    await waitFor(() => expect(hrefs).toHaveLength(1));
-    const zip = new URL(hrefs[0], "http://x");
-    expect(zip.searchParams.getAll("path")).toEqual(["Screenshots/whiteboard.png", "Projects/Teaser/banner.png"]);
-    expect(zip.searchParams.has("ticket")).toBe(false);
+    await waitFor(() => expect(forms).toHaveLength(1));
+    expect(forms[0].fields.filter(([name]) => name === "path").map(([, value]) => value)).toEqual(["Screenshots/whiteboard.png", "Projects/Teaser/banner.png"]);
+    expect(forms[0].fields.some(([name]) => name === "ticket")).toBe(false);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(ticket).not.toHaveBeenCalled();
+
+    // Turned back on elsewhere: the setting is asked afresh for every download, and the password is asked again.
+    ask = true;
+    await userEvent.click(bar().getByRole("button", { name: "Download" }));
+    expect(await screen.findByRole("alertdialog", { name: "Download 2 files?" })).toBeInTheDocument();
+    expect(forms).toHaveLength(1);
+    expect(preferences).toHaveBeenCalledTimes(2);
   });
 
   it("delete moves the selection to the trash after confirming", async () => {
@@ -316,6 +334,67 @@ describe("Gallery", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("orders names and folders as the tree does, without numeric order, case after letters", async () => {
+    const odd = {
+      damaged: 0,
+      root: {
+        name: "W",
+        path: "/W",
+        notes: [file("/W/img2.png", at(28, 1), 1), file("/W/img10.png", at(28, 1), 1), file("/W/Apple.png", at(28, 1), 1), file("/W/apple.png", at(28, 1), 1)],
+        folders: [
+          { name: "a b", path: "/W/a b", folders: [], notes: [file("/W/a b/x.png", at(28, 1), 1)] },
+          {
+            name: "a",
+            path: "/W/a",
+            notes: [file("/W/a/y.png", at(28, 1), 1)],
+            folders: [{ name: "c", path: "/W/a/c", folders: [], notes: [file("/W/a/c/z.png", at(28, 1), 1)] }],
+          },
+          { name: "B", path: "/W/B", folders: [], notes: [file("/W/B/Banner.png", at(28, 1), 1)] },
+        ],
+      },
+    };
+    api({ "GET /api/vaults/W/tree": () => json(200, odd) });
+    renderApp("/gallery/W");
+    await userEvent.click(await screen.findByRole("radio", { name: "Name" }));
+    expect(tileNames()).toEqual(["apple.png", "Apple.png", "Banner.png", "img10.png", "img2.png", "x.png", "y.png", "z.png"]);
+    await userEvent.click(screen.getByRole("radio", { name: "Folder" }));
+    expect(sections().map((s) => s.getAttribute("aria-label"))).toEqual(["/", "/a", "/a/c", "/a b", "/B"]);
+    expect(tileNames(sections()[0])).toEqual(["apple.png", "Apple.png", "img10.png", "img2.png"]);
+  });
+
+  it("a move refused on the way names the file, keeps the rest selected and moves only those on a second try", async () => {
+    const moves: string[] = [];
+    let refuse = true;
+    api({
+      "POST /api/move": async (r) => {
+        const { from } = (await r.json()) as { from: string };
+        if (from.endsWith("banner.png") && refuse) return json(409, { error: "It changed meanwhile." });
+        moves.push(from);
+        return json(200, { message: "moved" });
+      },
+    });
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await longPress("whiteboard.png");
+    await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
+    await userEvent.click(screen.getByRole("button", { name: "layout_editor_bad1.png" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Move" }));
+    const dialog = await screen.findByRole("dialog", { name: "Move 3 files" });
+    await userEvent.selectOptions(within(dialog).getByLabelText("Folder"), "/W/Sketches");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+
+    expect(await within(dialog).findByText(/banner\.png didn't move: It changed meanwhile\./)).toHaveTextContent("Moved 1 of 3.");
+    expect(moves).toEqual(["/W/Screenshots/whiteboard.png"]);
+    // Only what moved left the selection.
+    expect(screen.getByRole("region", { name: "Selection" })).toHaveTextContent("2 selected");
+    expect(within(dialog).getByRole("heading")).toHaveTextContent("Move 2 files");
+
+    refuse = false;
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move" }));
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("Moved 3 files.");
+    expect(moves).toEqual(["/W/Screenshots/whiteboard.png", "/W/Projects/Teaser/banner.png", "/W/Screenshots/layout_editor_bad1.png"]);
+  });
+
   it("shows a friendly way to upload when the vault has no images or PDFs", async () => {
     api({ "GET /api/vaults/W/tree": () => json(200, { damaged: 0, root: { name: "W", path: "/W", folders: [], notes: [] } }) });
     const router = renderApp("/gallery/W");
@@ -326,10 +405,18 @@ describe("Gallery", () => {
 
   it("loads a tile only near the screen and lets go of it when it leaves; a PDF's tile frees its document once drawn", async () => {
     const observed = new Map<Element, (entries: { isIntersecting: boolean }[]) => void>();
+    const roots = new Set<Element | Document | null>();
+    const margins = new Set<string | undefined>();
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        constructor(
+          private readonly callback: (entries: { isIntersecting: boolean }[]) => void,
+          options: IntersectionObserverInit,
+        ) {
+          roots.add(options.root ?? null);
+          margins.add(options.rootMargin);
+        }
         observe(element: Element) {
           observed.set(element, this.callback);
         }
@@ -349,6 +436,9 @@ describe("Gallery", () => {
     const fetched = () => fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname).filter((p) => p.startsWith("/api/files/"));
     await screen.findByRole("button", { name: "whiteboard.png" });
     expect(fetched()).toEqual([]);
+    // Near means near the gallery's own scrolling list, about a screen of it ahead.
+    expect([...roots]).toEqual([screen.getByTestId("gallery")]);
+    expect([...margins]).toEqual(["100% 0px"]);
 
     report("whiteboard.png", true);
     await waitFor(() => expect(tile("whiteboard.png").querySelector("img")).toHaveAttribute("src", "blob:file"));

@@ -241,8 +241,18 @@ public sealed class NoteApiTests(KumbuAppFactory app)
         var shot = root["notes"]![1]!;
         Assert.Equal((await JsonAsync(state))["version"]!.GetValue<string>(), shot["version"]!.GetValue<string>());
         Assert.True(DateTime.UtcNow - shot["writtenAt"]!.GetValue<DateTime>().ToUniversalTime() < TimeSpan.FromMinutes(1));
-        Assert.Null(root["notes"]![0]!["version"]);
-        Assert.Null(root["notes"]![0]!["writtenAt"]);
+        var note = root["notes"]![0]!.AsObject();
+        Assert.False(note.ContainsKey("version"));
+        Assert.False(note.ContainsKey("writtenAt"));
+
+        // A move changes no bytes: the time of writing stays (as a note's last write does), the one the lightbox shows.
+        using var moved = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/Berichte/shot.png", keepLinks = false });
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        using var after = await user.GetAsync($"/api/vaults/{user.Vault}/tree");
+        var there = (await JsonAsync(after))["root"]!["folders"]![0]!["notes"]!.AsArray().Single(n => n!["name"]!.GetValue<string>() == "shot.png")!;
+        Assert.Equal(shot["writtenAt"]!.GetValue<DateTime>(), there["writtenAt"]!.GetValue<DateTime>());
+        using var info = await user.GetAsync(user.Url("Berichte/shot.png", "version"));
+        Assert.Equal(there["writtenAt"]!.GetValue<DateTime>(), (await JsonAsync(info))["lastWriteAt"]!.GetValue<DateTime>());
     }
 
     [Fact]

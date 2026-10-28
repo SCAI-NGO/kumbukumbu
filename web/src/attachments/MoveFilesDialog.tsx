@@ -14,19 +14,24 @@ const folderLabel = (path: string) => (path.split("/").length === 2 ? `${path.sl
 /**
  * Moves several images and PDFs of one vault into a folder of it (`POST /api/move`, one after the other), each
  * keeping its name; the server rewrites the links to each, as for one. A name the folder has already stops it before
- * anything moves; a refusal on the way stops it there, saying what moved. `onMoved` hears the paths that moved.
+ * anything moves; a refusal on the way stops it there, naming the file and saying how many moved, and a second try
+ * moves only those left. `onMoved` hears the paths that moved (their old ones).
  */
 export default function MoveFilesDialog({ paths, onClose, onMoved }: { paths: string[]; onClose(): void; onMoved(moved: string[]): void }) {
   const id = useId();
-  const dialog = useDialog<HTMLFormElement>(onClose);
   const tree = useTree(vaultOf(paths[0]));
   const move = useMove();
   const [parent, setParent] = useState(() => folderOf(paths[0]));
+  // What is still to move: after a refusal, the files that didn't go yet.
+  const [remaining, setRemaining] = useState(paths);
+  const [movedSoFar, setMovedSoFar] = useState(0);
   const [problem, setProblem] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // Not closed while files are moving: what moved and what didn't would be lost.
+  const dialog = useDialog<HTMLFormElement>(() => !pending && onClose());
   const [done, setDone] = useState<string | null>(null);
   const folders = tree.data ? allFolders(tree.data.root).map((f) => f.path) : [parent];
-  const moving = paths.filter((p) => folderOf(p) !== parent);
+  const moving = remaining.filter((p) => folderOf(p) !== parent);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -44,11 +49,15 @@ export default function MoveFilesDialog({ paths, onClose, onMoved }: { paths: st
         await move.mutateAsync({ from, to: `${parent}/${titleOf(from)}` });
         moved.push(from);
       }
-      setDone(moved.length === 1 ? "Moved 1 file." : `Moved ${moved.length} files.`);
+      const all = movedSoFar + moved.length;
+      setDone(all === 1 ? "Moved 1 file." : `Moved ${all} files.`);
     } catch (error) {
-      setProblem(`${moved.length > 0 ? `Moved ${moved.length} of ${moving.length}, then: ` : ""}${errorText(error)}`);
+      const failed = moving[moved.length];
+      setProblem(`${moved.length > 0 ? `Moved ${moved.length} of ${moving.length}. ` : ""}${titleOf(failed)} didn't move: ${errorText(error)}`);
     } finally {
       setPending(false);
+      setMovedSoFar((n) => n + moved.length);
+      setRemaining((r) => r.filter((p) => !moved.includes(p)));
       if (moved.length > 0) onMoved(moved);
     }
   };
@@ -64,7 +73,7 @@ export default function MoveFilesDialog({ paths, onClose, onMoved }: { paths: st
         className="k-sheet flex w-full max-w-md flex-col gap-4 rounded-[16px] border border-line bg-surface p-[18px] pb-[max(18px,env(safe-area-inset-bottom))]"
       >
         <h2 id={`${id}-title`} className="text-[20px] font-bold break-words text-text">
-          {done ? "Files moved" : `Move ${paths.length} files`}
+          {done ? "Files moved" : `Move ${remaining.length} ${remaining.length === 1 ? "file" : "files"}`}
         </h2>
         {done ? (
           <>
@@ -92,7 +101,7 @@ export default function MoveFilesDialog({ paths, onClose, onMoved }: { paths: st
             <p className="text-sm text-muted">Each keeps its name. Links to them in notes are updated to the new place, so they keep working.</p>
             {problem && <FormError>{problem}</FormError>}
             <div className="flex gap-2.5">
-              <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+              <button type="button" disabled={pending} onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
                 Cancel
               </button>
               <button type="submit" disabled={pending || moving.length === 0} className={`${primaryButtonClass} flex-1`}>

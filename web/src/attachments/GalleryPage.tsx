@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { ArrowLeft, Check, Download, FileText, Folder, FolderInput, Image as ImageIcon, ListChecks, Trash2, Upload, X } from "lucide-react";
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { createContext, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useAttachmentUrl, useDeleteFile, useTree, type TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, inVault, titleOf, viewUrl, type LightboxState } from "../api/paths";
+import { folderOrder, textOrder } from "../api/textOrder";
 import ConfirmTyped from "../components/ConfirmTyped";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { sizeText } from "../components/Sheet";
@@ -13,7 +15,7 @@ import { topDialog, useDialog } from "../hooks/useDialog";
 import MoveDialog from "../shell/MoveDialog";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "./DeleteFileDialog";
-import { downloadFile, downloadZip, maxZipFiles, usePreferences } from "./downloadFiles";
+import { downloadFile, downloadZip, maxZipFiles, preferencesQuery } from "./downloadFiles";
 import MoveFilesDialog from "./MoveFilesDialog";
 import { openPdf } from "./pdf";
 import { useLongPress, useSelection } from "./useSelection";
@@ -63,9 +65,8 @@ function filesOf(folder: TreeFolder): GalleryFile[] {
   return [...here, ...folder.folders.flatMap(filesOf)];
 }
 
-/** A–Z for people: case and accents aside, numbers by their value; equal so far, by code point, for a stable order. */
-const byText = (a: string, b: string) => a.localeCompare(b, "en", { sensitivity: "base", numeric: true }) || (a < b ? -1 : a > b ? 1 : 0);
-const byName = (a: GalleryFile, b: GalleryFile) => byText(a.name, b.name) || byText(a.path, b.path);
+/** By name in the tree's text order, the same name in two folders by the folders'. */
+const byName = (a: GalleryFile, b: GalleryFile) => textOrder(a.name, b.name) || folderOrder(folderOf(a.path), folderOf(b.path));
 
 /** A section of the gallery: a day, a folder, or (by name) the one untitled list. */
 export interface GalleryGroup {
@@ -83,7 +84,7 @@ function dayLabel(d: Date, now: Date) {
 }
 
 /** `/Work/Projects/Teaser` → `/Projects/Teaser`, the vault's top level as `/`. */
-const folderLabel = (folder: string) => folder.slice(folder.indexOf("/", 1)) || "/";
+const folderLabel = (folder: string) => (folder.indexOf("/", 1) < 0 ? "/" : folder.slice(folder.indexOf("/", 1)));
 
 /**
  * The gallery's sections in an order (attachments design, "Gallery"): by date, newest first, a section a day (the
@@ -95,8 +96,8 @@ export function arrange(files: GalleryFile[], order: GalleryOrder, now = new Dat
     const folders = new Map<string, GalleryFile[]>();
     for (const file of files) folders.set(folderOf(file.path), [...(folders.get(folderOf(file.path)) ?? []), file]);
     return [...folders]
-      .map(([folder, list]) => ({ label: folderLabel(folder), files: list.sort(byName) }))
-      .sort((a, b) => byText(a.label, b.label));
+      .sort(([a], [b]) => folderOrder(a, b))
+      .map(([folder, list]) => ({ label: folderLabel(folder), files: list.sort(byName) }));
   }
   const time = (f: GalleryFile) => (f.writtenAt ? Date.parse(f.writtenAt) : 0);
   const groups: GalleryGroup[] = [];
@@ -118,12 +119,13 @@ export default function GalleryPage() {
   const navigate = useNavigate();
   const tree = useTree(vault);
   const [order, setOrder] = useState(storedOrder);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const selection = useSelection();
-  const { selected, selecting, toggle, clear, keep } = selection;
+  const { selected, selecting, toggle, clear, keep, drop } = selection;
   // A dialog keeps the files it was opened for: the selection changes under it as they move or go.
   const [dialog, setDialog] = useState<{ kind: "download" | "move" | "delete"; files: GalleryFile[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  const preferences = usePreferences();
+  const queryClient = useQueryClient();
 
   const files = useMemo(() => (tree.data ? filesOf(tree.data.root) : []), [tree.data]);
   const groups = useMemo(() => arrange(files, order), [files, order]);
@@ -171,11 +173,17 @@ export default function GalleryPage() {
     navigate("/");
   };
 
-  const download = () => {
+  const download = async () => {
     setProblem(null);
     if (chosen.length === 1) return downloadFile(chosen[0].path);
-    if (preferences.data?.askPasswordForDownloads === false) return void downloadZip(vault, selected).catch((e) => setProblem(errorText(e)));
-    setDialog({ kind: "download", files: chosen });
+    const files = chosen;
+    // Asked afresh: a setting turned back on elsewhere must not leave a ZIP without its ticket. Unknown, it asks.
+    const ask = await queryClient
+      .fetchQuery({ ...preferencesQuery, staleTime: 0 })
+      .then((p) => p.askPasswordForDownloads)
+      .catch(() => true);
+    if (ask) setDialog({ kind: "download", files });
+    else void downloadZip(vault, files.map((f) => f.path));
   };
 
   const versioned = chosen.every((f) => f.version);
@@ -212,7 +220,7 @@ export default function GalleryPage() {
         ))}
       </div>
 
-      <div data-testid="gallery" className={`min-h-0 flex-1 overflow-y-auto px-3 pt-1 ${selecting ? "pb-28" : "pb-6"}`}>
+      <div ref={setScroller} data-testid="gallery" className={`min-h-0 flex-1 overflow-y-auto px-3 pt-1 ${selecting ? "pb-28" : "pb-6"}`}>
         {tree.isPending && <p className="py-3 text-sm text-muted">Loading …</p>}
         {tree.isError && <p className="py-3 text-text">{errorText(tree.error)}</p>}
         {tree.data && files.length === 0 && (
@@ -225,6 +233,7 @@ export default function GalleryPage() {
             </button>
           </div>
         )}
+        <ScrollRoot.Provider value={scroller}>
         {groups.map((group) =>
           group.label ? (
             <section key={group.label} aria-label={group.label} className="mb-2">
@@ -245,6 +254,7 @@ export default function GalleryPage() {
             </div>
           ),
         )}
+        </ScrollRoot.Provider>
       </div>
 
       {selecting && (
@@ -259,7 +269,7 @@ export default function GalleryPage() {
               <X size={20} aria-hidden />
             </button>
             <p className="min-w-0 flex-1 truncate text-sm text-text">{chosen.length === 0 ? "Tap files to select them" : `${chosen.length} selected · ${sizeText(total)}`}</p>
-            <BarButton label="Download" disabled={chosen.length === 0 || chosen.length > maxZipFiles} onClick={download}>
+            <BarButton label="Download" disabled={chosen.length === 0 || chosen.length > maxZipFiles} onClick={() => void download()}>
               <Download size={20} aria-hidden />
             </BarButton>
             <BarButton label="Move" disabled={chosen.length === 0} onClick={() => setDialog({ kind: "move", files: chosen })}>
@@ -277,7 +287,7 @@ export default function GalleryPage() {
         (dialog.files.length === 1 ? (
           <MoveDialog subject={{ kind: "attachment", path: dialog.files[0].path }} onClose={() => setDialog(null)} onMoved={clear} />
         ) : (
-          <MoveFilesDialog paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} onMoved={clear} />
+          <MoveFilesDialog paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} onMoved={drop} />
         ))}
       {dialog?.kind === "delete" &&
         (dialog.files.length === 1 ? (
@@ -342,16 +352,24 @@ function Tiles(props: {
   );
 }
 
-/** Near the screen, within a screen's height and a half of it: only then does a tile hold its picture. */
+/** The gallery's scrolling list, which the tiles are near to or far from (they scroll inside it, not the page). */
+const ScrollRoot = createContext<HTMLElement | null>(null);
+
+/**
+ * Within about a screen's height of the gallery's visible part (above or below): only then does a tile hold its
+ * picture. A screen ahead loads before it is reached; further away the picture goes again, which bounds what a phone
+ * holds (iOS Safari above all) at the price of fetching it anew on the way back.
+ */
 function useNear(element: RefObject<HTMLElement>) {
+  const root = useContext(ScrollRoot);
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
   useEffect(() => {
     const target = element.current;
-    if (!target || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => setNear(entry.isIntersecting), { rootMargin: "150% 0px" });
+    if (!target || !root || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(([entry]) => setNear(entry.isIntersecting), { root, rootMargin: "100% 0px" });
     observer.observe(target);
     return () => observer.disconnect();
-  }, [element]);
+  }, [element, root]);
   return near;
 }
 
@@ -386,7 +404,7 @@ const Tile = memo(function Tile({
       }`}
     >
       {/* Far from the screen a tile holds nothing: its image's object URL is revoked, its PDF canvas emptied. */}
-      {near && (pdf ? <PdfTile vault={vault} path={file.path} /> : <ImageTile vault={vault} path={file.path} />)}
+      {near && (pdf ? <PdfTile vault={vault} path={file.path} version={file.version} /> : <ImageTile vault={vault} path={file.path} version={file.version} />)}
       <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-0.5 text-left text-[10px] text-white">
         {file.name}
       </span>
@@ -408,8 +426,9 @@ function Placeholder({ pdf }: { pdf: boolean }) {
 }
 
 /** The image itself, scaled by the browser (there are no thumbnails on the server in this part). */
-function ImageTile({ vault, path }: { vault: string; path: string }) {
-  const url = useAttachmentUrl(vault, inVault(path));
+function ImageTile({ vault, path, version }: { vault: string; path: string; version?: string }) {
+  // At the version the tree lists: a file changed meanwhile is fetched anew, not shown as it was.
+  const url = useAttachmentUrl(vault, inVault(path), version);
   const [broken, setBroken] = useState(false);
   if (!url || broken) return <Placeholder pdf={false} />;
   return <img src={url} alt="" draggable={false} decoding="async" onError={() => setBroken(true)} className="absolute inset-0 size-full object-cover" />;
@@ -422,7 +441,7 @@ const maxTilePixels = 1_000_000;
  * A PDF's first page at the tile's size, drawn by pdf.js; the document is let go of as soon as it is drawn, and the
  * canvas emptied when the tile leaves (browsers cap what all canvases together may hold, iOS Safari above all).
  */
-function PdfTile({ vault, path }: { vault: string; path: string }) {
+function PdfTile({ vault, path, version }: { vault: string; path: string; version?: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [drawn, setDrawn] = useState(false);
 
@@ -435,7 +454,7 @@ function PdfTile({ vault, path }: { vault: string; path: string }) {
     void (async () => {
       try {
         const { data, response } = await api.GET("/api/files/{vault}/{path}", {
-          params: { path: { vault, path: inVault(path) } },
+          params: { path: { vault, path: inVault(path) }, query: version ? { version } : {} },
           parseAs: "arrayBuffer",
           signal: controller.signal,
         });
@@ -471,7 +490,7 @@ function PdfTile({ vault, path }: { vault: string; path: string }) {
         target.height = 0;
       }
     };
-  }, [vault, path]);
+  }, [vault, path, version]);
 
   return (
     <>
@@ -518,9 +537,10 @@ function ZipDialog({ vault, paths, onClose }: { vault: string; paths: string[]; 
  */
 function DeleteFilesDialog({ files, onDeleted, onClose }: { files: GalleryFile[]; onDeleted(): void; onClose(): void }) {
   const id = useId();
-  const dialog = useDialog<HTMLDivElement>(onClose);
-  const remove = useDeleteFile();
   const [pending, setPending] = useState(false);
+  // Not closed while files are going: what went and what didn't would be lost.
+  const dialog = useDialog<HTMLDivElement>(() => !pending && onClose());
+  const remove = useDeleteFile();
   const [problem, setProblem] = useState<string | null>(null);
   // After a refusal, what is left to go.
   const [list, setList] = useState(files);
@@ -547,12 +567,12 @@ function DeleteFilesDialog({ files, onDeleted, onClose }: { files: GalleryFile[]
     <div className="absolute inset-0 z-30 flex items-end justify-center bg-black/55 p-3 sm:items-center">
       <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} className="k-sheet flex w-full max-w-md flex-col gap-3 rounded-[16px] border border-line bg-surface p-[18px]">
         <h2 id={`${id}-title`} className="text-[20px] font-bold text-text">
-          Delete {list.length} files?
+          Delete {list.length === 1 ? titleOf(list[0].path) : `${list.length} files`}?
         </h2>
         <p className="text-text-body">They go to the vault's trash. Links to them in notes lead nowhere until they are restored.</p>
         {problem && <FormError>{problem}</FormError>}
         <div className="mt-1 flex gap-2.5">
-          <button type="button" data-autofocus onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+          <button type="button" data-autofocus disabled={pending} onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
             Cancel
           </button>
           <button type="button" disabled={pending} onClick={() => void confirm()} className={`${primaryButtonClass} flex-1`}>

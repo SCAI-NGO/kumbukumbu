@@ -4,6 +4,7 @@ using System.Net;
 using System.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Auth;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Kumbu.Server.Vaults;
@@ -493,6 +494,65 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Contains(log.Lines, l => l.Contains($"User {user.User.Id} turned off the password", StringComparison.Ordinal));
         // Ids and counts, never a vault or file name.
         foreach (var name in new[] { "Geheimprojekt", "plan", "scan" }) Assert.DoesNotContain(log.Lines, l => l.Contains(name, StringComparison.Ordinal));
+    }
+
+    /// <summary>The web app's form post: a session with its own Origin, the fields in a form body.</summary>
+    private static Task<HttpResponseMessage> PostZipAsync(RestClient user, IEnumerable<string> paths, string? ticket = null, string? bearer = null)
+    {
+        var fields = paths.Select(p => new KeyValuePair<string, string>("path", p)).Append(new("tz", "Europe/Vienna"));
+        if (ticket is not null) fields = fields.Append(new("ticket", ticket));
+        return user.SendContentAsync(HttpMethod.Post, $"/api/files/{user.Vault}/zip", new FormUrlEncodedContent(fields), bearer);
+    }
+
+    [Fact]
+    public async Task A_zip_posted_as_a_form_takes_the_same_checks_as_the_get()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var png = Png(4, 3);
+        await user.CreateFileAsync("a.png", png);
+        await user.CreateFileAsync("Bücher/b.pdf", Pdf);
+
+        using var without = await PostZipAsync(user, ["a.png", "Bücher/b.pdf"]);
+        using var with = await PostZipAsync(user, ["a.png", "Bücher/b.pdf"], await TicketAsync(user));
+        using var tooMany = await PostZipAsync(user, Enumerable.Range(0, 101).Select(i => $"f{i}.png"), await TicketAsync(user));
+        using var json = await user.SendAsync(HttpMethod.Post, $"/api/files/{user.Vault}/zip", new { path = new[] { "a.png" } });
+        using var key = await PostZipAsync(user, ["a.png"], bearer: await user.KeyAsync("w", KeyRight.Write));
+
+        Assert.Equal(HttpStatusCode.Forbidden, without.StatusCode);
+        Assert.Contains("POST /api/export/ticket", await RestClient.ErrorAsync(without), StringComparison.Ordinal);
+        using var zip = await ZipAsync(with);
+        Assert.Equal(["Bücher/b.pdf", "a.png"], zip.Entries.Select(e => e.FullName).Order(StringComparer.Ordinal));
+        Assert.Equal(png, Bytes(zip.GetEntry("a.png")!));
+        Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+        Assert.Contains("at most 100 files", await RestClient.ErrorAsync(tooMany), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadRequest, json.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, key.StatusCode);
+        Assert.Contains("signed-in session", await RestClient.ErrorAsync(key), StringComparison.Ordinal);
+
+        // With the preference off, no ticket.
+        await TurnPasswordOffAsync(user);
+        using var off = await PostZipAsync(user, ["a.png"]);
+        Assert.Single((await ZipAsync(off)).Entries);
+    }
+
+    [Fact]
+    public async Task A_zip_form_from_another_origin_is_refused()
+    {
+        var user = await RestClient.NewAsync(Api);
+        await user.CreateFileAsync("a.png", Png(1, 1));
+        await TurnPasswordOffAsync(user);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/files/{user.Vault}/zip")
+        {
+            Content = new FormUrlEncodedContent([new KeyValuePair<string, string>("path", "a.png")]),
+        };
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={user.Session}");
+        request.Headers.Add("Origin", "https://elsewhere.example");
+        using var client = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+
+        using var response = await client.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("Kumbu's own pages", await RestClient.ErrorAsync(response), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -21,8 +21,10 @@ export function useSelection() {
   }, []);
   /** Keeps only what is still there (after a move or a delete, or a change elsewhere). */
   const keep = useCallback((paths: ReadonlySet<string>) => setSelected((s) => (s.every((p) => paths.has(p)) ? s : s.filter((p) => paths.has(p)))), []);
+  /** Lets go of these (they moved), keeping the rest selected. */
+  const drop = useCallback((paths: readonly string[]) => setSelected((s) => s.filter((p) => !paths.includes(p))), []);
 
-  return { selected, selecting: mode || selected.length > 0, toggle, clear, keep, start: () => setMode(true) };
+  return { selected, selecting: mode || selected.length > 0, toggle, clear, keep, drop, start: () => setMode(true) };
 }
 
 /**
@@ -32,6 +34,7 @@ export function useSelection() {
 export function useLongPress(onLongPress: (key: string) => void) {
   const press = useRef<{ key: string; x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const done = useRef(false);
+  const pointer = useRef<string>("mouse");
   const callback = useRef(onLongPress);
   callback.current = onLongPress;
 
@@ -44,6 +47,7 @@ export function useLongPress(onLongPress: (key: string) => void) {
   const handlers = useCallback(
     (key: string) => ({
       onPointerDown: (e: PointerEvent) => {
+        pointer.current = e.pointerType;
         // The mouse has Ctrl-click and "Select"; a long press is the finger's (and the pen's).
         if (e.pointerType === "mouse" || e.isPrimary === false) return;
         cancel();
@@ -62,8 +66,10 @@ export function useLongPress(onLongPress: (key: string) => void) {
       onPointerUp: cancel,
       onPointerCancel: cancel,
       onPointerLeave: cancel,
-      // The phone's own long-press menu (save image, share) would cover the selection.
-      onContextMenu: (e: { preventDefault(): void }) => e.preventDefault(),
+      // The phone's own long-press menu (save image, share) would cover the selection; the mouse keeps its menu.
+      onContextMenu: (e: { preventDefault(): void }) => {
+        if (pointer.current !== "mouse") e.preventDefault();
+      },
     }),
     [cancel],
   );
