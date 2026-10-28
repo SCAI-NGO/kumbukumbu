@@ -15,7 +15,7 @@ import { topDialog, useDialog } from "../hooks/useDialog";
 import MoveDialog from "../shell/MoveDialog";
 import { useEditor } from "../state/editor";
 import DeleteFileDialog from "./DeleteFileDialog";
-import { downloadFile, downloadZip, maxZipFiles, preferencesQuery } from "./downloadFiles";
+import { downloadFile, downloadZip, maxZipFiles, preferencesQuery, zipFrameError } from "./downloadFiles";
 import MoveFilesDialog from "./MoveFilesDialog";
 import { openPdf } from "./pdf";
 import { useLongPress, useSelection } from "./useSelection";
@@ -183,7 +183,7 @@ export default function GalleryPage() {
       .then((p) => p.askPasswordForDownloads)
       .catch(() => true);
     if (ask) setDialog({ kind: "download", files });
-    else void downloadZip(vault, files.map((f) => f.path));
+    else void downloadZip(zipFrame, vault, files.map((f) => f.path));
   };
 
   const versioned = chosen.every((f) => f.version);
@@ -281,6 +281,13 @@ export default function GalleryPage() {
           </div>
         </section>
       )}
+
+      {problem && !selecting && (
+        <div className="absolute inset-x-3 bottom-3 z-20">
+          <FormError>{problem}</FormError>
+        </div>
+      )}
+      <ZipFrame onError={setProblem} />
 
       {dialog?.kind === "download" && <ZipDialog vault={vault} paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} />}
       {dialog?.kind === "move" &&
@@ -500,6 +507,32 @@ function PdfTile({ vault, path, version }: { vault: string; path: string; versio
   );
 }
 
+/** The frame the ZIP's form posts into (`postZip`); it stays out of sight and out of the tab order. */
+const zipFrame = "kumbu-zip";
+
+/**
+ * The hidden frame a ZIP is posted into. A ZIP goes to disk and leaves it as it is; an error answer (the server's
+ * JSON) loads into it, is read (it is of the same origin, which the route lets frame it), handed on, and the frame
+ * emptied again.
+ */
+function ZipFrame({ onError }: { onError(message: string): void }) {
+  return (
+    <iframe
+      name={zipFrame}
+      title="Downloads"
+      hidden
+      tabIndex={-1}
+      onLoad={(e) => {
+        const frame = e.currentTarget;
+        const error = zipFrameError(frame);
+        if (error === null) return;
+        onError(error);
+        frame.src = "about:blank";
+      }}
+    />
+  );
+}
+
 /** Several files as one ZIP after the password (unless the user turned that off in Settings). */
 function ZipDialog({ vault, paths, onClose }: { vault: string; paths: string[]; onClose(): void }) {
   const [password, setPassword] = useState("");
@@ -518,7 +551,7 @@ function ZipDialog({ vault, paths, onClose }: { vault: string; paths: string[]; 
         setPending(true);
         setError(null);
         try {
-          await downloadZip(vault, paths, password);
+          await downloadZip(zipFrame, vault, paths, password);
           onClose();
         } catch (e) {
           setError(errorText(e));

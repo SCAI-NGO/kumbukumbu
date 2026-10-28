@@ -529,6 +529,14 @@ public sealed class ExportApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, key.StatusCode);
         Assert.Contains("signed-in session", await RestClient.ErrorAsync(key), StringComparison.Ordinal);
 
+        // The gallery posts into a hidden frame of its own and reads an error there: only this route may be framed,
+        // and only by the app's own origin.
+        string Frames(HttpResponseMessage r) => r.Headers.GetValues("Content-Security-Policy").Single().Split("; ").Single(d => d.StartsWith("frame-ancestors", StringComparison.Ordinal));
+        Assert.Equal("frame-ancestors 'self'", Frames(without));
+        Assert.Equal("frame-ancestors 'self'", Frames(with));
+        using var get = await user.GetAsync(ZipUrl(user, "a.png"));
+        Assert.Equal("frame-ancestors 'none'", Frames(get));
+
         // With the preference off, no ticket.
         await TurnPasswordOffAsync(user);
         using var off = await PostZipAsync(user, ["a.png"]);

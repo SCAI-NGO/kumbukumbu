@@ -76,13 +76,13 @@ function api(extra: Parameters<typeof fakeApi>[0] = {}) {
 /** What the app made the browser download, in order: the links it clicked, and the forms it posted. */
 function downloads() {
   const links: string[] = [];
-  const forms: { method: string; action: string; fields: [string, string][] }[] = [];
+  const forms: { method: string; action: string; target: string; fields: [string, string][] }[] = [];
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
     links.push(this.getAttribute("href") ?? "");
   });
   vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
     const fields = [...this.querySelectorAll("input")].map((i) => [i.name, i.value] as [string, string]);
-    forms.push({ method: this.method, action: this.getAttribute("action") ?? "", fields });
+    forms.push({ method: this.method, action: this.getAttribute("action") ?? "", target: this.target, fields });
   });
   return { links, forms };
 }
@@ -237,6 +237,10 @@ describe("Gallery", () => {
     await waitFor(() => expect(forms).toHaveLength(1));
     expect(forms[0].method).toBe("post");
     expect(forms[0].action).toBe("/api/files/W/zip");
+    // Into the gallery's hidden frame, not the page: an error lands there, not in place of the app.
+    const frame = document.querySelector<HTMLIFrameElement>("iframe[title=Downloads]")!;
+    expect(forms[0].target).toBe(frame.name);
+    expect(frame).not.toBeVisible();
     expect(forms[0].fields.filter(([name]) => name === "path").map(([, value]) => value)).toEqual(["Screenshots/whiteboard.png", "Sketches/sketch.png"]);
     expect(forms[0].fields.find(([name]) => name === "ticket")?.[1]).toBe("t1");
     expect(forms[0].fields.find(([name]) => name === "tz")?.[1]).toBeTruthy();
@@ -272,6 +276,32 @@ describe("Gallery", () => {
     expect(await screen.findByRole("alertdialog", { name: "Download 2 files?" })).toBeInTheDocument();
     expect(forms).toHaveLength(1);
     expect(preferences).toHaveBeenCalledTimes(2);
+  });
+
+  it("an error answer in the download frame is shown in the gallery, and the frame emptied", async () => {
+    api({ "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }) });
+    const { forms } = downloads();
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await longPress("whiteboard.png");
+    await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(forms).toHaveLength(1));
+
+    const frame = document.querySelector<HTMLIFrameElement>("iframe[title=Downloads]")!;
+    // An empty frame (reset, or nothing loaded as the ZIP went to disk) is no error.
+    fireEvent.load(frame);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    frame.contentDocument!.body.textContent = JSON.stringify({ error: "Arbeit has no file Projects/Teaser/banner.png." });
+    fireEvent.load(frame);
+    expect(within(screen.getByRole("region", { name: "Selection" })).getByRole("alert")).toHaveTextContent("Arbeit has no file Projects/Teaser/banner.png.");
+    expect(frame.getAttribute("src")).toBe("about:blank");
+
+    // Something that isn't the API's answer still says the download didn't start.
+    frame.contentDocument!.body.textContent = "<h1>Bad gateway</h1>";
+    fireEvent.load(frame);
+    expect(screen.getByRole("alert")).toHaveTextContent("The download didn't start. Try again.");
   });
 
   it("delete moves the selection to the trash after confirming", async () => {

@@ -53,7 +53,9 @@ public static class ExportApi
             .Errors(400, 401, 403, 404, 503);
         // The same as a form post (the web app's): a hundred paths would make the GET's request line too long. The
         // Origin check (Security.UseCallerRules) is its CSRF guard, as for every state-changing session request.
+        // Posted into a hidden frame of the gallery, which reads an error answer there: the frame must be allowed.
         api.MapPost("/files/{vault}/zip", FilesZipFormAsync)
+            .WithMetadata(SameOriginFramesMetadata.Instance)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
     }

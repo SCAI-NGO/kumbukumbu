@@ -17,14 +17,23 @@ public sealed class OriginExemptMetadata
     public static readonly OriginExemptMetadata Instance = new();
 }
 
+/// <summary>Marks an endpoint whose answers the app's own pages may load into a frame (the gallery's ZIP download,
+/// posted into a hidden frame so that an error can be read there instead of replacing the app): its responses get
+/// <c>frame-ancestors 'self'</c> instead of <c>'none'</c>. Only the same origin can frame them, so no other site can
+/// lay them under its own page.</summary>
+public sealed class SameOriginFramesMetadata
+{
+    public static readonly SameOriginFramesMetadata Instance = new();
+}
+
 /// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints.</summary>
 public static class Security
 {
     /// <summary>
     /// Only the app's own scripts, styles, images and connections. <c>base-uri</c> and <c>form-action</c> don't fall
-    /// back to <c>default-src</c>: no <c>&lt;base&gt;</c> may redirect relative URLs, and forms may only post to the
-    /// app (the web app's forms submit through fetch anyway). <c>object-src 'none'</c> is stricter than the
-    /// <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
+    /// back to <c>default-src</c>: no <c>&lt;base&gt;</c> may redirect relative URLs, and forms may only post to the app
+    /// (the web app's submit through fetch, but for the gallery's ZIP, a same-origin form post). <c>object-src 'none'</c>
+    /// is stricter than the <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
     /// it fetched (with its session) through an object URL. <c>worker-src 'self'</c> is what it would inherit, said
     /// explicitly: the only worker is pdf.js's, a file of the app; no <c>blob:</c> worker, and no WebAssembly (pdf.js
     /// runs without it, so no <c>'wasm-unsafe-eval'</c>). Scripts never get <c>'unsafe-eval'</c>: nothing in a PDF is
@@ -33,6 +42,9 @@ public static class Security
     public const string ContentSecurityPolicy =
         "default-src 'self'; img-src 'self' data: blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
         "base-uri 'none'; form-action 'self'; object-src 'none'";
+
+    /// <summary>The same, for an endpoint marked <see cref="SameOriginFramesMetadata"/>: only its own origin may frame it.</summary>
+    public static readonly string SameOriginFramesPolicy = ContentSecurityPolicy.Replace("frame-ancestors 'none'", "frame-ancestors 'self'", StringComparison.Ordinal);
 
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>
     public const string StrictTransportSecurity = "max-age=31536000; includeSubDomains";
@@ -59,7 +71,9 @@ public static class Security
                 var headers = context.Response.Headers;
                 headers.XContentTypeOptions = "nosniff";
                 headers.TryAdd("Referrer-Policy", "same-origin"); // unless stricter already, as on /oauth/authorize
-                headers.ContentSecurityPolicy = ContentSecurityPolicy;
+                headers.ContentSecurityPolicy = context.GetEndpoint()?.Metadata.GetMetadata<SameOriginFramesMetadata>() is null
+                    ? ContentSecurityPolicy
+                    : SameOriginFramesPolicy;
                 if (httpsPublicUrl || (context.Request.IsHttps && !IsLoopbackHost(context.Request.Host.Host))) headers.StrictTransportSecurity = StrictTransportSecurity;
                 // API answers are per user and some carry a secret shown once (keys, codes, recovery keys):
                 // no browser or proxy cache may keep them.
