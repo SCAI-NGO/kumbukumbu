@@ -166,7 +166,8 @@ public static class Security
 /// 20 per minute per address, join and recovery 5 per minute per address; checking the current password of a
 /// password change or of a new recovery key 5 per minute per username (together). Every attempt counts,
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
-/// the server spend. Sliding windows, as in <see cref="WrongKeyLimiter"/>.
+/// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
+/// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
 {
@@ -176,6 +177,14 @@ public sealed class AccountLimits : IDisposable
     public const int RecoveriesPerAddress = 5;
     public const int RedeemsPerAddress = 10;
     public const int RedeemFailuresPerServer = 100;
+
+    /// <summary>
+    /// Each of these requests reads every note in its scope with its history. The web app asks once per search that
+    /// rested for 200 ms (with the switch for earlier versions on) and once per page of 50 activity rows, and asks
+    /// again for each page shown when the window regains focus; a person stays well under 60 a minute, while a stolen
+    /// session gets one whole-vault read a second rather than as many as it can open connections for.
+    /// </summary>
+    public const int HistoryScansPerUser = 60;
 
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
@@ -189,6 +198,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _recoveryByAddress = Limiter(RecoveriesPerAddress);
     private readonly PartitionedRateLimiter<string> _redeemByAddress = Limiter(RedeemsPerAddress);
     private readonly PartitionedRateLimiter<string> _redeemFailures = Limiter(RedeemFailuresPerServer);
+    private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
 
     /// <summary>Null if the sign-in may go ahead, else how long to wait. The address is asked first, so a client
     /// over its own limit uses up nothing of the username's.</summary>
@@ -206,6 +216,11 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>Redeeming a pairing code: 10 attempts a minute per address.</summary>
     public TimeSpan? Redeem(HttpContext context) => Take(_redeemByAddress, Address(context));
+
+    /// <summary>Searching earlier versions or reading a vault's activity, counted per user across their sessions.</summary>
+    public TimeSpan? HistoryScan(string userId) => Take(_historyScanByUser, userId);
+
+    public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
     /// <summary>
     /// Whether the server has seen 100 wrong codes in the last minute. A wrong code can't tell which code it was aimed
@@ -263,5 +278,6 @@ public sealed class AccountLimits : IDisposable
         _recoveryByAddress.Dispose();
         _redeemByAddress.Dispose();
         _redeemFailures.Dispose();
+        _historyScanByUser.Dispose();
     }
 }
