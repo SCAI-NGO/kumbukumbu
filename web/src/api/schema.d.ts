@@ -6527,6 +6527,10 @@ export interface components {
              * @default 0
              */
             size: number | string;
+            /** Format: int32 */
+            width?: null | number | string;
+            /** Format: int32 */
+            height?: null | number | string;
         };
         NoteView: {
             path: string;

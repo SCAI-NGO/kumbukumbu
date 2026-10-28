@@ -25,10 +25,13 @@ public static class Security
     /// back to <c>default-src</c>: no <c>&lt;base&gt;</c> may redirect relative URLs, and forms may only post to the
     /// app (the web app's forms submit through fetch anyway). <c>object-src 'none'</c> is stricter than the
     /// <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
-    /// it fetched (with its session) through an object URL.
+    /// it fetched (with its session) through an object URL. <c>worker-src 'self'</c> is what it would inherit, said
+    /// explicitly: the only worker is pdf.js's, a file of the app; no <c>blob:</c> worker, and no WebAssembly (pdf.js
+    /// runs without it, so no <c>'wasm-unsafe-eval'</c>). Scripts never get <c>'unsafe-eval'</c>: nothing in a PDF is
+    /// compiled into code.
     /// </summary>
     public const string ContentSecurityPolicy =
-        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
+        "default-src 'self'; img-src 'self' data: blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
         "base-uri 'none'; form-action 'self'; object-src 'none'";
 
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>

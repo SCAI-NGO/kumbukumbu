@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -34,6 +34,9 @@ async function openDrawer() {
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
+    // The lightbox, once open: the file is gone meanwhile.
+    "GET /api/files/*": () => json(404, { error: "No such file" }),
+    "GET /api/version/*": () => json(404, { error: "No such file" }),
   });
   const router = renderApp("/notes/Work/plan.md");
   await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
@@ -67,7 +70,7 @@ describe("attachments in the tree", () => {
   it("opens an attachment in the lightbox with the folder's attachments in order", async () => {
     const router = await openDrawer();
     await userEvent.click(within(drawer()).getByRole("button", { name: "report.pdf" }));
-    expect(router.state.location.pathname).toBe("/view/Work/report.pdf");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/view/Work/report.pdf"));
     expect(router.state.location.state).toEqual({ paths: ["/Work/a shot.png", "/Work/report.pdf", "/Work/z photo.jpg"] });
   });
 });

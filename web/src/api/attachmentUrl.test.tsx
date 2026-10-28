@@ -41,13 +41,41 @@ describe("useAttachmentUrl", () => {
     expect(revoke).toHaveBeenCalledWith("blob:shot");
   });
 
+  it("never answers the previous file's revoked URL after a change of file", async () => {
+    fakeApi({
+      "GET /api/files/W/one.png": () => new Response(new Uint8Array([1]), { headers: { "Content-Type": "image/png" } }),
+      "GET /api/files/W/two.png": () => new Promise<Response>(() => {}), // still loading
+    });
+    let n = 0;
+    const create = vi.fn((_: Blob) => `blob:${++n}`);
+    const revoke = vi.fn();
+    URL.createObjectURL = create;
+    URL.revokeObjectURL = revoke;
+
+    // Every render's answer: the one right after the change, before any effect has run, counts too.
+    const seen: [string, string | null | undefined][] = [];
+    const { result, rerender } = renderHook(
+      ({ path }) => {
+        const url = useAttachmentUrl("W", path);
+        seen.push([path, url]);
+        return url;
+      },
+      { initialProps: { path: "one.png" } },
+    );
+    await waitFor(() => expect(result.current).toBe("blob:1"));
+    rerender({ path: "two.png" });
+    expect(revoke).toHaveBeenCalledWith("blob:1");
+    expect(seen.some(([path]) => path === "two.png")).toBe(true);
+    expect(seen.filter(([path, url]) => path === "two.png" && url !== undefined)).toEqual([]);
+  });
+
   it("answers no URL for a file that can't be read", async () => {
     const fetch = fakeApi({ "GET /api/files/W/gone.png": () => new Response(JSON.stringify({ error: "No such file" }), { status: 404, headers: { "Content-Type": "application/json" } }) });
     const { create } = objectUrls();
     const { result } = renderHook(() => useAttachmentUrl("W", "gone.png"));
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(result.current).toBeUndefined();
+    await waitFor(() => expect(result.current).toBeNull());
+    expect(fetch).toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });
 });

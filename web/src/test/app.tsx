@@ -5,9 +5,15 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { vi } from "vitest";
 import { routerFuture, routes } from "../router";
 
-/** The app's routes in a memory router at `path`, with a fresh query cache. */
-export function renderApp(path: string, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
-  const router = createMemoryRouter(routes, { initialEntries: [path], future: routerFuture });
+type InitialEntry = NonNullable<NonNullable<Parameters<typeof createMemoryRouter>[1]>["initialEntries"]>[number];
+
+/**
+ * The app's routes in a memory router at `path` (or at the last of several entries, a history to go back through),
+ * with a fresh query cache.
+ */
+export function renderApp(path: InitialEntry | InitialEntry[], queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  const entries = Array.isArray(path) ? path : [path];
+  const router = createMemoryRouter(routes, { initialEntries: entries, initialIndex: entries.length - 1, future: routerFuture });
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} future={{ v7_startTransition: true }} />

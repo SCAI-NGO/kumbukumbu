@@ -114,6 +114,7 @@ export const routes: RouteObject[] = [
           },
           { path: "/checkpoints/:vault/:name/*", lazy: lazyPage(() => import("./routes/Checkpoint")) },
           { path: "/board/:vault", lazy: lazyPage(() => import("./board/BoardPage")) },
+          { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
           { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },

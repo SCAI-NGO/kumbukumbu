@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -16,10 +17,13 @@ namespace Kumbu.Server.Api;
 public sealed record RestoreRequest(string? Version = null, string? Expected = null);
 
 /// <summary>The open note's or attachment's version and last write, without its content: what the web app polls.
-/// <c>lastWriterKind</c> as on a note; <c>kind</c> and <c>mediaType</c> as in the tree, <c>size</c> in bytes (a note's UTF-8).</summary>
+/// <c>lastWriterKind</c> as on a note; <c>kind</c> and <c>mediaType</c> as in the tree, <c>size</c> in bytes (a note's UTF-8);
+/// <c>width</c> and <c>height</c> an image's as displayed (the lightbox's info), left out for notes and PDFs.</summary>
 public sealed record NoteVersionView(
     string Path, string Version, string LastWriter, DateTime LastWriteAt, string? LastWriterKind = null,
-    string Kind = "note", string MediaType = NoteApi.NoteMediaType, long Size = 0);
+    string Kind = "note", string MediaType = NoteApi.NoteMediaType, long Size = 0,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Width = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Height = null);
 
 /// <summary>A removed note or attachment; <c>expiresAt</c>: when it leaves the trash for good, <c>size</c> in bytes (a
 /// note's UTF-8), <c>lines</c> 0 for an attachment. <c>kind</c> and <c>mediaType</c> as in the tree.</summary>
@@ -169,7 +173,7 @@ public static class HistoryApi
             var file = await StoreAttachments.GetAsync(store, notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
             return TypedResults.Ok(new NoteVersionView(
                 notePath.Value, file.Version, file.LastWriter, file.LastWriteAt, await kinds.OfAsync(file.LastWriter, ct),
-                AttachmentFormat.KindOf(notePath.Name), file.Current.MediaType, file.Current.Size));
+                AttachmentFormat.KindOf(notePath.Name), file.Current.MediaType, file.Current.Size, file.Current.Width, file.Current.Height));
         }
 
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);

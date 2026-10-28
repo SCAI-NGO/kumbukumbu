@@ -216,15 +216,16 @@ export function useDeleteNote() {
 
 /**
  * An attachment's bytes (`path` within `vault`, at `version` if given) as an object URL for an `img` or pdf.js:
- * fetched with the session, as the server serves files to signed-in users only. Undefined while they load, or if
+ * fetched with the session, as the server serves files to signed-in users only. Undefined while they load, null if
  * they can't be read; the URL is revoked when the component unmounts or asks for another file.
  */
-export function useAttachmentUrl(vault: string, path: string, version?: string): string | undefined {
-  const [url, setUrl] = useState<string>();
+export function useAttachmentUrl(vault: string, path: string, version?: string): string | null | undefined {
+  const key = `${vault}\n${path}\n${version ?? ""}`;
+  // Kept with the file it was made for: after a change of file the old one, revoked by then, is never answered.
+  const [made, setMade] = useState<{ key: string; url: string | null }>();
   useEffect(() => {
     const controller = new AbortController();
-    let made: string | undefined;
-    setUrl(undefined);
+    let url: string | undefined;
     api
       .GET("/api/files/{vault}/{path}", {
         params: { path: { vault, path }, query: version ? { version } : {} },
@@ -232,15 +233,37 @@ export function useAttachmentUrl(vault: string, path: string, version?: string):
         signal: controller.signal,
       })
       .then(({ data, response }) => {
-        if (!response.ok || !data || controller.signal.aborted) return;
-        made = URL.createObjectURL(data);
-        setUrl(made);
+        if (controller.signal.aborted) return;
+        if (!response.ok || !data) return setMade({ key, url: null });
+        url = URL.createObjectURL(data);
+        setMade({ key, url });
       })
-      .catch(() => {}); // Aborted, or the network failed: no URL.
+      // The network failed: no URL. Aborted: another file, or none, is wanted now.
+      .catch(() => !controller.signal.aborted && setMade({ key, url: null }));
     return () => {
       controller.abort();
-      if (made) URL.revokeObjectURL(made);
+      if (url) URL.revokeObjectURL(url);
     };
-  }, [vault, path, version]);
-  return url;
+  }, [key, vault, path, version]);
+  return made?.key === key ? made.url : undefined;
+}
+
+/** An attachment as it is, without its bytes (`GET /api/version`): size, dimensions, version and last write. */
+export const useFileInfo = (path: string) =>
+  useQuery({ queryKey: ["version", path], queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })) });
+
+/**
+ * Moves an attachment to the vault's trash, only if it is still at `version` (else a 409: it changed meanwhile).
+ * The notes that link to it are told apart by the dialog before; their links lead nowhere afterwards.
+ */
+export function useDeleteFile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, version }: { path: string; version?: string }) =>
+      call(api.DELETE("/api/files/{vault}/{path}", { params: { ...params(path), query: version ? { version } : {} } })),
+    onSuccess: (_, { path }) => {
+      queryClient.removeQueries({ queryKey: ["version", path] });
+      for (const key of ["tree", "vaults", "trash", "links", "backlinks", "activity", "history"]) void queryClient.invalidateQueries({ queryKey: [key] });
+    },
+  });
 }

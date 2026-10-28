@@ -363,6 +363,9 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal("image", state["kind"]!.GetValue<string>());
         Assert.Equal("image/png", state["mediaType"]!.GetValue<string>());
         Assert.Equal(one.Length, state["size"]!.GetValue<long>());
+        // The dimensions of the version restored last, as the lightbox's info shows them.
+        Assert.Equal(4, state["width"]!.GetValue<int>());
+        Assert.Equal(4, state["height"]!.GetValue<int>());
     }
 
     [Fact]
