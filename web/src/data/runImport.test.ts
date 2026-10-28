@@ -2,11 +2,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../api/client";
 import type { UploadFile } from "../upload/planUpload";
-import type { ImportNote, ImportVault } from "./readImport";
+import type { ImportFile, ImportNote, ImportVault } from "./readImport";
 import { planImport, runImport, summaryText, type Choice, type ImportApi, type VaultPlan } from "./runImport";
 
 const note = (path: string, version = `v-${path}`, content = `text of ${path}`): ImportNote => ({ path, content, version });
-const vault = (name: string, notes: ImportNote[], skipped: ImportVault["skipped"] = []): ImportVault => ({ name, notes, skipped });
+const vault = (name: string, notes: ImportNote[], skipped: ImportVault["skipped"] = [], files: ImportFile[] = []): ImportVault => ({ name, notes, files, skipped });
+const bytesOf = (path: string) => new TextEncoder().encode(`bytes of ${path}`);
+const file = (path: string, version = `v-${path}`): ImportFile => ({ path, size: bytesOf(path).length, version, read: () => bytesOf(path) });
+
+interface Put {
+  vault: string;
+  path: string;
+  body: string;
+  version: string | null;
+}
 
 interface Call {
   vault: string;
@@ -18,6 +27,7 @@ interface Call {
 function fakeApi(overrides: Partial<ImportApi> = {}) {
   const created: string[] = [];
   const uploads: Call[] = [];
+  const puts: Put[] = [];
   const api: ImportApi = {
     createVault: vi.fn(async (name: string) => {
       created.push(name);
@@ -29,9 +39,13 @@ function fakeApi(overrides: Partial<ImportApi> = {}) {
         ? { written: 0, replaced: files.length, skipped: [] }
         : { written: files.length, replaced: 0, skipped: [] };
     }),
+    putFile: vi.fn(async (v: string, path: string, bytes: Uint8Array, version: string | null) => {
+      puts.push({ vault: v, path, body: new TextDecoder().decode(bytes), version });
+      return version === null ? "created" : "replaced";
+    }),
     ...overrides,
   };
-  return { api, created, uploads };
+  return { api, created, uploads, puts };
 }
 
 const run = (plans: VaultPlan[], choices: Record<string, Choice> = {}, api = fakeApi().api) =>
@@ -77,7 +91,7 @@ describe("runImport", () => {
       [400, 450],
       [450, 450],
     ]);
-    expect(summary).toEqual({ vaults: 1, imported: 450, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] });
+    expect(summary).toEqual({ vaults: 1, imported: 450, files: 0, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] });
   });
 
   it("splits a batch at 5 MB of text", async () => {
@@ -118,7 +132,7 @@ describe("runImport", () => {
     const summary = await run(planImport([vault("Work", notes)], [{ name: "Work", versions }]), {}, api);
     expect(uploads).toEqual([]);
     expect(created).toEqual([]);
-    expect(summary).toEqual({ vaults: 1, imported: 0, replaced: 0, kept: 0, unchanged: 2, skipped: [], failed: [] });
+    expect(summary).toEqual({ vaults: 1, imported: 0, files: 0, replaced: 0, kept: 0, unchanged: 2, skipped: [], failed: [] });
     expect(summaryText(summary)).toBe("1 vault, 0 notes imported · ✓ no conflicts");
   });
 
@@ -237,6 +251,73 @@ describe("runImport against changes made meanwhile", () => {
   });
 });
 
+describe("runImport with images and PDFs", () => {
+  it("import keeps attachments from a ZIP: fresh ones go up with PUT, after the notes", async () => {
+    const { api, uploads, puts } = fakeApi();
+    const progress: [number, number][] = [];
+    const plans = planImport([vault("Work", [note("a.md")], [], [file("img/pic.png"), file("scan.pdf")])], []);
+    const summary = await runImport(plans, new Map(), api, (done, total) => progress.push([done, total]));
+    expect(uploads.map((u) => u.files.map((f) => f.path))).toEqual([["a.md"]]);
+    expect(puts).toEqual([
+      { vault: "Work", path: "img/pic.png", body: "bytes of img/pic.png", version: null },
+      { vault: "Work", path: "scan.pdf", body: "bytes of scan.pdf", version: null },
+    ]);
+    expect(progress.at(-1)).toEqual([3, 3]);
+    expect(summary).toMatchObject({ vaults: 1, imported: 1, files: 2, replaced: 0, kept: 0 });
+    expect(summaryText(summary)).toBe("1 vault, 1 note and 2 files imported · ✓ no conflicts");
+  });
+
+  it("an existing vault: unchanged files aren't sent, differing ones are replaced only at the version compared against", async () => {
+    const versions = new Map([
+      ["same.png", "v-same.png"],
+      ["changed.png", "old"],
+      ["moved-on.png", "old"],
+      ["gone.png", "old"],
+    ]);
+    const plans = planImport([vault("Work", [], [], ["same.png", "changed.png", "moved-on.png", "gone.png", "new.png"].map((p) => file(p)))], [{ name: "Work", versions }]);
+    expect(plans[0]).toMatchObject({ unchanged: ["same.png"], differing: ["changed.png", "moved-on.png", "gone.png"], fresh: ["new.png"] });
+    const { api, puts } = fakeApi();
+    const putFile = api.putFile;
+    // moved-on.png was written meanwhile (409), gone.png deleted (404).
+    api.putFile = vi.fn(async (v: string, path: string, bytes: Uint8Array, version: string | null) => {
+      if (path === "moved-on.png") return "conflict" as const;
+      if (path === "gone.png") throw new HttpError(404, "/Work/gone.png doesn't exist.");
+      return putFile(v, path, bytes, version);
+    });
+    const summary = await run(plans, { Work: "replace" }, api);
+    expect(puts.map((p) => [p.path, p.version])).toEqual([
+      ["new.png", null],
+      ["changed.png", "old"],
+    ]);
+    expect(summary).toMatchObject({ files: 1, replaced: 1, kept: 2, unchanged: 1, failed: [] });
+    expect(summary.skipped).toEqual([
+      { path: "Work/moved-on.png", reason: "changed after the comparison; kept as it is" },
+      { path: "Work/gone.png", reason: "deleted after the comparison; not brought back" },
+    ]);
+  });
+
+  it("with skip, differing files aren't sent; a fresh one found there already is kept", async () => {
+    const plans = planImport([vault("Work", [], [], [file("changed.png"), file("new.png")])], [{ name: "Work", versions: new Map([["changed.png", "old"]]) }]);
+    const { api } = fakeApi({ putFile: vi.fn(async () => "conflict" as const) });
+    const summary = await run(plans, { Work: "skip" }, api);
+    expect(api.putFile).toHaveBeenCalledTimes(1);
+    expect(summary).toMatchObject({ files: 0, kept: 2 });
+    expect(summary.skipped).toEqual([{ path: "Work/new.png", reason: "a file exists at this path" }]);
+  });
+
+  it("a file the server refuses is listed with its sentence, and the vault goes on", async () => {
+    const { api } = fakeApi();
+    const putFile = api.putFile;
+    api.putFile = vi.fn(async (v: string, path: string, bytes: Uint8Array, version: string | null) => {
+      if (path === "fake.png") throw new HttpError(400, "fake.png isn't a PNG image (its content doesn't match its name)");
+      return putFile(v, path, bytes, version);
+    });
+    const summary = await run(planImport([vault("Work", [], [], [file("fake.png"), file("ok.pdf")])], []), {}, api);
+    expect(summary).toMatchObject({ vaults: 1, files: 1, failed: [] });
+    expect(summary.skipped).toEqual([{ path: "Work/fake.png", reason: "fake.png isn't a PNG image (its content doesn't match its name)" }]);
+  });
+});
+
 describe("runImport, vault names and failures", () => {
   it("a folder `work` merges into the vault `Work`, under the server's spelling", async () => {
     const [plan] = planImport([vault("work", [note("a.md")])], [{ name: "Work", versions: new Map() }]);
@@ -274,7 +355,7 @@ describe("runImport, vault names and failures", () => {
 });
 
 describe("summaryText", () => {
-  const clean = { vaults: 3, imported: 412, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] };
+  const clean = { vaults: 3, imported: 412, files: 0, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] };
 
   it("says so when nothing conflicted", () => {
     expect(summaryText(clean)).toBe("3 vaults, 412 notes imported · ✓ no conflicts");
@@ -282,6 +363,10 @@ describe("summaryText", () => {
     expect(summaryText({ ...clean, skipped: [{ path: "Work/pic.png", reason: "not a Markdown file (.md or .markdown)" }] })).toBe(
       "3 vaults, 412 notes imported · ✓ no conflicts",
     );
+  });
+
+  it("counts the files beside the notes when there are any", () => {
+    expect(summaryText({ ...clean, files: 7 })).toBe("3 vaults, 412 notes and 7 files imported · ✓ no conflicts");
   });
 
   it("gives the counts when something was replaced, kept or failed", () => {

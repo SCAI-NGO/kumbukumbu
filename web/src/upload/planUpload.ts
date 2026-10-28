@@ -5,6 +5,14 @@ export const MAX_FILES = 200;
 export const MAX_BYTES = 5_000_000;
 /** The most a note may have (NoteWriter.MaxBytes): the server refuses a larger file, so it isn't sent. */
 export const MAX_NOTE_BYTES = 1_048_576;
+/** The most an image or PDF may have (`AttachmentFormat.MaxBytes`, 15 × 1024 × 1024), said as "15 MB". */
+export const MAX_ATTACHMENT_BYTES = 15_728_640;
+
+/**
+ * What the file picker offers: notes and the five formats by extension and media type. Concrete types, never
+ * `image/*`: iOS Safari then converts a HEIC photo to JPEG as it is picked.
+ */
+export const ACCEPT = ".md,.markdown,text/markdown,.pdf,.png,.jpg,.jpeg,.gif,.webp,application/pdf,image/png,image/jpeg,image/gif,image/webp";
 
 export interface Skipped {
   path: string;
@@ -16,32 +24,50 @@ export interface UploadFile {
   content: string;
 }
 
-// The server's sentences, so its list and this one read alike.
-export const NOT_MARKDOWN = "not a Markdown file (.md or .markdown)";
+// The server's sentences where it has them, so its list and this one read alike.
+export const NOT_SUPPORTED = "not a format Kumbu² keeps: notes (.md, .markdown), PDFs (.pdf) and images (.png, .jpg, .jpeg, .gif, .webp)";
 export const OBSIDIAN = "Obsidian's settings or trash, not a note";
 export const TOO_LARGE = `larger than ${MAX_NOTE_BYTES} bytes (1 MiB), the limit for a note`;
+export const TOO_LARGE_FILE = "larger than 15 MB, the limit for a file";
 
-const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
+export const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
+
+/** Whether a file name is one of the five formats kept besides notes (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`). */
+export const isAttachmentName = (name: string) => /.\.(pdf|png|jpe?g|gif|webp)$/i.test(name);
 
 function reasonAgainst(path: string): string | null {
   const segments = path.split("/");
   if (segments.slice(0, -1).some((s) => /^\.(obsidian|trash)$/i.test(s))) return OBSIDIAN;
-  return isMarkdown(segments.at(-1)!) ? null : NOT_MARKDOWN;
+  const name = segments.at(-1)!;
+  return isMarkdown(name) || isAttachmentName(name) ? null : NOT_SUPPORTED;
+}
+
+/** What a pick holds: notes to read and send, images and PDFs to send as they are, images too large to send as they are. */
+export interface UploadPlan<T> {
+  notes: T[];
+  files: T[];
+  /** Images over 15 MB: the user is offered to shrink them. A PDF over 15 MB is skipped. */
+  tooLarge: T[];
+  skipped: Skipped[];
 }
 
 /**
- * Which files to read and send: Markdown only, nothing of Obsidian's settings or trash, nothing larger than a
- * note may be. Decided by path and size alone, so skipped files are never read. The server checks again.
+ * Which files to read and send: notes and the five formats, nothing of Obsidian's settings or trash, nothing larger
+ * than a note or file may be. Decided by path and size alone, so skipped files are never read. The server checks again.
  */
-export function planUpload<T extends { path: string; size: number }>(files: T[]): { keep: T[]; skipped: Skipped[] } {
-  const keep: T[] = [];
-  const skipped: Skipped[] = [];
+export function planUpload<T extends { path: string; size: number }>(files: T[]): UploadPlan<T> {
+  const plan: UploadPlan<T> = { notes: [], files: [], tooLarge: [], skipped: [] };
   for (const file of files) {
-    const reason = reasonAgainst(file.path) ?? (file.size > MAX_NOTE_BYTES ? TOO_LARGE : null);
-    if (reason) skipped.push({ path: file.path, reason });
-    else keep.push(file);
+    const reason = reasonAgainst(file.path);
+    if (reason) plan.skipped.push({ path: file.path, reason });
+    else if (isMarkdown(file.path)) {
+      if (file.size > MAX_NOTE_BYTES) plan.skipped.push({ path: file.path, reason: TOO_LARGE });
+      else plan.notes.push(file);
+    } else if (file.size <= MAX_ATTACHMENT_BYTES) plan.files.push(file);
+    else if (!/\.pdf$/i.test(file.path)) plan.tooLarge.push(file);
+    else plan.skipped.push({ path: file.path, reason: TOO_LARGE_FILE });
   }
-  return { keep, skipped };
+  return plan;
 }
 
 const encoder = new TextEncoder();

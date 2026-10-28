@@ -55,7 +55,7 @@ async function server({ bDiffers = true } = {}) {
   return { fetch, uploads, created };
 }
 
-const exported = { "Work/a.md": "A", "Work/b.md": "B", "Work/pic.png": "png", "Ideas/c.md": "C", "Ideas/d/e.md": "E" };
+const exported = { "Work/a.md": "A", "Work/b.md": "B", "Work/notes.txt": "txt", "Ideas/c.md": "C", "Ideas/d/e.md": "E" };
 
 async function openAndPick(file: File, queryClient?: QueryClient) {
   renderApp("/settings", queryClient);
@@ -160,6 +160,47 @@ describe("Import vaults… in Settings", () => {
 
     expect(await within(dialog).findByText("1 vault, 2 notes imported · 1 vault failed")).toBeInTheDocument();
     expect(within(within(dialog).getByRole("list", { name: "Failed vaults" })).getByText("A vault called Ideas can't be made here.")).toBeInTheDocument();
+  });
+
+  it("import keeps attachments from a ZIP: compared by version, sent one PUT each", async () => {
+    const puts: { path: string; version: string | null; body: string }[] = [];
+    let versionsUrl = "";
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal", pending: false, canWrite: true }]),
+      "GET /api/embeddings": () => json(200, []),
+      "GET /api/vaults/Work/versions": async (request) => {
+        versionsUrl = request.url;
+        const notes = [
+          { path: "/Work/a.md", version: await versionOf("A"), kind: "note" },
+          { path: "/Work/shot.png", version: "old-shot", kind: "image" },
+        ];
+        return json(200, { full: true, cursor: "c", state: "s", damaged: 0, notes, deleted: [], attachments: true });
+      },
+      "PUT /api/files/*": async (request) => {
+        const url = new URL(request.url);
+        const path = decodeURIComponent(url.pathname.slice("/api/files/Work/".length));
+        const version = url.searchParams.get("version");
+        puts.push({ path, version, body: await request.text() });
+        const state = { path: `/Work/${path}`, mediaType: "image/png", size: 3, width: 1, height: 1, version: "new", writtenAt: "2026-10-28T09:00:00Z", writtenBy: "ada" };
+        return json(version ? 200 : 201, state);
+      },
+    });
+    const dialog = await openAndPick(zipFile({ "Work/a.md": "A", "Work/shot.png": "\u0089PNG new", "Work/img/scan.pdf": "%PDF-1.7" }));
+
+    const work = await within(dialog).findByRole("checkbox", { name: /Work/ });
+    expect(within(work.closest("li")!).getByText("1 note, 2 files · exists: merge or skip")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Import" }));
+    expect(await within(dialog).findByText("1 file in Work differs from the ZIP.")).toBeInTheDocument();
+    expect(new URL(versionsUrl).searchParams.get("attachments")).toBe("1");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Replace all" }));
+
+    expect(await within(dialog).findByText("1 vault, 0 notes and 1 file imported · 1 replaced")).toBeInTheDocument();
+    expect(within(dialog).getByText("1 note or file was there already, as it is.")).toBeInTheDocument();
+    expect(puts).toEqual([
+      { path: "img/scan.pdf", version: null, body: "%PDF-1.7" },
+      { path: "shot.png", version: "old-shot", body: "\u0089PNG new" },
+    ]);
   });
 
   it("a file that isn't a ZIP is refused before anything else", async () => {

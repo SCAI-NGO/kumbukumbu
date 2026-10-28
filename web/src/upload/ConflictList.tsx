@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { secondaryButtonClass } from "../components/form";
+import { isMarkdown } from "./planUpload";
 
 const choiceButtonClass = `${secondaryButtonClass} flex-1`;
 
 /**
- * The files whose notes exist already, before any of them is written: replace all, skip all, or replace the ones
- * ticked. `onDecide` gets the paths to replace.
+ * The files whose notes (or images and PDFs) exist already, before any of them is written: replace all, skip all, or
+ * replace the ones ticked. `onDecide` gets the paths to replace.
  */
 export default function ConflictList({ paths, waiting, onDecide }: { paths: string[]; waiting: number; onDecide(replace: Set<string>): void }) {
   const [ticked, setTicked] = useState<Set<string>>(new Set());
@@ -17,10 +18,12 @@ export default function ConflictList({ paths, waiting, onDecide }: { paths: stri
       return next;
     });
 
+  const noun = paths.every(isMarkdown) ? "note" : "file";
+
   return (
     <fieldset className="flex min-h-0 flex-col gap-2.5">
-      <legend className="text-[17px] font-bold text-text">{paths.length === 1 ? "1 note exists already" : `${paths.length} notes exist already`}</legend>
-      <p className="text-sm text-text-body">Nothing is replaced until you choose. A replaced note keeps its old version in the history.</p>
+      <legend className="text-[17px] font-bold text-text">{paths.length === 1 ? `1 ${noun} exists already` : `${paths.length} ${noun}s exist already`}</legend>
+      <p className="text-sm text-text-body">{`Nothing is replaced until you choose. A replaced ${noun} keeps its old version in the history.`}</p>
       {waiting > 0 && <p className="text-sm text-text-body">{waiting === 1 ? "1 new note waits for this choice" : `${waiting} new notes wait for this choice`}</p>}
       <ul className="flex max-h-60 flex-col overflow-y-auto rounded-[10px] border border-line">
         {paths.map((path) => (

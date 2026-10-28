@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { unzipSync, type UnzipFileInfo } from "fflate";
-import { MAX_NOTE_BYTES, NOT_MARKDOWN, OBSIDIAN, TOO_LARGE, type Skipped } from "../upload/planUpload";
+import { isAttachmentName, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
 export interface ImportNote {
@@ -9,10 +9,22 @@ export interface ImportNote {
   version: string;
 }
 
-/** A vault of the ZIP: a top-level folder, or the whole ZIP when it has notes at its root. */
+/**
+ * An image or PDF to import, at its path below the vault. Its bytes stay packed until it is sent: `read` unpacks them
+ * (again) each time, so the ZIP's files are never all unpacked at once.
+ */
+export interface ImportFile {
+  path: string;
+  size: number;
+  version: string;
+  read(): Uint8Array;
+}
+
+/** A vault of the ZIP: a top-level folder, or the whole ZIP when it has notes or files at its root. */
 export interface ImportVault {
   name: string;
   notes: ImportNote[];
+  files: ImportFile[];
   skipped: Skipped[];
 }
 
@@ -23,13 +35,16 @@ const UNREADABLE = "packed in a way this browser can't unpack (only stored and d
 
 const encoder = new TextEncoder();
 
-/** The server's version token (`VersionToken.Of`) of the text as it would store it: CRLF → LF. */
-export async function versionOf(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(text.replaceAll("\r\n", "\n")));
+/** The server's version token (`VersionToken.Of`) of a file's bytes, as they are. */
+export async function versionOfBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0"))
     .join("")
     .slice(0, 12);
 }
+
+/** The server's version token (`VersionToken.Of`) of the text as it would store it: CRLF → LF. */
+export const versionOf = (text: string) => versionOfBytes(encoder.encode(text.replaceAll("\r\n", "\n")));
 
 /** Kumbu² notes end in ".md"; ".markdown" and any case of either become it (`UploadApi.NoteName`). */
 function noteName(name: string): string | null {
@@ -39,7 +54,7 @@ function noteName(name: string): string | null {
 
 /**
  * Why a path below the vault isn't imported, in the server's words and order (`UploadApi.Target`, then the dot rule of
- * `NoteNames.Problem`); null for a note. The server checks again.
+ * `NoteNames.Problem`); null for a note, an image or a PDF. The server checks again.
  */
 function reasonAgainst(relative: string): string | null {
   const segments = relative.split("/");
@@ -47,7 +62,7 @@ function reasonAgainst(relative: string): string | null {
   if (relative.startsWith("/")) return "an absolute path; paths are relative to the folder uploaded into";
   if (segments.some((s) => s === "" || s === "." || s === "..")) return "empty, '.' and '..' segments aren't allowed";
   if (segments.slice(0, -1).some((s) => /^\.(obsidian|trash)$/i.test(s))) return OBSIDIAN;
-  if (!noteName(segments.at(-1)!)) return NOT_MARKDOWN;
+  if (!noteName(segments.at(-1)!) && !isAttachmentName(segments.at(-1)!)) return NOT_SUPPORTED;
   const hidden = segments.find((s) => s.startsWith("."));
   if (hidden) return `'${hidden}' starts with '.', which hides it in Obsidian`;
   return null;
@@ -89,9 +104,10 @@ function entryName(name: string): string {
 const isSystem = (name: string) => /^__MACOSX(\/|$)/.test(name) || name.startsWith(".");
 
 /**
- * The vaults of an import ZIP: each top-level folder is one, or, when any note sits at the ZIP's root (an Obsidian
- * vault zipped directly), the whole ZIP is one, named after the file. Which entries are unpacked is decided by name and
- * size alone, so images, PDFs and other attachments are never inflated. Notes that aren't UTF-8 are skipped, never
+ * The vaults of an import ZIP: each top-level folder is one, or, when any note, image or PDF sits at the ZIP's root (an
+ * Obsidian vault zipped directly), the whole ZIP is one, named after the file. Which entries are unpacked is decided by
+ * name and size alone, so other files are never inflated. Images and PDFs (up to 15 MB) are unpacked one at a time for
+ * their version and dropped again; `read` unpacks one when it is sent. Notes that aren't UTF-8 are skipped, never
  * imported with replacement characters. Names come in NFC, as the server stores them (macOS writes NFD). Rejects when
  * the bytes aren't a ZIP, and with `ImportTooLarge` when the notes would unpack to more than `budget` bytes.
  */
@@ -115,19 +131,20 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
   // A name in the ZIP twice (an appended ZIP): which copy is meant can't be told, so neither is imported.
   const seen = new Map<string, number>();
   for (const e of entries) seen.set(e.name, (seen.get(e.name) ?? 0) + 1);
-  // One vault when an entry at the root is a note: a folder per vault has nothing but folders there.
+  // One vault when an entry at the root is a note or file: a folder per vault has nothing but folders there.
   const single = entries.some((e) => isFile(e) && !nameOf(e.name).includes("/") && reasonAgainst(nameOf(e.name)) === null);
   // Keyed as the server tells vaults apart; the first spelling met names the vault.
   const vaults = new Map<string, { vault: ImportVault; paths: Set<string> }>();
   const vaultOf = (name: string) => {
     let entry = vaults.get(vaultKey(name));
-    if (!entry) vaults.set(vaultKey(name), (entry = { vault: { name, notes: [], skipped: [] }, paths: new Set() }));
+    if (!entry) vaults.set(vaultKey(name), (entry = { vault: { name, notes: [], files: [], skipped: [] }, paths: new Set() }));
     return entry;
   };
   const whole = zipName.replace(/\.zip$/i, "").normalize("NFC").trim();
 
   // Where each entry goes: its vault and path below it, and why it is skipped, if it is.
   const wanted = new Map<string, { into: ImportVault; path: string; target: string }>();
+  const files = new Map<string, { into: ImportVault; path: string }>();
   let bytes = 0;
   for (const entry of entries) {
     // `entry.name` stays the key the second pass knows the entry by.
@@ -145,21 +162,28 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
     }
     const { vault: target, paths } = vaultOf(vault);
     if (!isFile(entry)) continue;
+    const note = noteName(relative.split("/").at(-1)!);
     const reason =
       (seen.get(entry.name)! > 1 ? TWICE : null) ??
       reasonAgainst(relative) ??
-      (entry.originalSize > MAX_NOTE_BYTES ? TOO_LARGE : null) ??
+      (note && entry.originalSize > MAX_NOTE_BYTES ? TOO_LARGE : null) ??
+      (!note && entry.originalSize > MAX_ATTACHMENT_BYTES ? TOO_LARGE_FILE : null) ??
       (entry.compression !== 0 && entry.compression !== 8 ? UNREADABLE : null);
     if (reason) {
       target.skipped.push({ path: relative, reason });
       continue;
     }
-    const path = relative.split("/").slice(0, -1).concat(noteName(relative.split("/").at(-1)!)!).join("/");
+    const path = note ? relative.split("/").slice(0, -1).concat(note).join("/") : relative;
     if (paths.has(path)) {
       target.skipped.push({ path: relative, reason: SAME_PATH });
       continue;
     }
     paths.add(path);
+    // An image or PDF keeps its name, and is unpacked later, apart from the notes and outside their budget.
+    if (!note) {
+      files.set(entry.name, { into: target, path });
+      continue;
+    }
     bytes += entry.originalSize;
     wanted.set(entry.name, { into: target, path, target: relative });
   }
@@ -185,6 +209,18 @@ export async function readImport(zip: Uint8Array, zipName: string, budget = MAX_
       continue;
     }
     into.notes.push({ path, content, version: await versionOf(content) });
+  }
+
+  // Files one at a time: each is unpacked for its version and dropped, and again when it is sent. Its declared size
+  // bounds what fflate allocates, as for notes; a stored entry that lies is caught by the size check.
+  const unpack = (name: string) => unzipSync(zip, { filter: (entry) => entry.name === name })[name];
+  for (const [name, { into, path }] of files) {
+    const bytes = unpack(name);
+    if (bytes.length > MAX_ATTACHMENT_BYTES) {
+      into.skipped.push({ path, reason: TOO_LARGE_FILE });
+      continue;
+    }
+    into.files.push({ path, size: bytes.length, version: await versionOfBytes(bytes), read: () => unpack(name) });
   }
   return [...vaults.values()].map((v) => v.vault);
 }

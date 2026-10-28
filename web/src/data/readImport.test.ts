@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { strToU8, zipSync, type Zippable } from "fflate";
 import { describe, expect, it } from "vitest";
-import { MAX_NOTE_BYTES, TOO_LARGE } from "../upload/planUpload";
-import { ImportTooLarge, readImport, versionOf } from "./readImport";
+import { MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, TOO_LARGE, TOO_LARGE_FILE } from "../upload/planUpload";
+import { ImportTooLarge, readImport, versionOf, versionOfBytes } from "./readImport";
 
 /** A ZIP of these entries; a name ending in "/" is a folder entry. */
 function zip(entries: Record<string, string | Uint8Array>): Uint8Array {
@@ -99,7 +99,7 @@ describe("readImport", () => {
         skipped: [
           { path: "../x.md", reason: "empty, '.' and '..' segments aren't allowed" },
           { path: "a\\b.md", reason: "folders are separated by '/', not '\\'" },
-          { path: ".DS_Store", reason: "not a Markdown file (.md or .markdown)" },
+          { path: ".DS_Store", reason: NOT_SUPPORTED },
           { path: ".obsidian/app.json", reason: "Obsidian's settings or trash, not a note" },
           { path: ".trash/t.md", reason: "Obsidian's settings or trash, not a note" },
           { path: ".hidden.md", reason: "'.hidden.md' starts with '.', which hides it in Obsidian" },
@@ -108,16 +108,55 @@ describe("readImport", () => {
     ]);
   });
 
-  it("entries that aren't notes are never inflated", async () => {
+  it("entries that aren't kept are never inflated", async () => {
     // A deflate stream that doesn't decode: inflating it would throw.
-    const archive = zip({ "Work/a.md": "A", "Work/big.png": new Uint8Array(4000).fill(7) });
-    const broken = corrupt(archive, "Work/big.png");
+    const archive = zip({ "Work/a.md": "A", "Work/big.bin": new Uint8Array(4000).fill(7) });
+    const broken = corrupt(archive, "Work/big.bin");
     const vaults = await readImport(broken, "export.zip");
-    expect(shape(vaults)).toEqual([
-      { name: "Work", paths: ["a.md"], skipped: [{ path: "big.png", reason: "not a Markdown file (.md or .markdown)" }] },
-    ]);
+    expect(shape(vaults)).toEqual([{ name: "Work", paths: ["a.md"], skipped: [{ path: "big.bin", reason: NOT_SUPPORTED }] }]);
     // The same damage on a note does throw, so the test above proves the entry was left alone.
     await expect(readImport(corrupt(zip({ "Work/big.md": "x".repeat(4000) }), "Work/big.md"), "export.zip")).rejects.toThrow();
+  });
+
+  it("import keeps attachments from a ZIP", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const pdf = strToU8("%PDF-1.7\r\nbody\r\n");
+    const vaults = await readImport(
+      zip({
+        "Work/a.md": "A",
+        "Work/img/Bespre\u0301chung.png": png,
+        "Work/scan.PDF": pdf,
+        "Work/report.docx": "x",
+        "Work/huge.jpg": new Uint8Array(MAX_ATTACHMENT_BYTES + 1),
+        "Work/.obsidian/icon.png": png,
+      }),
+      "export.zip",
+    );
+    expect(vaults).toHaveLength(1);
+    const [work] = vaults;
+    expect(work.notes.map((n) => n.path)).toEqual(["a.md"]);
+    // Paths in NFC; the version as the server's for the bytes as they are (no CRLF → LF for a file).
+    expect(work.files.map((f) => [f.path, f.size, f.version])).toEqual([
+      ["img/Bespr\u00e9chung.png", png.length, await versionOfBytes(png)],
+      ["scan.PDF", pdf.length, await versionOfBytes(pdf)],
+    ]);
+    expect(await versionOfBytes(pdf)).not.toBe(await versionOf("%PDF-1.7\r\nbody\r\n"));
+    expect(work.files.map((f) => Array.from(f.read()))).toEqual([Array.from(png), Array.from(pdf)]);
+    expect(work.skipped).toEqual([
+      { path: "report.docx", reason: NOT_SUPPORTED },
+      { path: "huge.jpg", reason: TOO_LARGE_FILE },
+      { path: ".obsidian/icon.png", reason: "Obsidian's settings or trash, not a note" },
+    ]);
+  });
+
+  it("two images that land at the same path (vault folders differing in case): the second is skipped", async () => {
+    const vaults = await readImport(zip({ "Work/a.png": "1", "work/a.png": "2" }), "export.zip");
+    expect(vaults.map((v) => [v.files.map((f) => f.path), v.skipped])).toEqual([[["a.png"], [{ path: "a.png", reason: "another file of this upload has the same path" }]]]);
+  });
+
+  it("a zipped vault with only an image at its root is one vault too", async () => {
+    const vaults = await readImport(zip({ "pic.gif": strToU8("GIF89a"), "p/b.md": "B" }), "Photos.zip");
+    expect(vaults.map((v) => [v.name, v.notes.map((n) => n.path), v.files.map((f) => f.path)])).toEqual([["Photos", ["p/b.md"], ["pic.gif"]]]);
   });
 
   it("a file that isn't UTF-8 is skipped, not mangled", async () => {
@@ -206,6 +245,13 @@ describe("readImport", () => {
 
   it("something that isn't a ZIP is refused", async () => {
     await expect(readImport(strToU8("not a zip"), "x.zip")).rejects.toThrow();
+  });
+});
+
+describe("versionOfBytes", () => {
+  it("is the server's version token of a file's bytes, as they are", async () => {
+    expect(await versionOfBytes(strToU8("a\nb"))).toBe("7e18f737311b");
+    expect(await versionOfBytes(strToU8("a\r\nb"))).not.toBe("7e18f737311b");
   });
 });
 

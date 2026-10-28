@@ -2,13 +2,14 @@
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { toBatches, type Skipped, type UploadFile } from "../upload/planUpload";
+import { putFile } from "../upload/putFile";
 import { vaultKey, type ImportVault } from "./readImport";
 
 /**
  * What importing a vault of the ZIP means: `exists` when the user has a vault of that name (as the server tells names
- * apart), `target` the name in the server's spelling. Paths below the vault: `unchanged` notes are there with this
- * content already, `differing` ones with other content, `fresh` ones not at all. `seen`: the version each differing
- * note had when compared, so "Replace all" replaces only what the user was asked about.
+ * apart), `target` the name in the server's spelling. Paths below the vault, of notes and files alike: `unchanged` ones
+ * are there with this content already, `differing` ones with other content, `fresh` ones not at all. `seen`: the
+ * version each differing one had when compared, so "Replace all" replaces only what the user was asked about.
  */
 export interface VaultPlan {
   vault: ImportVault;
@@ -24,14 +25,16 @@ export interface VaultPlan {
 export type Choice = "replace" | "skip";
 
 /**
- * `vaults`: those imported in full or in part; `kept`: existing notes left as they were (`Skip all`, changed after the
- * comparison, or found there by the server); `skipped`: files of the ZIP and of the server's answers that weren't
- * written, as `Vault/path`; `failed`: vaults that couldn't be made or whose upload stopped, with the server's sentence
- * and how many notes of it were written before.
+ * `vaults`: those imported in full or in part; `imported` and `files`: new notes and new images or PDFs; `replaced`:
+ * either; `kept`: existing notes and files left as they were (`Skip all`, changed after the comparison, or found there
+ * by the server); `skipped`: files of the ZIP and of the server's answers that weren't written, as `Vault/path`;
+ * `failed`: vaults that couldn't be made or whose upload stopped, with the server's sentence and how many notes and
+ * files of it were written before.
  */
 export interface ImportSummary {
   vaults: number;
   imported: number;
+  files: number;
   replaced: number;
   kept: number;
   unchanged: number;
@@ -42,9 +45,14 @@ export interface ImportSummary {
 /** The calls an import makes, so a test can stand in for the server. */
 export interface ImportApi {
   createVault(name: string): Promise<void>;
-  /** Every note of the vault: path below the vault → version. */
+  /** Every note and file of the vault: path below the vault → version. */
   versions(vault: string): Promise<Map<string, string>>;
   upload(vault: string, files: UploadFile[], onConflict: Choice): Promise<{ written: number | string; replaced: number | string; skipped: Skipped[] }>;
+  /**
+   * An image or PDF to its path below the vault: to a free path without `version`, else only over that version
+   * ("conflict" otherwise). A refusal throws an `HttpError` (400 or 413 for the file itself, 404 when it is gone).
+   */
+  putFile(vault: string, path: string, bytes: Uint8Array, version: string | null): Promise<"created" | "replaced" | "conflict">;
 }
 
 export const serverImportApi: ImportApi = {
@@ -52,12 +60,13 @@ export const serverImportApi: ImportApi = {
     await call(api.POST("/api/vaults", { body: { name } }));
   },
   async versions(vault) {
-    const answer = await call(api.GET("/api/vaults/{vault}/versions", { params: { path: { vault } } }));
+    const answer = await call(api.GET("/api/vaults/{vault}/versions", { params: { path: { vault }, query: { attachments: "1" } } }));
     // The API's paths are from the root of the tree: "/Work/a.md".
     const prefix = `/${vault}/`;
     return new Map(answer.notes.filter((n) => n.path.startsWith(prefix)).map((n) => [n.path.slice(prefix.length), n.version]));
   },
   upload: (vault, files, onConflict) => call(api.POST("/api/upload/{vault}/{folder}", { params: { path: { vault, folder: "" } }, body: { files, onConflict } })),
+  putFile: async (vault, path, bytes, version) => (await putFile(vault, path, bytes, version ?? undefined)).kind,
 };
 
 /**
@@ -69,7 +78,7 @@ export function planImport(vaults: ImportVault[], existing: { name: string; vers
   return vaults.map((vault) => {
     const match = existing.find((e) => vaultKey(e.name) === vaultKey(vault.name));
     const plan: VaultPlan = { vault, target: match?.name ?? vault.name, exists: !!match, differing: [], unchanged: [], fresh: [], seen: new Map() };
-    for (const note of vault.notes) {
+    for (const note of [...vault.notes, ...vault.files]) {
       if (!match) plan.fresh.push(note.path);
       else if (!match.versions) plan.differing.push(note.path);
       else {
@@ -90,7 +99,8 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 /** "3 vaults, 412 notes imported · ✓ no conflicts", or the counts of what was replaced, kept or failed. */
 export function summaryText(s: ImportSummary): string {
-  const head = `${count(s.vaults, "vault", "vaults")}, ${count(s.imported, "note", "notes")} imported`;
+  const files = s.files > 0 ? ` and ${count(s.files, "file", "files")}` : "";
+  const head = `${count(s.vaults, "vault", "vaults")}, ${count(s.imported, "note", "notes")}${files} imported`;
   const partly = s.failed.filter((f) => f.written > 0).length;
   const failed = s.failed.length - partly;
   const parts = [
@@ -104,6 +114,7 @@ export function summaryText(s: ImportSummary): string {
 
 // The server's sentence for a note it kept because `skip` met it; such a note is a conflict, settled by keeping it.
 const EXISTS = "a note exists at this path";
+const FILE_EXISTS = "a file exists at this path";
 const CHANGED = "changed after the comparison; kept as it is";
 const DELETED = "deleted after the comparison; not brought back";
 const SIGNED_OUT = "You were signed out; sign in and import the rest again.";
@@ -115,9 +126,11 @@ class SignedOut extends Error {}
  * the server takes. Fresh notes go with `skip`, so a note that appeared meanwhile isn't replaced unasked; a batch of
  * them that met a change meanwhile (409) is sent once more. Differing notes go only with the choice `replace`, and
  * only those still at the version the user was asked about: the version list is read again first, and again after
- * a 409, which is never answered by sending the same replace batch blindly. Unchanged notes aren't sent. Any other
- * failure stops that vault, and the next one goes on; a session that ends stops the run. `onProgress`: notes done of
- * all to send.
+ * a 409, which is never answered by sending the same replace batch blindly. Images and PDFs go one `PUT` each, after
+ * the notes: a fresh one only to a free path, a differing one only over the version compared against, so the server
+ * itself keeps one that changed meanwhile. One the server refuses (its format or size) is listed and the vault goes
+ * on. Unchanged notes and files aren't sent. Any other failure stops that vault, and the next one goes on; a session
+ * that ends stops the run. `onProgress`: notes and files done of all to send.
  */
 export async function runImport(
   plans: VaultPlan[],
@@ -125,13 +138,14 @@ export async function runImport(
   importApi: ImportApi,
   onProgress: (done: number, total: number) => void,
 ): Promise<ImportSummary> {
-  const summary: ImportSummary = { vaults: 0, imported: 0, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] };
+  const summary: ImportSummary = { vaults: 0, imported: 0, files: 0, replaced: 0, kept: 0, unchanged: 0, skipped: [], failed: [] };
   const pick = (plan: VaultPlan, paths: string[]) => {
     const wanted = new Set(paths);
     return plan.vault.notes.filter((n) => wanted.has(n.path)).map(({ path, content }) => ({ path, content }));
   };
   const work = plans.map((plan) => {
     const replace = choices.get(plan.vault.name) === "replace" && plan.differing.length > 0;
+    // Notes only: `pick` leaves the files out.
     const fresh = toBatches(pick(plan, plan.fresh));
     return { plan, replace, fresh, toSend: plan.fresh.length - fresh.skipped.length + (replace ? plan.differing.length : 0) };
   });
@@ -165,6 +179,36 @@ export async function runImport(
       skip(result.skipped);
       advance(files.length);
     };
+    const files = new Map(plan.vault.files.map((f) => [f.path, f]));
+    /**
+     * An image or PDF of the vault (`path` not one of them: nothing), new without `version`, else over that version.
+     * The server's 409 keeps the file there, and its 404 a deleted one gone: both are counted as kept.
+     */
+    const sendFile = async (path: string, version: string | null) => {
+      const file = files.get(path);
+      if (!file) return;
+      let result;
+      try {
+        result = await importApi.putFile(name, path, file.read(), version);
+      } catch (err) {
+        const refused = err instanceof HttpError && (err.status === 400 || err.status === 413);
+        const gone = err instanceof HttpError && err.status === 404 && version !== null;
+        if (!refused && !gone) throw err;
+        if (gone) summary.kept++;
+        skip([{ path, reason: gone ? DELETED : errorText(err) }]);
+        advance(1);
+        return;
+      }
+      if (result === "conflict") {
+        summary.kept++;
+        skip([{ path, reason: version === null ? FILE_EXISTS : CHANGED }]);
+      } else {
+        written++;
+        if (result === "created") summary.files++;
+        else summary.replaced++;
+      }
+      advance(1);
+    };
     /** The differing notes of `paths` still at the version compared against; the others are kept and counted. */
     const stillAsSeen = async (paths: string[]) => {
       const now = await importApi.versions(name);
@@ -185,6 +229,7 @@ export async function runImport(
             await send(files, "skip");
           }
         }
+        for (const path of plan.fresh) await sendFile(path, null);
         if (replace) {
           const differing = toBatches(pick(plan, plan.differing));
           skip(differing.skipped);
@@ -202,6 +247,7 @@ export async function runImport(
               if (again.length) await send(again, "replace");
             }
           }
+          for (const path of plan.differing) await sendFile(path, plan.seen.get(path) ?? null);
         }
       } catch (err) {
         if (err instanceof HttpError && err.status === 401) throw new SignedOut();
