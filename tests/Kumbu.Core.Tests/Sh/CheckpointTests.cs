@@ -74,7 +74,7 @@ public class CheckpointTests
     [InlineData("mkcp /Nope x", "mkcp: /Nope: No such file or directory")]
     [InlineData("rmcp /Demo x", "rmcp: no checkpoint 'x' in Demo ('lscp /Demo' lists them)")]
     [InlineData("cat --checkpoint x /Demo/welcome.md", "cat: no checkpoint 'x' in Demo ('lscp /Demo' lists them)")]
-    [InlineData("history --checkpoint x /Demo", "history: --checkpoint works with ls, cat, outline, rg, links, backlinks, board, head, tail, wc, sort, diff and restore (see 'help checkpoints')")]
+    [InlineData("history --checkpoint x /Demo", "history: --checkpoint works with ls, cat, outline, rg, links, backlinks, tags, board, head, tail, wc, sort, diff and restore (see 'help checkpoints')")]
     [InlineData("rg --checkpoint x Hecate", "rg: --checkpoint needs a path in the checkpoint's vault, e.g. rg --checkpoint x Hecate /Demo")]
     public async Task Errors(string line, string error) => Assert.Equal(ShellResult.Error(error), await Run(line));
 
