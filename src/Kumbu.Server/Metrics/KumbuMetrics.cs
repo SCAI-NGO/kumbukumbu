@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Server.Search;
+using Kumbu.Server.Vaults;
 using Prometheus;
 
 namespace Kumbu.Server.Metrics;
@@ -49,6 +51,79 @@ public static class KumbuMetrics
 
     private static readonly Counter WriteConflicts = Prometheus.Metrics.CreateCounter(
         "kumbu_write_conflicts_total", "Note writes refused because the note had changed, by way in.", new CounterConfiguration { LabelNames = ["via"] });
+
+    public enum ProviderKind { Internal, External }
+
+    public enum LockReason { Idle, Memory }
+
+    public enum Outcome { Success, Failure }
+
+    public enum Grant { AuthorizationCode, RefreshToken }
+
+    private static readonly Counter EmbeddingBatches = Prometheus.Metrics.CreateCounter(
+        "kumbu_embedding_batches_total", "Batches sent to an embedding provider, by provider kind.", new CounterConfiguration { LabelNames = ["provider_kind"] });
+
+    private static readonly Histogram EmbeddingBatchDuration = Prometheus.Metrics.CreateHistogram(
+        "kumbu_embedding_batch_duration_seconds", "How long an embedding batch took, by provider kind.", new HistogramConfiguration { LabelNames = ["provider_kind"], Buckets = Seconds });
+
+    private static readonly Counter EmbeddingErrors = Prometheus.Metrics.CreateCounter(
+        "kumbu_embedding_errors_total", "Embedding batches that failed, by provider kind.", new CounterConfiguration { LabelNames = ["provider_kind"] });
+
+    private static readonly Gauge EmbeddingBacklog = Prometheus.Metrics.CreateGauge(
+        "kumbu_embedding_backlog", "Notes waiting to be indexed or being indexed.");
+
+    private static readonly Gauge VaultsUnlocked = Prometheus.Metrics.CreateGauge(
+        "kumbu_vaults_unlocked", "Vaults unlocked in memory now.");
+
+    private static readonly Counter VaultUnlocks = Prometheus.Metrics.CreateCounter(
+        "kumbu_vault_unlocks_total", "Vaults unlocked.");
+
+    private static readonly Counter VaultLocks = Prometheus.Metrics.CreateCounter(
+        "kumbu_vault_locks_total", "Vaults locked by the sweeper, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
+
+    private static readonly Counter SignIns = Prometheus.Metrics.CreateCounter(
+        "kumbu_sign_ins_total", "Password sign-ins, by outcome.", new CounterConfiguration { LabelNames = ["outcome"] });
+
+    private static readonly Counter OAuthTokens = Prometheus.Metrics.CreateCounter(
+        "kumbu_oauth_tokens_issued_total", "Token pairs issued by the OAuth token endpoint, by grant.", new CounterConfiguration { LabelNames = ["grant"] });
+
+    // A test process builds many hosts: the latest one is read, and held weakly so that a disposed host can be collected.
+    private static WeakReference<SearchIndex>? _index;
+    private static WeakReference<VaultCatalog>? _catalog;
+    private static int _scrapeHooked;
+
+    /// <summary>The gauges of this process's search index and vault catalog are read at each scrape. The callback is registered once;
+    /// a later call (another host in one process) only changes what it reads.</summary>
+    public static void ReadOnScrape(SearchIndex index, VaultCatalog catalog)
+    {
+        _index = new WeakReference<SearchIndex>(index);
+        _catalog = new WeakReference<VaultCatalog>(catalog);
+        if (Interlocked.Exchange(ref _scrapeHooked, 1) == 1) return;
+        Prometheus.Metrics.DefaultRegistry.AddBeforeCollectCallback(() =>
+        {
+            EmbeddingBacklog.Set(_index is { } i && i.TryGetTarget(out var idx) ? idx.Queued : 0);
+            VaultsUnlocked.Set(_catalog is { } c && c.TryGetTarget(out var cat) ? cat.UnlockedCount : 0);
+        });
+    }
+
+    public static void EmbeddingBatchDone(ProviderKind kind, TimeSpan elapsed)
+    {
+        var label = Label(kind);
+        EmbeddingBatches.WithLabels(label).Inc();
+        EmbeddingBatchDuration.WithLabels(label).Observe(elapsed.TotalSeconds);
+    }
+
+    public static void EmbeddingFailed(ProviderKind kind) => EmbeddingErrors.WithLabels(Label(kind)).Inc();
+
+    public static void VaultUnlocked() => VaultUnlocks.Inc();
+
+    public static void VaultLocked(LockReason reason) => VaultLocks.WithLabels(reason == LockReason.Idle ? "idle" : "memory").Inc();
+
+    public static void SignedIn(Outcome outcome) => SignIns.WithLabels(outcome == Outcome.Success ? "success" : "failure").Inc();
+
+    public static void OAuthTokenIssued(Grant grant) => OAuthTokens.WithLabels(grant == Grant.RefreshToken ? "refresh_token" : "authorization_code").Inc();
+
+    private static string Label(ProviderKind kind) => kind == ProviderKind.External ? "external" : "internal";
 
     /// <summary>The shell's command names; the only values the command label can take besides "other". A test compares it with the shell.</summary>
     public static readonly IReadOnlyList<string> KnownCommands =

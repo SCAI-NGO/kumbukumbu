@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
 
@@ -141,7 +143,9 @@ public sealed class SearchIndex : BackgroundService
             }
 
             var provider = vault.EmbeddingProvider;
-            if (_providers.Get(provider)?.Driver is not { } driver) return;
+            var configured = _providers.Get(provider);
+            if (configured?.Driver is not { } driver) return;
+            var kind = configured.External ? KumbuMetrics.ProviderKind.External : KumbuMetrics.ProviderKind.Internal;
             var model = driver.ModelKey;
             var note = entry.Note;
             if (IsCurrent(vault.Embeddings.GetValueOrDefault(path), note, driver)) return;
@@ -162,13 +166,20 @@ public sealed class SearchIndex : BackgroundService
                 // Nor does anything more of a vault being deleted or re-keyed.
                 if (vault.EmbeddingProvider != provider || !MayIndex(vault, path)) return;
                 float[][] vectors;
+                var started = Stopwatch.GetTimestamp();
                 try
                 {
                     vectors = await driver.EmbedAsync([.. batch.Select(i => chunks[i].EmbeddingText)], query: false, embedding.Token);
+                    KumbuMetrics.EmbeddingBatchDone(kind, Stopwatch.GetElapsedTime(started));
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     return;
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    KumbuMetrics.EmbeddingFailed(kind);
+                    throw;
                 }
 
                 for (var k = 0; k < batch.Length; k++) known[hashes[batch[k]]] = vectors[k];

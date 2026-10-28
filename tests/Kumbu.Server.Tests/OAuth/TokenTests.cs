@@ -162,10 +162,13 @@ public sealed class TokenTests(KumbuAppFactory app)
     [Fact]
     public async Task Exchanges_a_code_for_tokens()
     {
+        const string issued = "kumbu_oauth_tokens_issued_total{grant=\"authorization_code\"}";
+        var before = Metrics.Scrape.Value(await Metrics.Scrape.TextAsync(app), issued);
         var (owner, id) = await ConnectionAsync(Api);
         var flow = await AllowedAsync(Api, owner, id);
 
         using var response = await flow.TokenAsync();
+        Assert.True(Metrics.Scrape.Value(await Metrics.Scrape.TextAsync(app), issued) >= before + 1);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.CacheControl!.NoStore);

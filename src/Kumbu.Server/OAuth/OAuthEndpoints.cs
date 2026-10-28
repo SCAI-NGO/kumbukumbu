@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Metrics;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 
@@ -69,6 +70,7 @@ public static partial class OAuthEndpoints
         }
 
         limits.TokenRelease(http, clientId);
+        KumbuMetrics.OAuthTokenIssued(form.TryGetValue("grant_type", out var grant) && grant == "refresh_token" ? KumbuMetrics.Grant.RefreshToken : KumbuMetrics.Grant.AuthorizationCode);
         return TypedResults.Json(new JsonObject
         {
             ["access_token"] = pair.AccessToken,

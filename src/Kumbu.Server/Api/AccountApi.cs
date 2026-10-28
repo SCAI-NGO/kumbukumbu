@@ -2,6 +2,7 @@
 using System.Text.Json.Serialization;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
@@ -162,12 +163,18 @@ public static class AccountApi
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
-        var (user, userKey, readAt) = await users.TrySignInAsync(body.Username, body.Password, ct)
-            ?? throw new ApiException(StatusCodes.Status401Unauthorized, SignInFailed);
+        if (await users.TrySignInAsync(body.Username, body.Password, ct) is not { } signedIn)
+        {
+            KumbuMetrics.SignedIn(KumbuMetrics.Outcome.Failure);
+            throw new ApiException(StatusCodes.Status401Unauthorized, SignInFailed);
+        }
+
+        var (user, userKey, readAt) = signedIn;
 
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
         if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
         SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct));
+        KumbuMetrics.SignedIn(KumbuMetrics.Outcome.Success);
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
