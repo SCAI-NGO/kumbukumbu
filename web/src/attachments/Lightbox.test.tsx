@@ -74,7 +74,7 @@ describe("Lightbox", () => {
     api();
     const router = renderApp(opened("/W/shots/b.png"));
     expect(await screen.findByRole("heading", { name: "b.png" })).toBeInTheDocument();
-    expect(screen.getByText("2 / 3")).toBeInTheDocument();
+    expect(screen.getByText("File 2 of 3")).toBeInTheDocument();
 
     fireEvent.keyDown(document.body, { key: "ArrowRight" });
     expect(await screen.findByRole("heading", { name: "c.png" })).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("Lightbox", () => {
   it("pages through the folder's attachments when opened without an order", async () => {
     api();
     const router = renderApp("/view/W/shots/a.png");
-    expect(await screen.findByText("1 / 2")).toBeInTheDocument();
+    expect(await screen.findByText("File 1 of 2")).toBeInTheDocument();
     fireEvent.keyDown(document.body, { key: "ArrowRight" });
     await waitFor(() => expect(router.state.location.pathname).toBe("/view/W/shots/b.png"));
     // Opened from outside the app, closing goes to the vaults.
@@ -169,7 +169,7 @@ describe("Lightbox", () => {
     const removed = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "DELETE")!;
     expect(new URL(removed.url).search).toBe("?version=v1");
     // The deleted one is out of the order.
-    expect(await screen.findByText("2 / 2")).toBeInTheDocument();
+    expect(await screen.findByText("File 2 of 2")).toBeInTheDocument();
   });
 
   it("moves an image keeping its extension, and shows it at its new place", async () => {

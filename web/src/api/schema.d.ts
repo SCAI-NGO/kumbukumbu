@@ -3388,6 +3388,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Service Unavailable */
                 503: {
                     headers: {
@@ -4443,6 +4452,15 @@ export interface paths {
                 };
                 /** @description Not Found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -6333,6 +6351,12 @@ export interface components {
             /** Format: date-time */
             lastWriteAt: string;
             version: string;
+            /** @default agent */
+            writerKind: string;
+            /** Format: date-time */
+            quietSince?: null | string;
+            /** Format: date-time */
+            resumedAt?: null | string;
         };
         CheckpointEntryView: {
             name: string;

@@ -46,6 +46,21 @@ export function zoomAt(view: View, scale: number, point: { x: number; y: number 
   return { scale, x: point.x - (point.x - view.x) * ratio, y: point.y - (point.y - view.y) * ratio };
 }
 
+/** One notch of a mouse wheel zooms by this much: five take a fitted image to about 230 %. */
+const wheelStep = 1.18;
+
+/**
+ * The zoom factor of one wheel event. A mouse notch is 100 px in Chrome, more elsewhere, 3 lines in Firefox: each
+ * counts as one `wheelStep`, however large. A trackpad sends many small deltas, scrolling or (with Ctrl) pinching,
+ * and the zoom follows them in proportion; a pinch's more quickly, as its deltas are smaller.
+ */
+export function wheelFactor(e: { deltaY: number; deltaMode: number; ctrlKey: boolean }): number {
+  const pixels = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1);
+  const step = Math.log(wheelStep);
+  const amount = pixels * (e.ctrlKey ? 0.01 : step / 100);
+  return Math.exp(-Math.min(step, Math.max(-step, amount)));
+}
+
 /** What a finger that went `dx`, `dy` without zoom asks for. */
 export function swipeOf(dx: number, dy: number): "next" | "previous" | "close" | null {
   if (Math.abs(dx) > swipeDistance && Math.abs(dx) > Math.abs(dy)) return dx < 0 ? "next" : "previous";
@@ -176,7 +191,7 @@ export function useZoomPan(stage: RefObject<HTMLElement>, image: Size | null, on
     if (!element) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      zoomTo(viewRef.current.scale * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)), local({ x: e.clientX, y: e.clientY }));
+      zoomTo(viewRef.current.scale * wheelFactor(e), local({ x: e.clientX, y: e.clientY }));
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);

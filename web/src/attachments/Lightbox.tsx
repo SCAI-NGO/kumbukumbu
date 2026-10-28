@@ -16,10 +16,12 @@ import PdfPages, { type PdfStatus } from "./PdfPages";
 const HistorySheet = lazy(() => import("../note/HistorySheet"));
 
 // The lightbox is black in every colour scheme, as a photo viewer is: its controls use these, the Kumbu scheme's
-// text colours (theme/schemes.ts), which read on black; the dialogs it opens keep the scheme's own.
+// text colours (theme/schemes.ts), which read on black; the dialogs it opens keep the scheme's own. Text over the
+// picture sits on an opaque surface, so a light screenshot or a PDF page behind it can't wash it out.
 const controlClass =
   "flex size-11 flex-none items-center justify-center rounded-[10px] bg-[#232328cc] text-[#d9d6cf] disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-[#f0a848]";
-const badgeClass = "rounded-[6px] bg-[#232328cc] px-2 py-0.5 font-mono text-[12px] text-[#f0a848]";
+const badgeClass = "rounded-[6px] bg-[#232328] px-2 py-0.5 font-mono text-[12px] text-[#f0a848]";
+const pillClass = "rounded-full bg-[#232328] px-2.5 py-0.5 text-[12px] text-[#eceae4]";
 
 /** The router state as the lightbox keeps it: `back` once it knows whether closing goes back to its opener. */
 type State = LightboxState & { back?: boolean };
@@ -205,7 +207,7 @@ export default function Lightbox() {
           )}
         </div>
         {showInfo && (
-          <dl aria-label="Info" className="pointer-events-auto ml-auto grid w-full max-w-xs grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[12px] bg-[#1a1a1ee6] p-3 text-[13px]">
+          <dl aria-label="Info" className="pointer-events-auto ml-auto grid w-full max-w-xs grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-[12px] bg-[#1a1a1e] p-3 text-[13px]">
             <InfoRow label="Folder">{folderOf(path).slice(1).split("/").join(" / ")}</InfoRow>
             {extent && <InfoRow label={kind === "pdf" ? "Pages" : "Dimensions"}>{extent}</InfoRow>}
             {facts && (
@@ -233,13 +235,14 @@ export default function Lightbox() {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-1.5 bg-gradient-to-t from-black/80 to-transparent px-2 pt-6 pb-[max(10px,env(safe-area-inset-bottom))]">
         {copy && (
-          <p role="status" className="text-[12px] text-[#a09d96]">
+          <p role="status" className={pillClass}>
             {copy === "copied" ? "Link copied. Paste it into a note." : "Couldn't copy the link."}
           </p>
         )}
+        {/* Which file of the ones paged through; a PDF's page counter is the badge at the top. */}
         {paths.length > 1 && at >= 0 && (
-          <p className="text-[11px] text-[#8f8c86]">
-            {at + 1} / {paths.length}
+          <p className={pillClass}>
+            File {at + 1} of {paths.length}
           </p>
         )}
         <div className="pointer-events-auto flex gap-2">

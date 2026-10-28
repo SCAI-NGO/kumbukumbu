@@ -276,7 +276,7 @@ describe("a checkpoint in the web app", () => {
       expect(await screen.findByRole("img", { name: "a.png" })).toHaveAttribute("src", "blob:file");
       expect(asked).toEqual(["shots/a.png"]);
       expect(screen.getByText("Checkpoint before-cleanup · read only")).toBeInTheDocument();
-      expect(screen.getByText("1 / 2")).toBeInTheDocument();
+      expect(screen.getByText("File 1 of 2")).toBeInTheDocument();
       expect(screen.getByRole("link", { name: "Download" })).toHaveAttribute("href", "/api/vaults/Work/checkpoints/before-cleanup/files/shots/a.png?download=1");
       expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Rename or move" })).toBeNull();

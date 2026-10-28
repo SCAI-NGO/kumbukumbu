@@ -126,7 +126,7 @@ public static class HistoryApi
         api.MapPost("/vaults/{vault}/checkpoints/{name}/preview", PreviewAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("/vaults/{vault}/checkpoints/{name}/restore", RestoreCheckpointAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapDelete("/vaults/{vault}/checkpoints/{name}", RemoveCheckpointAsync).Errors(400, 401, 403, 404, 503);
-        api.MapGet("/vaults/{vault}/activity", ActivityAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/vaults/{vault}/activity", ActivityAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
     }
 
     /// <summary>A restore whose file's content was removed while it ran wrote nothing: a 409, as any lost race.</summary>
@@ -236,10 +236,11 @@ public static class HistoryApi
     /// <summary>
     /// The vault's changesets for the Activity sheet, newest first: <c>limit</c> rows (1 to 100, default 50), only
     /// those after the last row shown: <c>before</c> (its <c>to</c>, an ISO time) and <c>key</c> (its key; without it,
-    /// rows that ended before <c>before</c>). Sessions only: it names every writer of the vault.
+    /// rows that ended before <c>before</c>). Sessions only: it names every writer of the vault. Limited with search in
+    /// earlier versions (<see cref="AccountLimits.HistoryScansPerUser"/>): both read every note of the vault.
     /// </summary>
     private static async Task<Ok<ActivityView>> ActivityAsync(
-        string vault, string? before, string? key, int? limit, INoteStore store, WriterKinds kinds, CancellationToken ct)
+        string vault, string? before, string? key, int? limit, RequestCaller caller, AccountLimits limits, INoteStore store, WriterKinds kinds, CancellationToken ct)
     {
         var max = limit ?? DefaultActivityRows;
         if (max is < 1 or > MaxActivityRows) throw ApiErrors.BadRequest($"limit is 1 to {MaxActivityRows}.");
@@ -255,6 +256,7 @@ public static class HistoryApi
         }
 
         var root = ApiPaths.Parse(vault, null, note: false);
+        if (limits.HistoryScan(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter, AccountLimits.HistoryScansRefused);
         await NoteApi.RequireVaultAsync(store, root, ct);
         var notes = new List<StoredNote>();
         foreach (var path in await store.ListNotesUnderAsync(root, ct))
