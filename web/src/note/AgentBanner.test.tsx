@@ -12,6 +12,8 @@ const entry = (version: string, writtenAt: string, writer: string, writerKind: s
   current,
   changeset: null,
   writerKind,
+  kind: "note",
+  mediaType: "text/markdown",
 });
 
 describe("lastSeen", () => {

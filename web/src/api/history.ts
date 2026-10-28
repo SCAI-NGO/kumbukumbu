@@ -11,6 +11,7 @@ export type RestorePreview = components["schemas"]["RestorePreviewView"];
 export type NoteVersion = components["schemas"]["NoteVersionView"];
 export type CheckpointTree = components["schemas"]["CheckpointTreeView"];
 export type CheckpointNote = components["schemas"]["CheckpointNoteView"];
+export type FileState = components["schemas"]["FileStateView"];
 
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });
 
@@ -36,12 +37,13 @@ export function useRestoreNote() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: ["restore"],
-    mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }) =>
+    // A note's restore answers its NoteView, an attachment's its FileStateView; the generated schema names only one.
+    mutationFn: ({ path, version, expected }: { path: string; version?: string; expected?: string }): Promise<NoteView | FileState> =>
       call(api.POST("/api/restore/{vault}/{path}", { params: params(path), body: { version: version ?? null, ...(expected ? { expected } : {}) } })),
-    onSuccess: (note: NoteView) => {
+    onSuccess: (restored) => {
       // The restored note itself is what came back.
-      queryClient.setQueryData(["note", note.path], note);
-      vaultChanged(queryClient, vaultOf(note.path), { notes: false });
+      if ("content" in restored) queryClient.setQueryData(["note", restored.path], restored);
+      vaultChanged(queryClient, vaultOf(restored.path), { notes: false });
     },
   });
 }
