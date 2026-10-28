@@ -48,9 +48,9 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
     /// and revokes every API key of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
     /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>; deactivating also revokes the user's
-    /// open invitations there. Revoking again on reactivation
-    /// catches a key or a code whose creation raced the deactivation (its request's session resolved just before
-    /// it): reactivating revives no key, no app and no session.
+    /// open invitations there. Revoking again on reactivation catches a key or a code whose creation raced the
+    /// deactivation (its request's session resolved just before it): reactivating revives no key, no app, no session
+    /// and no invitation.
     /// </summary>
     public async Task<bool> SetActiveAsync(User actor, string userId, bool active, CancellationToken ct)
     {
