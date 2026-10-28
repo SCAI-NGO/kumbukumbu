@@ -487,4 +487,23 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.InternalServerError, get.StatusCode);
         Assert.Contains("The content of /Arbeit/shot.png doesn't open", await RestClient.ErrorAsync(get), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_not_modified_answer_gives_its_read_slot_back()
+    {
+        var user = await UserAsync();
+        await user.CreateFileAsync("shot.png", Png(4, 4));
+        using var first = await user.GetAsync(user.Url("shot.png", "files"));
+        var tag = first.Headers.ETag!.Tag;
+
+        // More than the server's slots (4 by default): a 304 that kept its slot would make the last read wait for good.
+        for (var i = 0; i < 6; i++)
+        {
+            using var unchanged = await user.SendAsync(HttpMethod.Get, user.Url("shot.png", "files"), headers: new Dictionary<string, string> { ["If-None-Match"] = tag });
+            Assert.Equal(HttpStatusCode.NotModified, unchanged.StatusCode);
+        }
+
+        using var again = await user.GetAsync(user.Url("shot.png", "files")).WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+    }
 }
