@@ -30,6 +30,7 @@ export default function Users() {
   const me = useSession((s) => s.user?.id);
   const [target, setTarget] = useState<AdminUser | null>(null);
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
+  const [promoting, setPromoting] = useState<AdminUser | null>(null);
   // One receipt after the other: a repeat after a restore gives one per user.
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [repeating, setRepeating] = useState(false);
@@ -64,11 +65,19 @@ export default function Users() {
       {users.data && (
         <ul className="flex flex-col gap-3">
           {users.data.map((user) => (
-            <UserItem key={user.id} user={user} self={user.id === me} onToggle={() => setTarget(user)} onDelete={() => setDeleting(user)} />
+            <UserItem
+              key={user.id}
+              user={user}
+              self={user.id === me}
+              onToggle={() => setTarget(user)}
+              onDelete={() => setDeleting(user)}
+              onPromote={() => setPromoting(user)}
+            />
           ))}
         </ul>
       )}
       {target && <ToggleDialog user={target} onClose={() => setTarget(null)} />}
+      {promoting && <PromoteDialog user={promoting} onClose={() => setPromoting(null)} />}
       {deleting && (
         <DeleteDialog
           user={deleting}
@@ -107,7 +116,7 @@ function useUpdate(user: AdminUser, onDone?: () => void) {
   });
 }
 
-function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: boolean; onToggle(): void; onDelete(): void }) {
+function UserItem({ user, self, onToggle, onDelete, onPromote }: { user: AdminUser; self: boolean; onToggle(): void; onDelete(): void; onPromote(): void }) {
   const update = useUpdate(user);
   const primary = user.role === "primary_admin";
   const makeAdmin = user.role !== "admin";
@@ -137,7 +146,7 @@ function UserItem({ user, self, onToggle, onDelete }: { user: AdminUser; self: b
             <button
               type="button"
               disabled={update.isPending}
-              onClick={() => update.mutate({ role: makeAdmin ? "admin" : "user" })}
+              onClick={() => (makeAdmin ? onPromote() : update.mutate({ role: "user" }))}
               aria-label={`Make ${user.display} ${makeAdmin ? "an admin" : "a user"}`}
               className={secondaryButtonClass}
             >
@@ -208,6 +217,26 @@ function RepeatDialog({ count, onClose, onDeleted }: { count: number; onClose():
       pending={repeat.isPending}
       error={repeat.isError ? errorText(repeat.error) : null}
       onConfirm={() => repeat.mutate()}
+      onClose={onClose}
+      password={password}
+      onPasswordChange={setPassword}
+    />
+  );
+}
+
+/** Making someone an admin takes the admin's own password, as inviting one does: a stolen session alone can't. */
+function PromoteDialog({ user, onClose }: { user: AdminUser; onClose(): void }) {
+  const update = useUpdate(user, onClose);
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  return (
+    <ConfirmTyped
+      title={`Make ${user.display} an admin?`}
+      text="An admin can invite, deactivate and delete accounts here. Your password confirms it."
+      action="Make admin"
+      pending={update.isPending}
+      error={update.isError ? errorText(update.error) : null}
+      onConfirm={() => update.mutate({ role: "admin", password })}
       onClose={onClose}
       password={password}
       onPasswordChange={setPassword}

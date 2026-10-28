@@ -269,6 +269,21 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     }
 
     /// <summary>
+    /// Every user's expired keys that aren't retired yet lose their slots and their name id, as the first time one is
+    /// presented again: run at start and every hour (<see cref="ExpiredKeySweep"/>), so that a key never presented
+    /// again doesn't keep its slots until its owner makes another key. A slot of an expired key opens a vault for nobody
+    /// (the key is refused before its slots are read), so deleting it loses nothing. Returns how many keys.
+    /// </summary>
+    public async Task<int> RetireAllExpiredAsync(CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var now = Now;
+        var expired = await Keys.Find(k => k.RevokedAt == null && k.ExpiresAt != null && k.ExpiresAt <= now && k.NameId != null).ToListAsync(ct);
+        foreach (var doc in expired) await RetireExpiredAsync(doc, ct);
+        return expired.Count;
+    }
+
+    /// <summary>
     /// The first time an expired key is presented: its slots go and its name is freed, as when the next key is made.
     /// Best effort and outside a transaction: the slots first, so the name id, which marks a key not yet retired,
     /// goes only once they are gone; the key is refused either way.

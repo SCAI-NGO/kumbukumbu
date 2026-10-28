@@ -67,8 +67,9 @@ public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 public sealed record AdminUserView(
     string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastSignInAt, int Vaults, long BytesStored);
 
-/// <summary>Either or both; the role is <c>user</c> or <c>admin</c>.</summary>
-public sealed record UpdateUserRequest(bool? Active = null, string? Role = null);
+/// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
+/// acting admin's own.</summary>
+public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null);
 
 /// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
 public sealed record DeleteAccountRequest(string Password, string Confirm);
@@ -105,8 +106,9 @@ public sealed record DeletionReceiptView(
 public sealed record AdminInvitationView(
     string Id, string Role, string? Note, string CreatedBy, DateTime CreatedAt, DateTime ExpiresAt, DateTime? UsedAt, string? UsedBy, DateTime? RevokedAt, string State);
 
-/// <summary>For <c>user</c> or <c>admin</c>, valid for <c>expiresInDays</c> (1 to 30, default 7).</summary>
-public sealed record CreateInvitationRequest(string Role, string? Note = null, int? ExpiresInDays = null);
+/// <summary>For <c>user</c> or <c>admin</c>, valid for <c>expiresInDays</c> (1 to 30, default 7). An invitation for
+/// <c>admin</c> needs <c>password</c>, the acting admin's own.</summary>
+public sealed record CreateInvitationRequest(string Role, string? Note = null, int? ExpiresInDays = null, string? Password = null);
 
 /// <summary><c>code</c> and <c>link</c> are shown here once and never again.</summary>
 public sealed record CreatedInvitationView(string Code, string Link, AdminInvitationView Invitation);
@@ -144,12 +146,12 @@ public static class AccountApi
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
-        account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404);
+        account.MapPatch("/admin/users/{id}", UpdateUserAsync).Errors(400, 401, 403, 404, 429);
         account.MapPost("/admin/users/{id}/delete", DeleteUserAsync).Errors(400, 401, 403, 404, 429);
         account.MapGet("/admin/deletions", ListDeletionsAsync).Errors(401, 403);
         account.MapPost("/admin/deletions/repeat", RepeatDeletionsAsync).Errors(400, 401, 403, 429);
         account.MapGet("/admin/invitations", ListInvitationsAsync).Errors(401, 403);
-        account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403);
+        account.MapPost("/admin/invitations", CreateInvitationAsync).Errors(400, 401, 403, 429);
         account.MapDelete("/admin/invitations/{id}", RevokeInvitationAsync).Errors(401, 403, 404);
         account.MapGet("/account/preferences", PreferencesAsync).Errors(401, 403);
         account.MapPut("/account/preferences", SetPreferencesAsync).Errors(400, 401, 403, 429);
@@ -321,9 +323,11 @@ public static class AccountApi
             .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, u.Vaults, u.BytesStored))
             .ToArray());
 
-    private static async Task<NoContent> UpdateUserAsync(string id, UpdateUserRequest body, RequestCaller caller, Admin admin, Pairings pairings, CancellationToken ct)
+    private static async Task<NoContent> UpdateUserAsync(
+        string id, UpdateUserRequest body, RequestCaller caller, Admin admin, Pairings pairings, UserCatalog users, AccountLimits limits, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
+        if (body.Role == Roles.Admin) await RequirePasswordAsync(caller, body.Password, "Making someone an admin needs your password.", users, limits, ct);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
         // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
@@ -372,14 +376,29 @@ public static class AccountApi
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());
 
     private static async Task<Created<CreatedInvitationView>> CreateInvitationAsync(
-        CreateInvitationRequest body, RequestCaller caller, Invitations invitations, IOptions<KumbuOptions> options, CancellationToken ct)
+        CreateInvitationRequest body, RequestCaller caller, Invitations invitations, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options,
+        CancellationToken ct)
     {
         var expiry = body.ExpiresInDays is { } days
             ? days > 0 && days <= Invitations.MaxExpiry.TotalDays ? TimeSpan.FromDays(days) : throw ApiErrors.BadRequest($"An invitation is valid for 1 to {Invitations.MaxExpiry.TotalDays} days.")
             : (TimeSpan?)null;
+        if (body.Role == Roles.Admin) await RequirePasswordAsync(caller, body.Password, "Inviting an admin needs your password.", users, limits, ct);
         var (code, info) = await invitations.CreateAsync(caller.User!, body.Role, body.Note, expiry, ct);
         var link = Invitations.Link(options.Value.PublicUrl, code);
         return TypedResults.Created($"/api/admin/invitations/{info.Id}", new CreatedInvitationView(code, link, InvitationView(info)));
+    }
+
+    /// <summary>
+    /// Making an admin, by invitation or by role, needs the acting admin's password, checked and limited as a password
+    /// change checks it: a stolen admin session alone must not make an admin account that outlives it. Both ways,
+    /// since an invitation for a user and a promotion would otherwise make one too. A user invitation needs none: the
+    /// account it makes opens nothing but its own vaults.
+    /// </summary>
+    private static async Task RequirePasswordAsync(RequestCaller caller, string? password, string missing, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(password)) throw ApiErrors.BadRequest(missing);
+        if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, password, ct)) throw ApiErrors.BadRequest("Your password is wrong.");
     }
 
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>

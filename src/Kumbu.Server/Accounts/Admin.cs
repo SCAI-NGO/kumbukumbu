@@ -47,9 +47,10 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
     /// Deactivates or reactivates a user; false if there is no such user, true (and nothing done) if they already
     /// are so, so a repeated request costs nobody their keys. A real change in either direction ends every session
     /// and revokes every API key of the user and the tokens of every connection (<see cref="ConnectionReasons.Deactivated"/>),
-    /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>. Revoking again on reactivation
-    /// catches a key or a code whose creation raced the deactivation (its request's session resolved just before
-    /// it): reactivating revives no key, no app and no session.
+    /// in one transaction with the flag, and stamps <c>credentialsChangedAt</c>; deactivating also revokes the user's
+    /// open invitations there. Revoking again on reactivation catches a key or a code whose creation raced the
+    /// deactivation (its request's session resolved just before it): reactivating revives no key, no app, no session
+    /// and no invitation.
     /// </summary>
     public async Task<bool> SetActiveAsync(User actor, string userId, bool active, CancellationToken ct)
     {
@@ -59,11 +60,11 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
         if (target.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin can't be deactivated.");
         if (!active && target.Id == acting.Id) throw new NotPermittedException("You can't deactivate yourself.");
 
-        (int Keys, int Connections)? revoked;
+        (int Keys, int Connections, long Invitations)? revoked;
         using (var session = await catalog.StartSessionAsync(ct))
         {
             // Retried on a write conflict: a key or a connection in use writes its lastUsedAt outside any transaction.
-            revoked = await session.WithTransactionAsync<(int, int)?>(
+            revoked = await session.WithTransactionAsync<(int, int, long)?>(
                 async (s, token) =>
                 {
                     // The role is checked again in the filter, in case it changed since the read above; the state, so
@@ -78,19 +79,27 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
 
                     await sessions.EndAllAsync(s, userId, token);
                     var keyCount = await keys.RevokeAllAsync(s, userId, token);
-                    return (keyCount, await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token));
+                    var connectionCount = await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token);
+                    var invitationCount = active ? 0 : await Invitations.RevokeOpenOfAsync(db, s, userId, Now, token);
+                    return (keyCount, connectionCount, invitationCount);
                 },
                 cancellationToken: ct);
         }
 
         if (revoked is not { } count) return true;
         if (active) log.LogInformation("{Admin} reactivated user {Username}", acting.Username, target.Username);
-        else log.LogInformation("{Admin} deactivated user {Username}; {Count} API keys and the tokens of {Connections} connections revoked", acting.Username, target.Username, count.Keys, count.Connections);
+        else
+        {
+            log.LogInformation(
+                "{Admin} deactivated user {Username}; {Count} API keys, the tokens of {Connections} connections and {Invitations} open invitations revoked",
+                acting.Username, target.Username, count.Keys, count.Connections, count.Invitations);
+        }
+
         return true;
     }
 
     /// <summary>Makes a user a <c>user</c> or an <c>admin</c>; false if there is no such user. The primary admin's
-    /// role can't be changed, and nobody can be made primary admin.</summary>
+    /// role can't be changed, and nobody can be made primary admin. Made a user, an admin's open invitations are revoked.</summary>
     public async Task<bool> SetRoleAsync(User actor, string userId, string role, CancellationToken ct)
     {
         if (!Roles.IsKnown(role)) throw new ArgumentException($"Unknown role '{role}'.", nameof(role));
@@ -106,6 +115,11 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
             cancellationToken: ct);
         if (updated.MatchedCount == 0) return false;
         log.LogInformation("{Admin} made {Username} {Role}", acting.Username, target.Username, role);
+        if (role == Roles.User && await Invitations.RevokeOpenOfAsync(db, null, userId, Now, ct) is > 0 and var revoked)
+        {
+            log.LogInformation("{Count} open invitations of {Username} revoked", revoked, target.Username);
+        }
+
         return true;
     }
 

@@ -176,7 +176,24 @@ public sealed class AccountLimits : IDisposable
     public const int JoinsPerAddress = 5;
     public const int RecoveriesPerAddress = 5;
     public const int RedeemsPerAddress = 10;
-    public const int RedeemFailuresPerServer = 100;
+
+    /// <summary>
+    /// Wrong pairing codes a minute from one network (<see cref="WrongKeyLimiter.Network"/>) before that network's
+    /// redeems are refused: what the whole server allowed before, now for one attacker's network alone.
+    /// </summary>
+    public const int RedeemFailuresPerNetwork = 100;
+
+    /// <summary>
+    /// Wrong pairing codes a minute from everywhere before every redeem is refused: the backstop against a guess spread
+    /// over many networks. A code is 40 random bits (2^40 ≈ 1.1·10^12 codes) and works for 10 minutes. Any 10 minutes
+    /// touch at most 61 of the window's 10-second segments, and any 6 in a row admit at most a minute's allowance, so
+    /// at most 11 × 10,000 = 110,000 wrong codes fall into one code's life, however many networks send them. Each guess
+    /// hits a given code with the chance 2^-40, so that code is guessed with a chance of at most 110,000 / 2^40 ≈ 1.0·10^-7,
+    /// 1 in 10 million; with K codes open at once (one per user and vault being paired), at most K times that.
+    /// Kept up without a pause while one code is always open, the attack would need 2^40 / 10,000 minutes, about 209
+    /// years, for one expected hit. Holding off pairing for everyone now takes wrong codes from at least 100 networks.
+    /// </summary>
+    public const int RedeemFailuresPerServer = 10_000;
 
     /// <summary>
     /// Each of these requests reads every note in its scope with its history. The web app asks once per search that
@@ -197,8 +214,21 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _joinByAddress = Limiter(JoinsPerAddress);
     private readonly PartitionedRateLimiter<string> _recoveryByAddress = Limiter(RecoveriesPerAddress);
     private readonly PartitionedRateLimiter<string> _redeemByAddress = Limiter(RedeemsPerAddress);
-    private readonly PartitionedRateLimiter<string> _redeemFailures = Limiter(RedeemFailuresPerServer);
+    private readonly PartitionedRateLimiter<string> _redeemFailuresByNetwork;
+    private readonly PartitionedRateLimiter<string> _redeemFailures;
     private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
+
+    public AccountLimits()
+        : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
+    {
+    }
+
+    /// <summary>For tests: other limits on wrong pairing codes, so that one can be reached in a few requests.</summary>
+    internal AccountLimits(int redeemFailuresPerNetwork, int redeemFailuresPerServer)
+    {
+        _redeemFailuresByNetwork = Limiter(redeemFailuresPerNetwork);
+        _redeemFailures = Limiter(redeemFailuresPerServer);
+    }
 
     /// <summary>Null if the sign-in may go ahead, else how long to wait. The address is asked first, so a client
     /// over its own limit uses up nothing of the username's.</summary>
@@ -223,28 +253,41 @@ public sealed class AccountLimits : IDisposable
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
     /// <summary>
-    /// Whether the server has seen 100 wrong codes in the last minute. A wrong code can't tell which code it was aimed
-    /// at, so there is no count per code; this bounds a guess spread over many addresses. While it holds every redeem
-    /// is refused, a right code too: the spec's trade-off, an attack delays pairing rather than speeding up guessing.
+    /// Whether the client's network has sent <see cref="RedeemFailuresPerNetwork"/> wrong codes in the last minute, or
+    /// the server has seen <see cref="RedeemFailuresPerServer"/>. A wrong code can't tell which code it was aimed at, so
+    /// there is no count per code; these bound a guess spread over many addresses of one network, and over many
+    /// networks. While one holds, every redeem it covers is refused, a right code too: the spec's trade-off, an attack
+    /// delays pairing rather than speeding up guessing, and now only for the attacker's own network unless it comes
+    /// from a hundred networks at once.
     /// </summary>
-    public bool RedeemsBlocked()
-    {
-        using var probe = _redeemFailures.AttemptAcquire(ServerWide, 0);
-        return !probe.IsAcquired;
-    }
+    public bool RedeemsBlocked(HttpContext context) => Exhausted(_redeemFailuresByNetwork, Network(context)) || Exhausted(_redeemFailures, ServerWide);
 
-    /// <summary>A wrong or expired code, counted towards <see cref="RedeemsBlocked"/>; true for the one that used up the minute's allowance.</summary>
-    public bool RedeemFailed()
+    /// <summary>A wrong or expired code, counted towards <see cref="RedeemsBlocked"/>, for the network and the server;
+    /// says which of them it used up the minute's allowance of, for the log.</summary>
+    public RedeemBlock RedeemFailed(HttpContext context)
     {
-        using var lease = _redeemFailures.AttemptAcquire(ServerWide);
-        return lease.IsAcquired && RedeemsBlocked();
+        var network = Network(context);
+        using var byNetwork = _redeemFailuresByNetwork.AttemptAcquire(network);
+        using var byServer = _redeemFailures.AttemptAcquire(ServerWide);
+        return byServer.IsAcquired && Exhausted(_redeemFailures, ServerWide) ? RedeemBlock.Server
+            : byNetwork.IsAcquired && Exhausted(_redeemFailuresByNetwork, network) ? RedeemBlock.Network
+            : RedeemBlock.None;
     }
 
     public static readonly TimeSpan RedeemRetryAfter = Window;
 
     private const string ServerWide = "*";
 
+    /// <summary>Zero permits only asks whether any are left; it uses none up.</summary>
+    private static bool Exhausted(PartitionedRateLimiter<string> limiter, string key)
+    {
+        using var probe = limiter.AttemptAcquire(key, 0);
+        return !probe.IsAcquired;
+    }
+
     private static string Address(HttpContext context) => WrongKeyLimiter.Partition(context.Connection.RemoteIpAddress);
+
+    private static string Network(HttpContext context) => WrongKeyLimiter.Network(context.Connection.RemoteIpAddress);
 
     private static string UsernameKey(string username)
     {
@@ -277,7 +320,16 @@ public sealed class AccountLimits : IDisposable
         _joinByAddress.Dispose();
         _recoveryByAddress.Dispose();
         _redeemByAddress.Dispose();
+        _redeemFailuresByNetwork.Dispose();
         _redeemFailures.Dispose();
         _historyScanByUser.Dispose();
     }
+}
+
+/// <summary>What a wrong pairing code started holding off, if anything: its network's redeems, or everyone's.</summary>
+public enum RedeemBlock
+{
+    None,
+    Network,
+    Server,
 }

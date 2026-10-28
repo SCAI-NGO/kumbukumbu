@@ -155,6 +155,30 @@ public sealed class InvitationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task An_open_invitation_whose_creator_is_no_longer_an_admin_is_refused_and_shown_as_revoked()
+    {
+        // As if the creator was deleted, deactivated or demoted just as the invitation was made: the revocation of
+        // their open invitations missed it, and the redeem catches it.
+        var admin = await AdminAsync();
+        var lea = await AdminAsync("lea");
+        var (code, info) = await Invitations().CreateAsync(lea, Roles.Admin, null, null, Ct);
+        await _db.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == lea.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(code, Ct))!.State);
+        Assert.Equal(InvitationState.Revoked, (await Invitations().ListAsync(admin, Ct)).Single(i => i.Id == info.Id).State);
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "mallory", Password, Ct));
+
+        Assert.Equal(InvitationState.Revoked, refused.State);
+        Assert.Null(await Users().TrySignInAsync("mallory", Password, Ct));
+        var doc = await InvitationDocs.Find(new BsonDocument("_id", info.Id)).SingleAsync(Ct);
+        Assert.False(doc.Contains("usedAt"));
+        Assert.True(doc.Contains("revokedAt"));
+        // Active again, it stays revoked.
+        await _db.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == lea.Id, Builders<UserDocument>.Update.Set(u => u.Active, true), cancellationToken: Ct);
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(code, Ct))!.State);
+    }
+
+    [Fact]
     public async Task Only_an_admin_may_revoke_or_list_invitations()
     {
         var admin = await AdminAsync();

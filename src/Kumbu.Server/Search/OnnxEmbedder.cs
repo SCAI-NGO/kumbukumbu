@@ -9,8 +9,8 @@ namespace Kumbu.Server.Search;
 
 /// <summary>
 /// The internal embedding model (the <c>onnx</c> driver), in process via ONNX Runtime: plaintext never leaves the server (concept §6). On the
-/// first start it downloads the model into <c>Kumbu:Search:ModelPath</c> and checks each file's SHA-256; after
-/// that it runs offline. Until the model is loaded, search ranks by words only and says why.
+/// first start it downloads the model into <c>Kumbu:Search:ModelPath</c> and checks each file's SHA-256, as it does again
+/// at every later start; after that it runs offline. Until the model is loaded, search ranks by words only and says why.
 /// </summary>
 public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFactory http, ILogger<OnnxEmbedder> log)
     : BackgroundService, IEmbeddingDriver
@@ -83,7 +83,15 @@ public sealed class OnnxEmbedder(IOptions<KumbuOptions> options, IHttpClientFact
         {
             var (_, local, size, sha) = file;
             var path = Path.Combine(dir, local);
-            if (ModelFiles.HasSize(path, size)) continue;
+            if (ModelFiles.HasSize(path, size))
+            {
+                // At every start, not only at download: a file of the same size put on the volume would otherwise be
+                // loaded. In the background like the download, before the model is loaded, so search ranks by words
+                // until then; a file that doesn't match is never loaded, but downloaded again.
+                if (await ModelFiles.MatchesAsync(path, file, ct)) continue;
+                log.LogWarning("{File} of the embedding model in {Dir} doesn't match its checksum; it is downloaded again", local, dir);
+                File.Delete(path);
+            }
 
             (State, Reason) = (SemanticState.Preparing, $"the embedding model is being downloaded ({size / 1_000_000} MB, once)");
             log.LogInformation("Downloading {File} of the embedding model ({Megabytes} MB) into {Dir}", local, size / 1_000_000, dir);
