@@ -253,8 +253,9 @@ public static class ExportApi
     }
 
     /// <summary>The plain <c>filename</c> beside <c>filename*</c>, for clients that read only it: accents dropped
-    /// (ü → u), other non-ASCII characters and quotes left out.</summary>
-    internal static string AsciiName(string name)
+    /// (ü → u), other non-ASCII characters and quotes left out; <paramref name="fallback"/> in front of a name left with
+    /// nothing before its extension.</summary>
+    internal static string AsciiName(string name, string fallback = "export")
     {
         var ascii = new StringBuilder();
         foreach (var c in name.Normalize(NormalizationForm.FormD))
@@ -263,6 +264,6 @@ public static class ExportApi
         }
 
         var text = string.Join(' ', ascii.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        return text.StartsWith('.') || text.Length == 0 ? "export" + text : text;
+        return text.StartsWith('.') || text.Length == 0 ? fallback + text : text;
     }
 }

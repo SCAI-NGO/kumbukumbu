@@ -24,10 +24,11 @@ public static class Security
     /// Only the app's own scripts, styles, images and connections. <c>base-uri</c> and <c>form-action</c> don't fall
     /// back to <c>default-src</c>: no <c>&lt;base&gt;</c> may redirect relative URLs, and forms may only post to the
     /// app (the web app's forms submit through fetch anyway). <c>object-src 'none'</c> is stricter than the
-    /// <c>'self'</c> it would inherit: no plug-in content at all.
+    /// <c>'self'</c> it would inherit: no plug-in content at all. <c>blob:</c> images: the web app shows an attachment
+    /// it fetched (with its session) through an object URL.
     /// </summary>
     public const string ContentSecurityPolicy =
-        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
+        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
         "base-uri 'none'; form-action 'self'; object-src 'none'";
 
     /// <summary>One year, and for the subdomains too; no <c>preload</c>, which can't be undone quickly.</summary>

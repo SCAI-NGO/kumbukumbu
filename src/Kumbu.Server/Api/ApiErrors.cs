@@ -117,9 +117,9 @@ public static class ApiErrors
                 await context.Response.WriteAsJsonAsync(new ApiError(e.StatusCode switch
                 {
                     StatusCodes.Status415UnsupportedMediaType => "Send the body as JSON (Content-Type: application/json).",
-                    StatusCodes.Status413PayloadTooLarge => context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase)
-                        ? UploadApi.Limits
-                        : "The request body is too large.",
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/upload", StringComparison.OrdinalIgnoreCase) => UploadApi.Limits,
+                    StatusCodes.Status413PayloadTooLarge when context.Request.Path.StartsWithSegments("/api/files", StringComparison.OrdinalIgnoreCase) => FileApi.TooLarge,
+                    StatusCodes.Status413PayloadTooLarge => "The request body is too large.",
                     _ => "The request body is missing, not JSON, or lacks a required field.",
                 }));
             }

@@ -353,4 +353,79 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("There is no vault 'Fremd'.", await ErrorAsync(delete));
         Assert.Equal("theirs\n", (await other.ReadAsync("secret.md"))["content"]!.GetValue<string>());
     }
+
+    private static string AttachmentsUrl(RestClient user, string? since = null) =>
+        $"/api/vaults/{Uri.EscapeDataString(user.Vault)}/versions?attachments=1" + (since is null ? "" : $"&since={Uri.EscapeDataString(since)}");
+
+    [Fact]
+    public async Task Versions_without_attachments_parameter_is_unchanged()
+    {
+        var user = await NewAsync(Api);
+        await user.CreateAsync("a.md", "a\n");
+        using var before = await user.GetAsync(VersionsUrl(user));
+        var today = await before.Content.ReadAsStringAsync(Ct);
+        var cursor = Cursor(JsonNode.Parse(today)!);
+
+        // Written, moved and trashed: each enters the changed-path log, which an older plugin must never see.
+        await user.CreateFileAsync("shot.png", FileApiTests.Png(4, 4));
+        await user.CreateFileAsync("gone.pdf", "%PDF-1.4\n"u8.ToArray());
+        using var mv = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/img/shot.png" });
+        using var rm = await user.SendAsync(HttpMethod.Delete, user.Url("gone.pdf", "files"));
+        Assert.True(mv.IsSuccessStatusCode && rm.IsSuccessStatusCode);
+
+        using var after = await user.GetAsync(VersionsUrl(user));
+        using var since = await user.GetAsync(VersionsUrl(user, cursor));
+
+        // The same clock, the same notes: the very same bytes, and the same ETag.
+        Assert.Equal(today, await after.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(before.Headers.ETag, after.Headers.ETag);
+        var answer = (await JsonAsync(since)).AsObject();
+        Assert.Equal(["full", "cursor", "state", "damaged", "notes", "deleted"], answer.Select(p => p.Key));
+        Assert.Equal(["/Arbeit/a.md"], Paths(answer));
+        Assert.Equal(["path", "version"], answer["notes"]![0]!.AsObject().Select(p => p.Key));
+        Assert.Empty(answer["deleted"]!.AsArray());
+        Assert.DoesNotContain(".p", answer.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Versions_with_attachments_lists_them_with_kind()
+    {
+        var user = await NewAsync(Api);
+
+        // An empty vault says it too: the plugin learns the server keeps attachments.
+        var empty = await JsonAsync(await user.GetAsync(AttachmentsUrl(user)));
+        Assert.True(empty["attachments"]!.GetValue<bool>());
+        Assert.Empty(empty["notes"]!.AsArray());
+
+        await user.CreateAsync("a.md", "a\n");
+        var pdf = await user.CreateFileAsync("report.pdf", "%PDF-1.4\n"u8.ToArray());
+        var png = await user.CreateFileAsync("shot.png", FileApiTests.Png(4, 4));
+
+        using var response = await user.GetAsync(AttachmentsUrl(user));
+        var full = await JsonAsync(response);
+
+        Assert.True(full["full"]!.GetValue<bool>());
+        Assert.Equal(["/Arbeit/a.md", "/Arbeit/report.pdf", "/Arbeit/shot.png"], Paths(full));
+        Assert.Equal(["note", "pdf", "image"], full["notes"]!.AsArray().Select(n => n!["kind"]!.GetValue<string>()));
+        Assert.Equal([pdf, png], full["notes"]!.AsArray().Skip(1).Select(n => n!["version"]!.GetValue<string>()));
+        // The state covers the attachments too, so it isn't the one an older client is given.
+        Assert.NotEqual((await VersionsAsync(user))["state"]!.GetValue<string>(), full["state"]!.GetValue<string>());
+        Assert.Equal($"\"{full["state"]!.GetValue<string>()}\"", response.Headers.ETag!.Tag);
+        using var unchanged = await user.SendAsync(HttpMethod.Get, AttachmentsUrl(user), headers: new Dictionary<string, string> { ["If-None-Match"] = response.Headers.ETag.Tag });
+        Assert.Equal(HttpStatusCode.NotModified, unchanged.StatusCode);
+
+        _time.Advance(TimeSpan.FromMinutes(10));
+        var cursor = Cursor(full);
+        using var rm = await user.SendAsync(HttpMethod.Delete, user.Url("report.pdf", "files"));
+        using var mv = await user.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Arbeit/shot.png", to = "/Arbeit/img/shot.png" });
+        Assert.True(rm.IsSuccessStatusCode && mv.IsSuccessStatusCode);
+
+        var since = await JsonAsync(await user.GetAsync(AttachmentsUrl(user, cursor)));
+
+        Assert.False(since["full"]!.GetValue<bool>());
+        Assert.True(since["attachments"]!.GetValue<bool>());
+        Assert.Equal(["/Arbeit/a.md", "/Arbeit/img/shot.png"], Paths(since));
+        Assert.Equal(["note", "image"], since["notes"]!.AsArray().Select(n => n!["kind"]!.GetValue<string>()));
+        Assert.Equal(["/Arbeit/report.pdf", "/Arbeit/shot.png"], Paths(since, "deleted"));
+    }
 }

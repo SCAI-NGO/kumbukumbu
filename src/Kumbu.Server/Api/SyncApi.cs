@@ -2,6 +2,8 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
 using Kumbu.Server.Accounts;
@@ -12,8 +14,11 @@ using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Kumbu.Server.Api;
 
-/// <summary>A note's path from the root of the vault tree and its version, as <c>GET /api/notes</c> gives it.</summary>
-public sealed record VersionEntry(string Path, string Version);
+/// <summary>A note's path from the root of the vault tree and its version, as <c>GET /api/notes</c> gives it; an
+/// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c> or <c>pdf</c>) only with
+/// <c>attachments=1</c>.</summary>
+public sealed record VersionEntry(
+    string Path, string Version, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
 
 /// <summary>
 /// A vault's versions (sync spec §5). <c>full</c>: every note of the vault is in <c>notes</c>; false only for an
@@ -22,8 +27,13 @@ public sealed record VersionEntry(string Path, string Version);
 /// time before the answer was read, to send back as <c>since</c>. <c>state</c>: a hash over the whole vault's paths,
 /// versions and damaged count, also the <c>ETag</c>. <c>damaged</c>: stored notes that don't open (their paths are
 /// sealed with them, so they can't be listed; a touched path whose note doesn't open is in neither list). Both lists in path order.
+/// <c>attachments</c>: true when asked with <c>attachments=1</c>; then <c>notes</c> lists attachments too, each entry
+/// with its <c>kind</c>, and <c>state</c> and <c>deleted</c> cover them. Without it, the answer is what clients that
+/// know no attachments have always had: no attachment path anywhere in it, and no <c>attachments</c> or <c>kind</c>.
 /// </summary>
-public sealed record VersionsView(bool Full, string Cursor, string State, int Damaged, IReadOnlyList<VersionEntry> Notes, IReadOnlyList<string> Deleted);
+public sealed record VersionsView(
+    bool Full, string Cursor, string State, int Damaged, IReadOnlyList<VersionEntry> Notes, IReadOnlyList<string> Deleted,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Attachments = null);
 
 /// <summary>A ticket for one connection to <c>GET /api/ws</c>, until <c>expiresAt</c> (30 seconds).</summary>
 public sealed record WsTicketView(string Ticket, DateTime ExpiresAt);
@@ -92,10 +102,12 @@ public static class SyncApi
     }
 
     /// <summary><c>since</c>: a <c>cursor</c> of an earlier answer. Without it, <c>If-None-Match</c> with the last
-    /// <c>state</c> answers 304 while nothing changed.</summary>
+    /// <c>state</c> answers 304 while nothing changed. <c>attachments=1</c>: attachments too (the Obsidian plugin
+    /// 0.1.1 asks without it and would take every entry for a note).</summary>
     private static async Task<Results<Ok<VersionsView>, StatusCodeHttpResult>> VersionsAsync(
-        string vault, string? since, HttpContext http, EncryptedNoteStore store, VaultCatalog catalog, CancellationToken ct)
+        string vault, string? since, string? attachments, HttpContext http, EncryptedNoteStore store, VaultCatalog catalog, CancellationToken ct)
     {
+        var withFiles = attachments is "1" or "true";
         var root = ApiPaths.Parse(vault, null, note: false);
         var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
@@ -107,30 +119,41 @@ public static class SyncApi
         var cursor = now.ToString("O", CultureInfo.InvariantCulture);
         var changedAt = unlocked.ChangedAt;
         var notes = unlocked.Notes;
+        var files = withFiles ? unlocked.Attachments : [];
         var damaged = unlocked.DamagedPathIds.Count;
-        var state = State(notes.Values.Select(n => n.Note), damaged);
+        var state = State(notes.Values.Select(n => (n.Note.Path, n.Note.Version)).Concat(files.Values.Select(a => (a.Attachment.Path, a.Attachment.Version))), damaged);
         http.Response.Headers.ETag = $"\"{state}\"";
+        var marker = withFiles ? true : (bool?)null;
 
         var from = Since(since, now, unlocked.Horizon);
         if (from is null)
         {
             if (since is null && http.Request.Headers.IfNoneMatch.Contains($"\"{state}\"")) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
-            var all = notes.Values.Select(n => n.Note).OrderBy(n => n.Path.Value, TextOrder.Default).Select(n => new VersionEntry(n.Path.Value, n.Version)).ToList();
-            return TypedResults.Ok(new VersionsView(true, cursor, state, damaged, all, []));
+            var all = notes.Values.Select(n => Entry(n.Note.Path, n.Note.Version, withFiles))
+                .Concat(files.Values.Select(a => Entry(a.Attachment.Path, a.Attachment.Version, withFiles)))
+                .OrderBy(e => e.Path, TextOrder.Default)
+                .ToList();
+            return TypedResults.Ok(new VersionsView(true, cursor, state, damaged, all, [], marker));
         }
 
-        var touched = changedAt.Where(c => c.Value >= from).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
+        // Attachments' writes, moves and removals are logged with the notes'; a client that knows no attachments
+        // must never see their paths, least of all in deleted, which would trash its copy of a file it keeps.
+        var touched = changedAt.Where(c => c.Value >= from && (withFiles || c.Key.IsNote)).Select(c => c.Key).OrderBy(p => p.Value, TextOrder.Default).ToList();
         var listed = new List<VersionEntry>();
         var deleted = new List<string>();
         foreach (var path in touched)
         {
-            if (notes.TryGetValue(path, out var entry)) listed.Add(new VersionEntry(path.Value, entry.Note.Version));
+            if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(path, entry.Note.Version, withFiles));
+            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(path, file.Attachment.Version, withFiles));
             // A note that doesn't open isn't gone: the client mustn't trash its copy. It is counted in damaged.
             else if (!unlocked.IsDamaged(path)) deleted.Add(path.Value);
         }
 
-        return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted));
+        return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted, marker));
     }
+
+    private static VersionEntry Entry(VaultPath path, string version, bool withKind) =>
+        new(path.Value, version, withKind ? AttachmentFormat.KindOf(path.Name) : null);
 
     /// <summary>
     /// Where a <c>since</c> answer starts, or null for the full list: no cursor, one that doesn't parse, one in the
@@ -145,11 +168,12 @@ public static class SyncApi
         return cursor - Overlap;
     }
 
-    /// <summary>The first 16 hex characters of SHA-256 over "path\tversion\n" per note in ordinal order, then "damaged\tn\n".</summary>
-    private static string State(IEnumerable<Kumbu.Core.Notes.StoredNote> notes, int damaged)
+    /// <summary>The first 16 hex characters of SHA-256 over "path\tversion\n" per note (and attachment, when listed) in
+    /// ordinal order, then "damaged\tn\n".</summary>
+    private static string State(IEnumerable<(VaultPath Path, string Version)> entries, int damaged)
     {
         var text = new StringBuilder();
-        foreach (var n in notes.OrderBy(n => n.Path.Value, StringComparer.Ordinal)) text.Append(n.Path.Value).Append('\t').Append(n.Version).Append('\n');
+        foreach (var (path, version) in entries.OrderBy(e => e.Path.Value, StringComparer.Ordinal)) text.Append(path.Value).Append('\t').Append(version).Append('\n');
         text.Append("damaged\t").Append(damaged.ToString(CultureInfo.InvariantCulture)).Append('\n');
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..16];
     }

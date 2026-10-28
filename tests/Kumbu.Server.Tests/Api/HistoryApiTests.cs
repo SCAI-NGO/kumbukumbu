@@ -419,13 +419,18 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
                      ("post", "/api/vaults/{vault}/checkpoints/{name}/preview"), ("post", "/api/vaults/{vault}/checkpoints/{name}/restore"),
                      ("delete", "/api/vaults/{vault}/checkpoints/{name}"),
                      ("get", "/api/vaults/{vault}/checkpoints/{name}/tree"), ("get", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}"),
+                     ("get", "/api/vaults/{vault}/checkpoints/{name}/files/{path}"),
                  })
         {
             Assert.True(paths[path]?[method] is not null, $"{method} {path} is missing");
         }
 
         // Looking into a checkpoint never writes.
-        foreach (var path in new[] { "/api/vaults/{vault}/checkpoints/{name}/tree", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}" })
+        foreach (var path in new[]
+                 {
+                     "/api/vaults/{vault}/checkpoints/{name}/tree", "/api/vaults/{vault}/checkpoints/{name}/notes/{path}",
+                     "/api/vaults/{vault}/checkpoints/{name}/files/{path}",
+                 })
         {
             Assert.Equal(["get"], paths[path]!.AsObject().Select(p => p.Key).Where(k => k != "parameters"));
         }
