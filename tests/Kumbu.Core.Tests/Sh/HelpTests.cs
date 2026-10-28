@@ -71,7 +71,7 @@ public class HelpTests
         var result = await Run("help checkpoints");
         Assert.False(result.IsError);
         Assert.StartsWith("checkpoints", result.Output);
-        Assert.Contains("ls, cat, outline, rg, links, backlinks, board, head, tail, wc, sort", result.Output);
+        Assert.Contains("ls, cat, outline, rg, links, backlinks, tags, board, head, tail, wc, sort", result.Output);
     }
 
     [Fact]

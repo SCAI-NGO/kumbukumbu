@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LinkView } from "./wikiLinks";
+import { useEditor } from "../state/editor";
 import MarkdownView from "./MarkdownView";
 
 const link = (line: number, raw: string, kind: string, path: string | null = null, candidates: string[] = []): LinkView => ({
@@ -396,5 +397,27 @@ describe("MarkdownView: attachments", () => {
     expect(screen.getByText("old.PDF")).toHaveClass("decoration-dashed");
     await userEvent.click(picture);
     expect(onCreateMissing).not.toHaveBeenCalled();
+  });
+});
+
+describe("tags in the text", () => {
+  afterEach(() => useEditor.getState().reset());
+
+  it("shows an inline #tag as a chip that opens the search filtered by it", async () => {
+    show("# Title\n\nNotes on #research and #project/kumbu.\n");
+    const chip = screen.getByRole("button", { name: "Notes tagged #research" });
+    expect(chip).toHaveTextContent("#research");
+    expect(screen.getByRole("button", { name: "Notes tagged #project/kumbu" })).toBeInTheDocument();
+
+    await userEvent.click(chip);
+    expect(useEditor.getState().searchTag).toBe("research");
+    expect(useEditor.getState().overlay).toBe("search");
+  });
+
+  it("leaves headings, code, links, numbers and escaped tags as written", () => {
+    show("# Heading\n\n`#code` and [x](https://example.org/#part) #123 \\#escaped word#tag *#emphasis* [see #linked](/x.md)\n\n```\n#fenced\n```\n");
+    expect(screen.queryByRole("button", { name: /^Notes tagged/ })).not.toBeInTheDocument();
+    expect(screen.getByText("#code")).toBeInTheDocument();
+    expect(screen.getByText("#fenced")).toBeInTheDocument();
   });
 });

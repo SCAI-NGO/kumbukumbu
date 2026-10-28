@@ -325,3 +325,70 @@ describe("search in earlier versions", () => {
     expect(within(compare).getByText("This version")).toBeInTheDocument();
   });
 });
+
+describe("tags in the search sheet", () => {
+  const tagApi = (searched: URL[] = []) =>
+    api(() => view([hit("/Work/kumbu.md")]), [], {
+      "GET /api/search": (r) => (searched.push(new URL(r.url)), json(200, view([hit("/Work/kumbu.md")]))),
+      "GET /api/tags": () => json(200, [{ tag: "research", count: 2 }, { tag: "project/kumbu", count: 1 }]),
+      "GET /api/tags/notes": (r) =>
+        new URL(r.url).searchParams.get("tag") === "research"
+          ? json(200, [
+              { path: "/Work/capabilities.md", line: 3, text: "  - research", tag: "research" },
+              { path: "/Work/kumbu.md", line: 2, text: "Server notes #Research", tag: "Research" },
+              { path: "/Work/kumbu.md", line: 5, text: "again #research", tag: "research" },
+            ])
+          : json(404, { error: "No note carries #reserch." }),
+    });
+
+  it("lists the tags with their counts while the query is empty; a tap sets the filter", async () => {
+    tagApi();
+    await openSheet();
+    const tags = await within(sheet()).findByRole("region", { name: "Tags" });
+    expect(within(tags).getAllByRole("button").map((b) => b.textContent)).toEqual(["#research2", "#project/kumbu1"]);
+
+    await userEvent.click(within(tags).getByRole("button", { name: /#research/ }));
+    expect(useEditor.getState().searchTag).toBe("research");
+    expect(await within(sheet()).findByRole("heading", { name: "2 notes tagged #research" })).toBeInTheDocument();
+    const notes = within(sheet()).getByRole("list", { name: "Notes tagged #research" });
+    expect(within(notes).getAllByRole("listitem")).toHaveLength(2);
+
+    await userEvent.click(within(notes).getByRole("button", { name: /^kumbu/ }));
+    expect(useEditor.getState().currentPath).toBe("/Work/kumbu.md");
+    // At the line where the tag stands: the note scrolls to the heading above it.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+
+  it("turns a typed #tag into the filter and searches for the rest with it", async () => {
+    const searched: URL[] = [];
+    tagApi(searched);
+    await openSheet();
+    await userEvent.type(input(), "#research capabilities");
+
+    expect(input()).toHaveValue("capabilities");
+    expect(within(sheet()).getByRole("button", { name: "Remove the tag filter #research" })).toBeInTheDocument();
+    await waitFor(() => expect(searched.at(-1)?.searchParams.get("q")).toBe("capabilities"));
+    expect(searched.at(-1)!.searchParams.getAll("tag")).toEqual(["research"]);
+    expect(await within(sheet()).findByRole("heading", { name: /1 result/ })).toBeInTheDocument();
+
+    await userEvent.click(within(sheet()).getByRole("button", { name: "Remove the tag filter #research" }));
+    expect(useEditor.getState().searchTag).toBeNull();
+    await waitFor(() => expect(searched.at(-1)!.searchParams.getAll("tag")).toEqual([]));
+  });
+
+  it("offers the tags that start with a #tag being typed", async () => {
+    tagApi();
+    await openSheet();
+    await userEvent.type(input(), "#proj");
+    const tags = await within(sheet()).findByRole("region", { name: "Tags" });
+    expect(within(tags).getAllByRole("button").map((b) => b.textContent)).toEqual(["#project/kumbu1"]);
+    expect(within(sheet()).getByRole("heading", { level: 2 })).toHaveTextContent("Tags");
+  });
+
+  it("says so when no note carries the tag", async () => {
+    tagApi();
+    await openSheet();
+    act(() => useEditor.getState().searchByTag("reserch"));
+    expect(await within(sheet()).findByRole("alert")).toHaveTextContent("No note carries #reserch.");
+  });
+});

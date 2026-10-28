@@ -55,7 +55,7 @@ export default function CheckpointNote({ vault, name, createdAt, path }: { vault
       {note.isError && <p className="mt-4 text-text-body">{errorText(note.error)}</p>}
       {note.data && !note.isError && (
         <article className="mt-4">
-          {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={null} />}
+          {parts.frontmatter !== null && <Properties yaml={parts.frontmatter} changed={null} still />}
           <MarkdownView
             source={parts.body}
             links={note.data.links}

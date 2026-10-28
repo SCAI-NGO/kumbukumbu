@@ -2,6 +2,7 @@
 using System.Text;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
+using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -27,7 +28,8 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
           says so ('Rejected (2, needs a reason)'). Problems come last: notes in the board folder
           that no column can place. Read a card with cat, as any note: cat "/Work/Board/<title>.md".
           --column C  every card of that column, archivable or long (ignoring case)
-          --tag T     only the cards with that tag (ignoring case, with or without '#')
+          --tag T     only the cards with that tag or one nested below it (ignoring case,
+                      with or without '#'), as 'help tags' explains
           The board is changed with the board tool, never by writing the card's frontmatter.
 
           board /Work
@@ -65,7 +67,8 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
             }
         }
 
-        var tag = options.Value("tag")?.Trim().TrimStart('#');
+        string? tag = null;
+        if (options.Value("tag") is { } asked && (tag = TagMatch.Normalise(asked)) is null) return ShellResult.Error($"board: {TagFilter.NotATag(asked)}");
         var today = DateOnly.FromDateTime(now());
         var where = $"/{vault}";
         var lines = new List<string>();
@@ -79,7 +82,7 @@ public sealed class BoardCommand(INoteReader notes, Func<DateTime> now) : IComma
         foreach (var (column, all) in board.Lanes)
         {
             if (only is not null && column != only) continue;
-            var cards = tag is null ? all : all.Where(c => c.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)).ToList();
+            var cards = tag is null ? all : all.Where(c => c.Tags.Any(t => TagMatch.Covers(tag, t.TrimStart('#')))).ToList();
             if (only is null && column.Archivable)
             {
                 archivable.Add(Heading(column, cards.Count));

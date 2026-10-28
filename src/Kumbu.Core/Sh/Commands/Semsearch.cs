@@ -4,6 +4,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
 using Kumbu.Core.Sections;
+using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -16,16 +17,16 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
 {
     private const int DefaultMax = 10;
 
-    private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning")];
+    private static readonly Option[] Spec = [new('n', "max", TakesValue: true), new(null, "words"), new(null, "meaning"), new(null, "tag", TakesValue: true)];
 
     public string Name => "semsearch";
 
-    public string Usage => "semsearch [-n N] [--words|--meaning] <query> [path]";
+    public string Usage => "semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]";
 
     public string Summary => "ranked search by words and meaning; finds sections";
 
     public string Help => """
-        semsearch [-n N] [--words|--meaning] <query> [path]
+        semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]
           Ranked search for the sections that best match a question or a topic, in every vault or below
           a path. Combines two rankings: by meaning (embeddings: the same idea in other words, also across
           languages) and by words (BM25: exact terms, names, abbreviations). The meaning score gets a
@@ -35,8 +36,11 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
           text or a regex, use rg. Images and PDFs are not searched; only notes are.
           The query is the words before the path; quoting it is optional.
           --words    rank by words only        --meaning  rank by meaning only
+          --tag T    only notes that carry #T (nested too, ignoring case; 'help tags'); repeat
+                     for notes with all of them. The ranking is the same, over fewer notes.
 
           semsearch how do agents read notes
+          semsearch --tag research modelling capabilities
           semsearch -n 5 'Regeln am Eingang' /Demo
         """;
 
@@ -75,6 +79,13 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
             found = await notes.ReadNotesUnderAsync(scope, ct);
             var isVault = scope.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(scope.Segments[0]);
             if (found.Count == 0 && !scope.IsRoot && !isVault) return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
+        }
+
+        if (options.Values("tag") is { Count: > 0 } tags)
+        {
+            var (carrying, tagError) = TagFilter.Narrow(found, tags, scope);
+            if (carrying is null) return ShellResult.Error($"semsearch: {tagError}");
+            found = carrying;
         }
 
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;

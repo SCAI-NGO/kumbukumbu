@@ -5,6 +5,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
+using Kumbu.Core.Tags;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -23,7 +24,7 @@ public sealed class Rg(INoteReader notes) : ICommand
         new('l', "files-with-matches"), new('c', "count"), new('n', "line-number"), new('N', "no-line-number"),
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
-        new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true),
+        new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true), new(null, "tag", TakesValue: true),
     ];
 
     public string Name => "rg";
@@ -55,6 +56,8 @@ public sealed class Rg(INoteReader notes) : ICommand
           -m, --max-count N          at most N matching lines per note
           -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
           --version V                search an earlier version (from 'history') of the one note given
+          --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
+                                     repeat for notes with all of them
           -A N, -B N, -C N           N lines of context after, before, or around each match
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
@@ -64,6 +67,7 @@ public sealed class Rg(INoteReader notes) : ICommand
           rg -n -C 2 'TODO|FIXME' /Work/projects
           rg --files | rg -i kumbu          find a note by name (e.g. for a [[wikilink]])
           rg -l '\[\[kumbu\]\]'              which notes link to kumbu
+          rg --tag research -i capabilit /Work
           cat /Demo/welcome.md | rg -n '^#'
         """;
 
@@ -72,7 +76,13 @@ public sealed class Rg(INoteReader notes) : ICommand
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
         if (!Options.TryParse(Name, args, Spec, out var options, out var error)) return error;
-        if (options.Has("files")) return await ListFilesAsync(options.Operands, input, ct);
+        var tags = options.Values("tag");
+        if (tags.Count > 0 && (input is not null || options.Has("version")))
+        {
+            return ShellResult.Error("rg: --tag chooses the notes rg reads; it works neither right of a pipe nor with --version");
+        }
+
+        if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, input, ct);
 
         List<string> patterns = [.. options.Values("regexp")];
         var operands = options.Operands;
@@ -119,7 +129,7 @@ public sealed class Rg(INoteReader notes) : ICommand
         {
             if (versioned is not null) return SearchContents(search, options, [versioned]);
             return input is null
-                ? await SearchNotesAsync(search, options, operands, ct)
+                ? await SearchNotesAsync(search, options, operands, tags, ct)
                 : SearchInput(search, options, operands, input);
         }
         catch (RegexMatchTimeoutException)
@@ -128,9 +138,10 @@ public sealed class Rg(INoteReader notes) : ICommand
         }
     }
 
-    private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, CancellationToken ct)
+    private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, IReadOnlyList<string> tags, CancellationToken ct)
     {
         var found = new Dictionary<VaultPath, Note>();
+        var scope = VaultPath.Root;
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)
         {
             if (SectionAddress.Split(operand).Fragment is not null)
@@ -139,6 +150,7 @@ public sealed class Rg(INoteReader notes) : ICommand
             }
 
             if (!CommandArgs.TryParsePath(Name, operand, out var path, out var pathError)) return pathError!;
+            if (operands.Count == 1) scope = path;
 
             var below = await notes.ReadNotesUnderAsync(path, ct);
             if (below.Count == 0 && !path.IsRoot)
@@ -156,8 +168,16 @@ public sealed class Rg(INoteReader notes) : ICommand
             foreach (var note in below) found.TryAdd(note.Path, note);
         }
 
-        var result = SearchContents(search, options, found.Values);
-        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, found.Keys) };
+        IReadOnlyList<Note> searched = [.. found.Values];
+        if (tags.Count > 0)
+        {
+            var (carrying, tagError) = TagFilter.Narrow(searched, tags, scope);
+            if (carrying is null) return ShellResult.Error($"rg: {tagError}");
+            searched = carrying;
+        }
+
+        var result = SearchContents(search, options, searched);
+        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, searched.Select(n => n.Path)) };
     }
 
     private const int HintedPaths = 5;
@@ -231,9 +251,21 @@ public sealed class Rg(INoteReader notes) : ICommand
             lineNumbers ? $"{n}{sep}{text}" : text)));
     }
 
-    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, string? input, CancellationToken ct)
+    private async Task<ShellResult> ListFilesAsync(IReadOnlyList<string> operands, IReadOnlyList<string> tags, string? input, CancellationToken ct)
     {
         if (input is not null) return ShellResult.Error("rg: --files lists notes; it does not read from a pipe");
+        if (tags.Count > 0)
+        {
+            if (operands.Count > 1) return ShellResult.Error("rg: --files with --tag takes one path");
+            var scope = VaultPath.Root;
+            if (operands.Count == 1 && !CommandArgs.TryParsePath(Name, operands[0], out scope, out var scopeError)) return scopeError!;
+            var (all, readError) = await TagsCommand.ReadScopeAsync(notes, Name, scope, ct);
+            if (all is null) return readError!;
+            var (carrying, tagError) = TagFilter.Narrow(all, tags, scope);
+            return carrying is null
+                ? ShellResult.Error($"rg: {tagError}")
+                : ShellResult.Ok(Lines.Join(carrying.Select(n => n.Path.Value).Order(TextOrder.Default)));
+        }
 
         var found = new HashSet<string>(StringComparer.Ordinal);
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)

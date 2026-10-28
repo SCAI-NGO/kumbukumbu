@@ -429,6 +429,14 @@ There is no vector database. A vault's embeddings are sealed in MongoDB like eve
 
 Indexing runs **in the background**, so a write isn't slowed down by it: each write queues its notes; a worker splits them into chunks and embeds only the chunks whose text changed (each chunk carries a hash of its text). When a vault is unlocked, it catches up with everything written while it was locked. A search says how many notes aren't indexed yet; those still count by words.
 
+### Tags as a filter
+
+A question like "what did we discuss about modelling capabilities in #research?" names a topic that comes up in many projects, and a tag that says which one is meant. Ranking can't tell the projects apart (the sections are about the same thing), so the tag works as a **filter before the ranking**: `semsearch --tag research …` ranks only the notes that carry `#research`, by exactly the scores it would give them without the filter. Narrowing changes which notes take part, never how a section scores against the query, so a result's score means the same with and without a tag. `rg --tag` narrows the same way, and `tags` lists what there is to narrow by.
+
+Tags are read as Obsidian reads them, since the vaults are Obsidian's: the frontmatter's `tags` property and `#tags` in the text, but not in code, comments or a URL's `#fragment`, and not `#123` (an issue number, not a topic). They match ignoring case and **nested**: `#project` covers `#project/kumbu`, so a parent tag is a filter over its whole family. A tag no note carries is an error, not an empty result: a misspelt filter that quietly found nothing would look like an answer.
+
+**Read, not indexed.** Tags aren't stored anywhere: they are read from the notes an unlocked vault already holds in memory, as `links` and `backlinks` read links (§5). An index would be one more thing to keep in step with every write, and one more encrypted document per vault, for a question the working set answers by itself. What it does need is a **cache**: reading every note of a 2,000-note vault takes about 100 ms, too much for each search. So a note's tags are remembered with the text they came from, in a weak table keyed by the very string the working set holds for the note's current version: a new version is a new string and is read afresh, and the old entry goes when its string does, with nothing to invalidate by hand. A second pass over the same vault takes under a millisecond.
+
 
 ## 10. Accounts: callers, the user key, sessions and API keys
 

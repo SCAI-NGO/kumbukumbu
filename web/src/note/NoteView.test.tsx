@@ -78,6 +78,16 @@ describe("the note view", () => {
     expect(within(view()).queryByText("tags: [work]", { selector: "p" })).not.toBeInTheDocument();
   });
 
+  it("shows the front matter's tags as chips that open the search filtered by one", async () => {
+    noteApi();
+    renderApp(planUrl);
+    const frontmatter = await screen.findByLabelText("Properties");
+    const chip = within(within(frontmatter).getByRole("list", { name: "Tags" })).getByRole("button", { name: "Notes tagged #work" });
+    await userEvent.click(chip);
+    expect(useEditor.getState().searchTag).toBe("work");
+    expect(useEditor.getState().overlay).toBe("search");
+  });
+
   it("shows one title: the note's own H1 replaces the file name's", async () => {
     noteApi();
     renderApp(planUrl);

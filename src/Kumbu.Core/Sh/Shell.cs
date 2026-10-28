@@ -50,13 +50,13 @@ public sealed class Shell
         }
     }
 
-    internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort"];
+    internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
     private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now) =>
     [
         new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
-        new LinksCommand(notes), new Backlinks(notes), new BoardCommand(notes, now),
+        new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
 

@@ -533,9 +533,12 @@ public static class NoteApi
     /// <summary>
     /// <c>mode</c>: <c>hybrid</c> (default) and <c>meaning</c> rank as <c>semsearch</c> and <c>semsearch --meaning</c>
     /// do; <c>exact</c> finds the sections with a line containing the query, ignoring case (<c>rg -F -i</c>).
-    /// <c>path</c> narrows the search to a vault, folder or note; <c>n</c> results, 1 to 50, default 10.
+    /// <c>path</c> narrows the search to a vault, folder or note; <c>tag</c> (repeatable) to the notes that carry every
+    /// one of those tags, nested ones included, as <c>semsearch --tag</c> (404 for a tag no note there carries);
+    /// <c>n</c> results, 1 to 50, default 10.
     /// </summary>
-    private static async Task<Ok<SearchView>> SearchAsync(string? q, string? mode, string? path, int? n, INoteStore store, ISearchIndex index, CancellationToken ct)
+    private static async Task<Ok<SearchView>> SearchAsync(
+        string? q, string? mode, string? path, int? n, string[]? tag, INoteStore store, ISearchIndex index, CancellationToken ct)
     {
         var query = q?.Trim() ?? "";
         if (query.Length == 0) throw ApiErrors.BadRequest("Give a query (q).");
@@ -549,19 +552,8 @@ public static class NoteApi
         var max = n ?? DefaultResults;
         if (max is < 1 or > MaxResults) throw ApiErrors.BadRequest($"n is 1 to {MaxResults}.");
 
-        var scope = VaultPath.Root;
-        if (path is not null && (!VaultPath.TryParse(path, out scope) || path.Contains('\\')))
-        {
-            throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
-        }
-
-        IReadOnlyList<Note> notes;
-        if (!scope.IsRoot && await store.ReadAsync(scope, ct) is { } single) notes = [new Note(scope, single)];
-        else
-        {
-            if (!scope.IsRoot) await RequireVaultAsync(store, scope, ct);
-            notes = await store.ReadNotesUnderAsync(scope, ct);
-        }
+        var (scope, notes) = await ReadScopeAsync(path, store, ct);
+        if (tag is { Length: > 0 }) notes = TagApi.Narrow(notes, tag, scope);
 
         if (exact)
         {
@@ -591,6 +583,21 @@ public static class NoteApi
 
         static SearchResultView Result(Chunk c, string snippet, double? score, string reason) =>
             new(c.Path.Value, c.Address, c.StartLine + 1, c.EndLine, snippet, score, reason);
+    }
+
+    /// <summary>The notes a search or a tag listing reads: below <paramref name="path"/> (a vault, folder or note), or of
+    /// every vault the caller reads when it is null.</summary>
+    internal static async Task<(VaultPath Scope, IReadOnlyList<Note> Notes)> ReadScopeAsync(string? path, INoteStore store, CancellationToken ct)
+    {
+        var scope = VaultPath.Root;
+        if (path is not null && (!VaultPath.TryParse(path, out scope) || path.Contains('\\')))
+        {
+            throw ApiErrors.BadRequest("The path is a vault, folder or note, e.g. /Work or /Work/projects.");
+        }
+
+        if (!scope.IsRoot && await store.ReadAsync(scope, ct) is { } single) return (scope, [new Note(scope, single)]);
+        if (!scope.IsRoot) await RequireVaultAsync(store, scope, ct);
+        return (scope, await store.ReadNotesUnderAsync(scope, ct));
     }
 
     /// <summary>The reason tags of MOBILE_EDITOR §4, strongest first: the query in the note's name, the whole query
