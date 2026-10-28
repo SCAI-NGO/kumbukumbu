@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 
@@ -15,7 +16,8 @@ public sealed class Ls(INoteReader notes) : ICommand
     public string Help => """
         ls [path]
           List a directory. Directories end with '/'. Without a path, list the vaults.
-          A note's path lists just that path.
+          A note's path lists just that path. An attachment (an image or a PDF) is listed with its
+          kind, pixel size and file size: shot.png  image 1440×3120 412 KB.
 
           ls
           ls /Demo/projects
@@ -52,29 +54,45 @@ public sealed class Ls(INoteReader notes) : ICommand
         }
 
         var below = await notes.ListNotesUnderAsync(dir, ct);
+        var files = await StoreAttachments.UnderAsync(notes, dir, ct);
         var isVault = dir.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(dir.Segments[0]);
         var damaged = isVault ? await notes.CountDamagedAsync(dir, ct) : 0;
-        if (below.Count == 0 && isVault)
+        if (below.Count == 0 && files.Count == 0 && isVault)
         {
             return ShellResult.Ok(damaged > 0 ? Damage.Summary(damaged) : "");
         }
 
-        if (below.Count == 0)
+        if (below.Count == 0 && files.Count == 0)
         {
             if (await notes.ReadAsync(dir, ct) is not null) return ShellResult.Ok(dir.Value);
+            if (await StoreAttachments.GetAsync(notes, dir, ct) is { } attachment)
+            {
+                return ShellResult.Ok($"{dir.Value}  {AttachmentText.Summary(attachment.Current)}");
+            }
+
             return ShellResult.Error($"ls: cannot access '{dir.Value}': No such file or directory");
         }
 
-        var entries = new HashSet<string>(StringComparer.Ordinal);
+        // Sorted by name; an attachment's line adds what it is after its name.
+        var entries = new Dictionary<string, string>(StringComparer.Ordinal);
+        var depth = dir.Segments.Count;
         foreach (var note in below)
         {
-            var depth = dir.Segments.Count;
             var name = note.Segments[depth];
-            entries.Add(note.Segments.Count > depth + 1 ? name + "/" : name);
+            var entry = note.Segments.Count > depth + 1 ? name + "/" : name;
+            entries[entry] = entry;
         }
 
-        var sorted = entries.ToList();
-        sorted.Sort(TextOrder.Default);
+        foreach (var file in files)
+        {
+            var name = file.Path.Segments[depth];
+            if (file.Path.Segments.Count > depth + 1) entries[name + "/"] = name + "/";
+            else entries[name] = $"{name}  {AttachmentText.Summary(file.Current)}";
+        }
+
+        var keys = entries.Keys.ToList();
+        keys.Sort(TextOrder.Default);
+        var sorted = keys.Select(k => entries[k]).ToList();
         if (damaged > 0) sorted.Add(Damage.Summary(damaged));
         return ShellResult.Ok(string.Join('\n', sorted));
     }

@@ -35,13 +35,14 @@ public sealed class Backlinks(INoteReader notes) : ICommand
         if (args.Count > 1) return ShellResult.Error($"backlinks: too many arguments{CommandArgs.QuoteHint}");
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
-        var note = await StoreAttachments.GetAsync(notes, path, ct) is { } attachment
+        var attachment = await StoreAttachments.GetAsync(notes, path, ct);
+        var note = attachment is not null
             ? ShellResult.Ok("") with { Version = new NoteVersion(path.Value, attachment.Version) }
             : await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         if (note.IsError) return note;
 
         var output = (await NoteLinks.ToAsync(notes, path, ct))
-            .Select(b => $"{b.Source.Value}:{b.Line + 1}:{b.Text}{(b.Ambiguous ? "  (ambiguous, may mean this note)" : "")}")
+            .Select(b => $"{b.Source.Value}:{b.Line + 1}:{b.Text}{(b.Ambiguous ? $"  (ambiguous, may mean this {(attachment is null ? "note" : "file")})" : "")}")
             .ToList();
         return note with { Output = output.Count > 0 ? Lines.Join(output) : "(no notes link here)" };
     }

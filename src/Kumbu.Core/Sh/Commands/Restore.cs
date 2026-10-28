@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class Restore(NoteWriter writer, Checkpoints checkpoints) : ICommand
+public sealed class Restore(NoteWriter writer, Checkpoints checkpoints, AttachmentWriter? files = null) : ICommand
 {
     private static readonly Option[] Spec = [new(null, "checkpoint", TakesValue: true), new(null, "plan", TakesValue: true)];
 
@@ -11,14 +12,14 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints) : IComma
 
     public string Usage => "restore <path> [version] | restore --checkpoint <name> <path>";
 
-    public string Summary => "bring a note back from the trash, or to an earlier version";
+    public string Summary => "bring a note or attachment back from the trash, or to an earlier version";
 
     public string Help => """
         restore <path> [version]
           If the note was removed: bring it back from the trash, the most recently removed one at that
           path, or the one with a version from 'trash'. If the note exists: make a version from
           'history <path>' current again. The version it replaces stays in the history, so a restore
-          can be undone the same way.
+          can be undone the same way. An image or a PDF comes back the same way.
 
         restore --checkpoint <name> <path>
           Go back to a named checkpoint ('lscp'). A note is restored at once. A folder or vault first
@@ -50,6 +51,7 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints) : IComma
         if (operands.Count > 2) return ShellResult.Error("restore: too many arguments");
         if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
 
+        if (files is not null && path.IsAttachment) return await files.RestoreAsync(path.Value, operands.Count == 2 ? operands[1] : null, ct);
         return await writer.RestoreAsync(path, operands.Count == 2 ? operands[1] : null, ct);
     }
 }

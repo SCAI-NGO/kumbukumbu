@@ -16,6 +16,9 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 {
     public ICaller Caller => caller;
 
+    /// <summary>The writer of this store's attachments, with this writer's clock and caller; null for a store that keeps none.</summary>
+    public AttachmentWriter? ForAttachments() => store is IAttachmentStore files ? new AttachmentWriter(store, files, time, caller) : null;
+
     public const int MaxBytes = 1_048_576;
     public const int HistoryLimit = 10;
     public static readonly TimeSpan TrashRetention = TimeSpan.FromDays(30);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Diffs;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -13,7 +14,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
 
     public string Usage => "history [--since T] <path>";
 
-    public string Summary => "versions of a note; of a directory: the latest writes below it";
+    public string Summary => "versions of a note or attachment; of a directory: the latest writes below it";
 
     public string Help => $"""
         history <path>
@@ -27,6 +28,8 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
           ask the user about a named checkpoint ('help mkcp').
           The version is computed from the text, so the same version can appear twice (after a restore,
           or after changing a text back); either line restores the same text.
+
+          An attachment (an image or a PDF) lists the same way, with its kind and size instead of lines.
 
         history [--since T] <directory>
           The latest writes below a directory or vault (or / for every vault), newest first: time,
@@ -61,10 +64,18 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             since = parsed;
         }
 
+        if (await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
+        {
+            var versions = NoteHistory.Versions(attachment).Select(v =>
+                $"{v.Version}  {Time(v.WrittenAt)}  {v.Writer}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}");
+            return ShellResult.Ok(Lines.Join(versions));
+        }
+
         var note = await notes.GetAsync(path, ct);
         if (note is null)
         {
             if (path.IsRoot || (await notes.ListNotesUnderAsync(path, ct)).Count > 0
+                || (await StoreAttachments.UnderAsync(notes, path, ct)).Count > 0
                 || (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0])))
             {
                 return await WritesBelowAsync(path, since, ct);
@@ -103,6 +114,18 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             }
         }
 
+        foreach (var file in await StoreAttachments.UnderAsync(notes, dir, ct))
+        {
+            var states = new List<(AttachmentState State, string Writer, DateTime At, Changeset? Changeset)> { (file.Current, file.LastWriter, file.LastWriteAt, file.Changeset) };
+            states.AddRange(file.History.Select(h => (h.State, h.WrittenBy, h.WrittenAt, h.Changeset)));
+            foreach (var (state, writer, at, changeset) in states)
+            {
+                if (since is { } from && at < from) continue;
+                var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
+                rows.Add((at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}"));
+            }
+        }
+
         var moves = (await notes.ListMovesAsync(dir, ct)).Where(m => since is not { } s || m.MovedAt >= s);
         foreach (var group in moves.GroupBy(m => (m.MovedBy, m.MovedAt)))
         {
@@ -136,6 +159,15 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         {
             if (since is { } s && trashed.DeletedAt < s) continue;
             rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{trashed.Note.Path.Value} → trash", ""));
+        }
+
+        if (notes is IAttachmentStore store)
+        {
+            foreach (var trashed in await store.ListAttachmentTrashAsync(dir.IsRoot ? null : dir, ct))
+            {
+                if (since is { } s && trashed.DeletedAt < s) continue;
+                rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{trashed.Attachment.Path.Value} → trash", ""));
+            }
         }
 
         var shown = rows.OrderByDescending(w => w.At).ThenBy(w => w.What, TextOrder.Default).ToList();

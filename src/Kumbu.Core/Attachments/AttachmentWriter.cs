@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Links;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -118,6 +119,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return ShellResult.Error($"{tool}: {path.Value} has changed since version {version} (it is now {existing.Version})");
         }
 
+        // Asked before removing, as for a note: afterwards the attachment no longer resolves.
+        var linking = await LinkingAsync(path, ct);
+
         // A batch, so the trash record joins the writer's changeset.
         var batch = new NoteBatch { AttachmentTrashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
         if ((await notes.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
@@ -125,8 +129,27 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return ShellResult.Error($"{tool}: {path.Value} changed while removing it; try again");
         }
 
-        return ShellResult.Ok(
-            $"removed {path.Value}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)");
+        var message = $"removed {path.Value}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
+        if (linking.Count > 0)
+        {
+            var links = linking.Sum(x => x.Count);
+            message += $"; {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", linking.Select(x => x.Path.Value))} now lead nowhere";
+        }
+
+        return ShellResult.Ok(message);
+    }
+
+    /// <summary>The notes whose links and embeds lead to the attachment, with how many each has, by path.</summary>
+    private async Task<List<(VaultPath Path, int Count)>> LinkingAsync(VaultPath path, CancellationToken ct)
+    {
+        var vault = VaultPath.Root.Child(path.Segments[0]);
+        var all = await notes.ReadNotesUnderAsync(vault, ct);
+        var resolver = new LinkResolver(path.Segments[0], all.Select(n => n.Path), await StoreAttachments.PathsUnderAsync(notes, vault, ct));
+        return all
+            .Select(n => (n.Path, Count: NoteLink.Parse(n.Content).Count(l => l.Target.Trim().Length > 0 && resolver.Resolve(n.Path, l.Target).Target == path)))
+            .Where(x => x.Count > 0)
+            .OrderBy(x => x.Path.Value, TextOrder.Default)
+            .ToList();
     }
 
     /// <summary>

@@ -55,6 +55,13 @@ public sealed class LinksCommand(INoteReader notes) : ICommand
         if (!CommandArgs.TryParsePath(Name, pathText, out var path, out var pathError)) return pathError!;
         if (path.IsRoot) return ShellResult.Error("links: give a vault or a directory, e.g. links /Demo");
 
+        if (await StoreAttachments.GetAsync(notes, path, ct) is not null)
+        {
+            return version is null && fragment is null
+                ? ShellResult.Ok("(no links: an attachment holds none; 'backlinks' lists the notes that link to it)")
+                : ShellResult.Error($"links: {path.Value} is an attachment; it has no versions or sections to read links from");
+        }
+
         var vault = VaultPath.Root.Child(path.Segments[0]);
         var content = await notes.ReadAsync(path, ct);
         if (content is null && fragment is null && (await notes.ListNotesUnderAsync(path, ct)).Count > 0)

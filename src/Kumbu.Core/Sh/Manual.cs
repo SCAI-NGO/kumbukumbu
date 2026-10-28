@@ -32,6 +32,7 @@ public static class Manual
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
           help [command]                  options and examples of a command
 
+        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, rg and semsearch skip them (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
         Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints).

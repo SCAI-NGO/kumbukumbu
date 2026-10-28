@@ -32,7 +32,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
           bonus for the words of the query a section contains. Prints the best sections (-n, default 10)
           as path#Section with their lines, their score and the start of their text; scores are
           comparable within one search, not across searches. Then cat "path#Section" reads one. For exact
-          text or a regex, use rg.
+          text or a regex, use rg. Images and PDFs are not searched; only notes are.
           The query is the words before the path; quoting it is optional.
           --words    rank by words only        --meaning  rank by meaning only
 
