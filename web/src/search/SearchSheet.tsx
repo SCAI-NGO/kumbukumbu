@@ -10,8 +10,10 @@ import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { writerText } from "../api/activity";
 import CompareVersions from "../shell/CompareVersions";
+import { splitTagQuery } from "../tags/tags";
 import ModeChips, { MODES } from "./ModeChips";
 import SearchResultCard from "./SearchResultCard";
+import { TagFilterChip, TagList, TaggedNotes, useTaggedCount } from "./TagPanels";
 import { useEarlierSearch, useSearch, type EarlierResult, type SearchResult } from "./useSearch";
 
 /**
@@ -20,10 +22,27 @@ import { useEarlierSearch, useSearch, type EarlierResult, type SearchResult } fr
  * every visit), each opening a comparison with today's text.
  */
 export default function SearchSheet() {
-  const { searchQuery, searchMode, recentPaths, setSearchQuery, setSearchMode, setOverlay } = useEditor();
+  const { searchQuery, searchMode, searchTag, recentPaths, setSearchQuery, setSearchMode, setSearchTag, setOverlay } = useEditor();
   const navigate = useNavigate();
   const dialog = useDialog<HTMLDivElement>(() => setOverlay("none"));
-  const search = useSearch(searchQuery, searchMode);
+  // `#research ` (the tag finished by a space) becomes the filter; a `#res` still being typed offers the tags.
+  const typed = splitTagQuery(searchQuery);
+  const typing = typed.tag !== null && !typed.finished ? typed.tag : null;
+  const text = typing === null ? searchQuery : "";
+  const listing = searchTag !== null && typing === null && text.trim() === "";
+  const search = useSearch(text, searchMode, searchTag);
+  const tagged = useTaggedCount(listing ? searchTag : null);
+  const type = (value: string) => {
+    const t = splitTagQuery(value);
+    if (t.tag && t.finished) {
+      setSearchTag(t.tag);
+      setSearchQuery(t.rest);
+    } else setSearchQuery(value);
+  };
+  const pick = (tag: string) => {
+    setSearchTag(tag);
+    setSearchQuery("");
+  };
   const results = search.data?.results;
   const hint = MODES.find((m) => m.mode === searchMode)!.hint;
   const [withEarlier, setWithEarlier] = useState(false);
@@ -42,7 +61,11 @@ export default function SearchSheet() {
       <header className="flex flex-none items-start gap-2 border-b border-line pt-3 pr-2 pb-3 pl-[22px]">
         <div className="min-w-0 flex-1 pt-2">
           <h2 className="text-[17px] font-bold text-text">
-            {search.idle ? (
+            {typing !== null ? (
+              "Tags"
+            ) : listing ? (
+              tagged === null ? `Notes tagged #${searchTag}` : `${tagged === 1 ? "1 note" : `${tagged} notes`} tagged #${searchTag}`
+            ) : search.idle ? (
               "Recent notes"
             ) : results ? (
               <>
@@ -67,7 +90,12 @@ export default function SearchSheet() {
       </header>
 
       <section aria-label="Results" aria-busy={search.waiting} className="min-h-0 flex-1 overflow-y-auto px-[22px] py-3">
+        {searchTag !== null && <TagFilterChip tag={searchTag} onClear={() => setSearchTag(null)} />}
+        {typing !== null && <TagList prefix={typing} onPick={pick} />}
+        {listing && <TaggedNotes tag={searchTag} onOpen={open} />}
         {search.idle &&
+          typing === null &&
+          searchTag === null &&
           (recentPaths.length ? (
             <ul aria-label="Recent notes" className="flex flex-col gap-2">
               {recentPaths.map((p) => (
@@ -84,8 +112,9 @@ export default function SearchSheet() {
               ))}
             </ul>
           ) : (
-            <p className="text-text-body">No notes opened yet. Type to search.</p>
+            <p className="text-text-body">No notes opened yet. Type to search, or #tag to search the notes with a tag.</p>
           ))}
+        {search.idle && typing === null && searchTag === null && <TagList onPick={pick} />}
         {search.error != null && <p role="alert" className="text-text-body">{errorText(search.error)}</p>}
         {results && (
           <div className="flex flex-col gap-3">
@@ -148,8 +177,8 @@ export default function SearchSheet() {
             aria-label="Search"
             data-autofocus
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search your notes"
+            onChange={(e) => type(e.target.value)}
+            placeholder={searchTag ? `Search the notes tagged #${searchTag}` : "Search your notes, or #tag"}
             autoComplete="off"
             className="min-w-0 flex-1 bg-transparent text-[16px] text-text outline-none placeholder:text-muted"
           />

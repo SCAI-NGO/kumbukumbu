@@ -29,6 +29,8 @@ interface EditorState {
   activeVault: string | null;
   searchQuery: string;
   searchMode: SearchMode;
+  /** The search sheet's tag filter, without `#` (`research`), or null. */
+  searchTag: string | null;
   showAgentHighlights: boolean;
   /** The last notes opened, newest first. */
   recentPaths: string[];
@@ -63,6 +65,9 @@ interface EditorState {
   setActiveVault(vault: string): void;
   setSearchQuery(query: string): void;
   setSearchMode(mode: SearchMode): void;
+  setSearchTag(tag: string | null): void;
+  /** Opens the search sheet on the notes with a tag (a tapped chip): the filter set, the query empty. */
+  searchByTag(tag: string): void;
   setShowAgentHighlights(show: boolean): void;
   setNoteTool(tool: NoteTool): void;
   setFind(find: Partial<Find>): void;
@@ -83,6 +88,7 @@ const initial = {
   activeVault: null,
   searchQuery: "",
   searchMode: "hybrid" as SearchMode,
+  searchTag: null as string | null,
   showAgentHighlights: false,
   recentPaths: [],
   beforeRead: null,
@@ -126,6 +132,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setActiveVault: (activeVault) => set({ activeVault }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSearchMode: (searchMode) => set({ searchMode }),
+  setSearchTag: (searchTag) => set({ searchTag }),
+  searchByTag: (searchTag) => set({ searchTag, searchQuery: "", overlay: "search" }),
   setShowAgentHighlights: (showAgentHighlights) => set({ showAgentHighlights }),
   setNoteTool: (noteTool) => set({ noteTool }),
   setFind: (find) => set((s) => ({ find: { ...s.find, ...find } })),

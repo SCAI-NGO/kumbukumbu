@@ -13,6 +13,8 @@ import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import TagChip from "../tags/TagChip";
+import { frontmatterTags } from "../tags/tags";
 import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, deviceOf, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
@@ -349,7 +351,7 @@ export default function NoteView({ path }: { path: string }) {
  * The front matter as a compact block of properties (key, value; lists as chips), as Obsidian shows it. YAML this
  * can't take apart faithfully is shown as written. Write mode keeps it in the source, where it is edited.
  */
-export function Properties({ yaml, changed }: { yaml: string; changed: string | null }) {
+export function Properties({ yaml, changed, still = false }: { yaml: string; changed: string | null; still?: boolean }) {
   const props = useMemo(() => parseProperties(yaml), [yaml]);
   const tint = changed ? { "data-changed": true, "data-writer": changed } : {};
   if (!props) {
@@ -374,7 +376,15 @@ export function Properties({ yaml, changed }: { yaml: string; changed: string | 
         <div key={`${i}${key}`} className="contents">
           <dt className="truncate font-mono text-[12px] leading-[21px] text-muted">{key}</dt>
           <dd className="min-w-0 break-words text-text-body">
-            {Array.isArray(value) ? (
+            {key === "tags" && frontmatterTags(value).length > 0 ? (
+              <ul aria-label="Tags" className="flex flex-wrap gap-1">
+                {frontmatterTags(value).map((t, j) => (
+                  <li key={j} className="flex">
+                    <TagChip tag={t} still={still} />
+                  </li>
+                ))}
+              </ul>
+            ) : Array.isArray(value) ? (
               <ul className="flex flex-wrap gap-1">
                 {value.map((v, j) => (
                   <li key={j} className="rounded-full bg-surface-2 px-2 text-[13px] text-text-body">

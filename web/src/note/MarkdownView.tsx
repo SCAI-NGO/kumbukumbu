@@ -9,6 +9,8 @@ import { errorText } from "../api/error-text";
 import { useLinks, useNote } from "../api/notes";
 import { fileKindOf, isAttachment, noteUrl, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
+import TagChip from "../tags/TagChip";
+import { remarkTags } from "../tags/tags";
 import AmbiguousLinkDialog from "./AmbiguousLinkDialog";
 import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
@@ -272,6 +274,12 @@ function WikiLink({ index, embed, children }: { index: number; embed: unknown; c
   }
 }
 
+/** An inline `#tag` (`remarkTags`); in a checkpoint it only names the tag. */
+function InlineTag({ tag }: { tag: string }) {
+  const { checkpointLink } = useContext(NoteContext);
+  return <TagChip tag={tag} still={!!checkpointLink} />;
+}
+
 /** A heading's source line for jumps and scroll targets; none inside an embedded note, whose lines are its own. */
 function useLine(node: HastNode | undefined) {
   const { nested } = useContext(NoteContext);
@@ -399,6 +407,8 @@ const components: Components = {
   img: ({ alt }) => <span className="rounded-[4px] bg-surface-2 px-1.5 font-mono text-[0.85em] text-muted">[image{alt ? `: ${alt}` : ""}]</span>,
   span: ({ node, children, ...props }) => {
     const index = node?.properties.dataWikiLink;
+    const tag = node?.properties.dataTag;
+    if (typeof tag === "string") return <InlineTag tag={tag} />;
     return typeof index === "number" ? (
       <WikiLink index={index} embed={node?.properties.dataEmbed}>
         {children}
@@ -414,7 +424,7 @@ function MarkdownViewBase({ source, links, tasksDisabled, onToggleTask, onCreate
   const current = find?.current ?? 0;
   const remarkPlugins = useMemo(
     () =>
-      [remarkGfm, remarkCallouts, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
+      [remarkGfm, remarkCallouts, remarkTags, [remarkWikiLinks, { links: links ?? [] }], [remarkFind, { query, current }], [remarkChanged, { highlight }]] as const,
     [links, highlight, query, current],
   );
   // The note's attachments in the order it names them, each once: what the lightbox pages through from a chip.
