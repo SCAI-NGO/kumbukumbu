@@ -287,27 +287,30 @@ public sealed class PdfAnalysisRunner : BackgroundService
         return new Outcome(analysis, null, null);
     }
 
-    /// <summary>A PDF the sidecar can't read at all is recorded at once; anything else counts a try.</summary>
+    /// <summary>
+    /// A PDF the sidecar can't read at all is recorded at once. A sidecar that is away or busy counts nothing: an outage
+    /// must not use up a PDF's tries, which a later failure of its own (a broken connection, a time-out) then needs.
+    /// Anything else counts a try.
+    /// </summary>
     private async Task<Outcome> FailedAsync(UnlockedVault vault, byte[] blobId, SidecarException e, CancellationToken ct)
     {
         KumbuMetrics.PdfAnalysisFailed(KumbuMetrics.FailReasonOf(e));
-        if (e.Code is not (SidecarException.Encrypted or "not_pdf" or "too_large" or "damaged"))
+        if (e.Transient)
         {
-            var tries = await _analyses.CountTryAsync(vault.Id, blobId, ct);
-            if (e.Transient || tries < MaxTries)
+            if (e.Code == SidecarException.Unavailable && !_down)
             {
-                if (e.Code == SidecarException.Unavailable && !_down)
-                {
-                    _down = true;
-                    _log.LogWarning("The PDF sidecar is unavailable; analyses wait for it");
-                }
-                else if (e.Code != SidecarException.Unavailable)
-                {
-                    _log.LogInformation("Analysing a PDF of vault {VaultId} failed ({Code}); it is tried again", vault.Id, e.Code);
-                }
-
-                return new Outcome(null, null, e.Code);
+                _down = true;
+                _log.LogWarning("The PDF sidecar is unavailable; analyses wait for it");
             }
+
+            return new Outcome(null, null, e.Code);
+        }
+
+        if (e.Code is not (SidecarException.Encrypted or "not_pdf" or "too_large" or "damaged")
+            && await _analyses.CountTryAsync(vault.Id, blobId, ct) < MaxTries)
+        {
+            _log.LogInformation("Analysing a PDF of vault {VaultId} failed ({Code}); it is tried again", vault.Id, e.Code);
+            return new Outcome(null, null, e.Code);
         }
 
         var failure = Failure(e.Code);

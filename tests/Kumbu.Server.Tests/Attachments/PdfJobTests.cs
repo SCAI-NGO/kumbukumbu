@@ -33,6 +33,10 @@ public sealed class PdfJobTests(KumbuAppFactory app)
 
     private Task<long> JobsAsync(string vaultId) => Raw("pdf_jobs").CountDocumentsAsync(new BsonDocument("vault", vaultId), cancellationToken: Ct);
 
+    /// <summary>The failed tries the vault's one job has counted.</summary>
+    private async Task<int> TriesAsync(string vaultId) =>
+        (await Raw("pdf_jobs").Find(new BsonDocument("vault", vaultId)).SingleAsync(Ct)).GetValue("tries", 0).ToInt32();
+
     private Task<long> AnalysesAsync(string vaultId) =>
         Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument { ["vault"] = vaultId, ["part"] = 0 }, cancellationToken: Ct);
 
@@ -84,8 +88,8 @@ public sealed class PdfJobTests(KumbuAppFactory app)
 
         Assert.Equal(1, await JobsAsync(vault.Id));
         Assert.Equal(0, await AnalysesAsync(vault.Id));
-        var job = await Raw("pdf_jobs").Find(new BsonDocument("vault", vault.Id)).SingleAsync(Ct);
-        Assert.True(job["tries"].AsInt32 >= 1);
+        // A sidecar that is away is no fault of the PDF's: it counts no try.
+        Assert.Equal(0, await TriesAsync(vault.Id));
 
         sidecar.Down = false;
         runner.Wake();
@@ -246,6 +250,54 @@ public sealed class PdfJobTests(KumbuAppFactory app)
 
         Assert.Equal(1, await JobsAsync(vault.Id));
         Assert.Equal(0, await AnalysesAsync(vault.Id));
+    }
+
+    [Fact]
+    public async Task An_outage_uses_up_no_tries_so_a_broken_connection_after_it_counts_one()
+    {
+        // A deploy: the sidecar away for several rounds, then the connection breaks once as it goes down again.
+        var sidecar = new FakePdfSidecar { Down = true };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var runner = host.Services.GetRequiredService<PdfAnalysisRunner>();
+        await user.CreateFileAsync("paper.pdf", Pdf("a paper caught in a deploy"));
+        var vault = await VaultAsync(host, user);
+
+        for (var i = 0; i < PdfAnalysisRunner.MaxTries + 2; i++) await runner.RoundAsync(Ct);
+        Assert.Equal(0, await TriesAsync(vault.Id));
+
+        (sidecar.Down, sidecar.FailWith) = (false, SidecarException.Aborted);
+        await runner.RoundAsync(Ct);
+
+        Assert.Equal(1, await JobsAsync(vault.Id));
+        Assert.Equal(1, await TriesAsync(vault.Id));
+        Assert.Equal(0, await AnalysesAsync(vault.Id));
+    }
+
+    [Fact]
+    public async Task A_busy_or_absent_sidecar_counts_no_try_and_the_analysis_runs_once_it_answers()
+    {
+        var sidecar = new FakePdfSidecar { FailWith = SidecarException.Busy };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var runner = host.Services.GetRequiredService<PdfAnalysisRunner>();
+        await user.CreateFileAsync("paper.pdf", Pdf("a paper the sidecar was too busy for"));
+        var vault = await VaultAsync(host, user);
+
+        for (var i = 0; i < PdfAnalysisRunner.MaxTries + 2; i++) await runner.RoundAsync(Ct);
+        (sidecar.FailWith, sidecar.Down) = (null, true);
+        for (var i = 0; i < PdfAnalysisRunner.MaxTries + 2; i++) await runner.RoundAsync(Ct);
+        Assert.Equal(0, await TriesAsync(vault.Id));
+
+        sidecar.Down = false;
+        await runner.RoundAsync(Ct);
+
+        Assert.Equal(0, await JobsAsync(vault.Id));
+        Assert.Equal(1, await AnalysesAsync(vault.Id));
+        var state = await StateAsync(host, user, "paper.pdf");
+        var stored = await host.Services.GetRequiredService<PdfAnalyses>().ReadAsync(vault, Convert.FromBase64String(state.BlobId), Ct);
+        Assert.Null(stored!.Failure);
+        Assert.Equal(3, stored.Analysis!.PageCount);
     }
 
     /// <summary>A sweep as at <paramref name="now"/>, with the grace period of new blobs long over.</summary>
