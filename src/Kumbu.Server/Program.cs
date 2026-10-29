@@ -66,9 +66,10 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
-// The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit.
+// The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address
+// connected to is refused on the server's listeners before a byte is sent (SidecarPeers.ConnectAsync).
 builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2) });
+    .ConfigurePrimaryHttpMessageHandler(sp => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2), ConnectCallback = sp.GetRequiredService<SidecarPeers>().ConnectAsync });
 builder.Services.AddSingleton<PdfAnalyses>();
 builder.Services.AddSingleton<PdfAnalysisRunner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PdfAnalysisRunner>());

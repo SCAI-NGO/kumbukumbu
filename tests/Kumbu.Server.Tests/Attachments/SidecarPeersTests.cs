@@ -212,6 +212,65 @@ public sealed class SidecarPeersTests(KumbuAppFactory app)
         await peers.StopAsync(CancellationToken.None);
     }
 
+    private static IPAddress? LocalAddress() => NetworkInterface.GetAllNetworkInterfaces()
+        .Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+        .SelectMany(n => n.GetIPProperties().UnicastAddresses).Select(a => a.Address)
+        .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a));
+
+    // A recreated sidecar has a new address before the next refresh sees it: the server's own connection to it adds it
+    // before the first byte goes out, and a refresh that still names the old one doesn't drop it.
+    [Fact]
+    public async Task The_address_the_server_connects_to_is_refused_before_anything_is_sent()
+    {
+        var now = LocalAddress();
+        if (now is null)
+        {
+            Assert.Skip("No IPv4 address besides loopback.");
+        }
+
+        var old = IPAddress.Parse("10.0.0.1");
+        var current = old;
+        var peers = Peers("http://pdf:8090", (_, _) => Task.FromResult<IPAddress[]>([current]));
+        await peers.RefreshAsync(Ct);
+        using var listener = new TcpListener(now, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var refusedAtFirstByte = false;
+        var server = Task.Run(async () =>
+        {
+            using var accepted = await listener.AcceptTcpClientAsync(Ct);
+            var stream = accepted.GetStream();
+            var buffer = new byte[4096];
+            _ = await stream.ReadAsync(buffer, Ct);
+            refusedAtFirstByte = peers.IsSidecar(now);
+            await stream.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"u8.ToArray(), Ct);
+        }, Ct);
+
+        current = now;
+        using var handler = new SocketsHttpHandler { ConnectCallback = peers.ConnectAsync };
+        using var http = new HttpClient(handler);
+        Assert.Equal("ok", await http.GetStringAsync(new Uri($"http://pdf:{port}/healthz"), Ct));
+        await server;
+
+        Assert.True(refusedAtFirstByte);
+        current = old;
+        await peers.RefreshAsync(Ct);
+        Assert.True(peers.IsSidecar(now));
+        Assert.True(peers.IsSidecar(old));
+    }
+
+    [Fact]
+    public void Added_addresses_are_normalised_and_loopback_is_left_out()
+    {
+        var peers = Peers("http://pdf:8090", Resolving());
+
+        peers.Add(IPAddress.Parse("::ffff:10.0.0.7"));
+        peers.Add(IPAddress.Loopback);
+
+        Assert.True(peers.IsSidecar(IPAddress.Parse("10.0.0.7")));
+        Assert.False(peers.IsSidecar(IPAddress.Loopback));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         for (var i = 0; i < 200 && !condition(); i++)
