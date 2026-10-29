@@ -20,6 +20,10 @@ WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/dist dist
+# The licence and the third-party notices from the repository's root, a named build context: docker build
+# --build-context root=. pdf (compose.build.yaml and the image workflow pass it). Without it, `root` would be taken
+# for an image to pull.
+COPY --from=root LICENSE THIRD-PARTY-NOTICES.md ./
 USER node
 EXPOSE 8090
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

@@ -19,8 +19,11 @@ jobs:
       contents: read
       packages: write
       id-token: write
-    # The server and its PDF sidecar, tagged alike: a release is both images from the same commit.
+    # The server and its PDF sidecar, tagged alike: release both from one tag. Each job runs to its end whatever the
+    # other's fate, so a failure never cancels the other half way through pushing and signing; a later change can
+    # publish :latest for both at once, after both have built.
     strategy:
+      fail-fast: false
       matrix:
         include:
           # GHCR image names must be lowercase, unlike the SCAI-NGO organisation name.
@@ -29,12 +32,15 @@ jobs:
             context: .
             file: Dockerfile
             cache: kumbu
+            build-contexts: ""
             version-args: true
           - name: pdf
             image: ghcr.io/scai-ngo/kumbukumbu-pdf
             context: pdf
             file: pdf/Dockerfile
             cache: kumbu-pdf
+            # LICENSE and THIRD-PARTY-NOTICES.md for the image (pdf/Dockerfile).
+            build-contexts: root=.
             version-args: false
 
     steps:
@@ -108,6 +114,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          build-contexts: ${{ matrix.build-contexts }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

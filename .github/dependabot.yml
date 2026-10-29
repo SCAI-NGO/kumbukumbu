@@ -23,6 +23,9 @@ updates:
     schedule:
       interval: weekly
 
+  # A pdfjs-dist update changes the analyser: change PdfAnalyses.Analyser (src/Kumbu.Server/Attachments/PdfAnalyses.cs)
+  # and the tests that pin it (PdfSidecarTests, PdfCommandTests, pdf/test/analyse.test.ts) in the same pull request.
+  # Every PDF is then analysed again once.
   - package-ecosystem: npm
     directory: /pdf
     schedule:
