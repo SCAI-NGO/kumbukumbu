@@ -6,13 +6,16 @@
 # .env, a DNS A record (and AAAA, if any) for it pointing at this host, and ports 80 and 443 free and reachable.
 #
 # What it changes against compose.yaml:
-# - Traefik is the only way in: Kumbu²'s port is no longer published on the host, Traefik listens on 80 and 443,
-#   redirects http to https and terminates TLS. The certificate comes from Let's Encrypt through the TLS-ALPN
+# - Traefik is the only way in from outside the host: Kumbu²'s port is no longer published, Traefik listens on 80
+#   and 443, redirects http to https and terminates TLS. The certificate comes from Let's Encrypt through the TLS-ALPN
 #   challenge on port 443.
 # - Kumbu² trusts the proxy (Kumbu:Proxy:Trusted): it takes the client address for its rate limits from the last
 #   X-Forwarded-For entry, the one Traefik appends, and the scheme from X-Forwarded-Proto, which Traefik sets. Traefik
 #   doesn't pass on the X-Forwarded-* headers a client sends (no forwardedHeaders.trustedIPs here), so a client can't
-#   pick its address. Safe only because nothing but Traefik can reach the container: keep it that way.
+#   pick its address. Kumbu² trusts every peer the same way, though, so this holds only while Traefik is the one
+#   container on Kumbu²'s networks that takes requests from outside. The others there are MongoDB and, with
+#   compose.monitoring.yaml, Prometheus (Grafana is kept off them for this reason): they could still pick an address
+#   themselves, an accepted limit. Put no other container on Kumbu²'s networks.
 # - Two networks: `proxy` (Traefik and Kumbu²) and the default one (Kumbu² and MongoDB), now internal. Traefik never
 #   sees MongoDB, and MongoDB has no way out. Kumbu² reaches the internet through `proxy` (model download, OAuth client
 #   metadata, external embedding providers).
@@ -68,7 +71,7 @@ services:
 
   kumbu:
     restart: unless-stopped
-    # No port on the host: Traefik is the only way in, which is what Kumbu__Proxy__Trusted relies on.
+    # No port on the host: Traefik is the only way in from outside it, which is what Kumbu__Proxy__Trusted relies on.
     ports: !reset []
     environment:
       Kumbu__PublicUrl: https://${KUMBU_HOST:?set KUMBU_HOST in .env to the host name Kumbu² is reached at}

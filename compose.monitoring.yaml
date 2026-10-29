@@ -7,9 +7,12 @@
 # tunnel (README, "Monitoring"). Prometheus publishes no port: it scrapes kumbu:9464, the metrics port compose.yaml
 # does not publish either, and keeps 90 days.
 #
-# Networks: `monitoring` (Kumbu², Prometheus, Grafana) is internal: neither reaches MongoDB, Prometheus has no way out.
-# Grafana is on `grafana` as well, an ordinary network, because Docker publishes no port of a container that is only on
-# internal networks (and compose.traefik.yaml makes the default network internal).
+# Networks: `monitoring` (Kumbu² and Prometheus) and `grafana-backend` (Prometheus and Grafana) are internal, so neither
+# monitoring container reaches MongoDB and Prometheus has no way out. Grafana doesn't reach Kumbu² at all: behind
+# Traefik the server trusts every peer's X-Forwarded-For (Kumbu:Proxy:Trusted), and Grafana may face the internet.
+# Prometheus does reach Kumbu²'s port 8080, and is trusted like any other peer there (docs/security-architecture.md §7).
+# Grafana is on `grafana` as well, an ordinary network of its own, because Docker publishes no port of a container that
+# is only on internal networks (and compose.traefik.yaml makes the default network internal).
 
 services:
   prometheus:
@@ -23,6 +26,7 @@ services:
       - prometheus-data:/prometheus
     networks:
       - monitoring
+      - grafana-backend
 
   grafana:
     image: grafana/grafana:13.2.5
@@ -46,7 +50,7 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     networks:
-      - monitoring
+      - grafana-backend
       - grafana
 
   kumbu:
@@ -56,6 +60,8 @@ services:
 
 networks:
   monitoring:
+    internal: true
+  grafana-backend:
     internal: true
   grafana:
 
