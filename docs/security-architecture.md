@@ -483,7 +483,7 @@ Accounts exist only by invitation: single-use, expiring (7 days by default, at m
 
 ### Passwords
 
-At least 12 characters (counted as characters, not bytes), not one of the 10,000 most common passwords, nor such a word padded with digits or punctuation (`Accounts/PasswordPolicy.cs`). The sign-up form warns that username and password are less safe than GitHub with a passkey, which come later (v3, §9) (`web/src/components/PasswordField.tsx:47`).
+At least 12 characters (counted as characters, not bytes), not one of the 10,000 most common passwords, nor such a word padded with digits or punctuation (`Accounts/PasswordPolicy.cs`). The sign-up form warns that username and password are less safe than GitHub with a passkey, which come later (v4, §9) (`web/src/components/PasswordField.tsx:47`).
 
 ### Recovery, and why there is no password reset
 
@@ -589,8 +589,8 @@ Points for the operator, not handled by the code:
 None of this is built. The roadmap (`docs/concept.md` §12):
 
 - **v2.5 (0.2.5):** Kanban boards, markdown links in `links`, `backlinks` and `mv`, and attachments (images and PDFs). Attachments get a design of their own, with the same care as the text core; how a short-lived download ticket for one attachment squares with "no secrets in URLs" (§7) is part of it. Built so far: their storage, sync and display (attachments, part 1, §5.4) and the model reading them, PDFs and images parsed and decoded in the PDF sidecar (part 2, §7, "The PDF sidecar").
-- **v3 (0.3.0):** OKF bundles, opt-in per directory; TOTP as a second factor for password accounts; single sign-on through any OIDC provider, GitHub first, as identity only: the provider says *who* someone is, holds no key material and cannot open a vault (concept §8); passkeys with the PRF extension as a further slot on the user key, so that the identity provider identifies and the passkey unlocks. A passkey without PRF cannot unlock; such a user sets a passphrase instead, and the UI says why.
-- **v4 (0.4.0):** sharing vaults between users. It extends the key model (asymmetric keys, slots for other users, revocation), gets its own section in this document and an independent review before it is built.
+- **v3 (0.3.0):** sharing vaults between users. It extends the key model (asymmetric keys, slots for other users, revocation), gets its own section in this document and an independent review before it is built.
+- **v4 (0.4.0):** TOTP as a second factor for password accounts; single sign-on through any OIDC provider, GitHub first, as identity only: the provider says *who* someone is, holds no key material and cannot open a vault (concept §8); passkeys with the PRF extension as a further slot on the user key, so that the identity provider identifies and the passkey unlocks. A passkey without PRF cannot unlock; such a user sets a passphrase instead, and the UI says why. OKF bundles, opt-in per directory.
 - **v5 (1.0.0):** "Time Machine": automatic checkpoints, and browsing a vault as it was on a date without a checkpoint made beforehand.
 
 Open questions from v0.2.0, each with its issue; the current behaviour is described in the section named:

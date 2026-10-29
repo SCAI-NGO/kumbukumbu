@@ -143,13 +143,13 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - Admins see metadata (who, storage used), never content.
 - **API keys:** named, per-vault read/write rights, shown once at creation, afterwards only by prefix (`kumbu_ab12…`). A key without at least one right can't exist (no slot = can't decrypt anything).
 - Rate limiting on login and invalid keys, in memory (one instance).
-- **Later:** TOTP/2FA (v3); sharing vaults between users, which needs asymmetric crypto (v4).
+- **Later:** sharing vaults between users, which needs asymmetric crypto (v3); TOTP/2FA (v4).
 
 **Login through GitHub** (direction from Chris, Oct 24, 2026; **postponed, not built**): in many companies every internal tool for developers (Rancher, Argo CD, Mongo Express …) signs in through GitHub, and Kumbu² should fit in. To settle when it is taken up:
 - **GitHub as the identity provider, limited to an organisation and optionally a team** (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`), the pattern of oauth2-proxy and Argo CD. The first login of a member creates the user; leaving the organisation ends the access. Invites become an option for deployments without an organisation.
 - **Admins through a GitHub team** (`KUMBU_GITHUB_ADMIN_TEAM`) instead of, or next to, the bootstrap token.
-- **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, a passkey with PRF in v3); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
-- **Later (v3): any OIDC provider** (Entra ID, Keycloak), GitHub being the first. The MCP OAuth flow (§9, step 10) uses the same login at `/authorize`; Claude and other clients are OAuth clients and bring no identity of their own.
+- **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, a passkey with PRF in v4); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
+- **Later (v4): any OIDC provider** (Entra ID, Keycloak), GitHub being the first. The MCP OAuth flow (§9, step 10) uses the same login at `/authorize`; Claude and other clients are OAuth clients and bring no identity of their own.
 
 ## 9. Client access
 
@@ -214,12 +214,14 @@ Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidia
 
 **A plugin package for the user's agent** (decided by Chris, Oct 24, 2026) handles what the tools can't judge: changes that need context, like renaming a project whose notes describe the name without containing it (`docs/notes-test-phase6b.md`). Its skills, a rename skill first, read before they replace and ask where the user's intent is unclear. It lives in its own repository and is distributed through a plugin marketplace; with the Obsidian sync plugin, Kumbu² then spans three repositories.
 
-**Roadmap** (decided by Chris, Oct 26, 2026; the versions are the release numbers):
+**Roadmap** (decided by Chris, Oct 26, 2026; the versions are the release numbers; v3 and v4 swapped on Oct 28, 2026):
 - **v1 (0.1.0):** the base, done; an internal test version.
 - **v2 (0.2.0):** the first public release, released in October 2026. Obsidian sync with pairing codes and device keys, install as an app with self-update, export and import as ZIP, welcome vault, activity and search in earlier versions, GDPR deletion, looking into a checkpoint (open it read-only, copy it for your AI, export it as ZIP).
 - **v2.5 (0.2.5):** Kanban boards, markdown links in `links`, `backlinks` and `mv`, attachments, and tags (read as Obsidian reads them, listed with `tags`, a filter on `rg`, `semsearch` and the web app's search).
-- **v3 (0.3.0):** OKF bundles, TOTP/2FA, OIDC single sign-on, passkeys with PRF.
-- **v4 (0.4.0):** sharing vaults and collaboration. It extends the crypto model (asymmetric keys, slots for other users, revocation), gets its own section in `docs/security-architecture.md` and an independent review before it is built. Under discussion: Kumbu² as a skills repository.
+- **v3 (0.3.0):** sharing vaults and collaboration ("think together"; concept in `concepts/collab-concept.md`). It extends the crypto model (asymmetric keys, slots for other users, revocation), gets its own section in `docs/security-architecture.md` and an independent review before it is built.
+- **v4 (0.4.0):** TOTP/2FA, OIDC single sign-on, passkeys with PRF, and OKF bundles. Under discussion: Kumbu² as a skills repository.
+
+Why the swap (Chris, Oct 28, 2026): sharing is the lower-hanging fruit with the larger effect at this stage, and the sign-in options get more feedback from real use first. OKF bundles move along with them: nobody asks for them yet; they are about data portability, so that people can leave Kumbu² for something better and never stay because their notes are locked in, which matters once there are users.
 - **v5 (1.0.0):** "Time Machine": automatic checkpoints, and browsing a vault as it was on a date without a checkpoint made beforehand (today: 10 versions per note, 30 days of trash, at most 10 named checkpoints).
 
 v1 is text only, on purpose. Attachments (images, PDFs) come in v2.5, to be designed with the same care as the text core, not added on the side. They are read by the AI as image parts plus extracted text, page by page; research in `docs/attachments-client-research.md`. Decided so far: the paragraphs below; still open: the size steps' numbers (from the test in §6 of the research). The way in, uploading an attachment, came with attachments, part 1.
@@ -249,7 +251,7 @@ v1 is text only, on purpose. Attachments (images, PDFs) come in v2.5, to be desi
 - **Images are decoded in the sidecar, not with ImageSharp** (a deviation from the design, which named ImageSharp): its current versions need a licence key to build and older ones have known vulnerabilities (above), while the sidecar already has Skia behind the same isolation, limits and time-outs as the PDF parser, a stricter isolation than any in-process decoder. One pipeline in one place. The server still checks an image's header (50 MP, 16,384 px on a side) before sending it, and checks what comes back. The cost: `img` works only while the sidecar is up.
 - **A measuring instrument.** v2.5 is meant to show what agents ask for: the dashboard's "Attachments" row counts page types and coverages, `pdf` calls by mode, pages delivered as text and as images, and text pages rendered anyway, the sign that the 25 % threshold misses figures (README, "Monitoring").
 
-v3 brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Writer identities (step 8) already tell humans from agents; markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv` come in v2.5 with the Kanban boards, ahead of the bundles.
+v4 brings **OKF bundles as an opt-in per directory** (decided by Chris, Oct 24, 2026): a directory that declares itself an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle gets OKF's rules and tooling; every other directory stays a plain Obsidian folder without them. Open questions in §13, analysis in `docs/okf-gap-analysis.md`. Writer identities (step 8) already tell humans from agents; markdown links (`[text](/path.md)`) in `links`, `backlinks` and `mv` come in v2.5 with the Kanban boards, ahead of the bundles.
 
 v2.5 brings **Kanban boards** (decided by Chris, Oct 24, 2026, from community feedback): several boards, and API keys that can be assigned boards, so an agent works on the boards it was given. One vault carries at most one board, and cards are on a par with notes. A card is a note, with tools for atomic card operations (design of Oct 27, 2026, §13).
 
@@ -272,7 +274,7 @@ Each step = a chapter in `CONCEPTS.md`, numbered on its own (steps 8 to 11 are c
 - **Mounting as an alternative** (not planned): **WebDAV** (mountable without extra software; ETags and locks map onto version tokens), **SFTP** (true sshfs; server-side SSH libraries for .NET are scarce) or an **own FUSE client** over the API. A mount keeps a vault unlocked, which works against the idle TTL (§7).
 - To settle either way: writes must go through version tokens and update links, backlinks and the search index; Obsidian's non-note files (`.obsidian/`, temp files, attachments) need a policy; sync needs a conflict strategy for offline edits. Plaintext on the server adds no new exposure, as search needs it already.
 
-### OKF bundles (v3, opt-in per directory)
+### OKF bundles (v4, opt-in per directory)
 Background and the full gap analysis: `docs/okf-gap-analysis.md`.
 - **The flag is OKF's own marker:** a directory is a bundle when its `index.md` carries `okf_version` in its frontmatter (OKF §12). No Kumbu²-only metadata; the flag travels with export and the Obsidian sync, and the user sees and sets it in Obsidian. Leaning, not decided.
 - **What enforcement means.** Refuse (writes without `type` fail with a teaching error), warn (writes pass, `okf check <path>` reports), or mixed: refuse agent writes, only warn on writes from the Obsidian sync, as refused sync writes would surface as conflicts the user can't make sense of. Leaning towards mixed.
