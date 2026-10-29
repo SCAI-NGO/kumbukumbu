@@ -55,6 +55,12 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     /// <summary>Text parts inserted at once while storing: a few, so no write carries tens of MB.</summary>
     private const int BatchBytes = 4 * 1024 * 1024;
 
+    /// <summary>
+    /// After an analysis, or the failure in its place, is stored for a blob of a vault: the search index embeds the
+    /// pages of the PDFs that hold it. On the storing thread; a handler must not block.
+    /// </summary>
+    public event Action<UnlockedVault, byte[]>? Stored;
+
     /// <summary>For tests: called with the number of each text part read.</summary>
     internal Action<int>? TextPartRead { get; set; }
 
@@ -82,14 +88,18 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         var now = catalog.Now;
         var head = Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), now);
         var parts = texts.Select((t, i) => Doc(vault, blobId, i + 1, vault.SealPdfAnalysis(blobId, i + 1, t), now)).ToList();
-        return await WriteAsync(vault, blobId, head, parts, ct) ? header.ToAnalysis() : null;
+        if (!await WriteAsync(vault, blobId, head, parts, ct)) return null;
+        Stored?.Invoke(vault, blobId);
+        return header.ToAnalysis();
     }
 
     /// <summary>Stores why the PDF can't be analysed in place of an analysis; false as <see cref="StoreAsync"/> is null.</summary>
-    public Task<bool> StoreFailureAsync(UnlockedVault vault, byte[] blobId, PdfFailure failure, CancellationToken ct)
+    public async Task<bool> StoreFailureAsync(UnlockedVault vault, byte[] blobId, PdfFailure failure, CancellationToken ct)
     {
         var header = new HeaderRecord(Analyser, 0, 0, null, null, [], [], failure, Analyser);
-        return WriteAsync(vault, blobId, Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), catalog.Now), [], ct);
+        if (!await WriteAsync(vault, blobId, Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), catalog.Now), [], ct)) return false;
+        Stored?.Invoke(vault, blobId);
+        return true;
     }
 
     /// <summary>Part 0, opened; null if there is none (text parts without it are an unfinished store), or it doesn't open
@@ -145,6 +155,57 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             log.LogWarning("A text part of a PDF analysis of vault {VaultId} is missing or doesn't open", vault.Id);
             return null;
         }
+    }
+
+    /// <summary>
+    /// The text of every page analysed (index 0 = page 1), each cut after <paramref name="maxChars"/>, for the search
+    /// index: the parts are read one at a time, so a long PDF never has all its text in memory. Read at one point in
+    /// time with part 0, as <see cref="TextAsync"/>. An empty list for a failed analysis (there is no text to search);
+    /// null without an analysis, or if a part is missing or doesn't open.
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> SearchTextAsync(UnlockedVault vault, byte[] blobId, int maxChars, CancellationToken ct)
+    {
+        using var session = await catalog.StartSnapshotSessionAsync(ct);
+        if (await ReadHeaderAsync(vault, blobId, session, ct) is not { } header) return null;
+        if (header.Failure is not null || header.AnalysedPages == 0) return [];
+
+        var pages = Enumerable.Range(0, header.AnalysedPages).Select(_ => new StringBuilder()).ToArray();
+        var wanted = header.Parts.Select(p => p.Part).ToList();
+        var read = 0;
+        using var cursor = await catalog.PdfParts.Find(session, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted), new FindOptions { BatchSize = 1 })
+            .SortBy(d => d.Part).ToCursorAsync(ct);
+        while (await cursor.MoveNextAsync(ct))
+        {
+            foreach (var doc in cursor.Current)
+            {
+                read++;
+                TextPartRead?.Invoke(doc.Part);
+                TextRecord text;
+                try
+                {
+                    text = vault.OpenPdfAnalysis<TextRecord>(doc);
+                }
+                catch (Exception e) when (e is CryptographicException or JsonException or InvalidDataException)
+                {
+                    log.LogWarning("A text part of a PDF analysis of vault {VaultId} is missing or doesn't open", vault.Id);
+                    return null;
+                }
+
+                foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length))
+                {
+                    var page = pages[s.Page - 1];
+                    if (page.Length < maxChars) page.Append(s.Text.AsSpan(0, Math.Min(s.Text.Length, maxChars - page.Length)));
+                }
+            }
+        }
+
+        if (read != wanted.Count)
+        {
+            log.LogWarning("A text part of a PDF analysis of vault {VaultId} is missing or doesn't open", vault.Id);
+            return null;
+        }
+
+        return [.. pages.Select(p => p.ToString())];
     }
 
     /// <summary>

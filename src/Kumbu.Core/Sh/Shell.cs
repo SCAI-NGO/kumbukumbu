@@ -43,7 +43,7 @@ public sealed class Shell
         ICommand[] commands =
         [
             .. ReadingCommands(notes, _now, pixels),
-            new Semsearch(notes, search ?? new Search.NoSearchIndex()),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
             new Mv(mover), new Rm(writer, files), new Trash(notes),

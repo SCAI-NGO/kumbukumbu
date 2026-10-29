@@ -491,6 +491,21 @@ public sealed class EncryptedNoteStore(
                     if (e.Version != note.Version) pending++;
                     foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
                 }
+
+                // The pages of PDFs, as embedded for their current version; any other version's pages are left out
+                // (their text is no longer the PDF's). PDFs don't count as pending: semsearch --words doesn't find them.
+                foreach (var (path, (_, file)) in vault.Attachments)
+                {
+                    if (file.Current.MediaType != "application/pdf" || !InScope(scope, path)) continue;
+                    if (!embeddings.TryGetValue(path, out var e) || e.Model != model || e.Version != file.Version) continue;
+                    if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
+                    {
+                        index.Enqueue(vault, [path]);
+                        continue;
+                    }
+
+                    foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                }
             }
         }
 
@@ -746,7 +761,7 @@ public sealed class EncryptedNoteStore(
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
-            index?.Enqueue(vault, paths.Where(p => !p.IsAttachment));
+            index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || Kumbu.Core.Attachments.AttachmentFormat.ForPath(p)?.Kind == Kumbu.Core.Attachments.AttachmentKind.Pdf));
             await RecordAsync(vault, paths);
             return true;
         }

@@ -120,8 +120,8 @@ public class AttachmentCommandTests
         Assert.Equal("rg: /Work/shot.png is an attachment; rg searches the text of notes only", (await Run("rg x /Work/shot.png")).Output);
         Assert.Contains("is an attachment, not a note", (await Run("semsearch layout /Work/shot.png")).Output);
         Assert.Contains("Images are not searched", (await Run("help rg")).Output);
-        Assert.Contains("Images and PDFs are not searched", (await Run("help semsearch")).Output);
-        Assert.Contains("semsearch skips attachments", (await Run("help attachments")).Output);
+        Assert.Contains("images are not searched", (await Run("help semsearch")).Output);
+        Assert.Contains("semsearch  ranks the pages of PDFs (not scans) by meaning", (await Run("help attachments")).Output);
     }
 
     [Fact]

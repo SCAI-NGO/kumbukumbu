@@ -53,8 +53,9 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         {SizeSteps.Table}
           At most 4 images come from one call, and at most {MaxPages} pages, fewer when their text would pass the
           output limit (about {OutputLimit.MaxChars / OutputLimit.CharsPerToken} tokens); the last line then names the range to go on with.
-          rg finds text in PDFs (/Work/paper.pdf:p7: text); semsearch doesn't search them yet. Neither finds
-          the text of pages without a text layer (scans), which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to page 2000, and says so.
+          rg finds text in PDFs (/Work/paper.pdf:p7: text), and semsearch finds their pages by
+          meaning (1. /Work/paper.pdf p7). Neither finds the text of pages without a text layer (scans),
+          which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to page 2000, and says so.
           If the analysis hasn't run yet, pdf runs it first (up to a minute); until it is there the text and
           the types aren't known, and only --images=all and --crop show pages.
           pdf stands alone, not in a pipeline. A client may drop images; if none follows a page's text, say
