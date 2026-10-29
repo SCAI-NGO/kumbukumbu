@@ -1,6 +1,8 @@
 # Keeps what the build pulls in up to date, each pinned where it is used: the actions to commit hashes in the
 # workflows, the base images to digests in the Dockerfile, the NuGet packages to the versions in the project files
-# and packages.lock.json.
+# and packages.lock.json. And the images the Compose files run, by their tags: Prometheus and Grafana in
+# compose.monitoring.yaml, and the defaults of KUMBU_MONGO_IMAGE and KUMBU_TRAEFIK_IMAGE (`${…:-image:tag}`), whose
+# tags name a major or minor version only, so a pull request there is a new major or minor version: review it.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -9,6 +11,11 @@ updates:
       interval: weekly
 
   - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly

@@ -6,6 +6,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -172,7 +173,7 @@ public static class FileApi
                     Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => Conflict(written, version),
                     Kumbu.Core.Sh.ShellErrorKind.NotFound => throw await NoteApi.MissingAsync(store, filePath, ct),
                     Kumbu.Core.Sh.ShellErrorKind.Refused => throw new ApiException(StatusCodes.Status403Forbidden, result.Output),
-                    Kumbu.Core.Sh.ShellErrorKind.Conflict => throw new ApiException(StatusCodes.Status409Conflict, result.Output),
+                    Kumbu.Core.Sh.ShellErrorKind.Conflict => throw ConflictWithoutState(result.Output),
                     _ => throw ApiErrors.BadRequest(result.Output),
                 };
             }
@@ -237,14 +238,24 @@ public static class FileApi
         if (!result.IsError) return TypedResults.NoContent();
         var now = await files.GetAttachmentAsync(filePath, ct) ?? throw await NoteApi.MissingAsync(store, filePath, ct);
         if (version is not null && now.Version != version) return Conflict(now, version);
-        throw new ApiException(StatusCodes.Status409Conflict, result.Output);
+        throw ConflictWithoutState(result.Output);
     }
 
-    internal static Conflict<FileConflictView> Conflict(StoredAttachment current, string? version) => TypedResults.Conflict(new FileConflictView(
-        version is null
-            ? $"{current.Path.Value} exists already; to overwrite it, send its version."
-            : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
-        FileStateView.Of(current)));
+    private static ApiException ConflictWithoutState(string message)
+    {
+        KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
+        return new ApiException(StatusCodes.Status409Conflict, message);
+    }
+
+    internal static Conflict<FileConflictView> Conflict(StoredAttachment current, string? version)
+    {
+        KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
+        return TypedResults.Conflict(new FileConflictView(
+            version is null
+                ? $"{current.Path.Value} exists already; to overwrite it, send its version."
+                : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
+            FileStateView.Of(current)));
+    }
 
     /// <summary>The attachments of the caller's store; every store of this server keeps them.</summary>
     internal static IAttachmentStore Files(INoteStore store) =>

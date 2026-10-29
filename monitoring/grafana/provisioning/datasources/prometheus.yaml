@@ -1,0 +1,11 @@
+# The dashboards refer to this data source by its uid.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: kumbu-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

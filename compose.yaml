@@ -75,8 +75,8 @@ services:
       # New vaults' recovery keys are written here, once; fetch them, store them safely, delete them.
       Kumbu__Recovery__Path: /recovery
       Kumbu__Recovery__Keys: ${KUMBU_RECOVERY_KEYS:-}
-      # Only behind a reverse proxy that is the only way in: with the port above published, clients could
-      # send their own X-Forwarded-For and pick the IP that rate limits count against.
+      # Only behind a reverse proxy that is the only way in from outside the host: with the port above published,
+      # clients could send their own X-Forwarded-For and pick the IP that rate limits count against.
       Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
       Kumbu__OAuth__AccessTokenMinutes: ${KUMBU_OAUTH_ACCESS_TOKEN_MINUTES:-60}
@@ -91,6 +91,8 @@ services:
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
+      # Prometheus metrics, for compose.monitoring.yaml: not published, but reachable from every container on a network of the server's.
+      Kumbu__Metrics__Url: http://0.0.0.0:9464
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.ComponentModel;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Metrics;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -16,5 +17,5 @@ public static class ShTool
         Shell shell,
         [Description("A command line, e.g. ls /  or  rg -i kumbu | head -5  or  cat \"/Work/Meeting Notes.md\"")] string command,
         CancellationToken ct) =>
-        await ToolResult.RunAsync(() => shell.RunAsync(command, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Sh, () => shell.RunAsync(command, ct));
 }

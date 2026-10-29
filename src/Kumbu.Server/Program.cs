@@ -9,6 +9,7 @@ using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
@@ -39,6 +40,17 @@ builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
+
+// /metrics is served on a listener of its own, not on the app's port: a proxy forwards whatever Host header a client
+// sends, so a route on the public port could not be told apart from the scraper's. Not in the bootstrap command.
+var metricsEnabled = !bootstrapCommand && builder.Configuration.GetValue("Kumbu:Metrics:Enabled", true);
+if (metricsEnabled)
+{
+    KumbuMetrics.Configure();
+    builder.Services.AddSingleton<Kumbu.Core.Sh.IShellObserver, ShellMetrics>();
+    builder.Services.AddSingleton<MetricsServer>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<MetricsServer>());
+}
 
 builder.Services.AddSingleton<IMongoClient>(sp =>
     new MongoClient(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.ClientSettings()));
@@ -136,6 +148,7 @@ builder.Services.AddMcpServer(o =>
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
 
 var app = builder.Build();
+if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>());
 
 if (bootstrapCommand)
 {
@@ -162,11 +175,11 @@ if (!TextOrder.IsCultureAware)
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
-    // can be pinned: any peer is trusted, which is safe only because the proxy is the container's only way in
-    // (no published port). ForwardLimit 1 takes the rightmost X-Forwarded-For entry, the one Traefik appended;
-    // whatever a client put in the header itself is ignored. X-Forwarded-Proto (which Traefik overwrites) makes
-    // Request.IsHttps true for a request that reached Traefik over https, for HSTS. First, so that everything
-    // after sees the client's address and scheme. Without a trusted proxy neither header is read.
+    // can be pinned: any peer is trusted, safe only while the proxy is the only way in from outside the host (no
+    // published port; the other containers on its networks are trusted too, an accepted limit). ForwardLimit 1 takes
+    // the rightmost X-Forwarded-For entry, the one Traefik appended; whatever a client put there is ignored.
+    // X-Forwarded-Proto (which Traefik overwrites) makes Request.IsHttps true for a request that reached Traefik over
+    // https, for HSTS. First, so that everything after sees the client's address and scheme. Otherwise neither is read.
     var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
     forwarded.KnownIPNetworks.Clear();
     forwarded.KnownProxies.Clear();
@@ -199,6 +212,7 @@ app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = SyncHub.CheckInterv
 
 // Routing first, so that CallerMiddleware sees the endpoint and its AllowAnonymous.
 app.UseRouting();
+if (metricsEnabled) app.UseKumbuHttpMetrics();
 app.UseOAuthCors();
 app.UseMiddleware<CallerMiddleware>();
 app.UseCallerRules(publicUrl);

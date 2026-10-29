@@ -56,6 +56,17 @@ public sealed class KumbuOptions
     public PrivacyOptions Privacy { get; set; } = new();
 
     public DeletionsOptions Deletions { get; set; } = new();
+
+    public MetricsOptions Metrics { get; set; } = new();
+}
+
+/// <summary>The Prometheus endpoint, on a port of its own (<see cref="Metrics.MetricsServer"/>).</summary>
+public sealed class MetricsOptions
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Where to listen; loopback by default. In a container it must be an address the scraper can reach.</summary>
+    public string Url { get; set; } = "http://127.0.0.1:9464";
 }
 
 /// <summary>Where the ids of deleted users are listed, outside the database (<see cref="Accounts.DeletionList"/>).</summary>

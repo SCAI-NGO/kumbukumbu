@@ -453,7 +453,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
     private static ShellResult Conflict(string tool, VaultPath path, string version, StoredNote current) =>
         ShellResult.Error(
-            $"{tool}: {path.Value} has changed since version {version} (it is now {current.Version}); cat it again and redo the change");
+            $"{tool}: {path.Value} has changed since version {version} (it is now {current.Version}); cat it again and redo the change") with { Kind = ShellErrorKind.Conflict };
 
     private static ShellResult Written(string message, StoredNote note) =>
         ShellResult.Ok(message) with { Version = new NoteVersion(note.Path.Value, note.Version) };

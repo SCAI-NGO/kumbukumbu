@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Globalization;
 using Kumbu.Core.Board;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Metrics;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -32,7 +33,7 @@ public static class BoardTool
         [Description("rename_column: the column's current name")] string? from = null,
         [Description("rename_column: the new name")] string? to = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(async () =>
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Board, async () =>
         {
             switch (action.Trim())
             {

@@ -7,6 +7,7 @@ using System.Text.Json;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Server.Metrics;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 
@@ -174,6 +175,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider };
         RecordKey(vault);
         _open[id] = vault;
+        KumbuMetrics.VaultUnlocked();
         Unlocked?.Invoke(vault);
         return vault;
     }
@@ -305,6 +307,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var vault = new UnlockedVault(id, name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = DefaultEmbeddingProvider };
         RecordKey(vault);
         _open[id] = vault;
+        KumbuMetrics.VaultUnlocked();
         Unlocked?.Invoke(vault);
         return vault;
     }
@@ -808,6 +811,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         {
             if (now - vault.LastUsed > TimeSpan.FromMinutes(o.IdleMinutes) && now - vault.LastUsed > InUse && _open.TryRemove(id, out _))
             {
+                KumbuMetrics.VaultLocked(KumbuMetrics.LockReason.Idle);
                 log.LogInformation("Locked vault {VaultId} after {Minutes} idle minutes", vault.Id, o.IdleMinutes);
             }
         }
@@ -816,7 +820,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         foreach (var vault in _open.Values.Where(v => now - v.LastUsed > InUse).OrderBy(v => v.LastUsed))
         {
             if (_open.Values.Sum(v => v.ApproxBytes) <= cap) break;
-            if (_open.TryRemove(vault.Id, out _)) log.LogInformation("Locked vault {VaultId} to stay below the memory limit", vault.Id);
+            if (_open.TryRemove(vault.Id, out _))
+            {
+                KumbuMetrics.VaultLocked(KumbuMetrics.LockReason.Memory);
+                log.LogInformation("Locked vault {VaultId} to stay below the memory limit", vault.Id);
+            }
         }
 
         foreach (var vault in _open.Values)
@@ -901,8 +909,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>How many vaults are unlocked now.</summary>
+    public int UnlockedCount => _open.Count;
+
     /// <summary>For tests: how many vaults are unlocked now.</summary>
-    public int OpenCount => _open.Count;
+    public int OpenCount => UnlockedCount;
 
     /// <summary>Reads one note again after a compare-and-swap failed: someone else wrote it.</summary>
     /// <summary>Takes <paramref name="vault"/> out of the working set (if it is still the one there) after it failed to follow
@@ -1046,6 +1057,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             RecordKey(vault);
             _open[id] = vault;
             log.LogInformation("Unlocked vault {VaultId} ({Notes})", vault.Id, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
+            KumbuMetrics.VaultUnlocked();
             Unlocked?.Invoke(vault);
             return vault;
         }

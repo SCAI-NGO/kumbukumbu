@@ -10,6 +10,7 @@ using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.Features;
@@ -351,11 +352,15 @@ public static class NoteApi
         return existing is null ? TypedResults.Created(ApiPaths.Url("notes", notePath), view) : TypedResults.Ok(view);
     }
 
-    internal static Conflict<ConflictView> Conflict(StoredNote current, string? version) => TypedResults.Conflict(new ConflictView(
-        version is null
-            ? $"{current.Path.Value} exists already; to overwrite it, send its version."
-            : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
-        new CurrentNoteView(current.Content, current.Version)));
+    internal static Conflict<ConflictView> Conflict(StoredNote current, string? version)
+    {
+        KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
+        return TypedResults.Conflict(new ConflictView(
+            version is null
+                ? $"{current.Path.Value} exists already; to overwrite it, send its version."
+                : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
+            new CurrentNoteView(current.Content, current.Version)));
+    }
 
     /// <summary><c>version</c>: trash the note only if it is still at that version, else 409 with the note as it is
     /// now (as a stale <c>PUT</c>). Without it, whatever version the note is at.</summary>

@@ -1,0 +1,1364 @@
+{
+  "uid": "kumbu",
+  "title": "Kumbu²",
+  "tags": [
+    "kumbu"
+  ],
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 41,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Traffic",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "HTTP requests by endpoint",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (endpoint) (rate(http_requests_received_total[5m]))",
+          "legendFormat": "{{endpoint}}",
+          "range": true
+        }
+      ],
+      "description": "Requests per second by route template; the path itself is never a label."
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "HTTP p95 latency by endpoint",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket{endpoint!=\"/api/ws\"}[5m]) unless rate(http_request_duration_seconds_bucket{endpoint=~\"/mcp.*\",method=\"GET\"}[5m])))",
+          "legendFormat": "{{endpoint}}",
+          "range": true
+        }
+      ],
+      "description": "Without the long-lived streams (the sync socket /api/ws and the MCP event stream, GET on /mcp), which last as long as the client stays connected."
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "HTTP errors and rate limits per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (code) (increase(http_requests_received_total{code=~\"4xx|5xx\"}[1h]))",
+          "legendFormat": "{{code}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (endpoint) (increase(kumbu_http_rate_limited_total[1h]))",
+          "legendFormat": "429 {{endpoint}}",
+          "range": true
+        }
+      ],
+      "description": "Requests answered 4xx or 5xx, and those answered 429 by route template, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 5,
+      "title": "MCP tool calls by tool",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (tool) (rate(kumbu_mcp_tool_calls_total[5m]))",
+          "legendFormat": "{{tool}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "MCP p95 by tool",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(kumbu_mcp_tool_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "MCP errors by tool and kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (tool, kind) (rate(kumbu_mcp_tool_errors_total[5m]))",
+          "legendFormat": "{{tool}} {{kind}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 8,
+      "title": "sh commands",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "sh commands by command",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (command) (rate(kumbu_sh_commands_total[5m]))",
+          "legendFormat": "{{command}}",
+          "range": true
+        }
+      ],
+      "description": "Each command of a pipeline once; anything the shell does not have is 'other'."
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "sh p95 by command",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, command) (rate(kumbu_sh_command_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{command}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 11,
+      "title": "Search",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 12,
+      "title": "semsearch and rg p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, command) (rate(kumbu_sh_command_duration_seconds_bucket{command=~\"semsearch|rg\"}[5m])))",
+          "legendFormat": "{{command}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 13,
+      "title": "Embedding batches by provider kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (provider_kind) (rate(kumbu_embedding_batches_total[5m]))",
+          "legendFormat": "{{provider_kind}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 14,
+      "title": "Embedding batch p95 by provider kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, provider_kind) (rate(kumbu_embedding_batch_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{provider_kind}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 15,
+      "title": "Embedding backlog",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(kumbu_embedding_backlog)",
+          "legendFormat": "notes waiting",
+          "range": true
+        }
+      ],
+      "description": "Notes waiting to be indexed or being indexed. With the internal model off (Kumbu:Search:Enabled=false), the notes of vaults on the internal provider wait here for good."
+    },
+    {
+      "type": "timeseries",
+      "id": 16,
+      "title": "Embedding errors per hour by provider kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (provider_kind) (increase(kumbu_embedding_errors_total[1h]))",
+          "legendFormat": "{{provider_kind}}",
+          "range": true
+        }
+      ],
+      "description": "Embedding batches that failed, in the hour before each point."
+    },
+    {
+      "type": "row",
+      "id": 17,
+      "title": "Vaults",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 18,
+      "title": "Vaults unlocked",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(kumbu_vaults_unlocked)",
+          "legendFormat": "unlocked",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 19,
+      "title": "Unlocks and locks per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(increase(kumbu_vault_unlocks_total[1h]))",
+          "legendFormat": "unlocks",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (reason) (increase(kumbu_vault_locks_total[1h]))",
+          "legendFormat": "locked: {{reason}}",
+          "range": true
+        }
+      ],
+      "description": "Vaults unlocked, and locked by the sweeper: idle (the TTL ran out) or memory; in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "Write conflicts per hour by way in",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (via) (increase(kumbu_write_conflicts_total[1h]))",
+          "legendFormat": "{{via}}",
+          "range": true
+        }
+      ],
+      "description": "Every write refused as a conflict (a stale version, a name already taken), in the hour before each point."
+    },
+    {
+      "type": "row",
+      "id": 29,
+      "title": "Auth",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 21,
+      "title": "Sign-ins per hour by outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (outcome) (increase(kumbu_sign_ins_total[1h]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        }
+      ],
+      "description": "Password sign-ins, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 22,
+      "title": "OAuth tokens issued per hour by grant",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (grant) (increase(kumbu_oauth_tokens_issued_total[1h]))",
+          "legendFormat": "{{grant}}",
+          "range": true
+        }
+      ],
+      "description": "Token pairs issued by the OAuth token endpoint, in the hour before each point."
+    },
+    {
+      "type": "row",
+      "id": 23,
+      "title": "Runtime",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 24,
+      "title": "CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 62
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "rate(process_cpu_seconds_total[5m])",
+          "legendFormat": "CPU",
+          "range": true
+        }
+      ],
+      "description": "CPU seconds per second; 1 is one core."
+    },
+    {
+      "type": "timeseries",
+      "id": 25,
+      "title": "Working set",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 62
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "process_working_set_bytes",
+          "legendFormat": "working set",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 26,
+      "title": "GC collections",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 62
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (generation) (rate(dotnet_collection_count_total[5m]))",
+          "legendFormat": "gen {{generation}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 27,
+      "title": "Heap",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "dotnet_total_memory_bytes",
+          "legendFormat": "allocated",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "system_runtime_dotnet_gc_last_collection_heap_size",
+          "legendFormat": "after last GC: {{gc_heap_generation}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 28,
+      "title": "Threads",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "system_runtime_dotnet_thread_pool_thread_count",
+          "legendFormat": "thread pool",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "system_runtime_dotnet_thread_pool_queue_length",
+          "legendFormat": "thread pool queue",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "process_num_threads",
+          "legendFormat": "process",
+          "range": true
+        }
+      ]
+    }
+  ]
+}

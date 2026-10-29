@@ -23,6 +23,7 @@ public sealed class StartupValidationTests
             builder.UseSetting("Kumbu:Mongo:ConnectionString", connectionString);
             builder.UseSetting("Kumbu:DevToken", token);
             builder.UseSetting("Kumbu:Seed:Path", "");
+            builder.UseSetting("Kumbu:Metrics:Url", "http://127.0.0.1:0");
             builder.ConfigureLogging(l => l.ClearProviders());
         }
     }

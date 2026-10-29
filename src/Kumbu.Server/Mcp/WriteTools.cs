@@ -2,6 +2,7 @@
 using System.ComponentModel;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Metrics;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -18,7 +19,7 @@ public static class WriteTools
         [Description("The note's full Markdown content")] string content,
         [Description("Version token from cat or the last write/edit; leave out to create a new note")] string? version = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(() => writer.WriteAsync(path, content, version, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Write, () => writer.WriteAsync(path, content, version, ct));
 
     [McpServerTool(Name = "edit", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.EditDescription)]
     public static async Task<CallToolResult> Edit(
@@ -30,7 +31,7 @@ public static class WriteTools
         [Description("Replace the whole section in the path, heading included, with new_text")] bool replace_section = false,
         [Description("Replace every occurrence of old_text, not just a unique one")] bool replace_all = false,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(() => writer.EditAsync(path, version, old_text, new_text, ct, replace_section, replace_all));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Edit, () => writer.EditAsync(path, version, old_text, new_text, ct, replace_section, replace_all));
 
     [McpServerTool(Name = "replace", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false), Description(Manual.ReplaceDescription)]
     public static async Task<CallToolResult> Replace(
@@ -41,5 +42,5 @@ public static class WriteTools
         [Description("Match old_text only as a whole word")] bool word = false,
         [Description("The plan token from the preview; leave out to preview")] string? plan = null,
         CancellationToken ct = default) =>
-        await ToolResult.RunAsync(() => replacer.RunAsync(path, old_text, new_text, word, plan, ct));
+        await ToolResult.RunAsync(KumbuMetrics.Tool.Replace, () => replacer.RunAsync(path, old_text, new_text, word, plan, ct));
 }

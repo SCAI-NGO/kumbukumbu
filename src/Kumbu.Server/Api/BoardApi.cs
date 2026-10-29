@@ -3,6 +3,7 @@ using System.Globalization;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Metrics;
 using Microsoft.AspNetCore.Http.HttpResults;
 using BoardModel = Kumbu.Core.Board.Board;
 
@@ -154,6 +155,7 @@ public static class BoardApi
             ShellErrorKind.Conflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status400BadRequest,
         };
+        if (status == StatusCodes.Status409Conflict) KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
         const string prefix = "board: ";
         throw new ApiException(status, result.Output.StartsWith(prefix, StringComparison.Ordinal) ? result.Output[prefix.Length..] : result.Output);
     }
