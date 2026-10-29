@@ -96,9 +96,9 @@ services:
       Kumbu__Search__Model: ${KUMBU_SEARCH_MODEL:-arctic-m}
       # The embedding provider of vaults whose owner never chose one: internal, or an external provider's name.
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
-      # Prometheus metrics, for compose.monitoring.yaml: not published, but reachable from every container on a network of the server's.
+      # Prometheus metrics, for compose.monitoring.yaml: not published; reachable from the containers on the server's networks.
       Kumbu__Metrics__Url: http://0.0.0.0:9464
-      # The PDF sidecar below, which parses PDFs and decodes images for img and pdf; empty, neither shows anything.
+      # The PDF sidecar below (img, pdf; empty, neither shows anything). The server refuses connections from its address.
       Kumbu__Pdf__Url: http://pdf:8090
     networks:
       - default

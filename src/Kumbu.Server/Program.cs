@@ -42,6 +42,10 @@ builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
+// The PDF sidecar's addresses, refused on both listeners: started before the metrics listener, and before the app's,
+// which the host starts after every hosted service registered here.
+builder.Services.AddSingleton<SidecarPeers>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SidecarPeers>());
 
 // /metrics is served on a listener of its own, not on the app's port: a proxy forwards whatever Host header a client
 // sends, so a route on the public port could not be told apart from the scraper's. Not in the bootstrap command.
@@ -181,6 +185,9 @@ if (!TextOrder.IsCultureAware)
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
+// Before anything else, forwarded headers included: the connection's own address decides (SidecarPeers).
+app.Use(app.Services.GetRequiredService<SidecarPeers>().RefuseAsync);
+
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
@@ -188,7 +195,7 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
     // published port; the other containers on its networks are trusted too, an accepted limit). ForwardLimit 1 takes
     // the rightmost X-Forwarded-For entry, the one Traefik appended; whatever a client put there is ignored.
     // X-Forwarded-Proto (which Traefik overwrites) makes Request.IsHttps true for a request that reached Traefik over
-    // https, for HSTS. First, so that everything after sees the client's address and scheme. Otherwise neither is read.
+    // https, for HSTS. Next, so that everything after sees the client's address and scheme. Otherwise neither is read.
     var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
     forwarded.KnownIPNetworks.Clear();
     forwarded.KnownProxies.Clear();
