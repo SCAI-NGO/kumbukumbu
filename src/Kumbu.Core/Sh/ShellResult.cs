@@ -18,6 +18,9 @@ public enum ShellErrorKind
 
     /// <summary>The state of the vault stands in the way (a definition problem, a name taken, changes that kept racing).</summary>
     Conflict,
+
+    /// <summary>Something it needs is away for now (the PDF sidecar, a PDF's analysis): the same call may work later.</summary>
+    Unavailable,
 }
 
 /// <summary>Outcome of a shell command; commands never throw for user input.</summary>

@@ -7,15 +7,24 @@ namespace Kumbu.Core.Attachments;
 public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight);
 
 /// <summary>
-/// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, and an analysis that couldn't
-/// run because the sidecar is away or busy, which <c>pdf</c> tells apart from one that is merely pending.
+/// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, the sidecar away or busy
+/// (<c>Unavailable</c>), and an analysis that couldn't run for that reason (<c>AnalysisUnavailable</c>), which
+/// <c>pdf</c> tells apart from one that is merely pending. <c>Failed</c> is anything else (this file, this page).
 /// </summary>
-public enum PixelsProblem { Unavailable, TooLarge, BadCrop, AnalysisUnavailable }
+public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, AnalysisUnavailable }
 
 /// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
-public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Unavailable) : Exception(message)
+public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Failed) : Exception(message)
 {
     public PixelsProblem Problem { get; } = problem;
+
+    /// <summary>The shell's error kind for it, for the tool metrics; null for a failure of the file itself.</summary>
+    public Sh.ShellErrorKind? Kind => Problem switch
+    {
+        PixelsProblem.Unavailable or PixelsProblem.AnalysisUnavailable => Sh.ShellErrorKind.Unavailable,
+        PixelsProblem.TooLarge or PixelsProblem.BadCrop => Sh.ShellErrorKind.Invalid,
+        _ => null,
+    };
 }
 
 /// <summary>How a <c>pdf</c> call reads: its mode, for the usage metrics.</summary>

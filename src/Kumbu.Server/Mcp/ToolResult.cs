@@ -76,6 +76,7 @@ internal static class ToolResult
                 ShellErrorKind.Refused => KumbuMetrics.ToolError.Refused,
                 ShellErrorKind.NotFound => KumbuMetrics.ToolError.NotFound,
                 ShellErrorKind.Conflict => KumbuMetrics.ToolError.Conflict,
+                ShellErrorKind.Unavailable => KumbuMetrics.ToolError.Unavailable,
                 _ => KumbuMetrics.ToolError.Other,
             });
         }

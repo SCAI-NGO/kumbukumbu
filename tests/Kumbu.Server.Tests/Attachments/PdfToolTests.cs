@@ -3,6 +3,7 @@ using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Attachments;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Metrics;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -88,6 +89,7 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         await user.CreateFileAsync("Samples/waiting.pdf", Pdf("waiting for the sidecar"));
         var key = await user.KeyAsync("pdf", KeyRight.Read);
         var path = $"/{user.Vault}/Samples/waiting.pdf";
+        var before = Scrape.Value(await Scrape.TextAsync(app), Unavailable);
 
         var text = await ShAsync(host, key, $"pdf {path}");
         var all = await ShAsync(host, key, $"pdf {path} 1 --images=all");
@@ -99,7 +101,11 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         Assert.Equal("pdf: PDF rendering is unavailable right now; try again later", Text(Assert.Single(all.Content)));
         Assert.False(cat.IsError);
         Assert.EndsWith(" — not analysed yet; pdf reads it (help pdf)", Text(cat.Content[0]));
+        // Counted as the sidecar being away, not as some other error.
+        Assert.True(Scrape.Value(await Scrape.TextAsync(app), Unavailable) >= before + 2);
     }
+
+    private const string Unavailable = "kumbu_mcp_tool_errors_total{tool=\"sh\",kind=\"unavailable\"}";
 
     [Fact]
     public async Task Rg_finds_the_text_of_an_analysed_pdf_by_page()

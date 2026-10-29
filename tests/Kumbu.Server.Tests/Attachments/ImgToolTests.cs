@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Metrics;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
@@ -93,12 +94,28 @@ public sealed class ImgToolTests(KumbuAppFactory app)
         var sidecar = new FakePdfSidecar { Down = true };
         var (host, user, key, _) = await SetUpAsync(app, sidecar);
         await using var _ = host;
+        var before = Scrape.Value(await Scrape.TextAsync(app), ErrorsOf("unavailable"));
 
         var result = await ShAsync(host, key, $"img /{user.Vault}/Samples/shot.png");
 
         Assert.True(result.IsError);
         Assert.Contains("unavailable", Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text);
+        Assert.True(Scrape.Value(await Scrape.TextAsync(app), ErrorsOf("unavailable")) >= before + 1);
     }
+
+    [Fact]
+    public async Task Img_in_a_pipeline_is_refused_as_invalid()
+    {
+        var before = Scrape.Value(await Scrape.TextAsync(app), ErrorsOf("invalid"));
+        await using var client = await app.ConnectAsync();
+
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = "img /Ideas/x.png | head" }, cancellationToken: Ct);
+
+        Assert.True(result.IsError);
+        Assert.True(Scrape.Value(await Scrape.TextAsync(app), ErrorsOf("invalid")) >= before + 1);
+    }
+
+    private static string ErrorsOf(string kind) => $"kumbu_mcp_tool_errors_total{{tool=\"sh\",kind=\"{kind}\"}}";
 
     [Fact]
     public async Task A_note_is_refused_and_help_img_is_there()

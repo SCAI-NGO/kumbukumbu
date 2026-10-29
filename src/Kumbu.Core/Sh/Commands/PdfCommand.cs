@@ -148,13 +148,13 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         {
             // Rendering needs no analysis: a PDF that couldn't be analysed may still show its pages.
             if (crop is not null || show == Show.All) return await WithoutAnalysisAsync(call, $"not analysed ({e.Message})", ct);
-            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : ShellResult.Error($"pdf: {e.Message}");
+            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : Failed(e);
         }
 
         if (analysis is null)
         {
             if (crop is not null || show == Show.All) return await WithoutAnalysisAsync(call, "not analysed yet", ct);
-            if (show == Show.Images) return ShellResult.Error("pdf: --images chooses pages by their type, which isn't known yet; use --images=all for a range");
+            if (show == Show.Images) return ShellResult.Error("pdf: --images chooses pages by their type, which isn't known yet; use --images=all for a range") with { Kind = ShellErrorKind.Unavailable };
             return NotAnalysedYet(path);
         }
 
@@ -186,10 +186,12 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     /// <summary>A PDF without an analysis: still pending, or, with <paramref name="because"/>, one that can't be run now.</summary>
     private static ShellResult NotAnalysedYet(VaultPath path, string? because = null)
     {
-        if (because is not null) return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet because {because}.");
+        if (because is not null) return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet because {because}.") with { Kind = ShellErrorKind.Unavailable };
         var quoted = SectionLookup.Quote(path);
-        return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet: its text and page types aren't known. Try again in a while; pdf {quoted} 1 --images=all shows a page as an image.");
+        return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet: its text and page types aren't known. Try again in a while; pdf {quoted} 1 --images=all shows a page as an image.") with { Kind = ShellErrorKind.Unavailable };
     }
+
+    private static ShellResult Failed(PixelsUnavailableException e) => ShellResult.Error($"pdf: {e.Message}") with { Kind = e.Kind };
 
     /// <summary>The PDF at <paramref name="pathText"/>, or the error for a path that isn't one, in the words of <c>cat</c>.</summary>
     private async Task<((VaultPath Path, AttachmentState State)? Opened, ShellResult? Error)> OpenAsync(string pathText, CancellationToken ct)
@@ -223,7 +225,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         }
         catch (PixelsUnavailableException e)
         {
-            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : ShellResult.Error($"pdf: {e.Message}");
+            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : Failed(e);
         }
 
         if (analysis is null) return NotAnalysedYet(path);
@@ -363,7 +365,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         if (textLast >= first && (texts is null || texts.Count < textLast - first + 1))
         {
             // Headers without their text would read as empty pages.
-            return ShellResult.Error($"pdf: the text of {call.Path.Value} can't be read right now; pdf {SectionLookup.Quote(call.Path)} {first} --images=all shows a page as an image.");
+            return ShellResult.Error($"pdf: the text of {call.Path.Value} can't be read right now; pdf {SectionLookup.Quote(call.Path)} {first} --images=all shows a page as an image.") with { Kind = ShellErrorKind.Unavailable };
         }
 
         var output = new Output();
@@ -472,7 +474,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         }
         catch (PixelsUnavailableException e)
         {
-            return ShellResult.Error($"pdf: {e.Message}");
+            return Failed(e);
         }
 
         CountPicture(call, page);
@@ -505,7 +507,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             }
             catch (PixelsUnavailableException e)
             {
-                if (output.Images == 0) return ShellResult.Error($"pdf: {e.Message}");
+                if (output.Images == 0) return Failed(e);
                 output.Add($"--- Page {n} of ?: {status} ({e.Message}) ---");
                 return output.Result();
             }

@@ -82,7 +82,7 @@ public sealed class Shell
 
         if (stages.Count > 1 && stages.Select(s => s[0]).FirstOrDefault(n => _commands.TryGetValue(n, out var c) && c.ProducesImages) is { } shower)
         {
-            return OutputLimit.Apply(ShellResult.Error($"sh: {shower} shows images and can't be part of a pipeline; run it on its own"));
+            return OutputLimit.Apply(ShellResult.Error($"sh: {shower} shows images and can't be part of a pipeline; run it on its own") with { Kind = ShellErrorKind.Invalid });
         }
 
         string? input = null;

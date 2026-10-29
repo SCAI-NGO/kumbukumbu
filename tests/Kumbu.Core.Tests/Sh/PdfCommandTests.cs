@@ -420,7 +420,7 @@ public class PdfCommandTests
 
         var result = await Run("pdf /Papers/a.pdf 3-5");
 
-        Assert.Equal(ShellResult.Error("pdf: the text of /Papers/a.pdf can't be read right now; pdf /Papers/a.pdf 3 --images=all shows a page as an image."), result);
+        Assert.Equal(ShellResult.Error("pdf: the text of /Papers/a.pdf can't be read right now; pdf /Papers/a.pdf 3 --images=all shows a page as an image.") with { Kind = ShellErrorKind.Unavailable }, result);
         Assert.Empty(_pixels.PageRequests);
     }
 
@@ -456,9 +456,9 @@ public class PdfCommandTests
         var images = await Run("pdf /Papers/a.pdf 2-3 --images");
 
         const string NotYet = "pdf: /Papers/a.pdf hasn't been analysed yet: its text and page types aren't known. Try again in a while; pdf /Papers/a.pdf 1 --images=all shows a page as an image.";
-        Assert.Equal(ShellResult.Error(NotYet), text);
-        Assert.Equal(ShellResult.Error(NotYet), info);
-        Assert.Equal(ShellResult.Error("pdf: --images chooses pages by their type, which isn't known yet; use --images=all for a range"), images);
+        Assert.Equal(ShellResult.Error(NotYet) with { Kind = ShellErrorKind.Unavailable }, text);
+        Assert.Equal(ShellResult.Error(NotYet) with { Kind = ShellErrorKind.Unavailable }, info);
+        Assert.Equal(ShellResult.Error("pdf: --images chooses pages by their type, which isn't known yet; use --images=all for a range") with { Kind = ShellErrorKind.Unavailable }, images);
         Assert.Equal([true, true, true], _pixels.AnalysisRequests);
         Assert.Empty(_pixels.PageRequests);
     }
@@ -470,9 +470,9 @@ public class PdfCommandTests
         _pixels.AnalysisFails = new PixelsUnavailableException("PDF analysis is unavailable right now; try again later", PixelsProblem.AnalysisUnavailable);
 
         const string Why = "pdf: /Papers/My a.pdf hasn't been analysed yet because PDF analysis is unavailable right now; try again later.";
-        Assert.Equal(ShellResult.Error(Why), await Run("pdf \"/Papers/My a.pdf\" 2-3"));
-        Assert.Equal(ShellResult.Error(Why), await Run("pdf info \"/Papers/My a.pdf\""));
-        Assert.Equal(ShellResult.Error(Why), await Run("pdf \"/Papers/My a.pdf\" 2 --images"));
+        Assert.Equal(ShellResult.Error(Why) with { Kind = ShellErrorKind.Unavailable }, await Run("pdf \"/Papers/My a.pdf\" 2-3"));
+        Assert.Equal(ShellResult.Error(Why) with { Kind = ShellErrorKind.Unavailable }, await Run("pdf info \"/Papers/My a.pdf\""));
+        Assert.Equal(ShellResult.Error(Why) with { Kind = ShellErrorKind.Unavailable }, await Run("pdf \"/Papers/My a.pdf\" 2 --images"));
         var all = await Run("pdf \"/Papers/My a.pdf\" 2 --images=all");
         Assert.Equal($"--- Page 2 of ?: not analysed (PDF analysis is unavailable right now; try again later) ---\n/Papers/My a.pdf (version {version}), page 2: page 595×842 pt; medium: 1109×1568 px PNG, 1 KB\n{Dropped}", Texts(all)[0]);
     }

@@ -89,7 +89,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
                 PixelsProblem.BadCrop => ImgRefusal.BadCrop,
                 _ => ImgRefusal.Unavailable,
             }));
-            return ShellResult.Error($"img: {e.Message}");
+            return ShellResult.Error($"img: {e.Message}") with { Kind = e.Kind };
         }
 
         pixels.Count(new ImgCalled(step, crop is not null));

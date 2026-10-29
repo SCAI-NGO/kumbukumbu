@@ -115,5 +115,10 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         "no_such_page" => $"{path} has no page {page}",
         "bad_crop" => $"the crop {crop} lies outside {(page is null ? "the image" : $"page {page}")}",
         _ => $"{path} couldn't be rendered",
-    }, e.Code == "bad_crop" ? PixelsProblem.BadCrop : PixelsProblem.Unavailable);
+    }, e.Code switch
+    {
+        SidecarException.Unavailable or SidecarException.Busy => PixelsProblem.Unavailable,
+        "bad_crop" => PixelsProblem.BadCrop,
+        _ => PixelsProblem.Failed,
+    });
 }
