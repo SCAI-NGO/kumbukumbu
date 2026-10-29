@@ -259,6 +259,25 @@ public sealed class SidecarPeersTests(KumbuAppFactory app)
         Assert.True(peers.IsSidecar(old));
     }
 
+    // The server's client of the sidecar, as Program.cs wires it, connects through SidecarPeers and never through a
+    // proxy, whose endpoint the callback would add instead of the sidecar's.
+    [Fact]
+    public void The_sidecar_client_connects_through_sidecar_peers_without_a_proxy()
+    {
+        var factory = app.Services.GetRequiredService<IHttpMessageHandlerFactory>();
+        HttpMessageHandler handler = factory.CreateHandler(nameof(IPdfSidecar));
+        while (handler is DelegatingHandler delegating)
+        {
+            handler = delegating.InnerHandler!;
+        }
+
+        var sockets = Assert.IsType<SocketsHttpHandler>(handler);
+        Assert.False(sockets.UseProxy);
+        var callback = sockets.ConnectCallback!;
+        Assert.Same(app.Services.GetRequiredService<SidecarPeers>(), callback.Target);
+        Assert.Equal(nameof(SidecarPeers.ConnectAsync), callback.Method.Name);
+    }
+
     [Fact]
     public void Added_addresses_are_normalised_and_loopback_is_left_out()
     {
