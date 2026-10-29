@@ -207,7 +207,7 @@ public static class KumbuMetrics
         "kumbu_pdf_pages_per_document", "Pages analysed per PDF (once per stored analysis).", Hist([1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]));
 
     private static readonly Histogram PdfAnalysisDuration = Prometheus.Metrics.CreateHistogram(
-        "kumbu_pdf_analysis_duration_seconds", "How long the sidecar took to analyse a PDF that was then stored.", Hist([0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]));
+        "kumbu_pdf_analysis_duration_seconds", "How long the sidecar took to analyse a PDF that was then stored.", Hist([0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1200]));
 
     private static readonly Counter PdfAnalysisFailures = Prometheus.Metrics.CreateCounter(
         "kumbu_pdf_analysis_failures_total", "PDF analyses that failed, by reason; a try that is repeated later counts each time.", new CounterConfiguration { LabelNames = ["reason"] });

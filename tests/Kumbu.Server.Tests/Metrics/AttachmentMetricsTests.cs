@@ -44,6 +44,17 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_analysis_duration_has_buckets_up_to_the_twenty_minutes_an_analysis_may_take()
+    {
+        var scrape = await Scrape.TextAsync(app);
+
+        foreach (var le in new[] { "30", "60", "120", "300", "600", "1200" })
+        {
+            Assert.Contains($"kumbu_pdf_analysis_duration_seconds_bucket{{le=\"{le}\"}}", scrape);
+        }
+    }
+
+    [Fact]
     public async Task An_analysis_leaves_its_pages_and_duration()
     {
         string[] series =
