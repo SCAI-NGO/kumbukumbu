@@ -66,8 +66,20 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    private static readonly HashSet<string> Codes =
-        ["bad_request", "not_pdf", "not_image", "too_large", "no_such_page", "bad_crop", SidecarException.Encrypted, SidecarException.Busy, SidecarException.Timeout, SidecarException.Failed];
+    /// <summary>The sidecar's codes with the status each comes with (plan: Decisions, sidecar API).</summary>
+    private static readonly Dictionary<string, HttpStatusCode> Codes = new()
+    {
+        ["bad_request"] = HttpStatusCode.BadRequest,
+        ["not_pdf"] = HttpStatusCode.BadRequest,
+        ["not_image"] = HttpStatusCode.BadRequest,
+        ["too_large"] = HttpStatusCode.RequestEntityTooLarge,
+        ["no_such_page"] = HttpStatusCode.UnprocessableEntity,
+        ["bad_crop"] = HttpStatusCode.UnprocessableEntity,
+        [SidecarException.Encrypted] = HttpStatusCode.UnprocessableEntity,
+        [SidecarException.Busy] = HttpStatusCode.ServiceUnavailable,
+        [SidecarException.Timeout] = HttpStatusCode.GatewayTimeout,
+        [SidecarException.Failed] = HttpStatusCode.InternalServerError,
+    };
 
     private PdfOptions Pdf => options.Value.Pdf;
 
@@ -155,8 +167,11 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         }
 
         if (response.StatusCode == HttpStatusCode.GatewayTimeout) return new SidecarException(SidecarException.Timeout, message ?? "The PDF sidecar did not answer in time");
-        if (code is not null && Codes.Contains(code)) return new SidecarException(code, message!);
-        return new SidecarException(SidecarException.Unavailable, UnavailableMessage);
+        if (code is null) return new SidecarException(SidecarException.Unavailable, UnavailableMessage);
+        // The sidecar's JSON with a code it doesn't give with this status: not an answer to trust as that code.
+        return Codes.TryGetValue(code, out var status) && status == response.StatusCode
+            ? new SidecarException(code, message!)
+            : new SidecarException(SidecarException.Failed, "The PDF sidecar's answer doesn't add up");
     }
 
     /// <summary>The body, or null if it is longer than <paramref name="max"/>; reading stops there.</summary>

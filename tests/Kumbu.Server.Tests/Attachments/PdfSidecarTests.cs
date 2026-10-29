@@ -205,6 +205,10 @@ public sealed class PdfSidecarTests
     [InlineData(500, """{"error":"The sidecar could not process the request.","code":"failed"}""", "failed")]
     [InlineData(502, "<html>bad gateway</html>", "unavailable")]
     [InlineData(500, "not json", "unavailable")]
+    [InlineData(500, """{"error":"The sidecar is busy.","code":"busy"}""", "failed")]
+    [InlineData(400, """{"error":"The PDF is password-protected.","code":"encrypted"}""", "failed")]
+    [InlineData(503, """{"error":"The body is not a PDF.","code":"not_pdf"}""", "failed")]
+    [InlineData(422, """{"error":"Something new.","code":"novel"}""", "failed")]
     public async Task Error_answers_map_to_codes(int status, string body, string code)
     {
         var stub = new Stub((_, _) => Json((HttpStatusCode)status, body));
