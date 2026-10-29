@@ -28,7 +28,7 @@ public sealed partial class KumbuOptionsValidator(IHostEnvironment? environment 
         "Kumbu:Metrics:Url must be an http URL with a host and a port and no path, e.g. http://127.0.0.1:9464";
 
     public const string PdfUrlMessage =
-        "Kumbu:Pdf:Url must be empty or an absolute http URL without credentials, e.g. http://pdf:8090";
+        "Kumbu:Pdf:Url must be empty or an absolute http or https URL without credentials, e.g. http://pdf:8090";
 
     public ValidateOptionsResult Validate(string? name, KumbuOptions options)
     {

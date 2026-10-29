@@ -212,7 +212,7 @@ public sealed class KumbuOptionsValidatorTests
     [InlineData("")]
     [InlineData("http://pdf:8090")]
     [InlineData("https://pdf.internal:8443/")]
-    public void Accepts_no_pdf_url_or_an_absolute_http_one(string url)
+    public void Accepts_no_pdf_url_or_an_absolute_http_or_https_one(string url)
     {
         var options = Options(KumbuAppFactory.Token, ValidMongo);
         options.Pdf.Url = url;
@@ -225,13 +225,18 @@ public sealed class KumbuOptionsValidatorTests
     [InlineData("ftp://pdf:21")]
     [InlineData("/pdf")]
     [InlineData("http://user:secret@pdf:8090")]
-    public void Rejects_a_pdf_url_that_isnt_an_absolute_http_url(string url)
+    public void Rejects_a_pdf_url_that_isnt_an_absolute_http_or_https_url(string url)
     {
         var options = Options(KumbuAppFactory.Token, ValidMongo);
         options.Pdf.Url = url;
 
         Assert.Equal([KumbuOptionsValidator.PdfUrlMessage], Validate(options).Failures);
     }
+
+    // Both are accepted, so the message must say so.
+    [Fact]
+    public void The_pdf_url_message_names_http_and_https() =>
+        Assert.Contains("absolute http or https URL", KumbuOptionsValidator.PdfUrlMessage);
 
     [Fact]
     public void Pdf_options_default_to_no_sidecar_and_its_limits()
