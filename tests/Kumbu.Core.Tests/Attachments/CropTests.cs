@@ -31,6 +31,18 @@ public class CropTests
     }
 
     [Theory]
+    [InlineData("-0,-0.0,10,10", "0,0,10,10")]
+    [InlineData("0.0000001,1e2,10.123456,1E-1", "0,100,10.1235,0.1")]
+    [InlineData("1000000,0,1,1", "1000000,0,1,1")]
+    public void Numbers_are_kept_to_four_places_as_plain_decimals(string text, string shown)
+    {
+        // The sidecar takes digits with an optional decimal point only: no sign, no exponent.
+        Assert.True(Crop.TryParse(text, out var crop, out _));
+        Assert.Equal(shown, crop.ToString());
+        Assert.Matches(@"^\d+(\.\d+)?(,\d+(\.\d+)?){3}$", crop.ToString());
+    }
+
+    [Theory]
     [InlineData("1,2,3")]
     [InlineData("1,2,3,4,5")]
     [InlineData("a,b,c,d")]
@@ -43,6 +55,10 @@ public class CropTests
     [InlineData("NaN,0,10,10")]
     [InlineData("0,0,Infinity,10")]
     [InlineData("0,0,10,NaN")]
+    [InlineData("0,0,0.00001,10")]
+    [InlineData("0,0,10,1e-7")]
+    [InlineData("1e20,0,10,10")]
+    [InlineData("0,0,1000000.1,10")]
     public void Anything_else_is_refused_with_the_expected_form(string text)
     {
         Assert.False(Crop.TryParse(text, out _, out var error));
