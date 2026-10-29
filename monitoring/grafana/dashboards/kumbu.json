@@ -772,7 +772,7 @@
     {
       "type": "timeseries",
       "id": 31,
-      "title": "PDF pages analysed per minute by type",
+      "title": "PDF pages analysed per hour by type",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -815,17 +815,17 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "sum by (type) (rate(kumbu_pdf_pages_analysed_total[5m])) * 60",
+          "expr": "sum by (type) (increase(kumbu_pdf_pages_analysed_total[1h]))",
           "legendFormat": "{{type}}",
           "range": true
         }
       ],
-      "description": "Pages analysed as text, mixed or image, per minute. Counted when an analysis is stored, so a PDF analysed again after an upgrade counts again."
+      "description": "Pages analysed as text, mixed or image, in the hour before each point. Counted when an analysis is stored, so a PDF analysed again after an upgrade counts again."
     },
     {
       "type": "timeseries",
       "id": 32,
-      "title": "PDF page coverage p50 and p90",
+      "title": "PDF page coverage p50 and p90, 24 h",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -868,7 +868,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(kumbu_pdf_page_text_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_text_coverage_ratio_bucket[24h])))",
           "legendFormat": "text p50",
           "range": true
         },
@@ -878,7 +878,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(kumbu_pdf_page_text_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_text_coverage_ratio_bucket[24h])))",
           "legendFormat": "text p90",
           "range": true
         },
@@ -888,7 +888,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(kumbu_pdf_page_image_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_image_coverage_ratio_bucket[24h])))",
           "legendFormat": "image p50",
           "range": true
         },
@@ -898,7 +898,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(kumbu_pdf_page_image_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_image_coverage_ratio_bucket[24h])))",
           "legendFormat": "image p90",
           "range": true
         },
@@ -908,7 +908,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(kumbu_pdf_page_vector_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_vector_coverage_ratio_bucket[24h])))",
           "legendFormat": "vector p50",
           "range": true
         },
@@ -918,17 +918,17 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(kumbu_pdf_page_vector_coverage_ratio_bucket[5m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_vector_coverage_ratio_bucket[24h])))",
           "legendFormat": "vector p90",
           "range": true
         }
       ],
-      "description": "Share of an analysed page covered by text, images and vector drawings; the median and the 90th percentile of the pages analysed in the last 5 minutes."
+      "description": "Share of an analysed page covered by text, images and vector drawings; the median and the 90th percentile of the pages analysed in the 24 hours before each point."
     },
     {
       "type": "timeseries",
       "id": 33,
-      "title": "Pages per PDF p50 and p90",
+      "title": "Pages per PDF p50 and p90, 24 h",
       "datasource": {
         "type": "prometheus",
         "uid": "kumbu-prometheus"
@@ -971,7 +971,7 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(kumbu_pdf_pages_per_document_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_pages_per_document_bucket[24h])))",
           "legendFormat": "p50",
           "range": true
         },
@@ -981,12 +981,12 @@
             "type": "prometheus",
             "uid": "kumbu-prometheus"
           },
-          "expr": "histogram_quantile(0.9, sum by (le) (rate(kumbu_pdf_pages_per_document_bucket[5m])))",
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_pages_per_document_bucket[24h])))",
           "legendFormat": "p90",
           "range": true
         }
       ],
-      "description": "Pages analysed per PDF, median and 90th percentile of the PDFs analysed in the last 5 minutes."
+      "description": "Pages analysed per PDF, median and 90th percentile of the PDFs analysed in the 24 hours before each point."
     },
     {
       "type": "timeseries",
@@ -1453,6 +1453,185 @@
       "description": "img calls refused, by reason, in the hour before each point."
     },
     {
+      "type": "timeseries",
+      "id": 42,
+      "title": "PDF analysis duration p50 and p95, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_analysis_duration_seconds_bucket[24h])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(kumbu_pdf_analysis_duration_seconds_bucket[24h])))",
+          "legendFormat": "p95",
+          "range": true
+        }
+      ],
+      "description": "How long the sidecar took to analyse a PDF that was then stored: median and 95th percentile of the analyses in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 43,
+      "title": "Characters per page p50 and p90, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_chars_bucket[24h])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_chars_bucket[24h])))",
+          "legendFormat": "p90",
+          "range": true
+        }
+      ],
+      "description": "Characters of text per analysed page: median and 90th percentile of the pages analysed in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 44,
+      "title": "Delivered image long edge p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, kind) (rate(kumbu_image_delivered_long_edge_pixels_bucket[5m])))",
+          "legendFormat": "p50 {{kind}}",
+          "range": true
+        }
+      ],
+      "description": "Long edge in pixels of each rendered image handed to the shell, by kind (page or image): the median of the last 5 minutes."
+    },
+    {
       "type": "row",
       "id": 17,
       "title": "Vaults",
@@ -1462,7 +1641,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 76
+        "y": 84
       }
     },
     {
@@ -1477,7 +1656,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 77
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -1529,7 +1708,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 77
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -1592,7 +1771,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 77
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -1643,7 +1822,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 85
+        "y": 93
       }
     },
     {
@@ -1658,7 +1837,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 86
+        "y": 94
       },
       "fieldConfig": {
         "defaults": {
@@ -1711,7 +1890,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 86
+        "y": 94
       },
       "fieldConfig": {
         "defaults": {
@@ -1762,7 +1941,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 94
+        "y": 102
       }
     },
     {
@@ -1777,7 +1956,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 95
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1830,7 +2009,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 95
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1882,7 +2061,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 95
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1934,7 +2113,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
@@ -1996,7 +2175,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
