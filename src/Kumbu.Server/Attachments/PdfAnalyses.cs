@@ -170,6 +170,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         if (header.Failure is not null || header.AnalysedPages == 0) return [];
 
         var pages = Enumerable.Range(0, header.AnalysedPages).Select(_ => new StringBuilder()).ToArray();
+        var cut = new bool[pages.Length];
         var wanted = header.Parts.Select(p => p.Part).ToList();
         var read = 0;
         using var cursor = await catalog.PdfParts.Find(session, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted), new FindOptions { BatchSize = 1 })
@@ -193,8 +194,17 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
 
                 foreach (var s in text.Segments.Where(s => s.Page >= 1 && s.Page <= pages.Length))
                 {
+                    if (cut[s.Page - 1]) continue;
                     var page = pages[s.Page - 1];
-                    if (page.Length < maxChars) page.Append(s.Text.AsSpan(0, Math.Min(s.Text.Length, maxChars - page.Length)));
+                    var length = Math.Min(s.Text.Length, maxChars - page.Length);
+                    if (length < s.Text.Length)
+                    {
+                        // Cut, and not between the halves of a surrogate pair; what follows on the page isn't taken.
+                        if (length > 0 && char.IsHighSurrogate(s.Text[length - 1])) length--;
+                        cut[s.Page - 1] = true;
+                    }
+
+                    page.Append(s.Text.AsSpan(0, length));
                 }
             }
         }

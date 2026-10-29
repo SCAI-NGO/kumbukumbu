@@ -78,9 +78,11 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
             return ShellResult.Error($"semsearch: missing query; {query} is the path (semsearch <query> {query})");
         }
 
+        // A PDF carries no tags, so a search by tag leaves them out.
+        var pages = pixels is not null && !options.Has("tag");
         IReadOnlyList<Note> found;
         if (!scope.IsRoot && await notes.ReadAsync(scope, ct) is { } single) found = [new Note(scope, single)];
-        else if (pixels is not null && AttachmentFormat.ForPath(scope)?.Kind == AttachmentKind.Pdf && await StoreAttachments.GetAsync(notes, scope, ct) is { } pdf
+        else if (pages && AttachmentFormat.IsPdf(scope) && await StoreAttachments.GetAsync(notes, scope, ct) is { } pdf
             && AttachmentText.IsPdf(pdf.Current))
         {
             if (options.Has("words")) return ShellResult.Error($"semsearch: {scope.Value} is a PDF; semsearch --words searches notes only, by meaning it finds its pages");
@@ -90,7 +92,11 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         {
             found = await notes.ReadNotesUnderAsync(scope, ct);
             var isVault = scope.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(scope.Segments[0]);
-            if (found.Count == 0 && !scope.IsRoot && !isVault) return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
+            // A folder of PDFs only has pages to find.
+            if (found.Count == 0 && !scope.IsRoot && !isVault && !(pages && (await StoreAttachments.UnderAsync(notes, scope, ct)).Any(a => AttachmentFormat.IsPdf(a.Current))))
+            {
+                return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
+            }
         }
 
         if (options.Values("tag") is { Count: > 0 } tags)
@@ -101,8 +107,6 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         }
 
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
-        // A PDF carries no tags, so a search by tag leaves them out.
-        var pages = pixels is not null && !options.Has("tag");
         var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages) switch
         {
             { MeaningUnavailable: true } r => (null, r.Semantic, false),

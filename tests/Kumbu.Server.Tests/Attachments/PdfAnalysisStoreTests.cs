@@ -302,4 +302,16 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         Assert.All(stored!.Pages, p => Assert.Equal(PdfAnalyses.MaxRegions, p.Regions.Count));
         Assert.Equal(Json(stored), Json(await w.Analyses.HeaderAsync(w.Vault, w.BlobId, Ct)));
     }
+
+    [Fact]
+    public async Task The_text_for_search_is_cut_per_page_and_never_inside_a_surrogate_pair()
+    {
+        var w = await WorldAsync();
+        var long1 = new string('a', 1999) + "😀" + new string('b', 300_000);
+        Assert.NotNull(await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(3, n => n switch { 1 => long1, 2 => "short page", _ => "" }), Ct));
+
+        var texts = await w.Analyses.SearchTextAsync(w.Vault, w.BlobId, 2000, Ct);
+
+        Assert.Equal([new string('a', 1999), "short page", ""], texts);
+    }
 }

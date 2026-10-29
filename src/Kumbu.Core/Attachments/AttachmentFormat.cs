@@ -32,6 +32,12 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
 
     public static AttachmentFormat? ForPath(VaultPath path) => path.IsRoot ? null : ForName(path.Name);
 
+    /// <summary>Whether a stored attachment is a PDF.</summary>
+    public static bool IsPdf(AttachmentState state) => state.MediaType == "application/pdf";
+
+    /// <summary>Whether a path is one a PDF is kept at: an attachment's extension names its format.</summary>
+    public static bool IsPdf(VaultPath path) => ForPath(path)?.Kind == AttachmentKind.Pdf;
+
     /// <summary>The format a file name's extension names (case-insensitive); null for any other name.</summary>
     public static AttachmentFormat? ForName(string name)
     {

@@ -19,7 +19,7 @@ internal static class AttachmentText
 
     public static string? Dimensions(AttachmentState state) => state is { Width: { } w, Height: { } h } ? $"{w}×{h}" : null;
 
-    internal static bool IsPdf(AttachmentState state) => state.MediaType == "application/pdf";
+    internal static bool IsPdf(AttachmentState state) => AttachmentFormat.IsPdf(state);
 
     internal static string FormatName(AttachmentState state) => state.MediaType switch
     {

@@ -65,7 +65,8 @@ public sealed class SearchIndex : BackgroundService
     /// <summary>Every note whose current version has no embeddings of the vault's model, and every embedding whose
     /// note is gone. Embeddings of another model count as missing: after a switch (of the internal model, or of the
     /// vault's provider), the vault is embedded again. PDFs likewise; one without an analysis yet is looked at and
-    /// left (its analysis queues it when it is stored).</summary>
+    /// left (its analysis queues it when it is stored), which costs a read of its analysis header at every unlock,
+    /// also while no sidecar is configured.</summary>
     public void CatchUp(UnlockedVault vault)
     {
         if (_providers.Get(vault.EmbeddingProvider) is not { } provider)
@@ -80,8 +81,9 @@ public sealed class SearchIndex : BackgroundService
         var otherModel = embeddings.Where(e => e.Value.Model != model && (notes.ContainsKey(e.Key) || pdfs.ContainsKey(e.Key))).ToList();
         if (otherModel.Count > 0)
         {
-            _log.LogInformation("Vault {VaultId}: {Count} {Notes} to embed with {New} (were {Old})",
-                vault.Id, otherModel.Count, otherModel.Count == 1 ? "note" : "notes", model,
+            var pdfCount = otherModel.Count(e => pdfs.ContainsKey(e.Key));
+            _log.LogInformation("Vault {VaultId}: {Count} {Notes} and {PdfCount} {Pdfs} to embed with {New} (were {Old})",
+                vault.Id, otherModel.Count - pdfCount, otherModel.Count - pdfCount == 1 ? "note" : "notes", pdfCount, pdfCount == 1 ? "PDF" : "PDFs", model,
                 string.Join(", ", otherModel.Select(e => e.Value.Model).Distinct().Order(StringComparer.Ordinal)));
         }
 
@@ -92,9 +94,7 @@ public sealed class SearchIndex : BackgroundService
 
     /// <summary>The paths whose current state is a PDF, if PDFs are indexed.</summary>
     private IEnumerable<(VaultPath Path, AttachmentState State)> Pdfs(UnlockedVault vault) =>
-        _analyses is null ? [] : vault.Attachments.Where(a => IsPdf(a.Value.Attachment.Current)).Select(a => (a.Key, a.Value.Attachment.Current));
-
-    private static bool IsPdf(AttachmentState state) => state.MediaType == "application/pdf";
+        _analyses is null ? [] : vault.Attachments.Where(a => AttachmentFormat.IsPdf(a.Value.Attachment.Current)).Select(a => (a.Key, a.Value.Attachment.Current));
 
     /// <summary>A stored analysis queues every path of the vault whose PDF has that blob.</summary>
     private void OnAnalysed(UnlockedVault vault, byte[] blobId)
@@ -161,7 +161,7 @@ public sealed class SearchIndex : BackgroundService
             if (!MayIndex(vault, path)) return;
             var filter = Builders<SealedDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<SealedDocument>.Filter.Eq(d => d.PathId, vault.PathId(path));
             var isNote = vault.Notes.TryGetValue(path, out var entry);
-            var pdf = !isNote && _analyses is not null && vault.Attachments.TryGetValue(path, out var file) && IsPdf(file.Attachment.Current) ? file.Attachment.Current : null;
+            var pdf = !isNote && _analyses is not null && vault.Attachments.TryGetValue(path, out var file) && AttachmentFormat.IsPdf(file.Attachment.Current) ? file.Attachment.Current : null;
             if (!isNote && pdf is null)
             {
                 await RemoveAsync(vault, path, filter, ct);

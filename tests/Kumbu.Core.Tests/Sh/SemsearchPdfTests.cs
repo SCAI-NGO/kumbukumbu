@@ -144,4 +144,19 @@ public class SemsearchPdfTests
         Assert.DoesNotContain("semsearch skips", (await sh.RunAsync("help attachments", Ct)).Output);
         Assert.DoesNotContain("semsearch skips", Manual.ToolDescription);
     }
+
+    [Fact]
+    public async Task A_folder_with_only_pdfs_is_searched_for_their_pages()
+    {
+        var sh = await ShellAsync(new FakeIndex(new SemanticHit(P("/V/Papers/b.pdf"), 2, 0.7)));
+        var time = new FakeTimeProvider(new DateTime(2026, 10, 29, 11, 0, 0, DateTimeKind.Utc));
+        await new AttachmentWriter(_store, _store, time, new FixedCaller(Writers.Dev)).WriteAsync("/V/Papers/b.pdf", "%PDF-1.7"u8.ToArray(), null, null, Ct);
+
+        var result = await sh.RunAsync("semsearch zebras /V/Papers", Ct);
+        var empty = await sh.RunAsync("semsearch zebras /V/Nothing", Ct);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.StartsWith("1. /V/Papers/b.pdf p2  score 0.70\n", result.Output);
+        Assert.True(empty.IsError);
+    }
 }

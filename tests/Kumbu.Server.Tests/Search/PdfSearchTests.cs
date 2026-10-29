@@ -135,6 +135,8 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
         var (kept, scan) = (P($"/{user.Vault}/kept.pdf"), P($"/{user.Vault}/scan.pdf"));
         await EventuallyAsync(() => Task.FromResult(Current(host, vault).Embeddings.ContainsKey(scan)), "the scan is indexed");
 
+        var embedded = Embedded("tapirs graze at dusk");
+
         // Another server on the same database: the vault is loaded and caught up afresh.
         await using var again = Host(app, sidecar);
         var reopened = await VaultAsync(again, user);
@@ -143,6 +145,54 @@ public sealed class PdfSearchTests(KumbuAppFactory app)
         Assert.Empty(Current(host, vault).Embeddings[scan].Chunks);
         Assert.Equal([1, 2, 3, 4], Current(again, reopened).Embeddings[kept].Chunks.Select(c => c.StartLine));
         Assert.Empty(Current(again, reopened).Embeddings[scan].Chunks);
+        Assert.Equal(embedded, Embedded("tapirs graze at dusk"));
         Assert.StartsWith($"1. {kept.Value} p2  score ", (await user.ShAsync($"semsearch -n 1 tapirs graze dusk /{user.Vault}", key)).Text);
+    }
+
+    /// <summary>How many texts with <paramref name="phrase"/> the app's embedder embedded as documents (not queries).</summary>
+    private int Embedded(string phrase)
+    {
+        lock (app.Embedder.Seen) return app.Embedder.Seen.Count(t => !t.Query && t.Text.Contains(phrase, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_rekeyed_vault_keeps_the_pages_of_its_pdfs_without_embedding_them_again()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, _) = await UploadAsync(host, "Papers/keys.pdf", "albatrosses glide for days");
+        var path = P($"/{user.Vault}/Papers/keys.pdf");
+        var embedded = Embedded("albatrosses glide for days");
+
+        using (var rekeyed = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{Uri.EscapeDataString(user.Vault)}/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        }
+
+        var after = await VaultAsync(host, user);
+        await host.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+        var key = await user.KeyAsync("after the re-keying", KeyRight.Read);
+
+        Assert.NotSame(vault, after);
+        var pages = Current(host, after).Embeddings[path];
+        Assert.Equal([1, 2, 3, 4], pages.Chunks.Select(c => c.StartLine));
+        Assert.Equal((await StateAsync(host, user, "Papers/keys.pdf")).Version, pages.Version);
+        Assert.Equal(embedded, Embedded("albatrosses glide for days"));
+        Assert.StartsWith($"1. {path.Value} p2  score ", (await user.ShAsync($"semsearch -n 1 albatrosses glide days /{user.Vault}", key)).Text);
+    }
+
+    [Fact]
+    public async Task A_moved_pdf_is_found_under_its_new_path_only()
+    {
+        await using var host = Host(app, Sidecar());
+        var (user, vault, key) = await UploadAsync(host, "inbox.pdf", "puffins dive for sand eels");
+        var (from, to) = (P($"/{user.Vault}/inbox.pdf"), P($"/{user.Vault}/Papers/puffins.pdf"));
+
+        var moved = await user.ShAsync($"mv {from.Value} {to.Value}", key);
+        await EventuallyAsync(() => Task.FromResult(Current(host, vault).Embeddings.ContainsKey(to) && !Current(host, vault).Embeddings.ContainsKey(from)), "the pages move along");
+        var (_, output) = await user.ShAsync($"semsearch puffins dive sand eels /{user.Vault}", key);
+
+        Assert.False(moved.IsError, moved.Text);
+        Assert.StartsWith($"1. {to.Value} p2  score ", output);
+        Assert.DoesNotContain(from.Value + " ", output);
     }
 }

@@ -73,7 +73,7 @@ public sealed class PdfAnalysisRunner : BackgroundService
     }
 
     private static List<byte[]> BlobIds(IEnumerable<AttachmentState> states) =>
-        [.. states.Where(s => s.MediaType == "application/pdf")
+        [.. states.Where(AttachmentFormat.IsPdf)
             .Select(s => EncryptedNoteStore.TryParseBlobId(s.BlobId, out var id) ? id : null).OfType<byte[]>()
             .DistinctBy(Convert.ToBase64String)];
 

@@ -175,7 +175,7 @@ public static class SectionSearch
         var best = new Dictionary<(VaultPath, int), double>();
         foreach (var hit in semantic.Hits)
         {
-            if (AttachmentFormat.ForPath(hit.Path)?.Kind != AttachmentKind.Pdf) continue;
+            if (!AttachmentFormat.IsPdf(hit.Path)) continue;
             best[(hit.Path, hit.StartLine)] = Math.Max(best.GetValueOrDefault((hit.Path, hit.StartLine), double.MinValue), hit.Score);
         }
 
