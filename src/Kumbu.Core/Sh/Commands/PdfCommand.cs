@@ -147,7 +147,8 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         catch (PixelsUnavailableException e)
         {
             // Rendering needs no analysis: a PDF that couldn't be analysed may still show its pages.
-            return crop is not null || show == Show.All ? await WithoutAnalysisAsync(call, $"not analysed ({e.Message})", ct) : ShellResult.Error($"pdf: {e.Message}");
+            if (crop is not null || show == Show.All) return await WithoutAnalysisAsync(call, $"not analysed ({e.Message})", ct);
+            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : ShellResult.Error($"pdf: {e.Message}");
         }
 
         if (analysis is null)
@@ -182,8 +183,10 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
 
     private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
 
-    private static ShellResult NotAnalysedYet(VaultPath path)
+    /// <summary>A PDF without an analysis: still pending, or, with <paramref name="because"/>, one that can't be run now.</summary>
+    private static ShellResult NotAnalysedYet(VaultPath path, string? because = null)
     {
+        if (because is not null) return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet because {because}.");
         var quoted = SectionLookup.Quote(path);
         return ShellResult.Error($"pdf: {path.Value} hasn't been analysed yet: its text and page types aren't known. Try again in a while; pdf {quoted} 1 --images=all shows a page as an image.");
     }
@@ -220,7 +223,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         }
         catch (PixelsUnavailableException e)
         {
-            return ShellResult.Error($"pdf: {e.Message}");
+            return e.Problem == PixelsProblem.AnalysisUnavailable ? NotAnalysedYet(path, e.Message) : ShellResult.Error($"pdf: {e.Message}");
         }
 
         if (analysis is null) return NotAnalysedYet(path);

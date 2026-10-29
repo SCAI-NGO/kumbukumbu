@@ -25,6 +25,8 @@ public sealed class PdfAnalysisRunner : BackgroundService
 
     public const string PasswordProtected = "this PDF is password-protected; Kumbu² can't read it";
 
+    public const string AnalysisUnavailable = "PDF analysis is unavailable right now; try again later";
+
     /// <summary>The code a try counts with when the sidecar answered but the analysis couldn't be stored.</summary>
     private const string NotStored = "not_stored";
 
@@ -83,7 +85,8 @@ public sealed class PdfAnalysisRunner : BackgroundService
     /// For <c>pdf</c> on a PDF whose analysis is missing or outdated: queues it and runs it, waiting at most
     /// <see cref="OnDemandWait"/> (a turn behind another analysis included). Null if it takes longer, when the job stays
     /// queued and the run goes on, or if it failed for now; <see cref="PixelsUnavailableException"/> if the PDF can't
-    /// be analysed (password-protected, say).
+    /// be analysed (password-protected, say), or, as <see cref="PixelsProblem.AnalysisUnavailable"/>, if the sidecar is
+    /// away or busy.
     /// </summary>
     public async Task<PdfAnalysis?> RunNowAsync(UnlockedVault vault, AttachmentState state, CancellationToken ct)
     {
@@ -97,6 +100,11 @@ public sealed class PdfAnalysisRunner : BackgroundService
         if (first != run) return null;
         var outcome = await run;
         if (outcome.Failure is { } failure) throw new PixelsUnavailableException(failure.Message);
+        if (outcome.Code is SidecarException.Unavailable or SidecarException.Busy)
+        {
+            throw new PixelsUnavailableException(AnalysisUnavailable, PixelsProblem.AnalysisUnavailable);
+        }
+
         return outcome.Analysis;
     }
 

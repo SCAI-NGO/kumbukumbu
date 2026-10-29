@@ -464,6 +464,20 @@ public class PdfCommandTests
     }
 
     [Fact]
+    public async Task Pending_with_analysis_unavailable_says_why_it_hasnt_been_analysed()
+    {
+        var version = await Upload("/Papers/My a.pdf", null);
+        _pixels.AnalysisFails = new PixelsUnavailableException("PDF analysis is unavailable right now; try again later", PixelsProblem.AnalysisUnavailable);
+
+        const string Why = "pdf: /Papers/My a.pdf hasn't been analysed yet because PDF analysis is unavailable right now; try again later.";
+        Assert.Equal(ShellResult.Error(Why), await Run("pdf \"/Papers/My a.pdf\" 2-3"));
+        Assert.Equal(ShellResult.Error(Why), await Run("pdf info \"/Papers/My a.pdf\""));
+        Assert.Equal(ShellResult.Error(Why), await Run("pdf \"/Papers/My a.pdf\" 2 --images"));
+        var all = await Run("pdf \"/Papers/My a.pdf\" 2 --images=all");
+        Assert.Equal($"--- Page 2 of ?: not analysed (PDF analysis is unavailable right now; try again later) ---\n/Papers/My a.pdf (version {version}), page 2: page 595×842 pt; medium: 1109×1568 px PNG, 1 KB\n{Dropped}", Texts(all)[0]);
+    }
+
+    [Fact]
     public async Task Pending_images_all_and_crop_render_anyway()
     {
         var version = await Upload("/Papers/a.pdf", null);

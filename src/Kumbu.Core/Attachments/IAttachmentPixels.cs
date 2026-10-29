@@ -6,8 +6,11 @@ namespace Kumbu.Core.Attachments;
 /// <summary>An image ready for the model, with the size it had before scaling (pixels for an image, points for a page).</summary>
 public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight);
 
-/// <summary>Why pixels couldn't be had, for the usage metrics: what <c>img</c> tells apart in its refusals.</summary>
-public enum PixelsProblem { Unavailable, TooLarge, BadCrop }
+/// <summary>
+/// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, and an analysis that couldn't
+/// run because the sidecar is away or busy, which <c>pdf</c> tells apart from one that is merely pending.
+/// </summary>
+public enum PixelsProblem { Unavailable, TooLarge, BadCrop, AnalysisUnavailable }
 
 /// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
 public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Unavailable) : Exception(message)

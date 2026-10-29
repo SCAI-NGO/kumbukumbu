@@ -158,13 +158,31 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         Assert.Null(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct));
         Assert.Null(await pixels.PageTextAsync(At(user, "paper.pdf"), state, 1, 3, Ct));
 
-        // Still down: no analysis, and the job waits.
-        Assert.Null(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, true, Ct));
+        // Still down: no analysis, and the job waits; pdf says why.
+        var down = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.AnalysisAsync(At(user, "paper.pdf"), state, true, Ct));
+        Assert.Equal(("PDF analysis is unavailable right now; try again later", PixelsProblem.AnalysisUnavailable), (down.Message, down.Problem));
         sidecar.Down = false;
         var analysis = await pixels.AnalysisAsync(At(user, "paper.pdf"), state, true, Ct);
 
         Assert.Equal(3, analysis!.PageCount);
         Assert.Equal(["Page 2 text"], await pixels.PageTextAsync(At(user, "paper.pdf"), state, 2, 2, Ct));
+    }
+
+    [Fact]
+    public async Task A_busy_sidecar_makes_analysis_unavailable_and_a_failing_try_leaves_it_pending()
+    {
+        var sidecar = new FakePdfSidecar { FailWith = SidecarException.Busy };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("a paper while the sidecar is busy"));
+        var state = await StateAsync(host, user, "paper.pdf");
+        var pixels = Pixels(host, user);
+
+        var busy = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.AnalysisAsync(At(user, "paper.pdf"), state, true, Ct));
+        sidecar.FailWith = SidecarException.Timeout;
+
+        Assert.Equal(PixelsProblem.AnalysisUnavailable, busy.Problem);
+        Assert.Null(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, true, Ct));
     }
 
     [Fact]
@@ -231,6 +249,8 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         await analyses.StoreAsync(vault, Convert.FromBase64String(state.BlobId), FakePdfSidecar.Canned(5), "pdfjs-dist@5.0.0+rules.1", Ct);
         var pixels = Pixels(host, user);
         Assert.Equal(5, (await pixels.AnalysisAsync(At(user, "old.pdf"), state, false, Ct))!.PageCount);
+        // With the sidecar away, the outdated one is better than none.
+        Assert.Equal(5, (await pixels.AnalysisAsync(At(user, "old.pdf"), state, true, Ct))!.PageCount);
         sidecar.Down = false;
 
         var again = await pixels.AnalysisAsync(At(user, "old.pdf"), state, true, Ct);

@@ -64,7 +64,14 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         if (stored is { Current: true }) return stored.Failure is { } failure ? throw new PixelsUnavailableException(failure.Message) : stored.Analysis;
         if (!runIfPending) return stored?.Analysis;
         // An outdated one is better than none while the new one isn't there.
-        return await runner.RunNowAsync(vault, state, ct) ?? stored?.Analysis;
+        try
+        {
+            return await runner.RunNowAsync(vault, state, ct) ?? stored?.Analysis;
+        }
+        catch (PixelsUnavailableException e) when (e.Problem == PixelsProblem.AnalysisUnavailable && stored?.Analysis is { } outdated)
+        {
+            return outdated;
+        }
     }
 
     public async Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct) =>
