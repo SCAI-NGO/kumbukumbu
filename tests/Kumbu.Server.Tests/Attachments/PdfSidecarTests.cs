@@ -93,6 +93,65 @@ public sealed class PdfSidecarTests
         Assert.Equal(SidecarException.Unavailable, e.Code);
     }
 
+    /// <summary>
+    /// A sidecar on loopback that reads a request's headers and its whole body, as the real one does before it starts
+    /// a job, then resets the connection without answering: what the server sees when the sidecar dies on a file.
+    /// </summary>
+    private static async Task<int> ResettingSidecarAsync(int requests, CancellationToken ct)
+    {
+        var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                for (var i = 0; i < requests; i++)
+                {
+                    using var socket = await listener.AcceptSocketAsync(ct);
+                    var seen = new List<byte>();
+                    var buffer = new byte[8192];
+                    int headerEnd = -1, length = 0;
+                    while (headerEnd < 0 || seen.Count < headerEnd + length)
+                    {
+                        var n = await socket.ReceiveAsync(buffer, ct);
+                        if (n == 0) break;
+                        seen.AddRange(buffer.AsSpan(0, n).ToArray());
+                        if (headerEnd < 0 && Encoding.ASCII.GetString([.. seen]).IndexOf("\r\n\r\n", StringComparison.Ordinal) is var at and >= 0)
+                        {
+                            headerEnd = at + 4;
+                            var headers = Encoding.ASCII.GetString([.. seen], 0, at);
+                            var line = headers.Split("\r\n").First(h => h.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
+                            length = int.Parse(line["Content-Length:".Length..].Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                        }
+                    }
+
+                    socket.LingerState = new System.Net.Sockets.LingerOption(true, 0);
+                    socket.Close();
+                }
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }, ct);
+        return port;
+    }
+
+    [Fact]
+    public async Task A_connection_that_breaks_after_the_file_was_sent_is_aborted_not_unavailable()
+    {
+        var port = await ResettingSidecarAsync(4, Ct);
+        var sidecar = Sidecar(new SocketsHttpHandler(), url: $"http://127.0.0.1:{port}");
+
+        var analysis = await Assert.ThrowsAsync<SidecarException>(() => sidecar.AnalyseAsync(Pdf, 2000, Ct));
+        var page = await Assert.ThrowsAsync<SidecarException>(() => sidecar.RenderPageAsync(Pdf, 1, Medium, null, Ct));
+
+        Assert.Equal(SidecarException.Aborted, analysis.Code);
+        Assert.False(analysis.Transient);
+        Assert.Equal(SidecarException.Aborted, page.Code);
+    }
+
     [Fact]
     public async Task An_analysis_posts_the_pdf_and_reads_pages_regions_and_text()
     {
@@ -221,8 +280,9 @@ public sealed class PdfSidecarTests
     [Fact]
     public async Task A_page_is_asked_for_with_its_step_and_crop_and_comes_back_as_a_picture()
     {
-        var png = FakePdfSidecar.SolidPng(1109, 1568);
-        var stub = new Stub((_, _) => Image(png, "image/png", 1109, 1568, ("X-Kumbu-Page-Width", "595.28"), ("X-Kumbu-Page-Height", "841.89")));
+        // The crop of 451 × 260 pt at medium: 1.2 MP bind before the long edge does.
+        var png = FakePdfSidecar.SolidPng(1442, 831);
+        var stub = new Stub((_, _) => Image(png, "image/png", 1442, 831, ("X-Kumbu-Page-Width", "595.28"), ("X-Kumbu-Page-Height", "841.89")));
 
         var picture = await Sidecar(stub).RenderPageAsync(Pdf, 4, Medium, new Crop(72, 300.5, 451, 260), Ct);
 
@@ -230,7 +290,7 @@ public sealed class PdfSidecarTests
         Assert.Equal("http://pdf.test:8090/render/page?page=4&longEdge=1568&pixels=1200000&bytes=409600&crop=72,300.5,451,260", request.RequestUri!.ToString());
         Assert.Equal(Pdf, body);
         Assert.Equal(png, picture.Data);
-        Assert.Equal(("image/png", 1109, 1568, 595.28, 841.89), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
+        Assert.Equal(("image/png", 1442, 831, 595.28, 841.89), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
     }
 
     [Fact]
@@ -252,6 +312,7 @@ public sealed class PdfSidecarTests
         { "a type that isn't an image", FakePdfSidecar.SolidPng(100, 100), "text/html", 100, 100 },
         { "a header that disagrees with the size given", FakePdfSidecar.SolidPng(100, 100), "image/png", 100, 101 },
         { "a long edge over the step's", FakePdfSidecar.SolidPng(1570, 10), "image/png", 1570, 10 },
+        { "more pixels than the step's budget", FakePdfSidecar.SolidPng(1200, 1200), "image/png", 1200, 1200 },
         { "bytes that aren't an image", "GIF89a......"u8.ToArray(), "image/png", 4, 4 },
     };
 

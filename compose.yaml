@@ -128,8 +128,12 @@ services:
       - no-new-privileges:true
     # The image's `node` user.
     user: "1000:1000"
-    # Two workers of at most 512 MB heap each, plus Skia's canvases outside it.
-    mem_limit: 1g
+    # Two workers of at most 384 MB of JavaScript heap each (768 MB), plus what lives outside it: pdf.js's decoded
+    # images (up to 50 MP, 200 MB at 4 bytes a pixel) and Skia's canvases (a large step is at most 3.7 MP, but a page
+    # or an image decoded for scaling can be larger), and the main thread's buffers (at most 18 bodies of 16 MiB).
+    # Past the limit the kernel kills the whole sidecar, which restarts; the server gives up on a PDF that keeps
+    # doing it after a few tries.
+    mem_limit: 1536m
     cpus: 1.5
     pids_limit: 128
 

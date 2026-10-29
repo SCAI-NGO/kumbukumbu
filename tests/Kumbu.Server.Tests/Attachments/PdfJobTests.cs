@@ -170,6 +170,26 @@ public sealed class PdfJobTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_pdf_the_sidecar_keeps_going_down_on_is_given_up_after_5_tries()
+    {
+        // An out-of-memory restarts the sidecar: the connection breaks after the file was sent, every round.
+        var sidecar = new FakePdfSidecar { FailWith = SidecarException.Aborted };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var runner = host.Services.GetRequiredService<PdfAnalysisRunner>();
+        await user.CreateFileAsync("heavy.pdf", Pdf("a paper that runs the sidecar out of memory"));
+        var vault = await VaultAsync(host, user);
+
+        for (var i = 0; i < 8 && await JobsAsync(vault.Id) > 0; i++) await runner.RoundAsync(Ct);
+
+        Assert.Equal(0, await JobsAsync(vault.Id));
+        Assert.Equal(PdfAnalysisRunner.MaxTries, sidecar.Analyses);
+        var state = await StateAsync(host, user, "heavy.pdf");
+        var stored = await host.Services.GetRequiredService<PdfAnalyses>().ReadAsync(vault, Convert.FromBase64String(state.BlobId), Ct);
+        Assert.Equal("this PDF couldn't be analysed: the analyser stopped on it every time (it may run out of memory)", stored!.Failure!.Message);
+    }
+
+    [Fact]
     public async Task A_failure_that_keeps_coming_back_is_given_up_after_5_tries()
     {
         var sidecar = new FakePdfSidecar { FailWith = SidecarException.Timeout };

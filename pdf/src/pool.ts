@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Runs each job in a fresh worker thread with a heap limit and a time limit, so one hostile file
-// can neither stall the others nor leave state behind for the next. A bounded queue holds the
-// rest; past it a job is refused at once.
+// can neither stall the others nor leave state behind for the next. Memory outside the heaps
+// (decoded images, canvases) is bounded only by the container's limit, which kills the whole
+// process, jobs under way included. A bounded queue holds the rest; past it a job is refused at once.
 
 import { Worker } from "node:worker_threads";
 import type { Crop, Target } from "./steps.js";
@@ -119,7 +120,7 @@ export class Pool {
   }
 
   private start(p: Pending) {
-    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 512 } });
+    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 384 } });
     this.running.add(worker);
     const started = Date.now();
     let settled = false;

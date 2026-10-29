@@ -30,11 +30,18 @@ public sealed record SidecarAnalysis(PdfAnalysis Analysis, IReadOnlyList<string>
 /// <summary>
 /// A request the sidecar refused or couldn't answer. <see cref="Code"/> is the sidecar's (<c>not_pdf</c>,
 /// <c>encrypted</c>, <c>no_such_page</c>, <c>bad_crop</c>, <c>busy</c>, <c>failed</c>, …), or <see cref="Unavailable"/>
-/// (no URL configured, no connection, a gateway's error) or <see cref="Timeout"/>.
+/// (no URL configured, no connection, a gateway's error), <see cref="Aborted"/> or <see cref="Timeout"/>.
 /// </summary>
 public sealed class SidecarException(string code, string message) : Exception(message)
 {
     public const string Unavailable = "unavailable";
+
+    /// <summary>
+    /// The connection broke after the whole file was sent: most likely the sidecar went down on this file (out of
+    /// memory, say, which restarts it). Not transient, so a file that keeps doing it is given up after a few tries.
+    /// </summary>
+    public const string Aborted = "aborted";
+
     public const string Timeout = "timeout";
     public const string Busy = "busy";
     public const string Encrypted = "encrypted";
@@ -118,11 +125,12 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         var baseUrl = Pdf.Url.EndsWith('/') ? Pdf.Url : Pdf.Url + "/";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(limit);
+        using var content = new SentContent(body) { Headers = { ContentType = new MediaTypeHeaderValue(mediaType) } };
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(new Uri(baseUrl), $"{route}?{query}"))
             {
-                Content = new ReadOnlyMemoryContent(body) { Headers = { ContentType = new MediaTypeHeaderValue(mediaType) } },
+                Content = content,
             };
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (!response.IsSuccessStatusCode) throw await ErrorAsync(response, timeout.Token);
@@ -133,6 +141,14 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             log.LogWarning("The PDF sidecar did not answer within {Seconds} s", (int)limit.TotalSeconds);
             throw new SidecarException(SidecarException.Timeout, "The PDF sidecar did not answer in time");
         }
+        // A refused connection or a failed lookup is the sidecar being away, even when a first attempt on a pooled
+        // connection had sent the file before the handler retried on a new one.
+        catch (Exception e) when (content.Sent && e is IOException or HttpRequestException
+                                  { HttpRequestError: not (HttpRequestError.ConnectionError or HttpRequestError.NameResolutionError) })
+        {
+            log.LogWarning("The PDF sidecar's connection broke after the file was sent ({Error})", (e as HttpRequestException)?.HttpRequestError.ToString() ?? "IO");
+            throw new SidecarException(SidecarException.Aborted, "The PDF sidecar stopped while working on the file");
+        }
         catch (HttpRequestException e)
         {
             log.LogWarning("The PDF sidecar can't be reached ({Error})", e.HttpRequestError);
@@ -140,7 +156,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         }
         catch (IOException)
         {
-            log.LogWarning("The PDF sidecar's answer broke off");
+            log.LogWarning("The PDF sidecar's connection broke before the file was sent");
             throw new SidecarException(SidecarException.Unavailable, UnavailableMessage);
         }
     }
@@ -209,6 +225,8 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
         // The sidecar rounds the scaled size; a pixel over is rounding, more is not the step asked for.
         if (Math.Max(w, h) > target.LongEdge + 1) throw Invalid("The image is larger than the size step");
+        // Likewise its pixel budget, give or take a row and a column of rounding.
+        if ((long)w * h > target.Pixels + w + h) throw Invalid("The image has more pixels than the size step");
         return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight));
     }
 
@@ -224,6 +242,28 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             : throw Invalid($"The answer has no valid {header}");
 
     private static SidecarException Invalid(string why) => new(SidecarException.Failed, why);
+
+    /// <summary>The request body, which says once it has been written out whole.</summary>
+    private sealed class SentContent(ReadOnlyMemory<byte> body) : HttpContent
+    {
+        public bool Sent { get; private set; }
+
+        protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)
+        {
+            Sent = false;
+            await stream.WriteAsync(body, cancellationToken);
+            await stream.FlushAsync(cancellationToken);
+            Sent = true;
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = body.Length;
+            return true;
+        }
+    }
 
     private sealed record AnalysisJson(string? Analyser, int PageCount, int AnalysedPages, string? Title, string? Author, List<PageJson>? Pages);
 

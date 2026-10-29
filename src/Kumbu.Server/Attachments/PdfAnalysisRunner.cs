@@ -14,7 +14,8 @@ namespace Kumbu.Server.Attachments;
 /// when a vault is unlocked (its PDFs without analysis or job are queued first, so a restart, an older upload or a
 /// re-keying loses none), when a job is queued, and once a minute. One analysis at a time server-wide, on demand
 /// (<see cref="RunNowAsync"/>) included, so the sidecar's two workers keep room for rendering. A sidecar that is away
-/// or busy keeps the job for the next round, however long; any other failure is tried <see cref="MaxTries"/> times, and
+/// or busy keeps the job for the next round, however long; any other failure, a connection that broke after the file was
+/// sent included (the sidecar went down on it, out of memory say), is tried <see cref="MaxTries"/> times, and
 /// then recorded in place of the analysis, as a password-protected or unreadable PDF is at once. Logs the vault id and
 /// the outcome only, never content or names.
 /// </summary>
@@ -323,6 +324,7 @@ public sealed class PdfAnalysisRunner : BackgroundService
         "damaged" => "this PDF couldn't be analysed: its stored content doesn't open",
         NotStored => "this PDF couldn't be analysed: its analysis couldn't be stored",
         SidecarException.Timeout => "this PDF couldn't be analysed: it took longer than the time limit",
+        SidecarException.Aborted => "this PDF couldn't be analysed: the analyser stopped on it every time (it may run out of memory)",
         _ => "this PDF couldn't be analysed: the analyser failed on it",
     });
 

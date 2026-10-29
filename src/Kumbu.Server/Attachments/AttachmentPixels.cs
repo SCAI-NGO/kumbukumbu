@@ -103,6 +103,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     {
         SidecarException.Unavailable or SidecarException.Busy => $"{what} is unavailable right now; try again later",
         SidecarException.Timeout => $"rendering {path} took too long; try a smaller --size or a --crop",
+        SidecarException.Aborted => $"rendering {path} stopped part way (the renderer may have run out of memory); try a smaller --size or a --crop",
         SidecarException.Encrypted => PdfAnalysisRunner.PasswordProtected,
         "no_such_page" => $"{path} has no page {page}",
         "bad_crop" => $"the crop {crop} lies outside {(page is null ? "the image" : $"page {page}")}",
