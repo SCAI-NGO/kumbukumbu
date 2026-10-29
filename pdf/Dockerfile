@@ -2,7 +2,7 @@
 # Base images by digest; the tag above each digest says which image it is and is what Dependabot follows.
 
 # node:22-bookworm-slim
-FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS build
 WORKDIR /app
 # pnpm at the version package.json's packageManager names.
 RUN corepack enable
@@ -13,7 +13,7 @@ COPY src src
 RUN pnpm build && pnpm prune --prod
 
 # node:22-bookworm-slim
-FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370
 ENV NODE_ENV=production PORT=8090
 WORKDIR /app
 # Owned by root and read-only to the node user, which runs the service.
