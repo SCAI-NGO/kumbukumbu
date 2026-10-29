@@ -53,8 +53,8 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         {SizeSteps.Table}
           At most 4 images come from one call, and at most {MaxPages} pages, fewer when their text would pass the
           output limit (about {OutputLimit.MaxChars / OutputLimit.CharsPerToken} tokens); the last line then names the range to go on with.
-          Pages without a text layer (scans) have no text, so they are not found by rg or semsearch; look at
-          them with --images. A PDF of more than 2000 pages is analysed up to page 2000, and says so.
+          rg and semsearch don't search PDFs yet; a later version finds their text, but never that of pages
+          without a text layer (scans), which have no text: look at them with --images. A PDF of more than 2000 pages is analysed up to page 2000, and says so.
           If the analysis hasn't run yet, pdf runs it first (up to a minute); until it is there the text and
           the types aren't known, and only --images=all and --crop show pages.
           pdf stands alone, not in a pipeline. A client may drop images; if none follows a page's text, say
@@ -199,8 +199,8 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         if (analysis is null) return NotAnalysedYet(path);
 
         var lines = new List<string> { $"{path.Name}: PDF, {AttachmentText.Pages(analysis.PageCount)}, {AttachmentText.Size(state.Size)}" };
-        if (!string.IsNullOrWhiteSpace(analysis.Title)) lines.Add($"Title: {analysis.Title}");
-        if (!string.IsNullOrWhiteSpace(analysis.Author)) lines.Add($"Author: {analysis.Author}");
+        if (Metadata(analysis.Title) is { Length: > 0 } title) lines.Add($"Title: {title}");
+        if (Metadata(analysis.Author) is { Length: > 0 } author) lines.Add($"Author: {author}");
         lines.Add($"Pages: {AttachmentText.Runs(analysis, MaxInfoRuns)}");
         if (analysis.AnalysedPages < analysis.PageCount)
         {
@@ -224,6 +224,10 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
 
         return ShellResult.Ok(string.Join('\n', lines));
     }
+
+    /// <summary>A title or author on one line: the PDF's metadata is untrusted and must not forge lines of the answer.</summary>
+    private static string Metadata(string? text) =>
+        text is null ? "" : new string([.. text.Select(c => char.IsControl(c) || c is '\u2028' or '\u2029' ? ' ' : c)]).Trim();
 
     /// <summary>"p4 mixed: vector drawing ≈ 35 % — regions (pt, x,y,w,h): drawing 72,300,451,260; image 80,90,200,120".</summary>
     private static string InfoLine(PdfPage page)
@@ -321,6 +325,12 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var byNumber = analysis.Pages.GroupBy(p => p.Number).ToDictionary(g => g.Key, g => g.First());
         var textLast = Math.Min(Math.Min(last, first + MaxPages - 1), analysed);
         var texts = textLast >= first ? await pixels.PageTextAsync(call.Path, call.State, first, textLast, ct) : null;
+        if (textLast >= first && (texts is null || texts.Count < textLast - first + 1))
+        {
+            // Headers without their text would read as empty pages.
+            return ShellResult.Error($"pdf: the text of {call.Path.Value} can't be read right now; pdf {SectionLookup.Quote(call.Path)} {first} --images=all shows a page as an image.");
+        }
+
         var output = new Output();
         string? failed = null;
         var count = analysis.PageCount.ToString(CultureInfo.InvariantCulture);
@@ -330,10 +340,12 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             if (n - first == MaxPages) return Stop(output, call, n - 1, $"at most {MaxPages} pages per call", n, open);
 
             var page = byNumber.GetValueOrDefault(n);
-            var text = page is null ? "" : (texts?.ElementAtOrDefault(n - first) ?? "").TrimEnd();
+            var text = page is null || n > textLast ? "" : texts![n - first].TrimEnd();
             var render = call.Show == Show.All || (call.Show == Show.Images && page is { Type: not PageType.Text });
             var head = page is null
-                ? $"--- Page {n} of {count}: not analysed (only the first {analysed} pages are)"
+                ? n <= analysis.AnalysedPages
+                    ? $"--- Page {n} of {count}: not in the analysis"
+                    : $"--- Page {n} of {count}: not analysed (only the first {analysis.AnalysedPages} pages are)"
                 : $"--- Page {n} of {count}: {AttachmentText.TypeName(page.Type)}{(Found(page) is { } found ? $" ({found})" : "")}";
 
             // Whole pages only, but a first page longer than the limit is shown in part rather than not at all.
@@ -371,7 +383,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                 if (output.Images == MaxImages && n < last) return Stop(output, call, n, $"at most {MaxImages} images per call", n + 1, open);
             }
 
-            if (cut && n < last) return Stop(output, call, n, "the next page would pass the output limit", n + 1, open);
+            if (cut && n < last) return Stop(output, call, n, $"page {n} was cut at the output limit, and pdf can't show the rest of it", n + 1, open);
         }
 
         return output.Result();
@@ -391,13 +403,13 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     private static string PageSize(Picture picture) => $"page {Point(picture.OriginalWidth)}×{Point(picture.OriginalHeight)} pt";
 
     /// <summary>"--- Stopped after page 9: at most 4 images per call. Continue with: pdf /a.pdf 10-20 --images ---".</summary>
-    private static ShellResult Stop(Output output, Call call, int after, string why, int next, bool open)
+    private static ShellResult Stop(Output output, Call call, int after, string why, int next, bool open, string? unsure = null)
     {
         var range = new PageRange(next, open ? null : call.Range.Last);
         var flag = call.Show switch { Show.Images => " --images", Show.All => " --images=all", _ => "" };
         var size = call.Step == SizeStep.Medium ? "" : $" --size {SizeSteps.Name(call.Step)}";
         var shown = range.Last == next ? $"{next}" : range.ToString();
-        output.Add($"--- Stopped after page {after}: {why}. Continue with: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{size} ---");
+        output.Add($"--- Stopped after page {after}: {why}. Continue with: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{size}{unsure} ---");
         return output.Result();
     }
 
@@ -437,7 +449,11 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var output = new Output();
         for (var n = call.Range.First; call.Range.Last is null || n <= call.Range.Last; n++)
         {
-            if (output.Images == MaxImages) return Stop(output, call, n - 1, $"at most {MaxImages} images per call", n, call.Range.Last is null);
+            if (output.Images == MaxImages)
+            {
+                // Without an analysis the page count is unknown: the page after may not exist.
+                return Stop(output, call, n - 1, $"at most {MaxImages} images per call", n, call.Range.Last is null, " (if the PDF has more pages)");
+            }
 
             Picture picture;
             try
