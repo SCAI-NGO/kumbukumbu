@@ -33,6 +33,7 @@ public static class Manual
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
+          uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
         Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
