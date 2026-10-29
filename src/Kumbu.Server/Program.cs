@@ -184,11 +184,11 @@ if (!TextOrder.IsCultureAware)
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
-    // can be pinned: any peer is trusted, which is safe only because the proxy is the container's only way in
-    // (no published port). ForwardLimit 1 takes the rightmost X-Forwarded-For entry, the one Traefik appended;
-    // whatever a client put in the header itself is ignored. X-Forwarded-Proto (which Traefik overwrites) makes
-    // Request.IsHttps true for a request that reached Traefik over https, for HSTS. First, so that everything
-    // after sees the client's address and scheme. Without a trusted proxy neither header is read.
+    // can be pinned: any peer is trusted, safe only while the proxy is the only way in from outside the host (no
+    // published port; the other containers on its networks are trusted too, an accepted limit). ForwardLimit 1 takes
+    // the rightmost X-Forwarded-For entry, the one Traefik appended; whatever a client put there is ignored.
+    // X-Forwarded-Proto (which Traefik overwrites) makes Request.IsHttps true for a request that reached Traefik over
+    // https, for HSTS. First, so that everything after sees the client's address and scheme. Otherwise neither is read.
     var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
     forwarded.KnownIPNetworks.Clear();
     forwarded.KnownProxies.Clear();
