@@ -57,8 +57,10 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 links, backlinks          backlinks lists the notes that link to it or embed it
                 img        shows an image to the model, whole or a part of it ('help img')
                 pdf        reads a PDF page by page: its text, pages as images, a part of a page ('help pdf')
-              What doesn't: rg and semsearch skip attachments (they search the text of notes only, and
-              'rg --files' lists notes only); head, tail, wc, sort and outline read notes, not attachments.
+              rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
+              What doesn't: semsearch skips attachments (it searches the text of notes only), and
+              'rg --files' lists notes only; rg doesn't search images, nor PDFs in a checkpoint; head, tail,
+              wc, sort and outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 
               ls /Work/Screens

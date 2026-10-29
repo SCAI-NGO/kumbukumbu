@@ -62,9 +62,9 @@ public sealed class Shell
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels, bool live = true) =>
     [
-        new Ls(notes), new Cat(notes, pixels), new OutlineCommand(notes), new Rg(notes),
+        new Ls(notes), new Cat(notes, pixels), new OutlineCommand(notes), new Rg(notes, live ? pixels : null),
         new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
@@ -197,7 +197,7 @@ public sealed class Shell
             }
         }
 
-        var command = ReadingCommands(view, _now, _pixels).Single(c => c.Name == name);
+        var command = ReadingCommands(view, _now, _pixels, live: false).Single(c => c.Name == name);
         var result = await command.RunAsync(args, null, ct);
         if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
         return result with { Version = null };

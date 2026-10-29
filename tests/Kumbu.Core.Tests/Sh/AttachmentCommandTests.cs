@@ -119,9 +119,9 @@ public class AttachmentCommandTests
         Assert.DoesNotContain("shot.png:", (await Run("rg -i png /Work")).Output.Replace("/Work/plan.md", ""));
         Assert.Equal("rg: /Work/shot.png is an attachment; rg searches the text of notes only", (await Run("rg x /Work/shot.png")).Output);
         Assert.Contains("is an attachment, not a note", (await Run("semsearch layout /Work/shot.png")).Output);
-        Assert.Contains("Images and PDFs are not searched", (await Run("help rg")).Output);
+        Assert.Contains("Images are not searched", (await Run("help rg")).Output);
         Assert.Contains("Images and PDFs are not searched", (await Run("help semsearch")).Output);
-        Assert.Contains("rg and semsearch skip attachments", (await Run("help attachments")).Output);
+        Assert.Contains("semsearch skips attachments", (await Run("help attachments")).Output);
     }
 
     [Fact]

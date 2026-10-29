@@ -538,8 +538,9 @@ public class PdfCommandTests
         Assert.Contains("85 %", help);
         Assert.Contains("25 %", help);
         Assert.Contains("50 megapixels", help);
-        Assert.Contains("rg and semsearch don't search PDFs yet", help);
-        Assert.Contains("never that of pages\n  without a text layer (scans)", help);
+        Assert.Contains("rg finds text in PDFs", help);
+        Assert.Contains("semsearch doesn't search them yet", help);
+        Assert.Contains("Neither finds\n  the text of pages without a text layer (scans)", help);
         Assert.Contains("A client may drop images", help);
         Assert.Contains("'help img'", help);
         Assert.Contains("pdf /Work/Papers/paper.pdf 4 --crop", help);

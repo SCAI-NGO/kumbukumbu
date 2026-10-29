@@ -81,7 +81,7 @@ public class HelpTests
         Assert.StartsWith("attachments", topic);
         Assert.Contains("15 MB each", topic);
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
-        Assert.Contains("rg and semsearch skip attachments", topic);
+        Assert.Contains("semsearch skips attachments", topic);
         Assert.Contains("img        shows an image to the model", topic);
         Assert.Contains("pdf        reads a PDF", topic);
 

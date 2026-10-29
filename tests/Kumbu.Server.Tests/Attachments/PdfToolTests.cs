@@ -102,6 +102,26 @@ public sealed class PdfToolTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Rg_finds_the_text_of_an_analysed_pdf_by_page()
+    {
+        await using var host = Host(app, new FakePdfSidecar { Analysis = _ => Paper() });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a paper to search"));
+        var key = await user.KeyAsync("pdf", KeyRight.Read);
+        var vault = await VaultAsync(host, user);
+        var blobId = Convert.FromBase64String((await StateAsync(host, user, "Samples/paper.pdf")).BlobId);
+        await EventuallyAsync(async () => await host.Services.GetRequiredService<PdfAnalyses>().HeaderAsync(vault, blobId, Ct) is not null, "the analysis is stored");
+        var path = $"/{user.Vault}/Samples/paper.pdf";
+
+        var found = await ShAsync(host, key, $"rg 'Page [23] text' /{user.Vault}");
+        var count = await ShAsync(host, key, $"rg -c -i page {path}");
+
+        Assert.False(found.IsError, Text(found.Content[0]));
+        Assert.Equal($"{path}:p2: Page 2 text\n{path}:p3: Page 3 text", Text(Assert.Single(found.Content)));
+        Assert.Equal($"{path}:3", Text(Assert.Single(count.Content)));
+    }
+
+    [Fact]
     public async Task A_crop_reaches_the_sidecar_with_the_same_numbers()
     {
         var sidecar = new FakePdfSidecar { Analysis = _ => Paper() };
