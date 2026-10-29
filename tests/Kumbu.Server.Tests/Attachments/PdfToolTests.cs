@@ -94,7 +94,7 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         var cat = await ShAsync(host, key, $"cat {path}");
 
         Assert.True(text.IsError);
-        Assert.Equal($"pdf: {path} hasn't been analysed yet: its text and page types aren't known. Try again in a while; pdf {path} 1 --images=all shows a page as an image.", Text(Assert.Single(text.Content)));
+        Assert.Equal($"pdf: {path} hasn't been analysed yet because PDF analysis is unavailable right now; try again later.", Text(Assert.Single(text.Content)));
         Assert.True(all.IsError);
         Assert.Equal("pdf: PDF rendering is unavailable right now; try again later", Text(Assert.Single(all.Content)));
         Assert.False(cat.IsError);
