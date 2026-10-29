@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
 using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 
 namespace Kumbu.Server.Attachments;
@@ -18,27 +20,34 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        if (ImageHeader.Read(bytes, out var problem) is null) throw new PixelsUnavailableException(TooLarge(path, state, problem));
-        try
-        {
-            return await sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, ct);
-        }
-        catch (SidecarException e)
-        {
-            throw Refused(e, "image rendering", path, null, crop);
-        }
+        if (ImageHeader.Read(bytes, out var problem) is null) throw new PixelsUnavailableException(TooLarge(path, state, problem), PixelsProblem.TooLarge);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, ct), e => Refused(e, "image rendering", path, null, crop));
     }
 
     public async Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, ct), e => Refused(e, "PDF rendering", path, page, crop));
+    }
+
+    /// <summary>A render timed and counted: its duration whatever came of it, a failure by reason, a picture by size.</summary>
+    private static async Task<Picture> MeasuredAsync(KumbuMetrics.RenderKind kind, Func<Task<Picture>> render, Func<SidecarException, PixelsUnavailableException> refuse)
+    {
+        var started = Stopwatch.GetTimestamp();
         try
         {
-            return await sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, ct);
+            var picture = await render();
+            KumbuMetrics.ImageDelivered(kind, picture.Data.Length, picture.Width, picture.Height);
+            return picture;
         }
         catch (SidecarException e)
         {
-            throw Refused(e, "PDF rendering", path, page, crop);
+            KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
+            throw refuse(e);
+        }
+        finally
+        {
+            KumbuMetrics.Rendered(kind, Stopwatch.GetElapsedTime(started));
         }
     }
 
@@ -56,10 +65,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     public async Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct) =>
         await VaultAsync(path, state, ct) is var (vault, blobId) ? await analyses.TextAsync(vault, blobId, first, last, ct) : null;
 
-    public void Count(AttachmentUse use)
-    {
-        // Measured from Task 9 on.
-    }
+    public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
         await store.VaultOfAsync(path, ct) is { } vault && EncryptedNoteStore.TryParseBlobId(state.BlobId, out var blobId) ? (vault, blobId) : null;
@@ -96,5 +102,5 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         "no_such_page" => $"{path} has no page {page}",
         "bad_crop" => $"the crop {crop} lies outside {(page is null ? "the image" : $"page {page}")}",
         _ => $"{path} couldn't be rendered",
-    });
+    }, e.Code == "bad_crop" ? PixelsProblem.BadCrop : PixelsProblem.Unavailable);
 }

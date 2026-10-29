@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Channels;
 using Kumbu.Core.Attachments;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
 
@@ -274,6 +275,8 @@ public sealed class PdfAnalysisRunner : BackgroundService
         }
 
         if (analysis is null) return Outcome.Skipped;
+        KumbuMetrics.PdfAnalysed(analysis.AnalysedPages, Stopwatch.GetElapsedTime(started));
+        foreach (var page in analysis.Pages) KumbuMetrics.PdfPageAnalysed(page);
         if (analysis.Analyser != PdfAnalyses.Analyser)
         {
             _log.LogWarning("The PDF sidecar's analyser is not this server's: it may be an older or newer release");
@@ -286,6 +289,7 @@ public sealed class PdfAnalysisRunner : BackgroundService
     /// <summary>A PDF the sidecar can't read at all is recorded at once; anything else counts a try.</summary>
     private async Task<Outcome> FailedAsync(UnlockedVault vault, byte[] blobId, SidecarException e, CancellationToken ct)
     {
+        KumbuMetrics.PdfAnalysisFailed(KumbuMetrics.FailReasonOf(e));
         if (e.Code is not (SidecarException.Encrypted or "not_pdf" or "too_large" or "damaged"))
         {
             var tries = await _analyses.CountTryAsync(vault.Id, blobId, ct);

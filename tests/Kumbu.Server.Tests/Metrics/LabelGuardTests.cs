@@ -98,7 +98,7 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
             var path = $"/Ideas/{Marker}.md";
             await client.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = path, ["content"] = $"# {Marker}\n\n{Marker} text.\n" }, cancellationToken: Ct);
             await app.IndexedAsync();
-            foreach (var command in new[] { $"semsearch {Marker}", $"rg {Marker} /Demo", Marker, $"cat {path} | {Marker}" })
+            foreach (var command in new[] { $"semsearch {Marker}", $"rg {Marker} /Demo", Marker, $"cat {path} | {Marker}", $"img /Demo/{Marker}.png", $"pdf info /Demo/{Marker}.pdf" })
             {
                 await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct);
             }

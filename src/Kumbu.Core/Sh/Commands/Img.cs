@@ -49,13 +49,13 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         var step = SizeStep.Medium;
         if (options.Value("size") is { } size && !SizeSteps.TryParse(size, out step))
         {
-            return Invalid($"img: --size is small, medium or large, not '{size}' (see 'help img')");
+            return Refused(ImgRefusal.BadSize, $"img: --size is small, medium or large, not '{size}' (see 'help img')");
         }
 
         Crop? crop = null;
         if (options.Value("crop") is { } cropText)
         {
-            if (!Crop.TryParse(cropText, out var parsed, out var cropError)) return Invalid($"img: {cropError}");
+            if (!Crop.TryParse(cropText, out var parsed, out var cropError)) return Refused(ImgRefusal.BadCrop, $"img: {cropError}");
             crop = parsed;
         }
 
@@ -65,14 +65,14 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         var state = attachment.Current;
         if (AttachmentText.IsPdf(state))
         {
-            return Invalid($"img: {path.Value} is a PDF; look at its pages with pdf {path.Value} <pages> --images (see 'help pdf')");
+            return Refused(ImgRefusal.Pdf, $"img: {path.Value} is a PDF; look at its pages with pdf {path.Value} <pages> --images (see 'help pdf')");
         }
 
         // The pixels would answer the same, but need a round trip to find out.
         if (crop is not null && state is { Width: { } width, Height: { } height }
             && (crop.X + crop.Width > width + 1e-6 || crop.Y + crop.Height > height + 1e-6))
         {
-            return Invalid($"img: the crop {crop} lies outside the image ({width}×{height} px)");
+            return Refused(ImgRefusal.BadCrop, $"img: the crop {crop} lies outside the image ({width}×{height} px)");
         }
 
         Picture picture;
@@ -82,8 +82,16 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         }
         catch (PixelsUnavailableException e)
         {
+            pixels.Count(new ImgRefused(e.Problem switch
+            {
+                PixelsProblem.TooLarge => ImgRefusal.TooLarge,
+                PixelsProblem.BadCrop => ImgRefusal.BadCrop,
+                _ => ImgRefusal.Unavailable,
+            }));
             return ShellResult.Error($"img: {e.Message}");
         }
+
+        pixels.Count(new ImgCalled(step, crop is not null));
 
         var head = $"{path.Value} (version {state.Version})";
         var original = $"image ({AttachmentText.FormatName(state)}), original {picture.OriginalWidth:0}×{picture.OriginalHeight:0} px";
@@ -93,11 +101,19 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
 
     private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
 
+    private ShellResult Refused(ImgRefusal reason, string message)
+    {
+        pixels.Count(new ImgRefused(reason));
+        return Invalid(message);
+    }
+
     /// <summary>What <c>cat</c> would say about a path that is no attachment, in the words of <c>img</c>.</summary>
     private async Task<ShellResult> NotAnAttachmentAsync(VaultPath path, CancellationToken ct)
     {
         var read = await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
-        if (!read.IsError) return Invalid($"img: {path.Value} is a note; cat reads notes");
-        return read with { Kind = read.Output.Contains(": No such file or directory", StringComparison.Ordinal) ? ShellErrorKind.NotFound : ShellErrorKind.Invalid };
+        if (!read.IsError) return Refused(ImgRefusal.Note, $"img: {path.Value} is a note; cat reads notes");
+        var missing = read.Output.Contains(": No such file or directory", StringComparison.Ordinal);
+        if (missing) pixels.Count(new ImgRefused(ImgRefusal.NotFound));
+        return read with { Kind = missing ? ShellErrorKind.NotFound : ShellErrorKind.Invalid };
     }
 }

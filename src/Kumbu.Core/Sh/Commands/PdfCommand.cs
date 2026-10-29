@@ -131,6 +131,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         }
 
         var call = new Call(path, state, step, crop, show, range);
+        pixels.Count(new PdfCalled(call.Mode));
         PdfAnalysis? analysis;
         try
         {
@@ -153,7 +154,24 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         return crop is not null ? await CropAsync(call, analysis, ct) : await PagesAsync(call with { Range = pages }, analysis, range.Last is null, ct);
     }
 
-    private sealed record Call(VaultPath Path, AttachmentState State, SizeStep Step, Crop? Crop, Show Show, PageRange Range);
+    private sealed record Call(VaultPath Path, AttachmentState State, SizeStep Step, Crop? Crop, Show Show, PageRange Range)
+    {
+        public PdfMode Mode => Crop is not null ? PdfMode.Crop : Show switch { Show.All => PdfMode.ImagesAll, Show.Images => PdfMode.Images, _ => PdfMode.Text };
+    }
+
+    private static PageKind KindOf(PdfPage? page) => page is null ? PageKind.Unknown : page.Type switch
+    {
+        PageType.Mixed => PageKind.Mixed,
+        PageType.Image => PageKind.Image,
+        _ => PageKind.Text,
+    };
+
+    /// <summary>A page delivered as a picture: counted as delivered, and by its type for the mode of the call.</summary>
+    private void CountPicture(Call call, PdfPage? page)
+    {
+        pixels.Count(new PdfPageDelivered(PageDelivery.Image));
+        pixels.Count(new PdfPageRendered(KindOf(page), call.Mode));
+    }
 
     private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
 
@@ -187,6 +205,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var (opened, error) = await OpenAsync(pathText, ct);
         if (opened is null) return error!;
         var (path, state) = opened.Value;
+        pixels.Count(new PdfCalled(PdfMode.Info));
         PdfAnalysis? analysis;
         try
         {
@@ -375,9 +394,11 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                 : page.Type != PageType.Text ? " — add --images to see it"
                 : "";
             output.Add(text.Length == 0 ? $"{head}{hint} ---" : $"{head}{hint} ---\n{text}");
+            if (text.Length > 0) pixels.Count(new PdfPageDelivered(PageDelivery.Text));
 
             if (picture is not null)
             {
+                CountPicture(call, page);
                 var what = page is null ? "" : $" ({AttachmentText.TypeName(page.Type)})";
                 output.Append(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {count}{what}", PageSize(picture), call.Step, null, picture));
                 output.Add(picture);
@@ -434,6 +455,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             return ShellResult.Error($"pdf: {e.Message}");
         }
 
+        CountPicture(call, page);
         var what = page is null ? "" : $" ({AttachmentText.TypeName(page.Type)})";
         var output = new Output();
         output.Add(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {analysis.PageCount}{what}", PageSize(picture), call.Step, crop, picture));
@@ -468,6 +490,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                 return output.Result();
             }
 
+            CountPicture(call, null);
             var text = PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n}", PageSize(picture), call.Step, call.Crop, picture);
             if (call.Crop is null)
             {

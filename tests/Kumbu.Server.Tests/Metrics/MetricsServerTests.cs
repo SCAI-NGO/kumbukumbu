@@ -39,21 +39,41 @@ public sealed class MetricsServerTests(KumbuAppFactory app)
         var text = await Scrape.TextAsync(app);
 
         var labels = KumbuMetrics.AllowedLabels;
+        // kind, via and reason are also label names of the attachment metrics, whose values the allowed sets then include.
+        string[] errorKinds = ["invalid", "refused", "not_found", "conflict", "unavailable", "damaged", "other"];
+        string[] pdfModes = ["info", "text", "images", "images_all", "crop"];
+        string[] failReasons = ["timeout", "unavailable", "invalid", "failed"];
+        string[] renderKinds = ["page", "image"];
         List<string> expected =
         [
             .. labels["tool"].SelectMany(t => new[] { $"kumbu_mcp_tool_calls_total{{tool=\"{t}\"}}", $"kumbu_mcp_tool_duration_seconds_count{{tool=\"{t}\"}}" }),
-            .. labels["tool"].SelectMany(t => labels["kind"].Select(k => $"kumbu_mcp_tool_errors_total{{tool=\"{t}\",kind=\"{k}\"}}")),
+            .. labels["tool"].SelectMany(t => errorKinds.Select(k => $"kumbu_mcp_tool_errors_total{{tool=\"{t}\",kind=\"{k}\"}}")),
             .. labels["command"].Select(c => $"kumbu_sh_commands_total{{command=\"{c}\"}}"),
             .. KumbuMetrics.KnownCommands.Select(c => $"kumbu_sh_command_duration_seconds_count{{command=\"{c}\"}}"),
-            .. labels["via"].Select(v => $"kumbu_write_conflicts_total{{via=\"{v}\"}}"),
+            .. new[] { "mcp", "api" }.Select(v => $"kumbu_write_conflicts_total{{via=\"{v}\"}}"),
             .. labels["provider_kind"].SelectMany(p => new[]
             {
                 $"kumbu_embedding_batches_total{{provider_kind=\"{p}\"}}", $"kumbu_embedding_batch_duration_seconds_count{{provider_kind=\"{p}\"}}",
                 $"kumbu_embedding_errors_total{{provider_kind=\"{p}\"}}",
             }),
-            .. labels["reason"].Select(r => $"kumbu_vault_locks_total{{reason=\"{r}\"}}"),
+            .. new[] { "idle", "memory" }.Select(r => $"kumbu_vault_locks_total{{reason=\"{r}\"}}"),
             .. labels["outcome"].Select(o => $"kumbu_sign_ins_total{{outcome=\"{o}\"}}"),
             .. labels["grant"].Select(g => $"kumbu_oauth_tokens_issued_total{{grant=\"{g}\"}}"),
+            .. new[] { "text", "mixed", "image" }.Select(t => $"kumbu_pdf_pages_analysed_total{{type=\"{t}\"}}"),
+            .. new[] { "text", "mixed", "image", "unknown" }.Select(t => $"kumbu_pdf_pages_rendered_total{{type=\"{t}\"}}"),
+            .. failReasons.Select(r => $"kumbu_pdf_analysis_failures_total{{reason=\"{r}\"}}"),
+            .. pdfModes.Select(m => $"kumbu_pdf_calls_total{{mode=\"{m}\"}}"),
+            .. new[] { "text", "image" }.Select(a => $"kumbu_pdf_pages_delivered_total{{as=\"{a}\"}}"),
+            .. new[] { "images_all", "crop" }.Select(v => $"kumbu_pdf_text_pages_rendered_total{{via=\"{v}\"}}"),
+            .. new[] { "small", "medium", "large" }.Select(st => $"kumbu_img_calls_total{{step=\"{st}\"}}"),
+            .. new[] { "note", "pdf", "not_found", "too_large", "bad_crop", "bad_size", "unavailable" }.Select(r => $"kumbu_img_refusals_total{{reason=\"{r}\"}}"),
+            .. renderKinds.SelectMany(k => new[]
+            {
+                $"kumbu_render_duration_seconds_count{{kind=\"{k}\"}}", $"kumbu_image_delivered_bytes_count{{kind=\"{k}\"}}",
+                $"kumbu_image_delivered_long_edge_pixels_count{{kind=\"{k}\"}}",
+            }),
+            .. renderKinds.SelectMany(k => failReasons.Select(r => $"kumbu_render_failures_total{{kind=\"{k}\",reason=\"{r}\"}}")),
+            "kumbu_img_crops_total",
         ];
         var missing = expected.Where(series => !text.Contains(series + " ", StringComparison.Ordinal)).ToList();
         Assert.True(missing.Count == 0, string.Join('\n', missing));

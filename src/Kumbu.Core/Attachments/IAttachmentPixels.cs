@@ -6,11 +6,40 @@ namespace Kumbu.Core.Attachments;
 /// <summary>An image ready for the model, with the size it had before scaling (pixels for an image, points for a page).</summary>
 public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight);
 
-/// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
-public sealed class PixelsUnavailableException(string message) : Exception(message);
+/// <summary>Why pixels couldn't be had, for the usage metrics: what <c>img</c> tells apart in its refusals.</summary>
+public enum PixelsProblem { Unavailable, TooLarge, BadCrop }
 
-/// <summary>What was looked at, for the usage metrics; filled in where it is counted.</summary>
+/// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
+public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Unavailable) : Exception(message)
+{
+    public PixelsProblem Problem { get; } = problem;
+}
+
+/// <summary>How a <c>pdf</c> call reads: its mode, for the usage metrics.</summary>
+public enum PdfMode { Info, Text, Images, ImagesAll, Crop }
+
+/// <summary>The type of a page that is shown; <c>Unknown</c> where there is no analysis (or no entry for the page).</summary>
+public enum PageKind { Text, Mixed, Image, Unknown }
+
+/// <summary>What a page is delivered as.</summary>
+public enum PageDelivery { Text, Image }
+
+/// <summary>Why <c>img</c> said no.</summary>
+public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, Unavailable }
+
+/// <summary>What was looked at, for the usage metrics. Only enums and flags in the records: nothing a person typed.</summary>
 public abstract record AttachmentUse;
+
+public sealed record PdfCalled(PdfMode Mode) : AttachmentUse;
+
+public sealed record PdfPageDelivered(PageDelivery As) : AttachmentUse;
+
+/// <summary>A page rendered as an image, in a call of this mode (<c>Images</c>, <c>ImagesAll</c> or <c>Crop</c>).</summary>
+public sealed record PdfPageRendered(PageKind Type, PdfMode Mode) : AttachmentUse;
+
+public sealed record ImgCalled(SizeStep Step, bool Cropped) : AttachmentUse;
+
+public sealed record ImgRefused(ImgRefusal Reason) : AttachmentUse;
 
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
