@@ -223,7 +223,7 @@ public static class KumbuMetrics
 
     private static readonly Counter PdfTextPagesRendered = Prometheus.Metrics.CreateCounter(
         "kumbu_pdf_text_pages_rendered_total",
-        "Pages the analysis calls text that a client still asked to see as an image (--images=all or --crop): the signal that the 25 % threshold misses figures.",
+        "Pages the analysis calls text that a client still asked to see as an image (--images=all or --crop). Each may mean the 25 % threshold missed a figure; an upper bound, since agents also look at text pages for other reasons.",
         new CounterConfiguration { LabelNames = ["via"] });
 
     private static readonly Counter ImgCalls = Prometheus.Metrics.CreateCounter(
@@ -239,7 +239,7 @@ public static class KumbuMetrics
         "kumbu_render_duration_seconds", "How long the sidecar took to render a page or an image, failures included.", Hist(Seconds, "kind"));
 
     private static readonly Counter RenderFailures = Prometheus.Metrics.CreateCounter(
-        "kumbu_render_failures_total", "Renders that failed, by kind and reason.", new CounterConfiguration { LabelNames = ["kind", "reason"] });
+        "kumbu_render_failures_total", "Renders that failed, by kind and reason; a page or crop that the request got wrong (no such page, outside the page) is not a failure.", new CounterConfiguration { LabelNames = ["kind", "reason"] });
 
     private static readonly Histogram DeliveredBytes = Prometheus.Metrics.CreateHistogram(
         "kumbu_image_delivered_bytes", "Bytes of each rendered image handed to the shell, by kind.", Hist([51200, 102400, 153600, 204800, 409600, 614400, 1048576, 2097152], "kind"));
@@ -263,18 +263,21 @@ public static class KumbuMetrics
         PdfAnalysisDuration.Observe(elapsed.TotalSeconds);
     }
 
-    /// <summary>The sidecar's code as one of the four reasons: what the PDF is (encrypted, not a PDF, too large, no such page or crop) is "invalid".</summary>
+    /// <summary>The sidecar's code as one of the four reasons: what the PDF is (encrypted, not a PDF, too large) is "invalid".</summary>
     public static FailReason FailReasonOf(SidecarException e) => e.Code switch
     {
         SidecarException.Timeout => FailReason.Timeout,
         SidecarException.Unavailable or SidecarException.Busy => FailReason.Unavailable,
-        SidecarException.Encrypted or "not_pdf" or "too_large" or "damaged" or "no_such_page" or "bad_crop" => FailReason.Invalid,
+        SidecarException.Encrypted or "not_pdf" or "too_large" or "damaged" => FailReason.Invalid,
         _ => FailReason.Failed,
     };
 
     public static void PdfAnalysisFailed(FailReason reason) => PdfAnalysisFailures.WithLabels(Label(reason)).Inc();
 
     public static void Rendered(RenderKind kind, TimeSpan elapsed) => RenderDuration.WithLabels(Label(kind)).Observe(elapsed.TotalSeconds);
+
+    /// <summary>A page or crop the request got wrong: a refusal of the request, not a failure of the render.</summary>
+    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop";
 
     public static void RenderFailed(RenderKind kind, FailReason reason) => RenderFailures.WithLabels(Label(kind), Label(reason)).Inc();
 
@@ -427,37 +430,64 @@ public static class KumbuMetrics
     };
 
     /// <summary>
-    /// Every value each label of the kumbu_ metrics can take, from the enums and the shell's command names. Not
-    /// <c>endpoint</c>: its values are the app's route templates and <c>none</c>, which only the running app knows.
-    /// The label guard test checks a scrape against it.
+    /// Every value each label of each kumbu_ metric can take, from the enums and the shell's command names, keyed by metric
+    /// name (a histogram under its base name) and label name, in the order the metric declares its labels. A value legal for
+    /// one metric is not for another. Not <c>endpoint</c> of <c>kumbu_http_rate_limited_total</c>: its values are the app's
+    /// route templates and <c>none</c>, which only the running app knows. The label guard test checks a scrape against it,
+    /// and the pre-creation test builds its series from it.
     /// </summary>
-    public static IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedLabels { get; } = Allowed();
+    public static IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlySet<string>>> AllowedLabels { get; } = Allowed();
 
-    // A label name shared by several metrics (kind, reason, via) takes the values of all of them.
-    private static Dictionary<string, IReadOnlySet<string>> Allowed()
+    private static Dictionary<string, IReadOnlyDictionary<string, IReadOnlySet<string>>> Allowed()
     {
-        var sets = new List<(string Name, HashSet<string> Values)>
-        {
-            ("tool", Values<Tool>(Label)),
-            ("kind", Values<ToolError>(Label)),
-            ("via", Values<WriteVia>(Label)),
-            ("provider_kind", Values<ProviderKind>(Label)),
-            ("reason", Values<LockReason>(Label)),
-            ("outcome", Values<Outcome>(Label)),
-            ("grant", Values<Grant>(Label)),
-            ("command", new HashSet<string>([.. KnownCommands, "other"], StringComparer.Ordinal)),
-            ("type", Values<PageKind>(Label)),
-            ("mode", Values<PdfMode>(Label)),
-            ("as", Values<PageDelivery>(Label)),
-            ("via", new HashSet<string>(TextPageModes.Select(Label), StringComparer.Ordinal)),
-            ("step", Values<SizeStep>(Label)),
-            ("reason", Values<ImgRefusal>(Label)),
-            ("kind", Values<RenderKind>(Label)),
-            ("reason", Values<FailReason>(Label)),
-        };
-        return sets.GroupBy(s => s.Name).ToDictionary(
-            g => g.Key,
-            g => (IReadOnlySet<string>)g.SelectMany(s => s.Values).ToHashSet(StringComparer.Ordinal));
+        var tool = Values<Tool>(Label);
+        var provider = Values<ProviderKind>(Label);
+        var command = new HashSet<string>(KnownCommands, StringComparer.Ordinal);
+        var failures = Values<FailReason>(Label);
+        var kinds = Values<RenderKind>(Label);
+        var types = Values<PageKind>(Label);
+        var analysed = new HashSet<string>(types.Where(t => t != "unknown"), StringComparer.Ordinal);
+        var textVia = new HashSet<string>(TextPageModes.Select(Label), StringComparer.Ordinal);
+        var result = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlySet<string>>>(StringComparer.Ordinal);
+        void Metric(string name, params (string Label, HashSet<string> Values)[] labels) =>
+            result[name] = labels.ToDictionary(l => l.Label, l => (IReadOnlySet<string>)l.Values, StringComparer.Ordinal);
+
+        Metric("kumbu_http_rate_limited_total");
+        Metric("kumbu_mcp_tool_calls_total", ("tool", tool));
+        Metric("kumbu_mcp_tool_duration_seconds", ("tool", tool));
+        Metric("kumbu_mcp_tool_errors_total", ("tool", tool), ("kind", Values<ToolError>(Label)));
+        Metric("kumbu_sh_commands_total", ("command", new HashSet<string>([.. command, "other"], StringComparer.Ordinal)));
+        Metric("kumbu_sh_command_duration_seconds", ("command", command));
+        Metric("kumbu_write_conflicts_total", ("via", Values<WriteVia>(Label)));
+        Metric("kumbu_embedding_batches_total", ("provider_kind", provider));
+        Metric("kumbu_embedding_batch_duration_seconds", ("provider_kind", provider));
+        Metric("kumbu_embedding_errors_total", ("provider_kind", provider));
+        Metric("kumbu_embedding_backlog");
+        Metric("kumbu_vaults_unlocked");
+        Metric("kumbu_vault_unlocks_total");
+        Metric("kumbu_vault_locks_total", ("reason", Values<LockReason>(Label)));
+        Metric("kumbu_sign_ins_total", ("outcome", Values<Outcome>(Label)));
+        Metric("kumbu_oauth_tokens_issued_total", ("grant", Values<Grant>(Label)));
+        Metric("kumbu_pdf_pages_analysed_total", ("type", analysed));
+        Metric("kumbu_pdf_page_text_coverage_ratio");
+        Metric("kumbu_pdf_page_image_coverage_ratio");
+        Metric("kumbu_pdf_page_vector_coverage_ratio");
+        Metric("kumbu_pdf_page_chars");
+        Metric("kumbu_pdf_pages_per_document");
+        Metric("kumbu_pdf_analysis_duration_seconds");
+        Metric("kumbu_pdf_analysis_failures_total", ("reason", failures));
+        Metric("kumbu_pdf_calls_total", ("mode", Values<PdfMode>(Label)));
+        Metric("kumbu_pdf_pages_delivered_total", ("as", Values<PageDelivery>(Label)));
+        Metric("kumbu_pdf_pages_rendered_total", ("type", types));
+        Metric("kumbu_pdf_text_pages_rendered_total", ("via", textVia));
+        Metric("kumbu_img_calls_total", ("step", Values<SizeStep>(Label)));
+        Metric("kumbu_img_crops_total");
+        Metric("kumbu_img_refusals_total", ("reason", Values<ImgRefusal>(Label)));
+        Metric("kumbu_render_duration_seconds", ("kind", kinds));
+        Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
+        Metric("kumbu_image_delivered_bytes", ("kind", kinds));
+        Metric("kumbu_image_delivered_long_edge_pixels", ("kind", kinds));
+        return result;
     }
 
     private static HashSet<string> Values<T>(Func<T, string> label) where T : struct, Enum =>

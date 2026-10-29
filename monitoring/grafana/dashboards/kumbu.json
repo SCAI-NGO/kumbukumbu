@@ -1092,7 +1092,7 @@
           "range": true
         }
       ],
-      "description": "Pages the analysis calls text that a client still asked to see as an image (--images=all or --crop): each one is a sign that the 25 % threshold missed a figure."
+      "description": "Pages the analysis calls text that a client still asked to see as an image (--images=all or --crop): each one may mean the 25 % threshold missed a figure (an upper bound: agents also look at text pages for other reasons)."
     },
     {
       "type": "timeseries",

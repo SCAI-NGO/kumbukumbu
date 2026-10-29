@@ -38,46 +38,20 @@ public sealed class MetricsServerTests(KumbuAppFactory app)
     {
         var text = await Scrape.TextAsync(app);
 
-        var labels = KumbuMetrics.AllowedLabels;
-        // kind, via and reason are also label names of the attachment metrics, whose values the allowed sets then include.
-        string[] errorKinds = ["invalid", "refused", "not_found", "conflict", "unavailable", "damaged", "other"];
-        string[] pdfModes = ["info", "text", "images", "images_all", "crop"];
-        string[] failReasons = ["timeout", "unavailable", "invalid", "failed"];
-        string[] renderKinds = ["page", "image"];
-        List<string> expected =
-        [
-            .. labels["tool"].SelectMany(t => new[] { $"kumbu_mcp_tool_calls_total{{tool=\"{t}\"}}", $"kumbu_mcp_tool_duration_seconds_count{{tool=\"{t}\"}}" }),
-            .. labels["tool"].SelectMany(t => errorKinds.Select(k => $"kumbu_mcp_tool_errors_total{{tool=\"{t}\",kind=\"{k}\"}}")),
-            .. labels["command"].Select(c => $"kumbu_sh_commands_total{{command=\"{c}\"}}"),
-            .. KumbuMetrics.KnownCommands.Select(c => $"kumbu_sh_command_duration_seconds_count{{command=\"{c}\"}}"),
-            .. new[] { "mcp", "api" }.Select(v => $"kumbu_write_conflicts_total{{via=\"{v}\"}}"),
-            .. labels["provider_kind"].SelectMany(p => new[]
-            {
-                $"kumbu_embedding_batches_total{{provider_kind=\"{p}\"}}", $"kumbu_embedding_batch_duration_seconds_count{{provider_kind=\"{p}\"}}",
-                $"kumbu_embedding_errors_total{{provider_kind=\"{p}\"}}",
-            }),
-            .. new[] { "idle", "memory" }.Select(r => $"kumbu_vault_locks_total{{reason=\"{r}\"}}"),
-            .. labels["outcome"].Select(o => $"kumbu_sign_ins_total{{outcome=\"{o}\"}}"),
-            .. labels["grant"].Select(g => $"kumbu_oauth_tokens_issued_total{{grant=\"{g}\"}}"),
-            .. new[] { "text", "mixed", "image" }.Select(t => $"kumbu_pdf_pages_analysed_total{{type=\"{t}\"}}"),
-            .. new[] { "text", "mixed", "image", "unknown" }.Select(t => $"kumbu_pdf_pages_rendered_total{{type=\"{t}\"}}"),
-            .. failReasons.Select(r => $"kumbu_pdf_analysis_failures_total{{reason=\"{r}\"}}"),
-            .. pdfModes.Select(m => $"kumbu_pdf_calls_total{{mode=\"{m}\"}}"),
-            .. new[] { "text", "image" }.Select(a => $"kumbu_pdf_pages_delivered_total{{as=\"{a}\"}}"),
-            .. new[] { "images_all", "crop" }.Select(v => $"kumbu_pdf_text_pages_rendered_total{{via=\"{v}\"}}"),
-            .. new[] { "small", "medium", "large" }.Select(st => $"kumbu_img_calls_total{{step=\"{st}\"}}"),
-            .. new[] { "note", "pdf", "not_found", "too_large", "bad_crop", "bad_size", "unavailable" }.Select(r => $"kumbu_img_refusals_total{{reason=\"{r}\"}}"),
-            .. renderKinds.SelectMany(k => new[]
-            {
-                $"kumbu_render_duration_seconds_count{{kind=\"{k}\"}}", $"kumbu_image_delivered_bytes_count{{kind=\"{k}\"}}",
-                $"kumbu_image_delivered_long_edge_pixels_count{{kind=\"{k}\"}}",
-            }),
-            .. renderKinds.SelectMany(k => failReasons.Select(r => $"kumbu_render_failures_total{{kind=\"{k}\",reason=\"{r}\"}}")),
-            "kumbu_img_crops_total",
-        ];
-        var missing = expected.Where(series => !text.Contains(series + " ", StringComparison.Ordinal)).ToList();
+        // Each metric with labels has a series for every combination of its allowed values, a histogram as its _count; the
+        // series of kumbu_http_rate_limited_total (route templates, known to the running app) exist only after a 429.
+        var expected = KumbuMetrics.AllowedLabels.Where(m => m.Key != "kumbu_http_rate_limited_total" && m.Value.Count > 0)
+            .SelectMany(m => Combinations(m.Value).Select(labels => (m.Key, labels))).ToList();
+        Assert.NotEmpty(expected);
+        var missing = expected
+            .Where(e => !text.Contains($"{e.Key}{{{e.labels}}} ", StringComparison.Ordinal) && !text.Contains($"{e.Key}_count{{{e.labels}}} ", StringComparison.Ordinal))
+            .Select(e => $"{e.Key}{{{e.labels}}}").ToList();
         Assert.True(missing.Count == 0, string.Join('\n', missing));
     }
+
+    private static IEnumerable<string> Combinations(IReadOnlyDictionary<string, IReadOnlySet<string>> labels) =>
+        labels.Aggregate<KeyValuePair<string, IReadOnlySet<string>>, IEnumerable<string>>([""], (soFar, label) =>
+            soFar.SelectMany(prefix => label.Value.Select(v => $"{(prefix.Length == 0 ? "" : prefix + ",")}{label.Key}=\"{v}\"")));
 
     [Fact]
     public void Disabled_metrics_open_no_port()

@@ -42,8 +42,13 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         }
         catch (SidecarException e)
         {
-            KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
+            if (!KumbuMetrics.IsRequestMistake(e)) KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReasonOf(e));
             throw refuse(e);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            KumbuMetrics.RenderFailed(kind, KumbuMetrics.FailReason.Failed);
+            throw;
         }
         finally
         {

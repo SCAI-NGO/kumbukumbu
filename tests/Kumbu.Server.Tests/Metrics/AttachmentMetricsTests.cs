@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Attachments;
+using Kumbu.Server.Metrics;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Attachments;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -164,5 +165,15 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
         var after = await Scrape.TextAsync(app);
         Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
         Assert.Equal(1, Scrape.Value(after, refusal) - Scrape.Value(before, refusal));
+    }
+
+    [Fact]
+    public void A_request_the_client_got_wrong_is_no_render_failure()
+    {
+        Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_page", "x")));
+        Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("bad_crop", "x")));
+        Assert.False(KumbuMetrics.IsRequestMistake(new SidecarException(SidecarException.Timeout, "x")));
+        Assert.Equal(KumbuMetrics.FailReason.Invalid, KumbuMetrics.FailReasonOf(new SidecarException(SidecarException.Encrypted, "x")));
+        Assert.Equal(KumbuMetrics.FailReason.Failed, KumbuMetrics.FailReasonOf(new SidecarException("other", "x")));
     }
 }

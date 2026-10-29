@@ -34,7 +34,6 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
 
         Assert.DoesNotContain(Marker, text, StringComparison.OrdinalIgnoreCase);
         var endpoints = Endpoints();
-        var allowed = new Dictionary<string, IReadOnlySet<string>>(KumbuMetrics.AllowedLabels) { ["endpoint"] = endpoints };
         var checkedKumbu = 0;
         var checkedHttp = 0;
         foreach (var line in text.Split('\n'))
@@ -43,37 +42,63 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
             var sample = Sample().Match(line);
             Assert.True(sample.Success, line);
             var name = sample.Groups["name"].Value;
-            var labels = Pair().Matches(sample.Groups["labels"].Value).ToDictionary(m => m.Groups["name"].Value, m => m.Groups["value"].Value);
-            if (name.StartsWith("kumbu_", StringComparison.Ordinal))
-            {
-                checkedKumbu++;
-                foreach (var (label, value) in labels)
-                {
-                    if (label == "le" && IsBound(value)) continue;
-                    Assert.True(allowed.TryGetValue(label, out var values), $"unknown label {label} in {line}");
-                    Assert.True(values.Contains(value), $"{label}=\"{value}\" in {line}");
-                }
-            }
-            else if (name.StartsWith("http_request", StringComparison.Ordinal))
-            {
-                checkedHttp++;
-                foreach (var (label, value) in labels)
-                {
-                    var ok = label switch
-                    {
-                        "le" => IsBound(value),
-                        "code" => CodeClass().IsMatch(value),
-                        "method" => Methods.Contains(value),
-                        "controller" or "action" => value.Length == 0,
-                        "endpoint" => endpoints.Contains(value) || value.Length == 0,
-                        _ => false,
-                    };
-                    Assert.True(ok, $"{label}=\"{value}\" in {line}");
-                }
-            }
+            if (name.StartsWith("kumbu_", StringComparison.Ordinal)) checkedKumbu++;
+            else if (name.StartsWith("http_request", StringComparison.Ordinal)) checkedHttp++;
+            Assert.True(Accepts(line, endpoints), line);
         }
 
         Assert.True(checkedKumbu > 0 && checkedHttp > 0, "no kumbu_ or http_ samples in the scrape");
+    }
+
+    /// <summary>Whether every label of a sample line takes a value its metric allows; a kumbu_ metric the guard doesn't know fails.</summary>
+    private static bool Accepts(string line, HashSet<string> endpoints)
+    {
+        var sample = Sample().Match(line);
+        if (!sample.Success) return false;
+        var name = sample.Groups["name"].Value;
+        var labels = Pair().Matches(sample.Groups["labels"].Value).ToDictionary(m => m.Groups["name"].Value, m => m.Groups["value"].Value);
+        if (name.StartsWith("kumbu_", StringComparison.Ordinal))
+        {
+            var metric = KumbuMetrics.AllowedLabels.ContainsKey(name) ? name : HistogramSuffix().Replace(name, "");
+            if (!KumbuMetrics.AllowedLabels.TryGetValue(metric, out var allowed)) return false;
+            foreach (var (label, value) in labels)
+            {
+                if (label == "le" && IsBound(value)) continue;
+                if (label == "endpoint" && metric == "kumbu_http_rate_limited_total" && endpoints.Contains(value)) continue;
+                if (!allowed.TryGetValue(label, out var values) || !values.Contains(value)) return false;
+            }
+
+            return true;
+        }
+
+        if (!name.StartsWith("http_request", StringComparison.Ordinal)) return true;
+        return labels.All(l => l.Key switch
+        {
+            "le" => IsBound(l.Value),
+            "code" => CodeClass().IsMatch(l.Value),
+            "method" => Methods.Contains(l.Value),
+            "controller" or "action" => l.Value.Length == 0,
+            "endpoint" => endpoints.Contains(l.Value) || l.Value.Length == 0,
+            _ => false,
+        });
+    }
+
+    [GeneratedRegex("_(bucket|sum|count)$")]
+    private static partial Regex HistogramSuffix();
+
+    [Fact]
+    public void A_value_legal_for_one_metric_is_rejected_on_another()
+    {
+        var endpoints = new HashSet<string> { "none" };
+
+        Assert.True(Accepts("""kumbu_render_failures_total{kind="page",reason="timeout"} 0""", endpoints));
+        Assert.True(Accepts("""kumbu_write_conflicts_total{via="api"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_render_failures_total{kind="invalid",reason="timeout"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_write_conflicts_total{via="crop"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_pdf_text_pages_rendered_total{via="mcp"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_vault_locks_total{reason="timeout"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_invented_total{tool="sh"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_mcp_tool_calls_total{tool="sh",kind="page"} 0""", endpoints));
     }
 
     [GeneratedRegex("^[1-5]xx$")]
