@@ -27,7 +27,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
                             pixels of the original image (as 'cat' reports its size, rotation by the camera
                             applied). The part is then scaled to the step like a whole image.
           A very tall or wide image is reduced a lot to fit a step; the text then suggests a crop.
-          At most 4 images come from one call, and img stands alone, not in a pipeline.
+          One call delivers one image, and img stands alone, not in a pipeline.
           A client may drop images; if none follows the text, say so to the user rather than guess.
           For the pages of a PDF see 'help pdf'; 'cat <path>' says what an attachment is.
 

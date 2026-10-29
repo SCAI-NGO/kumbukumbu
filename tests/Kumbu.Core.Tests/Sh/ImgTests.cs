@@ -228,7 +228,8 @@ public class ImgTests
         Assert.Contains(SizeSteps.Table, help);
         Assert.Contains("--crop x,y,w,h", help);
         Assert.Contains("original", help);
-        Assert.Contains("At most 4 images", help);
+        Assert.Contains("One call delivers one image", help);
+        Assert.DoesNotContain("At most 4 images", help);
         Assert.Contains("A client may drop images", help);
         Assert.Contains("'help pdf'", help);
         Assert.Contains("img /Work/Screens/shot.png --crop", help);

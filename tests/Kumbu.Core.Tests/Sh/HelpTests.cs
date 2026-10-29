@@ -85,6 +85,11 @@ public class HelpTests
         Assert.Contains("semsearch --words and --tag find notes only", topic);
         Assert.Contains("img        shows an image to the model", topic);
         Assert.Contains("pdf        reads a PDF", topic);
+        // The search commands are items of the same list, their continuation under their description.
+        Assert.Contains("\n    pdf        reads a PDF", topic);
+        Assert.Contains("\n    rg         searches the text of PDFs", topic);
+        Assert.Contains("\n    semsearch  ranks the pages of PDFs", topic);
+        Assert.Contains("\n                 1. /Work/paper.pdf p7  score 0.61", topic);
 
         // The stub is gone: a shell without the pixels has no pdf to explain.
         Assert.Equal(ShellResult.Error("help: no such command: pdf — try 'help'"), await Run("help pdf"));

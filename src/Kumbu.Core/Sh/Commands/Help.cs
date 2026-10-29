@@ -57,9 +57,9 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 links, backlinks          backlinks lists the notes that link to it or embed it
                 img        shows an image to the model, whole or a part of it ('help img')
                 pdf        reads a PDF page by page: its text, pages as images, a part of a page ('help pdf')
-              rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
-              semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
-                           1. /Work/paper.pdf p7  score 0.61
+                rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
+                semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
+                             1. /Work/paper.pdf p7  score 0.61
               What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
               neither rg nor semsearch searches images, and rg not PDFs in a checkpoint; head, tail,
               wc, sort and outline read notes, not attachments.
