@@ -514,8 +514,9 @@ GitHub Actions (`.github/workflows/docker.yml`) builds two images in the same ru
 | Pull request | built, not pushed | none |
 | Push to `master` | built, pushed, signed | `master`, `sha-<commit>` |
 | Tag `vX.Y.Z` | built, pushed, signed | `X.Y.Z`, `X.Y`, `X`, `sha-<commit>`, `latest` |
+| Tag `vX.Y.Z-pre.N` (pre-release) | built, pushed, signed | `X.Y.Z-pre.N`, `sha-<commit>` |
 
-`:latest` moves **only** on a `v*.*.*` tag, never on a push to `master`, so a server that follows `:latest` (Komodo on the VPS does) updates on a deliberate release, not on every merge. Builds that are not a tag report themselves as `<version.txt>-pre.<run number>`; `version.txt` holds the next release's base version. The server image carries its version in `/app/VERSION`: `docker run --rm --entrypoint cat ghcr.io/scai-ngo/kumbukumbu:latest /app/VERSION`. Run both images of the same release (or the same `sha-<commit>`): pinning one, pin the other to the same tag.
+`:latest` moves **only** on a `v*.*.*` tag, never on a push to `master`, so a server that follows `:latest` (Komodo on the VPS does) updates on a deliberate release, not on every merge. A pre-release tag such as `v0.2.5-pre.1` (any tag with a `-`) leaves `:latest`, `X.Y` and `X` alone: it is for trying a build on a server pinned to it (`KUMBU_IMAGE` and `KUMBU_PDF_IMAGE` set to `…:0.2.5-pre.1`), which reports itself as `0.2.5-pre.1`. Builds that are not a tag report themselves as `<version.txt>-pre.<run number>`; `version.txt` holds the next release's base version. The server image carries its version in `/app/VERSION`: `docker run --rm --entrypoint cat ghcr.io/scai-ngo/kumbukumbu:latest /app/VERSION`. Run both images of the same release (or the same `sha-<commit>`): pinning one, pin the other to the same tag.
 
 To release, set `version.txt` to the next version if it has changed, merge to `master`, and tag:
 
