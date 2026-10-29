@@ -15,7 +15,8 @@
 #   pick its address. Safe only because nothing but Traefik can reach the container: keep it that way.
 # - Two networks: `proxy` (Traefik and Kumbu²) and the default one (Kumbu² and MongoDB), now internal. Traefik never
 #   sees MongoDB, and MongoDB has no way out. Kumbu² reaches the internet through `proxy` (model download, OAuth client
-#   metadata, external embedding providers).
+#   metadata, external embedding providers). The PDF sidecar stays on `pdf`, compose.yaml's internal network with
+#   Kumbu² alone, which this file leaves as it is.
 # - KUMBU_PUBLIC_URL is https://${KUMBU_HOST}; a KUMBU_PUBLIC_URL in .env is not used.
 #
 # Left as it is, on purpose: Strict-Transport-Security and the other security headers come from Kumbu² itself (with

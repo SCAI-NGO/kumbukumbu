@@ -62,6 +62,11 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+      # Started along with the server, but not waited for: without the sidecar the server runs, and img, pdf's pages
+      # and new PDFs' analyses say they are unavailable until it is back.
+      pdf:
+        condition: service_started
+        required: false
     environment:
       Kumbu__Mongo__ConnectionString: mongodb://mongo:27017/?directConnection=true
       # Optional; set, the server signs in to MongoDB as `kumbu` (see the mongo service). Empty, it doesn't.
@@ -93,12 +98,44 @@ services:
       Kumbu__Embeddings__Default: ${KUMBU_EMBEDDINGS_DEFAULT:-internal}
       # Prometheus metrics, for compose.monitoring.yaml: not published, but reachable from every container on a network of the server's.
       Kumbu__Metrics__Url: http://0.0.0.0:9464
+      # The PDF sidecar below, which parses PDFs and decodes images for img and pdf; empty, neither shows anything.
+      Kumbu__Pdf__Url: http://pdf:8090
+    networks:
+      - default
+      - pdf
     volumes:
       # A directory, not a symlink: symlinked vault folders do not resolve inside the container.
       - ${KUMBU_VAULTS:-./vaults}:/seed:ro
       - recovery-keys:/recovery
       - deletions:/deletions
       - models:/models
+
+  pdf:
+    # The PDF sidecar (pdf/): untrusted PDFs are parsed, and untrusted images decoded, here, never in the server, which
+    # holds the vault keys. Stateless; it gets the bytes of one file per request and keeps nothing. Take it from the same
+    # release as the server (README, "Images and releases").
+    image: ${KUMBU_PDF_IMAGE:-ghcr.io/scai-ngo/kumbukumbu-pdf:latest}
+    restart: unless-stopped
+    # Only on `pdf`, an internal network shared with the server alone: no route out, and nothing else reaches it.
+    networks:
+      - pdf
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # The image's `node` user.
+    user: "1000:1000"
+    # Two workers of at most 512 MB heap each, plus Skia's canvases outside it.
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 128
+
+networks:
+  pdf:
+    internal: true
 
 volumes:
   mongo-data:
