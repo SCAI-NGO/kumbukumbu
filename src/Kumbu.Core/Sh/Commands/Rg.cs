@@ -311,10 +311,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
                     if (options.Has("files-with-matches") && total > 0) break;
                 }
             }
-            catch (Exception e) when (e is not OperationCanceledException)
+            catch (Exception e) when (e is not (OperationCanceledException or RegexMatchTimeoutException))
             {
-                // Whatever went wrong with this PDF's text, the notes and the other PDFs still count.
-                continue;
+                // Whatever went wrong with this PDF's text, the notes, the other PDFs and its matches so far still count;
+                // a search that took too long is rg's error, not this PDF's.
             }
 
             if (options.Has("count") && total > 0) output.Add($"{name}:{total}");

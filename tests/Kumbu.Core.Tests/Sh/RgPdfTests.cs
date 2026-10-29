@@ -25,6 +25,9 @@ public class RgPdfTests
 
         public HashSet<string> TextFails { get; } = [];
 
+        /// <summary>The exception the text of a PDF throws from a page on, as a failure part way through.</summary>
+        public Dictionary<string, (int From, Exception Error)> TextFailsFrom { get; } = [];
+
         public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
@@ -40,6 +43,7 @@ public class RgPdfTests
         {
             TextRequests.Add((path.Value, first, last));
             if (TextFails.Contains(path.Value)) throw new InvalidOperationException("the text part is gone");
+            if (TextFailsFrom.TryGetValue(path.Value, out var fails) && last >= fails.From) throw fails.Error;
             if (!Analyses.ContainsKey(path.Value)) return Task.FromResult<IReadOnlyList<string>?>(null);
             var text = Texts[path.Value];
             return Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(text)]);
@@ -295,6 +299,27 @@ public class RgPdfTests
         var result = await Run("rg -l needle /V");
 
         Assert.Equal("/V/plan.md\n/V/paper.pdf", result.Output);
+    }
+
+    [Fact]
+    public async Task A_pdf_whose_text_fails_part_way_keeps_its_count_so_far()
+    {
+        await Upload("/V/long.pdf", 250, n => n is 50 or 60 ? "needle" : "filler");
+        _pixels.TextFailsFrom["/V/long.pdf"] = (101, new InvalidOperationException("the text part is gone"));
+        await Paper("/V/z.pdf");
+
+        Assert.Equal("/V/long.pdf:2\n/V/z.pdf:3", (await Run("rg -c needle /V/long.pdf /V/z.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_search_that_times_out_on_pdf_text_says_it_took_too_long()
+    {
+        await Paper();
+        _pixels.TextFailsFrom["/V/paper.pdf"] = (1, new System.Text.RegularExpressions.RegexMatchTimeoutException("needle", "needle", TimeSpan.FromSeconds(2)));
+
+        var result = await Run("rg needle /V");
+
+        Assert.Equal(ShellResult.Error("rg: the search took too long; narrow the path or simplify the pattern"), result);
     }
 
     [Fact]
