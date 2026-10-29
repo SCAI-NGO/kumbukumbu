@@ -9,8 +9,9 @@ namespace Kumbu.Server.Metrics;
 /// <summary>
 /// Serves <c>/metrics</c> on a listener of its own, so that the app's port, which a proxy exposes, never carries it
 /// (a request there cannot be told to be for the metrics by a <c>Host</c> header). Nothing else is served: any other path is 404.
+/// The PDF sidecar is refused here as on the app's port (<see cref="Attachments.SidecarPeers"/>).
 /// </summary>
-public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedService, IAsyncDisposable
+public sealed class MetricsServer(IOptions<KumbuOptions> options, Attachments.SidecarPeers sidecar) : IHostedService, IAsyncDisposable
 {
     private WebApplication? _app;
 
@@ -30,6 +31,7 @@ public sealed class MetricsServer(IOptions<KumbuOptions> options) : IHostedServi
         var app = builder.Build();
         try
         {
+            app.Use(sidecar.RefuseAsync);
             app.MapMetrics("/metrics");
             await app.StartAsync(cancellationToken);
         }

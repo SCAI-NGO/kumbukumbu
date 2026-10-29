@@ -64,10 +64,15 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
         {
             services.RemoveAll<Kumbu.Server.Search.IEmbeddingDriver>();
             services.AddSingleton<Kumbu.Server.Search.IEmbeddingDriver>(Embedder);
+            // No sidecar container in tests: canned analyses and solid-colour pictures stand in for it.
+            services.RemoveAll<Kumbu.Server.Attachments.IPdfSidecar>();
+            services.AddSingleton<Kumbu.Server.Attachments.IPdfSidecar>(Sidecar);
         });
     }
 
     public Search.FakeEmbedder Embedder { get; } = new();
+
+    public Attachments.FakePdfSidecar Sidecar { get; } = new();
 
     /// <summary>The origin <see cref="PublicApi"/> is reached at.</summary>
     public const string PublicUrl = "https://kumbu.test";

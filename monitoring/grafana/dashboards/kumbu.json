@@ -758,6 +758,881 @@
     },
     {
       "type": "row",
+      "id": 30,
+      "title": "Attachments",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 31,
+      "title": "PDF pages analysed per hour by type",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (type) (increase(kumbu_pdf_pages_analysed_total[1h]))",
+          "legendFormat": "{{type}}",
+          "range": true
+        }
+      ],
+      "description": "Pages analysed as text, mixed or image, in the hour before each point. Counted when an analysis is stored, so a PDF analysed again after an upgrade counts again."
+    },
+    {
+      "type": "timeseries",
+      "id": 32,
+      "title": "PDF page coverage p50 and p90, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_text_coverage_ratio_bucket[24h])))",
+          "legendFormat": "text p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_text_coverage_ratio_bucket[24h])))",
+          "legendFormat": "text p90",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_image_coverage_ratio_bucket[24h])))",
+          "legendFormat": "image p50",
+          "range": true
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_image_coverage_ratio_bucket[24h])))",
+          "legendFormat": "image p90",
+          "range": true
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_vector_coverage_ratio_bucket[24h])))",
+          "legendFormat": "vector p50",
+          "range": true
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_vector_coverage_ratio_bucket[24h])))",
+          "legendFormat": "vector p90",
+          "range": true
+        }
+      ],
+      "description": "Share of an analysed page covered by text, images and vector drawings; the median and the 90th percentile of the pages analysed in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 33,
+      "title": "Pages per PDF p50 and p90, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_pages_per_document_bucket[24h])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_pages_per_document_bucket[24h])))",
+          "legendFormat": "p90",
+          "range": true
+        }
+      ],
+      "description": "Pages analysed per PDF, median and 90th percentile of the PDFs analysed in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 34,
+      "title": "pdf calls per minute by mode",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (mode) (rate(kumbu_pdf_calls_total[5m])) * 60",
+          "legendFormat": "{{mode}}",
+          "range": true
+        }
+      ],
+      "description": "pdf calls that reached a PDF: info, text, images (--images), images_all (--images=all) and crop (--crop)."
+    },
+    {
+      "type": "timeseries",
+      "id": 35,
+      "title": "Text pages rendered per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (via) (increase(kumbu_pdf_text_pages_rendered_total[1h]))",
+          "legendFormat": "{{via}}",
+          "range": true
+        }
+      ],
+      "description": "Pages the analysis calls text that a client still asked to see as an image (--images=all or --crop): each one may mean the 25 % threshold missed a figure (an upper bound: agents also look at text pages for other reasons)."
+    },
+    {
+      "type": "timeseries",
+      "id": 36,
+      "title": "Pages delivered per minute",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 52
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (as) (rate(kumbu_pdf_pages_delivered_total[5m])) * 60",
+          "legendFormat": "{{as}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (type) (rate(kumbu_pdf_pages_rendered_total[5m])) * 60",
+          "legendFormat": "rendered {{type}}",
+          "range": true
+        }
+      ],
+      "description": "PDF pages delivered as text or as an image, and the images by the type the analysis gave the page."
+    },
+    {
+      "type": "timeseries",
+      "id": 37,
+      "title": "img calls per minute by step",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (step) (rate(kumbu_img_calls_total[5m])) * 60",
+          "legendFormat": "{{step}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(rate(kumbu_img_crops_total[5m])) * 60",
+          "legendFormat": "crops",
+          "range": true
+        }
+      ],
+      "description": "img calls that delivered an image, by size step, and those among them that were crops."
+    },
+    {
+      "type": "timeseries",
+      "id": 38,
+      "title": "Render p95 by kind",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(kumbu_render_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{kind}}",
+          "range": true
+        }
+      ],
+      "description": "How long the sidecar took to render a page or an image, failures included."
+    },
+    {
+      "type": "timeseries",
+      "id": 39,
+      "title": "Delivered image bytes p50 and p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 60
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, kind) (rate(kumbu_image_delivered_bytes_bucket[5m])))",
+          "legendFormat": "p50 {{kind}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(kumbu_image_delivered_bytes_bucket[5m])))",
+          "legendFormat": "p95 {{kind}}",
+          "range": true
+        }
+      ],
+      "description": "Size of each rendered image handed to the shell, by kind (page or image)."
+    },
+    {
+      "type": "timeseries",
+      "id": 40,
+      "title": "Analysis and render failures per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 68
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (reason) (increase(kumbu_pdf_analysis_failures_total[1h]))",
+          "legendFormat": "analysis {{reason}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (kind, reason) (increase(kumbu_render_failures_total[1h]))",
+          "legendFormat": "render {{kind}} {{reason}}",
+          "range": true
+        }
+      ],
+      "description": "PDF analyses and renders that failed, by reason, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 41,
+      "title": "img refusals per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 68
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (reason) (increase(kumbu_img_refusals_total[1h]))",
+          "legendFormat": "{{reason}}",
+          "range": true
+        }
+      ],
+      "description": "img calls refused, by reason, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 42,
+      "title": "PDF analysis duration p50 and p95, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_analysis_duration_seconds_bucket[24h])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(kumbu_pdf_analysis_duration_seconds_bucket[24h])))",
+          "legendFormat": "p95",
+          "range": true
+        }
+      ],
+      "description": "How long the sidecar took to analyse a PDF that was then stored: median and 95th percentile of the analyses in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 43,
+      "title": "Characters per page p50 and p90, 24 h",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(kumbu_pdf_page_chars_bucket[24h])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.9, sum by (le) (increase(kumbu_pdf_page_chars_bucket[24h])))",
+          "legendFormat": "p90",
+          "range": true
+        }
+      ],
+      "description": "Characters of text per analysed page: median and 90th percentile of the pages analysed in the 24 hours before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 44,
+      "title": "Delivered image long edge p50",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 76
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, kind) (rate(kumbu_image_delivered_long_edge_pixels_bucket[5m])))",
+          "legendFormat": "p50 {{kind}}",
+          "range": true
+        }
+      ],
+      "description": "Long edge in pixels of each rendered image handed to the shell, by kind (page or image): the median of the last 5 minutes."
+    },
+    {
+      "type": "row",
       "id": 17,
       "title": "Vaults",
       "collapsed": false,
@@ -766,7 +1641,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 84
       }
     },
     {
@@ -781,7 +1656,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 44
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -833,7 +1708,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 44
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -896,7 +1771,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 44
+        "y": 85
       },
       "fieldConfig": {
         "defaults": {
@@ -947,7 +1822,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 52
+        "y": 93
       }
     },
     {
@@ -962,7 +1837,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 94
       },
       "fieldConfig": {
         "defaults": {
@@ -1015,7 +1890,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 94
       },
       "fieldConfig": {
         "defaults": {
@@ -1066,7 +1941,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 102
       }
     },
     {
@@ -1081,7 +1956,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 62
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1134,7 +2009,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 62
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1186,7 +2061,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 62
+        "y": 103
       },
       "fieldConfig": {
         "defaults": {
@@ -1238,7 +2113,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 70
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
@@ -1300,7 +2175,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 70
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {

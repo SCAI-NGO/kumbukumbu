@@ -43,6 +43,43 @@ public sealed partial class DashboardTests(KumbuAppFactory app)
         Assert.All(queried, name => Assert.True(Exported(name) || Exported(Suffix().Replace(name, "")), $"{name} is queried but not exported"));
     }
 
+    // A metric no panel shows is measured for nothing: the README lists every one under the dashboard's rows.
+    [Fact]
+    public async Task Every_metric_the_server_defines_has_a_panel()
+    {
+        var file = Path.Combine(Path.GetDirectoryName(KumbuAppFactory.SamplesPath)!, "monitoring", "grafana", "dashboards", "kumbu.json");
+        var dashboard = JsonNode.Parse(await File.ReadAllTextAsync(file, Ct))!;
+        var queried = Expressions(dashboard).SelectMany(e => Metric().Matches(e)).Select(m => Suffix().Replace(m.Value, "")).ToHashSet(StringComparer.Ordinal);
+
+        Assert.Empty(Defined().Where(name => !queried.Contains(name)).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_readme_lists_the_dashboard_s_rows_in_its_order()
+    {
+        var root = Path.GetDirectoryName(KumbuAppFactory.SamplesPath)!;
+        var dashboard = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(root, "monitoring", "grafana", "dashboards", "kumbu.json"), Ct))!;
+        var rows = dashboard["panels"]!.AsArray().Where(p => (string?)p!["type"] == "row").Select(p => (string)p!["title"]!).ToList();
+        var readme = await File.ReadAllLinesAsync(Path.Combine(root, "README.md"), Ct);
+        var listed = readme.SkipWhile(l => !l.StartsWith("What is measured, in rows of the dashboard", StringComparison.Ordinal)).Skip(2)
+            .TakeWhile(l => l.StartsWith("- **", StringComparison.Ordinal)).Select(l => l[4..l.IndexOf("**", 4, StringComparison.Ordinal)]).ToList();
+
+        Assert.Equal(rows, listed);
+    }
+
+    // A PDF is analysed once per upload, a few a day: a 5-minute rate of that is mostly empty, and its spikes say nothing.
+    [Fact]
+    public async Task Per_upload_metrics_are_shown_over_an_hour_or_longer()
+    {
+        var file = Path.Combine(Path.GetDirectoryName(KumbuAppFactory.SamplesPath)!, "monitoring", "grafana", "dashboards", "kumbu.json");
+        var dashboard = JsonNode.Parse(await File.ReadAllTextAsync(file, Ct))!;
+        string[] perUpload = ["kumbu_pdf_pages_analysed_total", "kumbu_pdf_page_", "kumbu_pdf_pages_per_document", "kumbu_pdf_analysis_"];
+
+        var shortWindows = Expressions(dashboard).Where(e => perUpload.Any(m => e.Contains(m, StringComparison.Ordinal)) && e.Contains("[5m]", StringComparison.Ordinal));
+
+        Assert.Empty(shortWindows);
+    }
+
     private static IEnumerable<string> Expressions(JsonNode node) => node switch
     {
         JsonObject o => (o["targets"] is JsonArray targets ? targets.Select(t => (string?)t?["expr"]).OfType<string>() : [])

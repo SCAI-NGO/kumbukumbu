@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Search;
@@ -11,9 +12,10 @@ namespace Kumbu.Core.Sh.Commands;
 /// <summary>
 /// Ranked search over sections (concept §6): embeddings for meaning, BM25 for exact words and names. The hybrid
 /// ranks by cosine similarity plus a small bonus for the query's words; <c>--words</c> ranks by BM25 alone.
-/// <c>rg</c> stays the plain, unranked regex search.
+/// <c>rg</c> stays the plain, unranked regex search. With <c>pixels</c>, pages of PDFs rank among the sections by
+/// meaning, shown with the start of their stored text.
 /// </summary>
-public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
+public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachmentPixels? pixels = null) : ICommand
 {
     private const int DefaultMax = 10;
 
@@ -23,7 +25,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
 
     public string Usage => "semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]";
 
-    public string Summary => "ranked search by words and meaning; finds sections";
+    public string Summary => "ranked search by words and meaning; finds sections and PDF pages";
 
     public string Help => """
         semsearch [-n N] [--words|--meaning] [--tag T] <query> [path]
@@ -33,7 +35,10 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
           bonus for the words of the query a section contains. Prints the best sections (-n, default 10)
           as path#Section with their lines, their score and the start of their text; scores are
           comparable within one search, not across searches. Then cat "path#Section" reads one. For exact
-          text or a regex, use rg. Images and PDFs are not searched; only notes are.
+          text or a regex, use rg. Pages of PDFs rank among the sections by meaning, not by words and
+          not with --tag: a hit prints as path p7 with its score and the start of the page's text, and
+          pdf path 7 reads it; a PDF as the path ranks its own pages.
+          Pages without a text layer (scans) and images are not searched.
           The query is the words before the path; quoting it is optional.
           --words    rank by words only        --meaning  rank by meaning only
           --tag T    only notes that carry #T (nested too, ignoring case; 'help tags'); repeat
@@ -42,6 +47,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
           semsearch how do agents read notes
           semsearch --tag research modelling capabilities
           semsearch -n 5 'Regeln am Eingang' /Demo
+          semsearch attention heads /Work/Papers/smith-2025.pdf
         """;
 
     public bool ReadsInput => false;
@@ -72,13 +78,25 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
             return ShellResult.Error($"semsearch: missing query; {query} is the path (semsearch <query> {query})");
         }
 
+        // A PDF carries no tags, so a search by tag leaves them out.
+        var pages = pixels is not null && !options.Has("tag");
         IReadOnlyList<Note> found;
         if (!scope.IsRoot && await notes.ReadAsync(scope, ct) is { } single) found = [new Note(scope, single)];
+        else if (pages && AttachmentFormat.IsPdf(scope) && await StoreAttachments.GetAsync(notes, scope, ct) is { } pdf
+            && AttachmentText.IsPdf(pdf.Current))
+        {
+            if (options.Has("words")) return ShellResult.Error($"semsearch: {scope.Value} is a PDF; semsearch --words searches notes only, by meaning it finds its pages");
+            found = [];
+        }
         else
         {
             found = await notes.ReadNotesUnderAsync(scope, ct);
             var isVault = scope.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(scope.Segments[0]);
-            if (found.Count == 0 && !scope.IsRoot && !isVault) return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
+            // A folder of PDFs only has pages to find.
+            if (found.Count == 0 && !scope.IsRoot && !isVault && !(pages && (await StoreAttachments.UnderAsync(notes, scope, ct)).Any(a => AttachmentFormat.IsPdf(a.Current))))
+            {
+                return await CommandArgs.ReadNoteAsync(Name, notes, scope, ct);
+            }
         }
 
         if (options.Values("tag") is { Count: > 0 } tags)
@@ -89,7 +107,7 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
         }
 
         var mode = options.Has("words") ? SearchMode.Words : options.Has("meaning") ? SearchMode.Meaning : SearchMode.Hybrid;
-        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct) switch
+        var (listed, semantic, notIndexed) = await SectionSearch.RankAsync(found, scope, query, mode, max, index, ct, pages) switch
         {
             { MeaningUnavailable: true } r => (null, r.Semantic, false),
             var r => (r.Hits, r.Semantic, r.FellBackToWords),
@@ -102,17 +120,43 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index) : ICommand
         {
             var (c, score) = listed[i];
             var shown = score is { } s ? string.Create(CultureInfo.InvariantCulture, $"  score {s:0.00}") : "";
+            if (listed[i].Page is { } page)
+            {
+                lines.Add($"{i + 1}. {c.Path.Value} p{page}{shown}");
+                lines.Add($"   {await PageStartAsync(c.Path, page, ct)}");
+                continue;
+            }
+
             lines.Add($"{i + 1}. {c.Path.Value}{c.Address}  lines {c.StartLine + 1}-{c.EndLine}{shown}");
             lines.Add($"   {SectionSearch.Snippet(c)}");
         }
 
-        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0));
+        lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0, listed.Any(h => h.Page is not null)));
         return ShellResult.Ok(Lines.Join(lines));
     }
 
-    private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool notIndexed, bool any)
+    /// <summary>The start of a page's stored text on one line, as a section's snippet.</summary>
+    private async Task<string> PageStartAsync(VaultPath path, int page, CancellationToken ct)
     {
-        var read = any ? "; cat \"path#Section\" reads one" : "";
+        const string Unavailable = "(the text of this page can't be read right now)";
+        if (await StoreAttachments.GetAsync(notes, path, ct) is not { } attachment) return Unavailable;
+        IReadOnlyList<string>? text;
+        try
+        {
+            text = await pixels!.PageTextAsync(path, attachment.Current, page, page, ct);
+        }
+        catch (PixelsUnavailableException)
+        {
+            return Unavailable;
+        }
+
+        if (text is not [var only]) return Unavailable;
+        return SectionSearch.Shorten(string.Join(' ', only.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)));
+    }
+
+    private static string Footer(SemanticResult? semantic, bool wordsOnly, bool meaningOnly, bool notIndexed, bool any, bool anyPage = false)
+    {
+        var read = !any ? "" : anyPage ? "; cat \"path#Section\" reads a section, pdf path N a page" : "; cat \"path#Section\" reads one";
         if (wordsOnly) return $"(ranked by words{read})";
         var by = meaningOnly ? "meaning" : "words and meaning";
         if (semantic is null || semantic.State != SemanticState.Ready) return $"(ranked by words only: {semantic?.Reason ?? "no index"}{read})";

@@ -9,17 +9,39 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # GHCR image names must be lowercase, unlike the SCAI-NGO organisation name.
-  IMAGE: ghcr.io/scai-ngo/kumbukumbu
 
 jobs:
   build:
-    name: Build Image
+    # The server's job keeps its old name, which checks on pull requests may require.
+    name: ${{ matrix.name == 'server' && 'Build Image' || 'Build Image (PDF sidecar)' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
+    # The server and its PDF sidecar, tagged alike: release both from one tag. Each job runs to its end whatever the
+    # other's fate, so a failure never cancels the other half way through pushing and signing; a later change can
+    # publish :latest for both at once, after both have built.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # GHCR image names must be lowercase, unlike the SCAI-NGO organisation name.
+          - name: server
+            image: ghcr.io/scai-ngo/kumbukumbu
+            context: .
+            file: Dockerfile
+            cache: kumbu
+            build-contexts: ""
+            version-args: true
+          - name: pdf
+            image: ghcr.io/scai-ngo/kumbukumbu-pdf
+            context: pdf
+            file: pdf/Dockerfile
+            cache: kumbu-pdf
+            # LICENSE and THIRD-PARTY-NOTICES.md for the image (pdf/Dockerfile).
+            build-contexts: root=.
+            version-args: false
 
     steps:
       - name: Checkout repository
@@ -42,6 +64,8 @@ jobs:
 
       - name: Compute version
         id: version
+        env:
+          VERSION_ARGS: ${{ matrix.version-args }}
         run: |
           BASE=$(cat version.txt | tr -d '[:space:]')
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -54,13 +78,23 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "short_sha=$SHORT_SHA" >> $GITHUB_OUTPUT
           echo "built_at=$BUILT_AT" >> $GITHUB_OUTPUT
+          # Only the server's Dockerfile takes them (the web app, the server's version and /app/VERSION).
+          {
+            echo "build_args<<EOF"
+            if [ "$VERSION_ARGS" = true ]; then
+              echo "VERSION=$VERSION"
+              echo "GIT_SHA=$SHORT_SHA"
+              echo "BUILT_AT=$BUILT_AT"
+            fi
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
           echo "Resolved version: $VERSION (sha=$SHORT_SHA built_at=$BUILT_AT)"
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ matrix.image }}
           # `latest` moves ONLY on a v*.*.* tag push, never on a plain master
           # push — Komodo watches :latest, so a release is a conscious tag,
           # not every merge. A master push still builds + pushes a sha-/branch-
@@ -78,17 +112,15 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: .
-          file: Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-contexts: ${{ matrix.build-contexts }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            GIT_SHA=${{ steps.version.outputs.short_sha }}
-            BUILT_AT=${{ steps.version.outputs.built_at }}
-          cache-from: type=gha,scope=kumbu
-          cache-to: type=gha,mode=max,scope=kumbu
+          build-args: ${{ steps.version.outputs.build_args }}
+          cache-from: type=gha,scope=${{ matrix.cache }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache }}
 
       - name: Sign the published Docker image
         if: github.event_name != 'pull_request'
@@ -102,8 +134,9 @@ jobs:
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
           EVENT_NAME: ${{ github.event_name }}
+          IMAGE: ${{ matrix.image }}
         run: |
-          echo "## Docker Build Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Docker Build Report: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$TAGS" ] && [ "$EVENT_NAME" != "pull_request" ]; then
             echo "Pushed tags:" >> "$GITHUB_STEP_SUMMARY"
