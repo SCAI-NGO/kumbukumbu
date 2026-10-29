@@ -23,6 +23,8 @@ public class RgPdfTests
 
         public HashSet<string> Failing { get; } = [];
 
+        public HashSet<string> TextFails { get; } = [];
+
         public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
@@ -37,6 +39,7 @@ public class RgPdfTests
         public Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct)
         {
             TextRequests.Add((path.Value, first, last));
+            if (TextFails.Contains(path.Value)) throw new InvalidOperationException("the text part is gone");
             if (!Analyses.ContainsKey(path.Value)) return Task.FromResult<IReadOnlyList<string>?>(null);
             var text = Texts[path.Value];
             return Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(text)]);
@@ -257,6 +260,54 @@ public class RgPdfTests
 
         Assert.Equal("/V/papers/only.pdf", (await Run("rg -l needle /V/papers")).Output);
         Assert.Equal("rg: /V/nothing: No such file or directory", (await Run("rg needle /V/nothing")).Output);
+    }
+
+    [Fact]
+    public async Task Max_count_used_up_stops_reading_further_chunks()
+    {
+        await Upload("/V/big.pdf", 250, _ => "x");
+
+        var result = await Run("rg -m 1 x /V/big.pdf");
+
+        Assert.Equal("/V/big.pdf:p1: x", result.Output);
+        Assert.Equal([("/V/big.pdf", 1, 100)], _pixels.TextRequests);
+    }
+
+    [Fact]
+    public async Task The_output_limit_is_checked_per_page()
+    {
+        var line = new string('x', 10_000);
+        await Upload("/V/wide.pdf", 100, _ => line);
+
+        // Called directly, so the shell's own cut does not hide how many pages rg added.
+        var result = await new Kumbu.Core.Sh.Commands.Rg(_store, _pixels).RunAsync(["x", "/V/wide.pdf"], null, Ct);
+
+        Assert.Equal(3, result.Output.Split('\n').Length);
+    }
+
+    [Fact]
+    public async Task A_pdf_whose_text_cannot_be_read_is_skipped()
+    {
+        await Paper();
+        await Paper("/V/broken.pdf");
+        _pixels.TextFails.Add("/V/broken.pdf");
+
+        var result = await Run("rg -l needle /V");
+
+        Assert.Equal("/V/plan.md\n/V/paper.pdf", result.Output);
+    }
+
+    [Fact]
+    public async Task A_checkpoint_does_not_search_pdfs()
+    {
+        await Paper();
+        Assert.False((await Run("mkcp /V cp")).IsError);
+        _pixels.TextRequests.Clear();
+
+        var result = await Run("rg --checkpoint cp -l needle /V");
+
+        Assert.Equal("/V/plan.md", result.Output);
+        Assert.Empty(_pixels.TextRequests);
     }
 
     [Fact]

@@ -277,7 +277,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
                 var analysis = await pixels!.AnalysisAsync(path, state, runIfPending: false, ct);
                 if (analysis is null) continue;
 
-                for (var first = 1; first <= analysis.AnalysedPages && size <= OutputLimit.MaxChars; first += PagesAtATime)
+                for (var first = 1; first <= analysis.AnalysedPages && size <= OutputLimit.MaxChars && search.Remaining(total) != 0; first += PagesAtATime)
                 {
                     var last = Math.Min(first + PagesAtATime - 1, analysis.AnalysedPages);
                     if (await pixels.PageTextAsync(path, state, first, last, ct) is not { } texts) break;
@@ -305,14 +305,15 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
                         }
 
                         size += Grown();
-                        if (search.Remaining(total) == 0) break;
+                        if (search.Remaining(total) == 0 || size > OutputLimit.MaxChars) break;
                     }
 
                     if (options.Has("files-with-matches") && total > 0) break;
                 }
             }
-            catch (PixelsUnavailableException)
+            catch (Exception e) when (e is not OperationCanceledException)
             {
+                // Whatever went wrong with this PDF's text, the notes and the other PDFs still count.
                 continue;
             }
 
