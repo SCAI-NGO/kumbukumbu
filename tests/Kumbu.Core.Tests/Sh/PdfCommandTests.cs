@@ -89,7 +89,7 @@ public class PdfCommandTests
 
     /// <summary>12 pages: 1-3 text (page 2 with a small image), 4 mixed, 5-12 text.</summary>
     private static PdfAnalysis Twelve() => new("pdfjs-dist@6.4.299+rules.1", 12, 12, "Attention to detail", "A. Smith", [
-        Text(1), Text(2, images: 1, imageCoverage: 0.06), Text(3),
+        Text(1), Text(2, images: 1, imageCoverage: 0.03), Text(3),
         Mixed(4, regions: [new PdfRegion("drawing", 72, 300, 451, 260), new PdfRegion("image", 80, 90, 200, 120)]),
         .. Enumerable.Range(5, 8).Select(n => Text(n)),
     ]);
@@ -125,7 +125,7 @@ public class PdfCommandTests
         Assert.False(result.IsError, result.Output);
         Assert.Null(result.Parts);
         Assert.Equal("""
-            --- Page 2 of 12: text (1 small image ≈ 6 %) ---
+            --- Page 2 of 12: text (1 small image ≈ 3 %) ---
             Text of page 2
 
             --- Page 3 of 12: text ---
@@ -136,6 +136,55 @@ public class PdfCommandTests
             """.ReplaceLineEndings("\n"), result.Output);
         Assert.Empty(_pixels.PageRequests);
         Assert.Equal([true], _pixels.AnalysisRequests);
+    }
+
+    /// <summary>9 pages of text; page 5 holds two charts of about 11 % each, page 6 two photos of 12 % together.</summary>
+    private static PdfAnalysis Charts() => new("a", 9, 9, null, null, [
+        .. Enumerable.Range(1, 9).Select(n => n switch
+        {
+            5 => new PdfPage(5, 595, 842, 0, PageType.Text, 2400, 0.4, 0, 0.22, 0,
+                [new PdfRegion("drawing", 60, 120, 230, 240), new PdfRegion("drawing", 305, 120, 230, 240)]),
+            6 => new PdfPage(6, 595, 842, 0, PageType.Text, 2000, 0.4, 0.12, 0, 2,
+                [new PdfRegion("image", 60, 500, 230, 260), new PdfRegion("image", 305, 500, 230, 260)]),
+            _ => Text(n),
+        }),
+    ]);
+
+    [Fact]
+    public async Task A_text_page_with_figures_of_5_percent_or_more_says_how_to_see_them()
+    {
+        await Upload("/Papers/c.pdf", Charts());
+
+        var text = await Run("pdf /Papers/c.pdf 4-6");
+        var images = await Run("pdf /Papers/c.pdf 5 --images");
+
+        Assert.Equal("""
+            --- Page 4 of 9: text ---
+            Text of page 4
+
+            --- Page 5 of 9: text (vector drawing ≈ 22 % of the page) — add --images=all or --crop to see it ---
+            Text of page 5
+
+            --- Page 6 of 9: text (2 images ≈ 12 % of the page) — add --images=all or --crop to see it ---
+            Text of page 6
+            """.ReplaceLineEndings("\n"), text.Output);
+        Assert.Equal("--- Page 5 of 9: text (vector drawing ≈ 22 % of the page) — add --images=all or --crop to see it ---\nText of page 5", images.Output);
+        Assert.Empty(_pixels.PageRequests);
+    }
+
+    [Fact]
+    public async Task Info_lists_the_text_pages_with_figures_and_leaves_out_small_ones()
+    {
+        await Upload("/Papers/c.pdf", Charts() with { Pages = [.. Charts().Pages.Select(p => p.Number == 2 ? Text(2, images: 1, imageCoverage: 0.04) : p)] });
+
+        var lines = (await Run("pdf info /Papers/c.pdf")).Output.Split('\n');
+
+        Assert.Equal([
+            "c.pdf: PDF, 9 pages, 2.1 MB",
+            "Pages: 1-9 text",
+            "p5 text: vector drawing ≈ 22 % — regions (pt, x,y,w,h): drawing 60,120,230,240; drawing 305,120,230,240",
+            "p6 text: 2 images ≈ 12 % — regions (pt, x,y,w,h): image 60,500,230,260; image 305,500,230,260",
+        ], lines);
     }
 
     [Fact]
@@ -442,7 +491,7 @@ public class PdfCommandTests
 
         Assert.Equal("TITITIT", Kinds(open));
         Assert.Equal("--- Page 4 of ?: not analysed yet (/Papers/a.pdf has no page 4) ---", Texts(open)[^1]);
-        Assert.Equal("--- Stopped after page 10: at most 4 images per call. Continue with: pdf /Papers/a.pdf 11- --images=all (if the PDF has more pages) ---", Texts(four)[^1]);
+        Assert.Equal("--- Stopped after page 10: at most 4 images per call. If the PDF has more pages, continue with: pdf /Papers/a.pdf 11- --images=all ---", Texts(four)[^1]);
         Assert.Equal(ShellResult.Error("pdf: /Papers/a.pdf has no page 40"), past);
     }
 
@@ -541,6 +590,12 @@ public class PdfCommandTests
         Assert.Contains("rg finds text in PDFs", help);
         Assert.Contains("semsearch finds their pages by\n  meaning (1. /Work/paper.pdf p7)", help);
         Assert.Contains("Neither finds the text of pages without a text layer (scans)", help);
+        Assert.Contains("A PDF of more than 2000 pages is analysed up to\n  page 2000, and says so.", help);
+        Assert.Contains("cover 5 % of it or more", help);
+        Assert.Contains("— add --images=all or --crop to see it ---", help);
+        Assert.Contains("1 small image ≈ 3 %", help);
+        Assert.Contains("figures of each page that has more than small ones", help);
+        Assert.All(help.Split('\n'), line => Assert.True(line.Length <= 106, line));
         Assert.Contains("A client may drop images", help);
         Assert.Contains("'help img'", help);
         Assert.Contains("pdf /Work/Papers/paper.pdf 4 --crop", help);

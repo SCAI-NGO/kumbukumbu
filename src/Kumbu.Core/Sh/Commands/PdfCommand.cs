@@ -16,6 +16,9 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     private const int MaxRegions = 8;
     private const int MaxInfoRuns = 200;
 
+    // From this share of the page (in %), the images and drawings of a text page are figures worth a look, not small ones.
+    private const int FigurePercent = 5;
+
     // Room left under the output limit for what follows the pages: a picture block, the line naming where to go on.
     private const int Reserve = 1_000;
 
@@ -39,11 +42,14 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             image   one image covers at least 85 % of the page: a scan or a photo, with or without a text layer
             mixed   images and vector drawings together cover at least 25 % of the page: charts, figures
             text    anything else, an empty page too
+          On a text page, images and drawings that cover {FigurePercent} % of it or more get a nudge too, as --images
+          leaves the page out; less than that is called small (1 small image ≈ 3 %):
+            --- Page 5 of 9: text (vector drawing ≈ 22 % of the page) — add --images=all or --crop to see it ---
           An image inside the PDF of more than 50 megapixels is left out of the analysis, so its page reads
           as text.
           pdf info <path>   the page count, title and author, the types in runs (1-3 text, 4 mixed), and the
-                            figures of each page that isn't text with their regions in points, ready for
-                            --crop. A cheap first look.
+                            figures of each page that has more than small ones, with their regions in
+                            points, ready for --crop. A cheap first look.
           --images          also show the mixed and image pages of the range as an image, after their text
           --images=all      show every page of the range as an image, whatever its type
           --crop x,y,w,h    one page only: a part of it, rendered anew at full sharpness, without the text;
@@ -51,11 +57,12 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                             as 'pdf info' gives the regions
           --size S          the step for images, medium if omitted:
         {SizeSteps.Table}
-          At most 4 images come from one call, and at most {MaxPages} pages, fewer when their text would pass the
-          output limit (about {OutputLimit.MaxChars / OutputLimit.CharsPerToken} tokens); the last line then names the range to go on with.
+          At most {MaxImages} images come from one call, and at most {MaxPages} pages, fewer when their text would pass
+          the output limit (about {OutputLimit.MaxChars / OutputLimit.CharsPerToken} tokens); the last line then names the range to go on with.
           rg finds text in PDFs (/Work/paper.pdf:p7: text), and semsearch finds their pages by
           meaning (1. /Work/paper.pdf p7). Neither finds the text of pages without a text layer (scans),
-          which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to page 2000, and says so.
+          which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to
+          page 2000, and says so.
           If the analysis hasn't run yet, pdf runs it first (up to a minute); until it is there the text and
           the types aren't known, and only --images=all and --crop show pages.
           pdf stands alone, not in a pipeline. A client may drop images; if none follows a page's text, say
@@ -227,7 +234,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             lines.Add($"Analysed the first {analysis.AnalysedPages} of {analysis.PageCount} pages; later pages have no text or types.");
         }
 
-        var figures = analysis.Pages.Where(p => p.Type != PageType.Text).OrderBy(p => p.Number).ToList();
+        var figures = analysis.Pages.Where(p => p.Type != PageType.Text || HasFigures(p)).OrderBy(p => p.Number).ToList();
         var used = lines.Sum(l => l.Length + 1);
         for (var i = 0; i < figures.Count; i++)
         {
@@ -265,7 +272,11 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
 
     private static int Percent(double coverage) => (int)Math.Round(coverage * 100, MidpointRounding.AwayFromZero);
 
-    /// <summary>"1 small image ≈ 6 %", "vector drawing ≈ 35 %": what covers the page, leaving out what rounds to 0 %.</summary>
+    /// <summary>A text page whose images and drawings are worth a look, which <c>--images</c> leaves out.</summary>
+    private static bool HasFigures(PdfPage page) =>
+        page.Type == PageType.Text && Percent(page.ImageCoverage) + Percent(page.VectorCoverage) >= FigurePercent;
+
+    /// <summary>"1 small image ≈ 3 %", "vector drawing ≈ 35 %": what covers the page, leaving out what rounds to 0 %.</summary>
     private static List<string> Figures(PdfPage page, bool small)
     {
         var found = new List<string>();
@@ -279,7 +290,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         return found;
     }
 
-    /// <summary>What the header says in brackets: "text; vector drawing ≈ 35 % of the page", "1 small image ≈ 6 %", or nothing.</summary>
+    /// <summary>What the header says in brackets: "text; vector drawing ≈ 35 % of the page", "1 small image ≈ 3 %", or nothing.</summary>
     private static string? Found(PdfPage page)
     {
         switch (page.Type)
@@ -290,6 +301,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                 var figures = Figures(page, small: false);
                 return $"{(page.Chars > 0 ? "text" : "no text layer")}{(figures.Count > 0 ? $"; {string.Join(", ", figures)} of the page" : "")}";
             default:
+                if (HasFigures(page)) return $"{string.Join(", ", Figures(page, small: false))} of the page";
                 var small = Figures(page, small: true);
                 return small.Count > 0 ? string.Join(", ", small) : page.Chars == 0 ? "empty" : null;
         }
@@ -392,6 +404,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                 : render ? $" — not rendered: {failed}"
                 : page is null ? " — add --images=all to see it"
                 : page.Type != PageType.Text ? " — add --images to see it"
+                : HasFigures(page) ? " — add --images=all or --crop to see it"
                 : "";
             output.Add(text.Length == 0 ? $"{head}{hint} ---" : $"{head}{hint} ---\n{text}");
             if (text.Length > 0) pixels.Count(new PdfPageDelivered(PageDelivery.Text));
@@ -424,14 +437,18 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
 
     private static string PageSize(Picture picture) => $"page {Point(picture.OriginalWidth)}×{Point(picture.OriginalHeight)} pt";
 
-    /// <summary>"--- Stopped after page 9: at most 4 images per call. Continue with: pdf /a.pdf 10-20 --images ---".</summary>
-    private static ShellResult Stop(Output output, Call call, int after, string why, int next, bool open, string? unsure = null)
+    /// <summary>
+    /// "--- Stopped after page 9: at most 4 images per call. Continue with: pdf /a.pdf 10-20 --images ---"; the command
+    /// ends the line, so it can be copied as it is.
+    /// </summary>
+    private static ShellResult Stop(Output output, Call call, int after, string why, int next, bool open, bool unsure = false)
     {
         var range = new PageRange(next, open ? null : call.Range.Last);
         var flag = call.Show switch { Show.Images => " --images", Show.All => " --images=all", _ => "" };
         var size = call.Step == SizeStep.Medium ? "" : $" --size {SizeSteps.Name(call.Step)}";
         var shown = range.Last == next ? $"{next}" : range.ToString();
-        output.Add($"--- Stopped after page {after}: {why}. Continue with: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{size}{unsure} ---");
+        var lead = unsure ? "If the PDF has more pages, continue with" : "Continue with";
+        output.Add($"--- Stopped after page {after}: {why}. {lead}: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{size} ---");
         return output.Result();
     }
 
@@ -475,7 +492,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             if (output.Images == MaxImages)
             {
                 // Without an analysis the page count is unknown: the page after may not exist.
-                return Stop(output, call, n - 1, $"at most {MaxImages} images per call", n, call.Range.Last is null, " (if the PDF has more pages)");
+                return Stop(output, call, n - 1, $"at most {MaxImages} images per call", n, call.Range.Last is null, unsure: true);
             }
 
             Picture picture;
