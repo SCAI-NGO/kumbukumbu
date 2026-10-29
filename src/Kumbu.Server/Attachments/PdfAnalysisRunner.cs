@@ -23,6 +23,9 @@ public sealed class PdfAnalysisRunner : BackgroundService
 
     public const string PasswordProtected = "this PDF is password-protected; Kumbu² can't read it";
 
+    /// <summary>The code a try counts with when the sidecar answered but the analysis couldn't be stored.</summary>
+    private const string NotStored = "not_stored";
+
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
     private readonly VaultCatalog _catalog;
@@ -257,7 +260,20 @@ public sealed class PdfAnalysisRunner : BackgroundService
             _log.LogInformation("The PDF sidecar answers again");
         }
 
-        if (await _analyses.StoreAsync(vault, blobId, result, ct) is not { } analysis) return Outcome.Skipped;
+        PdfAnalysis? analysis;
+        try
+        {
+            analysis = await _analyses.StoreAsync(vault, blobId, result, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The sidecar did its part: a store that fails (too large for the database, say) would fail the same way
+            // next round, after minutes of analysis, so it counts a try.
+            _log.LogError("Storing the analysis of a PDF of vault {VaultId} failed: {Error}", vault.Id, e.GetType().Name);
+            return await FailedAsync(vault, blobId, new SidecarException(NotStored, "The analysis couldn't be stored"), ct);
+        }
+
+        if (analysis is null) return Outcome.Skipped;
         if (analysis.Analyser != PdfAnalyses.Analyser)
         {
             _log.LogWarning("The PDF sidecar's analyser is not this server's: it may be an older or newer release");
@@ -301,6 +317,7 @@ public sealed class PdfAnalysisRunner : BackgroundService
         "not_pdf" => "this PDF couldn't be analysed: it isn't a PDF the analyser can read",
         "too_large" => "this PDF couldn't be analysed: it is larger than the analyser takes",
         "damaged" => "this PDF couldn't be analysed: its stored content doesn't open",
+        NotStored => "this PDF couldn't be analysed: its analysis couldn't be stored",
         SidecarException.Timeout => "this PDF couldn't be analysed: it took longer than the time limit",
         _ => "this PDF couldn't be analysed: the analyser failed on it",
     });

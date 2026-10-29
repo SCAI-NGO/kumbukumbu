@@ -189,6 +189,30 @@ public sealed class PdfJobTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_analysis_that_cant_be_stored_counts_a_try_and_is_given_up_after_5()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var analyses = host.Services.GetRequiredService<PdfAnalyses>();
+        // As a database that refuses the write would (too large for its cache, say).
+        analyses.StoreFaultAt = _ => throw new MongoException("the write is refused");
+        var user = await RestClient.NewAsync(host);
+        var runner = host.Services.GetRequiredService<PdfAnalysisRunner>();
+        await user.CreateFileAsync("unstorable.pdf", Pdf("an analysis the database refuses"));
+        var vault = await VaultAsync(host, user);
+
+        for (var i = 0; i < 8 && await JobsAsync(vault.Id) > 0; i++) await runner.RoundAsync(Ct);
+
+        Assert.Equal(0, await JobsAsync(vault.Id));
+        Assert.Equal(PdfAnalysisRunner.MaxTries, sidecar.Analyses);
+        var state = await StateAsync(host, user, "unstorable.pdf");
+        var stored = await analyses.ReadAsync(vault, Convert.FromBase64String(state.BlobId), Ct);
+        Assert.Equal("this PDF couldn't be analysed: its analysis couldn't be stored", stored!.Failure!.Message);
+        // The text parts of the failed stores went with the failure's.
+        Assert.Equal(1, await Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument("vault", vault.Id), cancellationToken: Ct));
+    }
+
+    [Fact]
     public async Task An_unavailable_sidecar_is_never_given_up_on()
     {
         var sidecar = new FakePdfSidecar { Down = true };
