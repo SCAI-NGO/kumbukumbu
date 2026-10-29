@@ -148,6 +148,16 @@ public class ImgTests
     }
 
     [Fact]
+    public async Task The_pointer_to_pdf_quotes_a_path_with_spaces()
+    {
+        await Upload("/Work/My Papers/a b.pdf", [.. "%PDF-1.7"u8.ToArray(), .. new byte[100]], null);
+
+        var result = await Run("img \"/Work/My Papers/a b.pdf\"");
+
+        Assert.Equal("img: /Work/My Papers/a b.pdf is a PDF; look at its pages with pdf \"/Work/My Papers/a b.pdf\" <pages> --images (see 'help pdf')", result.Output);
+    }
+
+    [Fact]
     public async Task A_note_a_pdf_and_a_missing_path_are_refused()
     {
         await Upload("/Work/a.pdf", [.. "%PDF-1.7"u8.ToArray(), .. new byte[100]], null);

@@ -2,6 +2,7 @@
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
+using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
@@ -65,7 +66,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         var state = attachment.Current;
         if (AttachmentText.IsPdf(state))
         {
-            return Refused(ImgRefusal.Pdf, $"img: {path.Value} is a PDF; look at its pages with pdf {path.Value} <pages> --images (see 'help pdf')");
+            return Refused(ImgRefusal.Pdf, $"img: {path.Value} is a PDF; look at its pages with pdf {SectionLookup.Quote(path)} <pages> --images (see 'help pdf')");
         }
 
         // The pixels would answer the same, but need a round trip to find out.
