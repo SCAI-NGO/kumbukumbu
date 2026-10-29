@@ -10,7 +10,7 @@ Fixtures, made by a script (no real documents): `paper.pdf`, three pages, page 2
 
 | Suite | Command | Result |
 |---|---|---|
-| Server and core | `dotnet test --solution Kumbu.slnx` | 2506 tests: 2500 passed, 6 skipped (the model tests and a TensorX key), 0 failed |
+| Server and core | `dotnet test --solution Kumbu.slnx` | 2521 tests: 2515 passed, 6 skipped (the model tests and a TensorX key), 0 failed |
 | PDF sidecar | `pnpm -C pdf test` (type check, then Vitest), `pnpm -C pdf build` | 6 files, 77 tests passed; type check and build clean |
 | Web app | `pnpm -C web test --run`, `pnpm -C web build` | 72 files, 1079 tests passed; built |
 | Compose files | `docker compose … config -q` with the build, Traefik and monitoring files | valid in every combination |
@@ -34,6 +34,7 @@ Fixtures, made by a script (no real documents): `paper.pdf`, three pages, page 2
 | `rg -i -m 2 yield /Demo/Papers` | `/Demo/Papers/paper.pdf:p1: …` lines |
 | Sidecar stopped | `img` → "image rendering is unavailable right now"; a PDF uploaded meanwhile → "hasn't been analysed yet …"; `--images=all` → "PDF rendering is unavailable right now"; the stored text of an analysed PDF still readable; `cat` says "not analysed yet" |
 | Sidecar started again | the queued analysis ran within the next round (about a minute); `pdf info` then showed the pages |
+| From inside the sidecar's container (after the cross-package review's fix) | `fetch` of `kumbu:8080/healthz`, `kumbu:8080/oauth/authorize?client_id=https://…` and `kumbu:9464/metrics`: 403 each; the server meanwhile used the sidecar normally (`img … --size small` delivered 354 × 768) |
 | Prometheus | pages analysed by type (6 text, 1 image), `pdf` calls by mode, `img` calls by step, refusals and render failures by reason, and one render of a page classified `text` through `--crop` — the threshold's miss signal, from the chart crop above |
 
 ## Found in hands-on
