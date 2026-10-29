@@ -75,16 +75,15 @@ public class HelpTests
     }
 
     [Fact]
-    public async Task Help_lists_the_attachments_img_and_pdf_topics()
+    public async Task Help_lists_the_attachments_and_pdf_topics()
     {
         var topic = (await Run("help attachments")).Output;
         Assert.StartsWith("attachments", topic);
         Assert.Contains("15 MB each", topic);
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
         Assert.Contains("rg and semsearch skip attachments", topic);
+        Assert.Contains("img        shows an image to the model", topic);
 
-        Assert.StartsWith("img", (await Run("help img")).Output);
-        Assert.Contains("Coming in 0.2.5", (await Run("help img")).Output);
         Assert.StartsWith("pdf", (await Run("help pdf")).Output);
         Assert.Contains("Coming in 0.2.5", (await Run("help pdf")).Output);
 

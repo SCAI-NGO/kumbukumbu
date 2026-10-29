@@ -54,6 +54,7 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
                 rm         moves it to the trash ({NoteWriter.TrashRetention.Days} days) and says which links now lead nowhere
                 trash, restore, history   as for notes: an earlier version, or one from the trash, comes back
                 links, backlinks          backlinks lists the notes that link to it or embed it
+              img        shows an image to the model, whole or a part of it ('help img')
               What doesn't: rg and semsearch skip attachments (they search the text of notes only, and
               'rg --files' lists notes only); head, tail, wc, sort and outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
@@ -62,11 +63,6 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               cat /Work/Screens/shot.png
               backlinks /Work/Screens/shot.png
               mv /Work/Screens/shot.png /Work/archive/
-            """,
-        ["img"] = """
-            img
-              Coming in 0.2.5: looking at an image from the shell. Until then, 'cat <path>' says what an
-              image is (format, pixel size, file size); see 'help attachments'.
             """,
         ["pdf"] = """
             pdf

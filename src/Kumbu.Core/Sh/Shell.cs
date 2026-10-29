@@ -44,6 +44,7 @@ public sealed class Shell
         [
             .. ReadingCommands(notes, _now),
             new Semsearch(notes, search ?? new Search.NoSearchIndex()),
+            .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels)],
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
             new Mv(mover), new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
