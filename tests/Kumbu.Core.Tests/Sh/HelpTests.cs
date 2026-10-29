@@ -75,7 +75,7 @@ public class HelpTests
     }
 
     [Fact]
-    public async Task Help_lists_the_attachments_and_pdf_topics()
+    public async Task Help_lists_the_attachments_topic()
     {
         var topic = (await Run("help attachments")).Output;
         Assert.StartsWith("attachments", topic);
@@ -83,9 +83,10 @@ public class HelpTests
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
         Assert.Contains("rg and semsearch skip attachments", topic);
         Assert.Contains("img        shows an image to the model", topic);
+        Assert.Contains("pdf        reads a PDF", topic);
 
-        Assert.StartsWith("pdf", (await Run("help pdf")).Output);
-        Assert.Contains("Coming in 0.2.5", (await Run("help pdf")).Output);
+        // The stub is gone: a shell without the pixels has no pdf to explain.
+        Assert.Equal(ShellResult.Error("help: no such command: pdf — try 'help'"), await Run("help pdf"));
 
         Assert.Contains("'help attachments'", (await Run("help")).Output);
         Assert.Contains("help attachments", Manual.ToolDescription);

@@ -42,9 +42,9 @@ public sealed class Shell
         var files = writer.ForAttachments();
         ICommand[] commands =
         [
-            .. ReadingCommands(notes, _now),
+            .. ReadingCommands(notes, _now, pixels),
             new Semsearch(notes, search ?? new Search.NoSearchIndex()),
-            .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels)],
+            .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
             new Mv(mover), new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
@@ -62,9 +62,9 @@ public sealed class Shell
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels) =>
     [
-        new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
+        new Ls(notes), new Cat(notes, pixels), new OutlineCommand(notes), new Rg(notes),
         new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
@@ -197,7 +197,7 @@ public sealed class Shell
             }
         }
 
-        var command = ReadingCommands(view, _now).Single(c => c.Name == name);
+        var command = ReadingCommands(view, _now, _pixels).Single(c => c.Name == name);
         var result = await command.RunAsync(args, null, ct);
         if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
         return result with { Version = null };
