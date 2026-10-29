@@ -195,7 +195,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         Assert.True(await w.Analyses.StoreFailureAsync(w.Vault, w.BlobId, new PdfFailure("encrypted", "this PDF is password-protected; Kumbu² can't read it"), Ct));
 
         var stored = await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct);
-        Assert.Equal(new StoredPdfAnalysis(PdfAnalyses.Analyser, null, new PdfFailure("encrypted", "this PDF is password-protected; Kumbu² can't read it")), stored);
+        Assert.Equal(new StoredPdfAnalysis(PdfAnalyses.Analyser, null, new PdfFailure("encrypted", "this PDF is password-protected; Kumbu² can't read it"), PdfAnalyses.Analyser), stored);
         Assert.True(stored!.Current);
         Assert.Null(await w.Analyses.HeaderAsync(w.Vault, w.BlobId, Ct));
         Assert.Null(await w.Analyses.TextAsync(w.Vault, w.BlobId, 1, 1, Ct));
@@ -205,16 +205,91 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task An_analysis_by_another_analyser_is_outdated()
+    public async Task An_analysis_stored_by_a_server_of_another_analyser_is_outdated()
+    {
+        var w = await WorldAsync();
+
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(2, PageText), "pdfjs-dist@5.0.0+rules.1", Ct);
+
+        var stored = await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct);
+        Assert.False(stored!.Current);
+        Assert.Equal("pdfjs-dist@5.0.0+rules.1", stored.Requested);
+    }
+
+    [Fact]
+    public async Task An_analysis_by_a_sidecar_of_another_release_is_current_and_shows_its_analyser()
     {
         var w = await WorldAsync();
         var book = Book(2, PageText);
 
-        await w.Analyses.StoreAsync(w.Vault, w.BlobId, book with { Analysis = book.Analysis with { Analyser = "pdfjs-dist@5.0.0+rules.1" } }, Ct);
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, book with { Analysis = book.Analysis with { Analyser = "pdfjs-dist@7.0.0+rules.2" } }, Ct);
 
         var stored = await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct);
-        Assert.False(stored!.Current);
-        Assert.Equal("pdfjs-dist@5.0.0+rules.1", stored.Analysis!.Analyser);
+        Assert.True(stored!.Current);
+        Assert.Equal(("pdfjs-dist@7.0.0+rules.2", PdfAnalyses.Analyser), (stored.Analysis!.Analyser, stored.Requested));
+    }
+
+    [Fact]
+    public async Task Two_parts_with_their_numbers_swapped_dont_open()
+    {
+        var w = await WorldAsync();
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(150, PageText), Ct);
+        Assert.True(await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct) >= 3);
+
+        await SwapAsync(w, 1, 2);
+        Assert.Null(await w.Analyses.TextAsync(w.Vault, w.BlobId, 1, 150, Ct));
+        Assert.NotNull(await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct));
+
+        await SwapAsync(w, 1, 2);
+        await SwapAsync(w, 0, 1);
+        Assert.Null(await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct));
+        Assert.Null(await w.Analyses.TextAsync(w.Vault, w.BlobId, 1, 150, Ct));
+    }
+
+    /// <summary>Gives parts <paramref name="a"/> and <paramref name="b"/> each other's numbers, past the unique index.</summary>
+    private static async Task SwapAsync(World w, int a, int b)
+    {
+        var of = (int part) => new BsonDocument { ["vault"] = w.Vault.Id, ["part"] = part };
+        await w.Parts.UpdateOneAsync(of(a), Builders<BsonDocument>.Update.Set("part", -1), cancellationToken: Ct);
+        await w.Parts.UpdateOneAsync(of(b), Builders<BsonDocument>.Update.Set("part", a), cancellationToken: Ct);
+        await w.Parts.UpdateOneAsync(of(-1), Builders<BsonDocument>.Update.Set("part", b), cancellationToken: Ct);
+    }
+
+    [Fact]
+    public async Task A_store_that_stops_after_its_text_leaves_no_analysis_and_the_next_store_or_a_sweep_clears_it()
+    {
+        var w = await WorldAsync();
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(100, PageText), Ct);
+        w.Analyses.StoreFaultAt = _ => throw new InvalidOperationException("crash before part 0");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(150, PageText), Ct));
+
+        // The old analysis went first; the new text without its part 0 is no analysis.
+        Assert.Null(await w.Analyses.ReadAsync(w.Vault, w.BlobId, Ct));
+        Assert.Null(await w.Analyses.TextAsync(w.Vault, w.BlobId, 1, 1, Ct));
+        var headless = await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct);
+        Assert.True(headless >= 3);
+        Assert.Equal(0, await w.Parts.CountDocumentsAsync(new BsonDocument { ["vault"] = w.Vault.Id, ["part"] = 0 }, cancellationToken: Ct));
+
+        // The blob is referenced, so only the parts' own state decides.
+        var bytes = Encoding.ASCII.GetBytes("%PDF-1.7 the paper");
+        var state = new AttachmentState("application/pdf", bytes.Length, null, null, Kumbu.Core.Notes.VersionToken.Of(bytes), Convert.ToBase64String(w.BlobId));
+        Assert.Empty(await Store(w.Catalog).TryCommitAsync(
+            new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { new StoredAttachment(P("/Work/paper.pdf"), state, 1, "lea", DateTime.UtcNow, [], null) } }, "lea", DateTime.UtcNow, Ct));
+
+        // A sweep within the grace period leaves them (a store may be under way in another process), later it doesn't.
+        var sweep = new BlobSweep(w.Catalog, NullLogger.Instance);
+        await sweep.RunAsync(w.Vault, DateTime.UtcNow, Ct);
+        Assert.Equal(headless, await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct));
+        await sweep.RunAsync(w.Vault, DateTime.UtcNow + BlobSweep.Grace + TimeSpan.FromMinutes(1), Ct);
+        Assert.Equal(0, await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct));
+
+        // And a store after another crash replaces what that one left.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(150, PageText), Ct));
+        w.Analyses.StoreFaultAt = null;
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(2, n => $"neu {n}"), Ct);
+        Assert.Equal(2, await w.Parts.CountDocumentsAsync(new BsonDocument("vault", w.Vault.Id), cancellationToken: Ct));
+        Assert.Equal(["neu 1", "neu 2"], await w.Analyses.TextAsync(w.Vault, w.BlobId, 1, 2, Ct));
     }
 
     [Fact]

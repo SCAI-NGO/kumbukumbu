@@ -37,7 +37,7 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
         {
             if (!catalog.MayIndex(vault)) return 0;
             var released = await ReleaseAsync(vault, now, ct);
-            await ReleaseAnalysesAsync(vault, ct);
+            await ReleaseAnalysesAsync(vault, now, ct);
             return released;
         }
         finally
@@ -69,13 +69,25 @@ public sealed class BlobSweep(VaultCatalog catalog, ILogger log)
 
     /// <summary>
     /// The analyses and jobs of PDFs whose blob the vault no longer holds: those just released, and any a process left
-    /// behind. Under the gate, which every analysis is stored under (<see cref="Attachments.PdfAnalyses"/>), and only
-    /// after its transaction found the blob, so none is stored for a blob gone meanwhile. Read from the indexes alone.
+    /// behind; and text parts older than <see cref="Grace"/> without their part 0, which a store that stopped half way
+    /// left (<see cref="Attachments.PdfAnalyses"/>). Under the gate, which every analysis is stored under, and only after
+    /// its final transaction found the blob, so none is stored for a blob gone meanwhile. Read from the indexes alone.
     /// </summary>
-    private async Task ReleaseAnalysesAsync(UnlockedVault vault, CancellationToken ct)
+    private async Task ReleaseAnalysesAsync(UnlockedVault vault, DateTime now, CancellationToken ct)
     {
         var a = Builders<PdfAnalysisDocument>.Filter;
         var j = Builders<PdfJobDocument>.Filter;
+        var headed = (await (await catalog.PdfParts.DistinctAsync(d => d.BlobId, a.Eq(d => d.Vault, vault.Id) & a.Eq(d => d.Part, 0), cancellationToken: ct)).ToListAsync(ct))
+            .Select(Convert.ToBase64String).ToHashSet();
+        var stale = a.Eq(d => d.Vault, vault.Id) & a.Gt(d => d.Part, 0) & a.Lt(d => d.At, now - Grace);
+        var headless = (await (await catalog.PdfParts.DistinctAsync(d => d.BlobId, stale, cancellationToken: ct)).ToListAsync(ct))
+            .Where(b => !headed.Contains(Convert.ToBase64String(b))).ToList();
+        if (headless.Count > 0)
+        {
+            var left = await catalog.PdfParts.DeleteManyAsync(stale & a.In(d => d.BlobId, headless), ct);
+            log.LogInformation("Deleted {Parts} parts of unfinished PDF analyses of vault {VaultId}", left.DeletedCount, vault.Id);
+        }
+
         var named = (await (await catalog.PdfParts.DistinctAsync(d => d.BlobId, a.Eq(d => d.Vault, vault.Id), cancellationToken: ct)).ToListAsync(ct))
             .Concat(await (await catalog.PdfJobs.DistinctAsync(d => d.BlobId, j.Eq(d => d.Vault, vault.Id), cancellationToken: ct)).ToListAsync(ct))
             .DistinctBy(Convert.ToBase64String).ToList();

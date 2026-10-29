@@ -200,24 +200,42 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task An_outdated_analysis_is_made_again_when_asked_for_and_kept_when_not()
+    public async Task A_sidecar_of_another_release_analyses_once_and_its_analysis_stays_current()
     {
         var sidecar = new FakePdfSidecar
         {
-            Analysis = _ => FakePdfSidecar.Canned(2) is var c ? c with { Analysis = c.Analysis with { Analyser = "pdfjs-dist@5.0.0+rules.1" } } : c,
+            Analysis = _ => FakePdfSidecar.Canned(2) is var c ? c with { Analysis = c.Analysis with { Analyser = "pdfjs-dist@7.0.0+rules.2" } } : c,
         };
         await using var host = Host(app, sidecar);
         var user = await RestClient.NewAsync(host);
-        await user.CreateFileAsync("old.pdf", Pdf("analysed by an older sidecar"));
-        var state = await StateAsync(host, user, "old.pdf");
+        await user.CreateFileAsync("other.pdf", Pdf("analysed by a newer sidecar"));
+        var state = await StateAsync(host, user, "other.pdf");
         var pixels = Pixels(host, user);
-        await EventuallyAsync(async () => await pixels.AnalysisAsync(At(user, "old.pdf"), state, false, Ct) is not null, "the analysis is stored");
-        Assert.Equal("pdfjs-dist@5.0.0+rules.1", (await pixels.AnalysisAsync(At(user, "old.pdf"), state, false, Ct))!.Analyser);
+        await EventuallyAsync(async () => await pixels.AnalysisAsync(At(user, "other.pdf"), state, false, Ct) is not null, "the analysis is stored");
 
-        sidecar.Analysis = _ => FakePdfSidecar.Canned(2);
+        for (var i = 0; i < 3; i++) Assert.Equal("pdfjs-dist@7.0.0+rules.2", (await pixels.AnalysisAsync(At(user, "other.pdf"), state, true, Ct))!.Analyser);
+
+        Assert.Equal(1, sidecar.Analyses);
+    }
+
+    [Fact]
+    public async Task An_analysis_stored_by_an_older_server_is_made_again_when_asked_for_and_kept_when_not()
+    {
+        var sidecar = new FakePdfSidecar { Down = true };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("old.pdf", Pdf("analysed before an upgrade"));
+        var state = await StateAsync(host, user, "old.pdf");
+        var vault = await VaultAsync(host, user);
+        var analyses = host.Services.GetRequiredService<PdfAnalyses>();
+        await analyses.StoreAsync(vault, Convert.FromBase64String(state.BlobId), FakePdfSidecar.Canned(5), "pdfjs-dist@5.0.0+rules.1", Ct);
+        var pixels = Pixels(host, user);
+        Assert.Equal(5, (await pixels.AnalysisAsync(At(user, "old.pdf"), state, false, Ct))!.PageCount);
+        sidecar.Down = false;
+
         var again = await pixels.AnalysisAsync(At(user, "old.pdf"), state, true, Ct);
 
-        Assert.Equal(PdfAnalyses.Analyser, again!.Analyser);
-        Assert.Equal(2, sidecar.Analyses);
+        Assert.Equal(3, again!.PageCount);
+        Assert.True((await analyses.ReadAsync(vault, Convert.FromBase64String(state.BlobId), Ct))!.Current);
     }
 }

@@ -12,10 +12,16 @@ namespace Kumbu.Server.Attachments;
 public sealed record PdfFailure(string Code, string Message);
 
 /// <summary>What part 0 of a PDF's analysis holds: the measurements, or the failure that took their place.</summary>
-public sealed record StoredPdfAnalysis(string Analyser, PdfAnalysis? Analysis, PdfFailure? Failure)
+/// <param name="Analyser">The sidecar's, as it answered (for display).</param>
+/// <param name="Requested">This server's <see cref="PdfAnalyses.Analyser"/> when it stored the analysis.</param>
+public sealed record StoredPdfAnalysis(string Analyser, PdfAnalysis? Analysis, PdfFailure? Failure, string Requested)
 {
-    /// <summary>Made by this server's analyser; another one's counts as outdated and is made again when asked for.</summary>
-    public bool Current => Analyser == PdfAnalyses.Analyser;
+    /// <summary>
+    /// Stored by a server of this analyser; one stored by an older or newer one counts as outdated and is made again
+    /// when asked for. Not the sidecar's own string: a sidecar of another release would make every analysis outdated
+    /// for ever.
+    /// </summary>
+    public bool Current => Requested == PdfAnalyses.Analyser;
 }
 
 /// <summary>
@@ -46,15 +52,25 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
 
     private static FilterDefinitionBuilder<PdfAnalysisDocument> F => Builders<PdfAnalysisDocument>.Filter;
 
+    /// <summary>Text parts inserted at once while storing: a few, so no write carries tens of MB.</summary>
+    private const int BatchBytes = 4 * 1024 * 1024;
+
     /// <summary>For tests: called with the number of each text part read.</summary>
     internal Action<int>? TextPartRead { get; set; }
 
+    /// <summary>For tests: awaited at <c>"after-text"</c>, once a store's text parts are in; a throw there is a crash.</summary>
+    internal Func<string, Task>? StoreFaultAt { get; set; }
+
     /// <summary>
-    /// Replaces the blob's analysis, all parts in one transaction, and takes its job off the queue. Null, and nothing
-    /// written, if the vault can't be written now (deleted, being re-keyed) or no longer holds the blob. Returns the
+    /// Replaces the blob's analysis and takes its job off the queue (see <see cref="WriteAsync"/>). Null, and nothing
+    /// stored, if the vault can't be written now (deleted, being re-keyed) or no longer holds the blob. Returns the
     /// analysis as <see cref="HeaderAsync"/> reads it back.
     /// </summary>
-    public async Task<PdfAnalysis?> StoreAsync(UnlockedVault vault, byte[] blobId, SidecarAnalysis analysis, CancellationToken ct)
+    public Task<PdfAnalysis?> StoreAsync(UnlockedVault vault, byte[] blobId, SidecarAnalysis analysis, CancellationToken ct) =>
+        StoreAsync(vault, blobId, analysis, Analyser, ct);
+
+    /// <summary>As stored by a server whose analyser is <paramref name="requested"/> (tests make an outdated one).</summary>
+    internal async Task<PdfAnalysis?> StoreAsync(UnlockedVault vault, byte[] blobId, SidecarAnalysis analysis, string requested, CancellationToken ct)
     {
         var a = analysis.Analysis;
         var pages = a.Pages.Select(p => new PageRecord(
@@ -62,44 +78,46 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             [.. p.Regions.Take(MaxRegions).Select(r => new RegionRecord(r.Kind, r.X, r.Y, r.Width, r.Height))])).ToList();
         var texts = Chunk(analysis.PageTexts);
         var header = new HeaderRecord(a.Analyser, a.PageCount, a.AnalysedPages, a.Title, a.Author, pages,
-            [.. texts.Select((t, i) => new PartRecord(i + 1, t.Segments[0].Page, t.Segments[^1].Page))], null);
+            [.. texts.Select((t, i) => new PartRecord(i + 1, t.Segments[0].Page, t.Segments[^1].Page))], null, requested);
         var now = catalog.Now;
-        List<PdfAnalysisDocument> docs =
-        [
-            Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), now),
-            .. texts.Select((t, i) => Doc(vault, blobId, i + 1, vault.SealPdfAnalysis(blobId, i + 1, t), now)),
-        ];
-        return await WriteAsync(vault, blobId, docs, ct) ? header.ToAnalysis() : null;
+        var head = Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), now);
+        var parts = texts.Select((t, i) => Doc(vault, blobId, i + 1, vault.SealPdfAnalysis(blobId, i + 1, t), now)).ToList();
+        return await WriteAsync(vault, blobId, head, parts, ct) ? header.ToAnalysis() : null;
     }
 
     /// <summary>Stores why the PDF can't be analysed in place of an analysis; false as <see cref="StoreAsync"/> is null.</summary>
     public Task<bool> StoreFailureAsync(UnlockedVault vault, byte[] blobId, PdfFailure failure, CancellationToken ct)
     {
-        var header = new HeaderRecord(Analyser, 0, 0, null, null, [], [], failure);
-        return WriteAsync(vault, blobId, [Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), catalog.Now)], ct);
+        var header = new HeaderRecord(Analyser, 0, 0, null, null, [], [], failure, Analyser);
+        return WriteAsync(vault, blobId, Doc(vault, blobId, 0, vault.SealPdfAnalysis(blobId, 0, header), catalog.Now), [], ct);
     }
 
-    /// <summary>Part 0, opened; null if there is none, or it doesn't open (then it counts as missing and is made again).</summary>
+    /// <summary>Part 0, opened; null if there is none (text parts without it are an unfinished store), or it doesn't open
+    /// (then it counts as missing and is made again).</summary>
     public async Task<StoredPdfAnalysis?> ReadAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct) =>
-        await ReadHeaderAsync(vault, blobId, ct) is { } h ? new StoredPdfAnalysis(h.Analyser, h.Failure is null ? h.ToAnalysis() : null, h.Failure) : null;
+        await ReadHeaderAsync(vault, blobId, null, ct) is { } h
+            ? new StoredPdfAnalysis(h.Analyser, h.Failure is null ? h.ToAnalysis() : null, h.Failure, h.Requested ?? h.Analyser)
+            : null;
 
     /// <summary>The measurements without the text; null without an analysis or for a failed one.</summary>
     public async Task<PdfAnalysis?> HeaderAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct) => (await ReadAsync(vault, blobId, ct))?.Analysis;
 
     /// <summary>
     /// The text of pages <paramref name="first"/> to <paramref name="last"/> (index 0 = page <paramref name="first"/>),
-    /// cut at the last page analysed; read from the parts that hold them only. Null without an analysis, for a failed
-    /// one, or if a part is missing or doesn't open.
+    /// cut at the last page analysed; read from the parts that hold them only, at one point in time with part 0 (a
+    /// snapshot), so a store meanwhile can't mix two analyses. Null without an analysis, for a failed one, or if a part
+    /// is missing or doesn't open.
     /// </summary>
     public async Task<IReadOnlyList<string>?> TextAsync(UnlockedVault vault, byte[] blobId, int first, int last, CancellationToken ct)
     {
-        if (await ReadHeaderAsync(vault, blobId, ct) is not { Failure: null } header) return null;
+        using var session = await catalog.StartSnapshotSessionAsync(ct);
+        if (await ReadHeaderAsync(vault, blobId, session, ct) is not { Failure: null } header) return null;
         first = Math.Max(1, first);
         last = Math.Min(last, header.AnalysedPages);
         if (first > last) return [];
 
         var wanted = header.Parts.Where(p => p.First <= last && p.Last >= first).Select(p => p.Part).ToList();
-        var docs = await catalog.PdfParts.Find(F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted))
+        var docs = await catalog.PdfParts.Find(session, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.In(d => d.Part, wanted))
             .SortBy(d => d.Part).ToListAsync(ct);
         if (docs.Count != wanted.Count) return Missing();
 
@@ -145,26 +163,33 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
             wanted = blobIds.Where(b => !analysed.Contains(Convert.ToBase64String(b)));
         }
 
-        var added = 0;
-        var j = Builders<PdfJobDocument>.Filter;
-        foreach (var blobId in wanted)
-        {
-            try
-            {
-                var result = await catalog.PdfJobs.UpdateOneAsync(
-                    j.Eq(d => d.Vault, vault.Id) & j.Eq(d => d.BlobId, blobId),
-                    Builders<PdfJobDocument>.Update.SetOnInsert(d => d.At, catalog.Now).SetOnInsert(d => d.Tries, 0),
-                    new UpdateOptions { IsUpsert = true },
-                    ct);
-                if (result.UpsertedId is not null) added++;
-            }
-            catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
-            {
-                // Queued by someone else at the same moment.
-            }
-        }
+        var queue = wanted.ToList();
+        if (queue.Count == 0) return 0;
 
-        return added;
+        // Under the gate a deletion takes too: no job outlives its vault.
+        return await UnderGateAsync(vault, 0, async () =>
+        {
+            var added = 0;
+            var j = Builders<PdfJobDocument>.Filter;
+            foreach (var blobId in queue)
+            {
+                try
+                {
+                    var result = await catalog.PdfJobs.UpdateOneAsync(
+                        j.Eq(d => d.Vault, vault.Id) & j.Eq(d => d.BlobId, blobId),
+                        Builders<PdfJobDocument>.Update.SetOnInsert(d => d.At, catalog.Now).SetOnInsert(d => d.Tries, 0),
+                        new UpdateOptions { IsUpsert = true },
+                        ct);
+                    if (result.UpsertedId is not null) added++;
+                }
+                catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+                {
+                    // Queued by someone else at the same moment.
+                }
+            }
+
+            return added;
+        }, ct);
     }
 
     /// <summary>The vault's jobs, oldest first.</summary>
@@ -185,9 +210,10 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         return job?.Tries ?? 0;
     }
 
-    private async Task<HeaderRecord?> ReadHeaderAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
+    private async Task<HeaderRecord?> ReadHeaderAsync(UnlockedVault vault, byte[] blobId, IClientSessionHandle? session, CancellationToken ct)
     {
-        var doc = await catalog.PdfParts.Find(F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.Eq(d => d.Part, 0)).FirstOrDefaultAsync(ct);
+        var filter = F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId) & F.Eq(d => d.Part, 0);
+        var doc = await (session is null ? catalog.PdfParts.Find(filter) : catalog.PdfParts.Find(session, filter)).FirstOrDefaultAsync(ct);
         if (doc is null) return null;
         try
         {
@@ -201,13 +227,60 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     }
 
     /// <summary>
-    /// Under the vault's gate, which the blob sweep, deletions and re-keying take too, and only while the vault may be
-    /// written: an analysis never outlives its blob or vault, nor is it sealed under a key a re-keying replaced. Their
-    /// interrupt stops the wait.
+    /// Stores in stages, so no write carries tens of MB: the old parts go (part 0 first), the text parts go in batches
+    /// of a few MB, and one small transaction then checks the vault still holds the blob and all the text parts are
+    /// there, inserts part 0 and takes the job off the queue. Until part 0 is in, there is no analysis: a crash in
+    /// between leaves text parts without it, which read as none and go with the next store or the blob sweep.
+    /// All of it under one hold of the vault's gate (see <see cref="UnderGateAsync{T}"/>).
     /// </summary>
-    private async Task<bool> WriteAsync(UnlockedVault vault, byte[] blobId, List<PdfAnalysisDocument> docs, CancellationToken ct)
+    private Task<bool> WriteAsync(UnlockedVault vault, byte[] blobId, PdfAnalysisDocument head, List<PdfAnalysisDocument> texts, CancellationToken ct) =>
+        UnderGateAsync(vault, false, async () =>
+        {
+            var mine = F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId);
+            await catalog.PdfParts.DeleteOneAsync(mine & F.Eq(d => d.Part, 0), ct);
+            await catalog.PdfParts.DeleteManyAsync(mine, ct);
+            var (batch, bytes) = (new List<PdfAnalysisDocument>(), 0L);
+            foreach (var part in texts)
+            {
+                if (batch.Count > 0 && bytes + part.Blob.Length > BatchBytes)
+                {
+                    await catalog.PdfParts.InsertManyAsync(batch, cancellationToken: ct);
+                    (batch, bytes) = ([], 0);
+                }
+
+                batch.Add(part);
+                bytes += part.Blob.Length;
+            }
+
+            if (batch.Count > 0) await catalog.PdfParts.InsertManyAsync(batch, cancellationToken: ct);
+            if (texts.Count > 0 && StoreFaultAt is { } fault) await fault("after-text");
+
+            using var session = await catalog.StartSessionAsync(ct);
+            var stored = await session.WithTransactionAsync(
+                async (s, token) =>
+                {
+                    var b = Builders<BlobDocument>.Filter;
+                    var held = await catalog.Blobs.Find(s, b.Eq(d => d.Vault, vault.Id) & b.Eq(d => d.BlobId, blobId), new FindOptions { Hint = EncryptedNoteStore.BlobTimeIndex })
+                        .Project(new MongoDB.Bson.BsonDocument { { "bid", 1 }, { "_id", 0 } }).AnyAsync(token);
+                    if (!held || await catalog.PdfParts.CountDocumentsAsync(s, mine & F.Gt(d => d.Part, 0), cancellationToken: token) != texts.Count) return false;
+                    await catalog.PdfParts.InsertOneAsync(s, head, cancellationToken: token);
+                    var j = Builders<PdfJobDocument>.Filter;
+                    await catalog.PdfJobs.DeleteOneAsync(s, j.Eq(d => d.Vault, vault.Id) & j.Eq(d => d.BlobId, blobId), cancellationToken: token);
+                    return true;
+                },
+                cancellationToken: ct);
+            if (!stored) await catalog.PdfParts.DeleteManyAsync(mine, ct);
+            return stored;
+        }, ct);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> under the vault's gate, which the blob sweep, deletions and re-keying take too, and
+    /// only while the vault may be written: an analysis or a job never outlives its blob or vault, nor is an analysis
+    /// sealed under a key a re-keying replaced. Their interrupt stops the wait; then <paramref name="otherwise"/>.
+    /// </summary>
+    private async Task<T> UnderGateAsync<T>(UnlockedVault vault, T otherwise, Func<Task<T>> work, CancellationToken ct)
     {
-        if (!catalog.MayIndex(vault)) return false;
+        if (!catalog.MayIndex(vault)) return otherwise;
         using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct, catalog.InterruptToken(vault.Id));
         try
         {
@@ -215,27 +288,12 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return false;
+            return otherwise;
         }
 
         try
         {
-            if (!catalog.MayIndex(vault)) return false;
-            using var session = await catalog.StartSessionAsync(ct);
-            return await session.WithTransactionAsync(
-                async (s, token) =>
-                {
-                    var b = Builders<BlobDocument>.Filter;
-                    var held = await catalog.Blobs.Find(s, b.Eq(d => d.Vault, vault.Id) & b.Eq(d => d.BlobId, blobId), new FindOptions { Hint = EncryptedNoteStore.BlobTimeIndex })
-                        .Project(new MongoDB.Bson.BsonDocument { { "bid", 1 }, { "_id", 0 } }).AnyAsync(token);
-                    if (!held) return false;
-                    await catalog.PdfParts.DeleteManyAsync(s, F.Eq(d => d.Vault, vault.Id) & F.Eq(d => d.BlobId, blobId), cancellationToken: token);
-                    await catalog.PdfParts.InsertManyAsync(s, docs, cancellationToken: token);
-                    var j = Builders<PdfJobDocument>.Filter;
-                    await catalog.PdfJobs.DeleteOneAsync(s, j.Eq(d => d.Vault, vault.Id) & j.Eq(d => d.BlobId, blobId), cancellationToken: token);
-                    return true;
-                },
-                cancellationToken: ct);
+            return catalog.MayIndex(vault) ? await work() : otherwise;
         }
         finally
         {
@@ -291,9 +349,11 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     }
 }
 
-/// <summary>Part 0 as sealed. <see cref="Parts"/> says which pages each text part holds.</summary>
+/// <summary>Part 0 as sealed. <see cref="Parts"/> says which pages each text part holds;
+/// <see cref="Requested"/> is this server's analyser when it stored it; <see cref="Analyser"/> the sidecar's.</summary>
 internal sealed record HeaderRecord(
-    string Analyser, int PageCount, int AnalysedPages, string? Title, string? Author, List<PageRecord> Pages, List<PartRecord> Parts, PdfFailure? Failure)
+    string Analyser, int PageCount, int AnalysedPages, string? Title, string? Author, List<PageRecord> Pages, List<PartRecord> Parts, PdfFailure? Failure,
+    string? Requested)
 {
     public PdfAnalysis ToAnalysis() => new(Analyser, PageCount, AnalysedPages, Title, Author, [.. Pages.Select(p => p.ToPage())]);
 }
