@@ -16,7 +16,7 @@ public sealed class Rekeying(
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
-    /// <summary>The users whose sessions resumed their vaults in this process (<see cref="ResumeOnce"/>).</summary>
+    /// <summary>The users whose vaults were resumed in this process, by a sign-in, a recovery or a session (<see cref="ResumeOnce"/>).</summary>
     private readonly ConcurrentDictionary<string, byte> _resumed = new(StringComparer.Ordinal);
 
     /// <summary>Runs at the start of <see cref="ResumeAsync"/> (tests make it fail).</summary>
@@ -84,9 +84,14 @@ public sealed class Rekeying(
     /// <summary>
     /// Hands the user's pending vaults to the runner, fire and forget: those recorded by a rotation and not started
     /// (<c>rekeyPending</c>), and those in their two-key period. Never waits and never throws: a sign-in or a recovery
-    /// must not depend on it, and a vault missed here is resumed by the next trigger.
+    /// must not depend on it, and a vault missed here is resumed by the next trigger. Always runs, and counts as the
+    /// user's resume for <see cref="ResumeOnce"/>, so the session's first request doesn't run a second one beside it.
     /// </summary>
-    public void ResumePending(User user, byte[] userKey) => _ = ResumeAsync(user, userKey);
+    public void ResumePending(User user, byte[] userKey)
+    {
+        _resumed[user.Id] = 0;
+        _ = ResumeOrForgetAsync(user, userKey);
+    }
 
     /// <summary>
     /// <see cref="ResumePending"/> for a session's request, the first time per user and process: a session that outlived
@@ -95,13 +100,13 @@ public sealed class Rekeying(
     public void ResumeOnce(User user, byte[] userKey)
     {
         if (!_resumed.TryAdd(user.Id, 0)) return;
-        _ = ForgetIfFailedAsync();
+        _ = ResumeOrForgetAsync(user, userKey);
+    }
 
-        // A resume that failed (the database didn't answer) is tried again at the session's next request.
-        async Task ForgetIfFailedAsync()
-        {
-            if (!await ResumeAsync(user, userKey)) _resumed.TryRemove(user.Id, out _);
-        }
+    /// <summary>A resume that failed (the database didn't answer) is tried again at the session's next request.</summary>
+    private async Task ResumeOrForgetAsync(User user, byte[] userKey)
+    {
+        if (!await ResumeAsync(user, userKey)) _resumed.TryRemove(user.Id, out _);
     }
 
     /// <summary>What <see cref="ResumePending"/> runs: false if it failed. Every failure is logged here, none goes

@@ -313,6 +313,32 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         }
     }
 
+    [Fact]
+    public async Task A_sign_in_and_the_sessions_requests_after_it_resume_once()
+    {
+        await using var restarted = Api.WithWebHostBuilder(_ => { });
+        var rekeying = restarted.Services.GetRequiredService<Rekeying>();
+        var runs = 0;
+        rekeying.ResumeFault = () =>
+        {
+            Interlocked.Increment(ref runs);
+            return Task.CompletedTask;
+        };
+        try
+        {
+            // Signs in, then creates a vault: the session's first request.
+            var owner = await RestClient.NewAsync(restarted);
+            using (var listed = await owner.GetAsync("/api/vaults")) Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), Ct);
+
+            Assert.Equal(1, Volatile.Read(ref runs));
+        }
+        finally
+        {
+            rekeying.ResumeFault = null;
+        }
+    }
+
     private async Task<HttpResponseMessage> GetAsync(WebApplicationFactory<Program> api, string path, string session)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
