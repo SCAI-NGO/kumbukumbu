@@ -272,4 +272,52 @@ public class AttachmentWriterTests
         Assert.Null(attachment.Changeset);
         Assert.Equal([v2, v1], attachment.History.Select(h => h.State.Version));
     }
+
+    [Fact]
+    public async Task A_marker_is_written_like_a_file_in_the_writers_changeset()
+    {
+        var notes = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));
+        await notes.WriteAsync("/Work/plan.md", "plan\n", null, Ct);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        var result = await Writer().WriteAsync("/Work/Drafts/.vaultkeep", Array.Empty<byte>(), null, null, Ct);
+
+        Assert.False(result.Result.IsError, result.Result.Output);
+        Assert.Equal("created /Work/Drafts/", result.Result.Output);
+        var marker = await Get("/Work/Drafts/.vaultkeep");
+        Assert.Equal(0, marker.Current.Size);
+        Assert.Equal("application/octet-stream", marker.Current.MediaType);
+        Assert.Equal("e3b0c44298fc", marker.Version);
+        Assert.Equal((await _store.GetAsync(P("/Work/plan.md"), Ct))!.Changeset, marker.Changeset);
+    }
+
+    [Fact]
+    public async Task A_marker_directly_in_a_vault_is_refused()
+    {
+        var result = await Writer().WriteAsync("/Work/.vaultkeep", Array.Empty<byte>(), null, null, Ct);
+
+        Assert.Equal(ShellErrorKind.Invalid, result.Result.Kind);
+        Assert.Equal("mkdir: /Work/: A vault exists on its own; it needs no .vaultkeep", result.Result.Output);
+    }
+
+    [Fact]
+    public async Task A_marker_below_a_note_is_not_a_directory()
+    {
+        await new NoteWriter(_store, _time, new FixedCaller(Writers.Dev)).WriteAsync("/Work/plan.md", "plan\n", null, Ct);
+
+        var result = await Writer().WriteAsync("/Work/plan.md/.vaultkeep", Array.Empty<byte>(), null, null, Ct);
+
+        Assert.Equal(ShellErrorKind.Conflict, result.Result.Kind);
+        Assert.Equal("mkdir: /Work/plan.md: Not a directory", result.Result.Output);
+    }
+
+    [Fact]
+    public async Task Removing_a_marker_names_its_folder()
+    {
+        await Write(Writer(), "/Work/Drafts/.vaultkeep", [], null);
+
+        var result = await Writer().RemoveAsync("/Work/Drafts/.vaultkeep", Ct);
+
+        Assert.Equal("removed /Work/Drafts/; it stays in the trash for 30 days ('restore /Work/Drafts/' brings it back)", result.Output);
+    }
 }

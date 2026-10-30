@@ -49,17 +49,22 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (!TryParse(Upload, pathText, out var path, out var error)) return new WriteResult(error with { Kind = ShellErrorKind.Invalid });
 
         if (caller.Refuse(Upload, path) is { } refused) return new WriteResult(refused with { Kind = ShellErrorKind.Refused });
+        if (FolderMarker.Is(path) && path.Segments.Count == 2)
+        {
+            return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: A vault exists on its own; it needs no {FolderMarker.Name}");
+        }
+
         if (AttachmentFormat.ForPath(path) is not { } format)
         {
-            return Fail(ShellErrorKind.Invalid, $"{Upload}: {path.Name}: {AttachmentFormat.UnsupportedMessage}");
+            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name}: {AttachmentFormat.UnsupportedMessage}");
         }
 
         if (bytes.Length > AttachmentFormat.MaxBytes)
         {
-            return Fail(ShellErrorKind.Invalid, $"{Upload}: {path.Name} is larger than 15 MB, the limit for a file");
+            return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {path.Name} is larger than 15 MB, the limit for a file");
         }
 
-        if (AttachmentFormat.Problem(path, bytes.Span) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Upload}: {problem}");
+        if (AttachmentFormat.Problem(path, bytes.Span) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {problem}");
 
         var image = format.Kind == AttachmentKind.Image ? dimensions : null;
         var existing = await store.GetAttachmentAsync(path, ct);
@@ -67,7 +72,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         {
             if (existing is not null)
             {
-                return Fail(ShellErrorKind.Conflict, $"{Upload}: {path.Value} already exists (version {existing.Version}); to overwrite it, pass that version", existing);
+                return Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)} already exists (version {existing.Version}); to overwrite it, pass that version", existing);
             }
 
             if (await CheckNewAsync(path, ct) is { } newError) return newError;
@@ -79,16 +84,16 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             if ((await notes.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
             {
                 return await store.GetAttachmentAsync(path, ct) is { } now
-                    ? Fail(ShellErrorKind.Conflict, $"{Upload}: {path.Value} was created by someone else just now; fetch it and try again", now)
-                    : Fail(ShellErrorKind.Conflict, $"{Upload}: {path.Value} could not be created just now; try again");
+                    ? Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)} was created by someone else just now; fetch it and try again", now)
+                    : Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)} could not be created just now; try again");
             }
 
-            return Written($"created {path.Value}", created);
+            return Written($"created {Shown(path)}", created);
         }
 
         if (existing is null) return await MissingAsync(path, ct);
         if (existing.Version != version) return Conflict(path, version, existing);
-        if (existing.Version == VersionToken.Of(bytes.Span)) return Written($"{path.Value} is unchanged", existing);
+        if (existing.Version == VersionToken.Of(bytes.Span)) return Written($"{Shown(path)} is unchanged", existing);
 
         var next = Next(existing, await StateAsync(path, format, bytes, image, ct), caller.Writer, Now, await ChangesetAsync(path, ct));
         var replace = new NoteBatch { AttachmentReplaces = { (existing, next) }, Changeset = next.Changeset };
@@ -97,7 +102,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return await store.GetAttachmentAsync(path, ct) is { } now ? Conflict(path, version, now) : await MissingAsync(path, ct);
         }
 
-        return Written($"wrote {path.Value}", next);
+        return Written($"wrote {Shown(path)}", next);
     }
 
     /// <summary>Moves an attachment to the trash, as <see cref="NoteWriter.RemoveAsync"/> does a note: with
@@ -111,12 +116,12 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (existing is null)
         {
             if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
-            return ShellResult.Error($"{tool}: {path.Value}: No such file or directory{await Moves.HintAsync(notes, path, ct)}");
+            return ShellResult.Error($"{tool}: {Shown(path)}: No such file or directory{await Moves.HintAsync(notes, path, ct)}");
         }
 
         if (version is not null && existing.Version != version)
         {
-            return ShellResult.Error($"{tool}: {path.Value} has changed since version {version} (it is now {existing.Version})");
+            return ShellResult.Error($"{tool}: {Shown(path)} has changed since version {version} (it is now {existing.Version})");
         }
 
         // Asked before removing, as for a note: afterwards the attachment no longer resolves.
@@ -126,10 +131,10 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         var batch = new NoteBatch { AttachmentTrashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
         if ((await notes.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
         {
-            return ShellResult.Error($"{tool}: {path.Value} changed while removing it; try again");
+            return ShellResult.Error($"{tool}: {Shown(path)} changed while removing it; try again");
         }
 
-        var message = $"removed {path.Value}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
+        var message = $"removed {Shown(path)}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
         if (linking.Count > 0)
         {
             var links = linking.Sum(x => x.Count);
@@ -171,8 +176,8 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             if (trashed is null)
             {
                 return version is null
-                    ? ShellResult.Error($"{tool}: {path.Value} is not in the trash ('trash' lists what is)")
-                    : ShellResult.Error($"{tool}: {path.Value} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
+                    ? ShellResult.Error($"{tool}: {Shown(path)} is not in the trash ('trash' lists what is)")
+                    : ShellResult.Error($"{tool}: {Shown(path)} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
             }
 
             var restored = trashed.Attachment with
@@ -181,32 +186,32 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             };
             var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
             return (await notes.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0
-                ? ShellResult.Error($"{tool}: {path.Value} changed while restoring it; try again")
-                : Written($"restored {path.Value} from the trash", restored).Result;
+                ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")
+                : Written($"restored {Shown(path)} from the trash", restored).Result;
         }
 
         if (version is null)
         {
             return ShellResult.Error(
-                $"{tool}: {path.Value} exists; to go back to an earlier version, give one from 'history {Quote(path)}'");
+                $"{tool}: {Shown(path)} exists; to go back to an earlier version, give one from 'history {Quote(path)}'");
         }
 
-        if (existing.Version == version) return Written($"{path.Value} is already at version {version}", existing).Result;
+        if (existing.Version == version) return Written($"{Shown(path)} is already at version {version}", existing).Result;
 
         var entry = existing.History.FirstOrDefault(h => h.State.Version == version);
         if (entry is null)
         {
             var inTrash = (await store.ListAttachmentTrashAsync(path, ct)).Any(t => t.Attachment.Path == path && t.Attachment.Version == version);
             return ShellResult.Error(inTrash
-                ? $"{tool}: version {version} of {path.Value} is in the trash, but an attachment exists at that path; rm it first"
-                : $"{tool}: {path.Value} has no version {version} ('history {Quote(path)}' lists them)");
+                ? $"{tool}: version {version} of {Shown(path)} is in the trash, but an attachment exists at that path; rm it first"
+                : $"{tool}: {Shown(path)} has no version {version} ('history {Quote(path)}' lists them)");
         }
 
         // In no changeset, so the next write doesn't coalesce into it: a restore is a checkpoint.
         var next = Next(existing, entry.State, $"{caller.Writer} (restore)", Now, changeset: null, keepCurrent: true);
         return (await notes.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, caller.Writer, Now, ct)).Count > 0
-            ? ShellResult.Error($"{tool}: {path.Value} changed while restoring it; try again")
-            : Written($"restored {path.Value} to version {version}", next).Result;
+            ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")
+            : Written($"restored {Shown(path)} to version {version}", next).Result;
     }
 
     private Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
@@ -219,18 +224,18 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     /// <summary>The checks of a new note's path (<see cref="NoteWriter"/>), for notes and attachments alike.</summary>
     private async Task<WriteResult?> CheckNewAsync(VaultPath path, CancellationToken ct)
     {
-        if (path.Segments.Count < 2) return Fail(ShellErrorKind.Invalid, $"{Upload}: {path.Value}: attachments live inside a vault, e.g. /Work/shot.png");
-        if (NoteNames.NameProblem(path) is { } problem) return Fail(ShellErrorKind.Invalid, $"{Upload}: {path.Value}: {problem}");
+        if (path.Segments.Count < 2) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {Shown(path)}: attachments live inside a vault, e.g. /Work/shot.png");
+        if (NoteNames.NameProblem(path) is { } problem) return Fail(ShellErrorKind.Invalid, $"{ToolOf(path)}: {Shown(path)}: {problem}");
 
         var vault = VaultPath.Root.Child(path.Segments[0]);
         if (!(await notes.ListVaultsAsync(ct)).Contains(path.Segments[0]))
         {
-            return Fail(ShellErrorKind.NotFound, $"{Upload}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
+            return Fail(ShellErrorKind.NotFound, $"{ToolOf(path)}: there is no vault '{path.Segments[0]}' (ls lists the vaults; writing does not create new ones)");
         }
 
         if ((await notes.ListNotesUnderAsync(path, ct)).Count > 0 || (await store.ListAttachmentsUnderAsync(path, ct)).Count > 0)
         {
-            return Fail(ShellErrorKind.Conflict, $"{Upload}: {path.Value}: Is a directory");
+            return Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)}: Is a directory");
         }
 
         for (var dir = vault; dir.Segments.Count < path.Segments.Count - 1;)
@@ -238,7 +243,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             dir = dir.Child(path.Segments[dir.Segments.Count]);
             if (await notes.ReadAsync(dir, ct) is not null || await store.GetAttachmentAsync(dir, ct) is not null)
             {
-                return Fail(ShellErrorKind.Conflict, $"{Upload}: {dir.Value}: Not a directory");
+                return Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(dir)}: Not a directory");
             }
         }
 
@@ -248,12 +253,12 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     private async Task<WriteResult> MissingAsync(VaultPath path, CancellationToken ct) =>
         await notes.IsDamagedAsync(path, ct) ? Fail(ShellErrorKind.Conflict, Damage.Message(Upload, path))
         : Fail(ShellErrorKind.NotFound, await Moves.HintAsync(notes, path, ct) is { Length: > 0 } moved
-            ? $"{Upload}: {path.Value}: No such file or directory{moved}"
-            : $"{Upload}: {path.Value}: No such file or directory (if it was removed, 'trash' lists it)");
+            ? $"{ToolOf(path)}: {Shown(path)}: No such file or directory{moved}"
+            : $"{ToolOf(path)}: {Shown(path)}: No such file or directory (if it was removed, 'trash' lists it)");
 
     private static WriteResult Conflict(VaultPath path, string version, StoredAttachment current) =>
         Fail(ShellErrorKind.Conflict,
-            $"{Upload}: {path.Value} has changed since version {version} (it is now {current.Version}); fetch it again and redo the change", current);
+            $"{ToolOf(path)}: {Shown(path)} has changed since version {version} (it is now {current.Version}); fetch it again and redo the change", current);
 
     private static WriteResult Fail(ShellErrorKind kind, string message, StoredAttachment? current = null) =>
         new(ShellResult.Error(message) with { Kind = kind }, current);
@@ -275,5 +280,10 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         return false;
     }
 
-    private static string Quote(VaultPath path) => path.Value.Contains(' ') ? $"\"{path.Value}\"" : path.Value;
+    private static string Quote(VaultPath path) => Shown(path).Contains(' ') ? $"\"{Shown(path)}\"" : Shown(path);
+
+    /// <summary>A marker is made by <c>mkdir</c> and named as its folder; everything else is an upload.</summary>
+    private static string ToolOf(VaultPath path) => FolderMarker.Is(path) ? "mkdir" : Upload;
+
+    private static string Shown(VaultPath path) => FolderMarker.Shown(path);
 }
