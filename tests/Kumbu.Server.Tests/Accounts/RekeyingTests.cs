@@ -293,12 +293,12 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         try
         {
             using (var first = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-            using var waited = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-            waited.CancelAfter(TimeSpan.FromSeconds(30));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
             while (Volatile.Read(ref runs) < 2)
             {
+                Assert.True(DateTime.UtcNow < deadline, "The resume never retried.");
                 using (var again = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, again.StatusCode);
-                await Task.Delay(TimeSpan.FromMilliseconds(50), waited.Token);
+                await Task.Delay(TimeSpan.FromMilliseconds(50), Ct);
             }
 
             await AllRekeyedAsync(owner.User.Id, vaults.Values);

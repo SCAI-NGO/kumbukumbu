@@ -376,10 +376,10 @@ public static class AccountApi
         AccountLimits limits, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
-        // Activating or a role change needs the window; making an admin brings the password itself, which opens it.
-        // Deactivating is cleaning up and needs neither.
+        // Only granting needs the window: activating; making an admin brings the password itself, which opens it.
+        // Deactivating and demoting are cleaning up and need neither.
         if (body.Role == Roles.Admin) await RequirePasswordAsync(http, caller, body.Password, "Making someone an admin needs your password.", users, sessions, limits, ct);
-        else if (body.Active is true || body.Role is not null) Security.RequirePasswordWindow(caller);
+        else if (body.Active is true) Security.RequirePasswordWindow(caller);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
         // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.

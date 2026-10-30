@@ -115,6 +115,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     private const string Reading = "reading: the session reads anyway";
     private const string CleaningUp = "revoking and signing out are never guarded";
     private const string OwnPassword = "asks for the password itself, which opens the window";
+    private const string EndsTheSession = "asks for the password itself; ends the session";
     private const string GrantingInline = "guarded inline: only granting needs the window";
 
     /// <summary>Every session-only endpoint without the marker, and why. A new one fails the test until someone decides.</summary>
@@ -137,9 +138,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["DELETE /api/admin/invitations/{id}"] = CleaningUp,
         ["DELETE /api/connections/{id}"] = CleaningUp,
         ["POST /api/sessions/end-others"] = CleaningUp,
-        ["POST /api/password"] = OwnPassword,
+        ["POST /api/password"] = EndsTheSession,
         ["POST /api/recovery-key"] = OwnPassword,
-        ["POST /api/account/delete"] = OwnPassword,
+        ["POST /api/account/delete"] = EndsTheSession,
         ["POST /api/account/reencrypt"] = OwnPassword,
         ["POST /api/admin/users/{id}/delete"] = OwnPassword,
         ["POST /api/admin/deletions/repeat"] = OwnPassword,
@@ -306,12 +307,20 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         var connection = await ConnectionAsync(user);
         var (otherId, _) = await OtherUserAsync(api);
         var (promotedId, _) = await OtherUserAsync(api);
+        var (demotedId, _) = await OtherUserAsync(api);
+        using (var made = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.Admin, password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, made.StatusCode);
+        }
+
         CloseWindow();
 
         var flow = await OAuthFlow.StartAsync(api, user, connection, await OAuthFlow.RegisterAsync(api, Callback), Callback);
         using (var denied = await flow.DecideAsync(allow: false)) Assert.Equal(HttpStatusCode.OK, denied.StatusCode);
         using (var gone = await flow.GetConsentAsync()) Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
         using (var off = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId}", new { active = false })) Assert.Equal(HttpStatusCode.NoContent, off.StatusCode);
+        using (var demoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.User })) Assert.Equal(HttpStatusCode.NoContent, demoted.StatusCode);
+        Assert.Equal(Roles.User, (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == demotedId)!["role"]!.GetValue<string>());
         Assert.False(await WindowOpenAsync(user));
 
         using (var promoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{promotedId}", new { role = Roles.Admin, password = RestClient.Password }))
@@ -509,6 +518,27 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         CloseWindow();
 
         using (var wrong = await user.SendAsync(HttpMethod.Post, "/api/export/ticket", new { password = "not the password at all" }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+        }
+
+        using var refused = await CreateKeyAsync(user);
+        await AssertPasswordRequiredAsync(refused);
+    }
+
+    [Theory]
+    [InlineData("delete-vault")]
+    [InlineData("rekey")]
+    public async Task A_wrong_password_on_a_vault_action_leaves_the_window_closed(string action)
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true);
+        CloseWindow();
+        var password = "not the password at all";
+
+        using (var wrong = action == "rekey"
+            ? await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/rekey", new { password })
+            : await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password, confirm = "Arbeit" }))
         {
             Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
         }
