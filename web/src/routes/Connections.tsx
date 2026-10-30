@@ -6,11 +6,13 @@ import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { timeText } from "../components/Sheet";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, RightsPicker, type Right } from "./NewKeyDialog";
+import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type Connection = components["schemas"]["ConnectionView"];
 
@@ -60,6 +62,7 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
   const [created, setCreated] = useState<Connection | null>(null);
   const [changing, setChanging] = useState<Connection | null>(null);
   const [revoking, setRevoking] = useState<Connection | null>(null);
+  const [order, setOrder] = useState<UsageOrder>("created");
 
   const reveal = (c: Connection | null) => {
     setCreated(c);
@@ -68,8 +71,8 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
 
   if (created) return <ConnectorReveal connection={created} onDone={() => reveal(null)} />;
 
-  const live = connections.data?.filter((c) => !isOver(c)) ?? [];
-  const over = connections.data?.filter(isOver) ?? [];
+  const live = inUsageOrder(connections.data?.filter((c) => !isOver(c)) ?? [], order);
+  const over = inUsageOrder(connections.data?.filter(isOver) ?? [], order);
 
   const item = (c: Connection) => <ConnectionItem key={c.id} connection={c} onChange={() => setChanging(c)} onRevoke={() => setRevoking(c)} />;
 
@@ -87,6 +90,7 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
 
       {connections.isError && <FormError>{errorText(connections.error)}</FormError>}
       {connections.data?.length === 0 && <p className="text-muted">You have no connections yet.</p>}
+      {connections.data && connections.data.length > 1 && <UsageOrderSwitch label="Sort connections" order={order} onOrder={setOrder} />}
       {live.length > 0 && <ul className="flex flex-col gap-3">{live.map(item)}</ul>}
       {over.length > 0 && (
         <details className="flex flex-col gap-3">
@@ -137,7 +141,7 @@ function ConnectionItem({ connection: c, onChange, onRevoke }: { connection: Con
         ))}
       </ul>
       <p className="text-sm text-muted">
-        Created {date(c.createdAt)} · {c.lastUsedAt ? `Last used ${date(c.lastUsedAt)}` : "Never used"} · {expiry}
+        Created {date(c.createdAt)} · {c.lastUsedAt ? `Last used ${timeText(c.lastUsedAt)}` : "Never used"} · {expiry}
       </p>
       <p className="text-sm text-text">{statusText(c)}</p>
       {c.state === "needs_reconnect" && <p className="text-sm text-muted">Use Reconnect in the app.</p>}
