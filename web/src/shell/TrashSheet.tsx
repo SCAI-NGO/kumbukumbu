@@ -13,8 +13,8 @@ import { useEditor } from "../state/editor";
 const smallButton =
   "min-h-11 flex-none rounded-[10px] border border-line px-3 text-sm font-medium text-accent-text disabled:opacity-40 focus-visible:outline-2 focus-visible:outline-accent";
 
-/** A removed folder is named as the folder ("Drafts/") and placed by its parent; anything else by its file. */
-const nameOf = (path: string) => (isMarker(path) ? `${titleOf(folderOf(path))}/` : titleOf(path));
+/** A removed folder is named as the folder ("Drafts/", its name as it is) and placed by its parent; anything else by its file. */
+const nameOf = (path: string) => (isMarker(path) ? `${folderOf(path).slice(folderOf(path).lastIndexOf("/") + 1)}/` : titleOf(path));
 const placeOf = (path: string) => crumbOf(isMarker(path) ? folderOf(path) : path);
 
 /**

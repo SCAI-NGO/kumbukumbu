@@ -237,6 +237,20 @@ describe("the trash", () => {
     expect(await restore!.json()).toEqual({ version: "e3b0c44298fc" });
   });
 
+  it("names a removed folder by its last segment as it is", async () => {
+    api({
+      "GET /api/vaults/Work/trash": () =>
+        json(200, {
+          retentionDays: 30,
+          notes: [{ path: "/Work/notes.md/.vaultkeep", kind: "folder", version: "e3b0c44298fc", deletedAt: "2026-10-24T09:00:00Z", deletedBy: "ada", expiresAt: "2026-11-23T09:00:00Z", lines: 0, size: 0 }],
+        }),
+    });
+    await openVaultMenu("Trash");
+
+    const list = await within(sheet("Trash")).findByRole("list", { name: "Removed notes" });
+    expect(within(list).getByRole("button", { name: "Restore notes.md/" })).toBeInTheDocument();
+  });
+
   it("says why a restore didn't go through", async () => {
     api({
       "GET /api/vaults/Work/trash": () =>
@@ -354,6 +368,36 @@ describe("checkpoints", () => {
     expect(await within(sheet("Checkpoints")).findByRole("status")).toHaveTextContent("Restored /Work/ to checkpoint 'before-cleanup': 1 changed, 1 back.");
     const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.url.endsWith("/restore"));
     expect(await restore!.json()).toEqual({ plan: "p1an" });
+  });
+
+  it("name folders in the preview as folders, never by their markers", async () => {
+    api({
+      "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [checkpoint] }),
+      "POST /api/vaults/Work/checkpoints/before-cleanup/preview": () =>
+        json(200, {
+          scope: "/Work/",
+          changes: [
+            { kind: "back", path: "/Work/Drafts/.vaultkeep", from: null, added: null, removed: null, fileKind: "folder" },
+            { kind: "trash", path: "/Work/Ideas/.vaultkeep", from: null, added: null, removed: null, fileKind: "folder" },
+            { kind: "moved", path: "/Work/Old/.vaultkeep", from: "/Work/Archive/.vaultkeep", added: null, removed: null, fileKind: "folder" },
+          ],
+          rewrittenLinks: 0,
+          rewrittenIn: [],
+          broken: [],
+          plan: "p1an",
+        }),
+    });
+    await openVaultMenu("Checkpoints");
+    await userEvent.click(await within(sheet("Checkpoints")).findByRole("button", { name: "Restore before-cleanup" }));
+
+    const dialog = sheet("Restore before-cleanup?");
+    const changes = await within(dialog).findByRole("list", { name: "What changes" });
+    expect(within(changes).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "/Work/Drafts/ comes back",
+      "/Work/Ideas/ goes to the trash",
+      "/Work/Old/ moves back from /Work/Archive/",
+    ]);
+    expect(dialog).not.toHaveTextContent(".vaultkeep");
   });
 
   it("says when there is nothing to restore", async () => {
