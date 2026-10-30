@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { timeText } from "../components/Sheet";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -73,6 +74,40 @@ describe("Keys", () => {
     const old = screen.getByText("Old phone").closest("li")!;
     expect(old).toHaveTextContent("Revoked 2 Oct 2026");
     expect(within(old).queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
+  });
+
+  it("shows when a key was last used, to the minute", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, lastUsedAt: "2026-10-05T14:37:00Z" }]) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Laptop")).closest("li")!;
+    expect(item).toHaveTextContent(`Last used ${timeText("2026-10-05T14:37:00Z")}`);
+  });
+
+  it("sorts the keys by least recent use on request: never used first, then the oldest use", async () => {
+    api({
+      "GET /api/keys": () =>
+        json(200, [
+          { ...listed, id: "a", name: "Alpha", lastUsedAt: "2026-10-20T09:00:00Z" },
+          { ...listed, id: "b", name: "Bravo", lastUsedAt: null },
+          { ...listed, id: "c", name: "Charlie", lastUsedAt: "2026-10-03T09:00:00Z" },
+          { ...listed, id: "d", name: "Delta", lastUsedAt: "2026-10-10T09:00:00Z" },
+          { ...listed, id: "e", name: "Echo", lastUsedAt: null },
+        ]),
+    });
+    renderApp("/keys");
+    await screen.findByText("Alpha");
+    const names = () => [...screen.getByRole("region", { name: "API keys" }).querySelectorAll("li h2")].map((h) => h.textContent);
+    const sort = screen.getByRole("group", { name: "Sort API keys" });
+
+    expect(within(sort).getByRole("button", { name: "By creation" })).toHaveAttribute("aria-pressed", "true");
+    expect(names()).toEqual(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
+
+    await userEvent.click(within(sort).getByRole("button", { name: "Least recently used first" }));
+    expect(within(sort).getByRole("button", { name: "Least recently used first" })).toHaveAttribute("aria-pressed", "true");
+    expect(names()).toEqual(["Bravo", "Echo", "Charlie", "Delta", "Alpha"]);
+
+    await userEvent.click(within(sort).getByRole("button", { name: "By creation" }));
+    expect(names()).toEqual(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
   });
 
   it("marks a key paired from Obsidian as an Obsidian device", async () => {

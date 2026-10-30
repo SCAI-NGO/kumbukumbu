@@ -5,10 +5,12 @@ import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AccountScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
 import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
+import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
@@ -25,6 +27,7 @@ export default function Keys() {
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
   // While a connector URL is shown, it has the page to itself, as a new key has.
   const [revealing, setRevealing] = useState(false);
+  const [order, setOrder] = useState<UsageOrder>("created");
 
   if (created) {
     return (
@@ -48,9 +51,10 @@ export default function Keys() {
 
           {keys.isError && <FormError>{errorText(keys.error)}</FormError>}
           {keys.data?.length === 0 && <p className="text-muted">You have no API keys yet.</p>}
+          {keys.data && keys.data.length > 1 && <UsageOrderSwitch label="Sort API keys" order={order} onOrder={setOrder} />}
           {keys.data && keys.data.length > 0 && (
             <ul className="flex flex-col gap-3">
-              {keys.data.map((key) => (
+              {inUsageOrder(keys.data, order).map((key) => (
                 <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
               ))}
             </ul>
@@ -100,7 +104,7 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
         ))}
       </ul>
       <p className="text-sm text-muted">
-        Created {date(apiKey.createdAt)} · {apiKey.lastUsedAt ? `Last used ${date(apiKey.lastUsedAt)}` : "Never used"}
+        Created {date(apiKey.createdAt)} · {apiKey.lastUsedAt ? `Last used ${timeText(apiKey.lastUsedAt)}` : "Never used"}
         {revoked && ` · Revoked ${date(apiKey.revokedAt!)}`}
         {expiryText(apiKey, expired)}
       </p>
