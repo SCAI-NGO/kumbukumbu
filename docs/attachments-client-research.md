@@ -233,6 +233,7 @@ Server: `0.2.5-pre.1` (the first pre-release, `4fc2db9`) on the reference instan
 | claude.ai | ✓ | ✓ | ✓ | the baseline [M] |
 | Grok | – | ✓ | ✓ | chose `medium` by itself when no step was named, saying it was enough to read the codes [M] |
 | ChatGPT | ✓ | – | ✓ | the call shows as a "Bash" block; ChatGPT said the image was in `content_items`, not `content`, and that it read it after "adjusting" (see below) [M] |
+| Muse (muse.ai) | ✓ | ✓ | ✓ | added 2026-10-30, the server version not recorded; usable in the EU through a Proton account; connected by giving the model the server's link in the chat, then two consents (Muse's, then Kumbu²'s OAuth) [M] |
 | Le Chat | ✗ | – | – | the chat fails with "Ein Fehler ist aufgetreten" already at `small`; the server log shows every `tools/call` completed without error [M] |
 
 What follows:
@@ -241,6 +242,7 @@ What follows:
 - **The pixel budget binds on a 3:2 image** (`medium` 1341×894 = 1.2 MP, below the 1568 px edge), and `large` also met its byte target (quality lowered to fit 1 MB). [M]
 - **Claude Code scales `large` down to a 2000 px long edge** itself, so on Claude Code `large` beyond 2000 px costs bytes only. A crop read off the displayed image needs two conversions (displayed → delivered → original); Claude Code states its factor, our text block the original's size. [M]
 - **ChatGPT reads images now, at least through code.** This contradicts §2.6 (`{}` in connectors, "Image output is not supported" in Code Mode). The call ran as code, and the model picked the image out of the result itself; the UI shows no steps, so it is open whether the model saw the image or the sandbox read it with OCR. Large digits on white don't tell the two apart. [M, I]
+- **Muse reads every step** and was the easiest client to connect: no settings page, the link in the chat and two clicks. [M]
 - **Le Chat cannot take an image part in a tool result**, whatever its size; nothing on our side to tune. Worth a report to Mistral. [M, I]
 - **Finding the connector is a separate question from seeing**: Le Chat first took "/probes" for a chat upload and only used Kumbu² when asked about the server. The server instructions speak of notes, not of images or attachments. [M] Not changed yet.
 
