@@ -53,8 +53,11 @@ function withExtension(name: string, extension: string) {
 
 type OnConflict = "ask" | "replace" | "skip";
 
-/** A request: a batch of notes, or one image or PDF (`version`: replace the file at that version). */
-type Step = { kind: "notes"; files: UploadFile[]; onConflict: OnConflict } | { kind: "file"; path: string; file: Blob; version?: string };
+/** A request: a batch of notes, one image or PDF (`version`: replace the file at that version), or an empty folder's marker. */
+type Step =
+  | { kind: "notes"; files: UploadFile[]; onConflict: OnConflict }
+  | { kind: "file"; path: string; file: Blob; version?: string }
+  | { kind: "marker"; path: string };
 
 /** An image or PDF that exists already, with the version the user is asked about replacing. */
 interface FileConflict {
@@ -82,6 +85,7 @@ interface Run {
 interface Pending {
   notes: UploadFile[][];
   files: Picked[];
+  markers: Picked[];
   skipped: Skipped[];
   withFiles: boolean;
   /** A pasted image goes straight on when nothing was skipped: its name was the one question. */
@@ -94,7 +98,7 @@ type View =
   | { kind: "reading" }
   | { kind: "shrink"; images: Picked[]; type: ShrinkType }
   | { kind: "shrinking"; path: string }
-  | { kind: "review"; notes: number; files: number }
+  | { kind: "review"; notes: number; files: number; folders: number }
   | { kind: "running"; at: number }
   | { kind: "conflicts" }
   | { kind: "failed"; at: number; error: string }
@@ -111,8 +115,8 @@ const touched = (vault: string) => [["tree", vault], ["vaults"], ["search"], ["n
 
 const pickButtonClass = `${secondaryButtonClass} flex flex-1 cursor-pointer items-center justify-center gap-2 focus-within:outline-2 focus-within:outline-accent`;
 
-function reviewText(notes: number, files: number) {
-  if (notes === 0 && files === 0) return "Nothing to upload";
+function reviewText(notes: number, files: number, folders: number) {
+  if (notes === 0 && files === 0) return folders === 0 ? "Nothing to upload" : `${count(folders, "empty folder", "empty folders")} to upload`;
   if (files === 0) return `${count(notes, "Markdown file", "Markdown files")} to upload`;
   if (notes === 0) return `${count(files, "file", "files")} to upload`;
   return `${count(notes, "Markdown file", "Markdown files")} and ${count(files, "other file", "other files")} to upload`;
@@ -178,6 +182,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     pending.current = {
       notes: batches,
       files: plan.files,
+      markers: plan.markers,
       skipped: [...plan.skipped, ...skipped],
       withFiles: picked.some((p) => isAttachmentName(p.path.slice(p.path.lastIndexOf("/") + 1))),
       start,
@@ -206,17 +211,18 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     ready();
   }
 
-  /** The run made of what was read: notes first, then the files. */
+  /** The run made of what was read: notes first, then the files, then the empty folders. */
   function ready() {
     const p = pending.current!;
     pending.current = null;
     const steps: Step[] = [
       ...p.notes.map((files): Step => ({ kind: "notes", files, onConflict: "ask" })),
       ...p.files.map((f): Step => ({ kind: "file", path: f.path, file: f.file })),
+      ...p.markers.map((m): Step => ({ kind: "marker", path: m.path })),
     ];
     run.current = { ...emptyRun(), steps, skipped: p.skipped, withFiles: p.withFiles };
     if (p.start && p.skipped.length === 0 && steps.length > 0) void runFrom(0);
-    else setView({ kind: "review", notes: p.notes.flat().length, files: p.files.length });
+    else setView({ kind: "review", notes: p.notes.flat().length, files: p.files.length, folders: p.markers.length });
   }
 
   const refresh = () => {
@@ -257,6 +263,16 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
     else r.replaced++;
   }
 
+  /** An empty folder: one that exists already is as good as a new one, and none is counted. */
+  async function sendMarker(step: Extract<Step, { kind: "marker" }>) {
+    try {
+      await putFile(vault, inVault ? `${inVault}/${step.path}` : step.path, new Uint8Array(0));
+    } catch (err) {
+      if (!(err instanceof HttpError && (err.status === 400 || err.status === 409))) throw err;
+      run.current.skipped.push({ path: step.path, reason: errorText(err) });
+    }
+  }
+
   async function runFrom(from: number) {
     const r = run.current;
     for (let i = from; i < r.steps.length; i++) {
@@ -264,7 +280,8 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
       const step = r.steps[i];
       try {
         if (step.kind === "notes") await sendNotes(step);
-        else await sendFile(step);
+        else if (step.kind === "file") await sendFile(step);
+        else await sendMarker(step);
       } catch (err) {
         refresh();
         setView({ kind: "failed", at: i, error: errorText(err) });
@@ -463,7 +480,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
         {view.kind === "review" && (
           <>
             <p className="text-text">
-              {reviewText(view.notes, view.files)}, {count(r.skipped.length, "file", "files")} skipped
+              {reviewText(view.notes, view.files, view.folders)}, {count(r.skipped.length, "file", "files")} skipped
             </p>
             <SkippedList skipped={r.skipped} />
             <div className="flex gap-2.5">

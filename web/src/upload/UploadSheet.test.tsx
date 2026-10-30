@@ -496,3 +496,27 @@ describe("summaryText", () => {
     expect(summaryText({ written: 0, replaced: 0, skipped: 0 })).toBe("0 notes uploaded, 0 replaced, 0 files skipped");
   });
 });
+
+describe("empty folders", () => {
+  it("uploading a folder with an empty subfolder puts its marker", async () => {
+    const { puts, sent } = uploadApi([]);
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await userEvent.upload(within(sheet).getByLabelText("Choose a folder"), folderFiles(["Vault/a.md", "Vault/Drafts/.vaultkeep"]));
+    expect(await within(sheet).findByText("1 Markdown file to upload, 0 files skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Upload" }));
+
+    expect(await within(sheet).findByText("1 note uploaded, 0 replaced, 0 files skipped")).toBeInTheDocument();
+    expect(sent).toHaveLength(1);
+    expect(puts).toEqual([{ url: "/api/files/Work/Vault/Drafts/.vaultkeep", version: null, body: "" }]);
+  });
+
+  it("a pick of nothing but markers reviews as empty folders", async () => {
+    uploadApi([]);
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await userEvent.upload(within(sheet).getByLabelText("Choose a folder"), folderFiles(["Vault/Drafts/.vaultkeep"]));
+    expect(await within(sheet).findByText("1 empty folder to upload, 0 files skipped")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Upload" })).toBeEnabled();
+  });
+});

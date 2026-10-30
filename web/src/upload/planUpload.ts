@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { MARKER } from "../api/paths";
 
 /** The server's limits per request (UploadApi.MaxFiles, MaxBytes: UTF-8 bytes of the files' text). */
 export const MAX_FILES = 200;
@@ -35,6 +36,15 @@ export const isMarkdown = (name: string) => /.\.(md|markdown)$/i.test(name);
 /** Whether a file name is one of the five formats kept besides notes (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`). */
 export const isAttachmentName = (name: string) => /.\.(pdf|png|jpe?g|gif|webp)$/i.test(name);
 
+/**
+ * An empty folder's marker (`.vaultkeep`): its folder's name comes first, and no dot folder lies above it. One directly in
+ * the picked place (no folder before it) is no marker.
+ */
+export function isFolderMarker(path: string): boolean {
+  const segments = path.split("/");
+  return segments.length > 1 && segments.at(-1) === MARKER && !segments.slice(0, -1).some((s) => s.startsWith("."));
+}
+
 function reasonAgainst(path: string): string | null {
   const segments = path.split("/");
   if (segments.slice(0, -1).some((s) => /^\.(obsidian|trash)$/i.test(s))) return OBSIDIAN;
@@ -46,6 +56,8 @@ function reasonAgainst(path: string): string | null {
 export interface UploadPlan<T> {
   notes: T[];
   files: T[];
+  /** Empty folders' markers: sent as zero bytes, whatever their size and content, and counted nowhere. */
+  markers: T[];
   /** Images over 15 MB: the user is offered to shrink them. A PDF over 15 MB is skipped. */
   tooLarge: T[];
   skipped: Skipped[];
@@ -56,10 +68,11 @@ export interface UploadPlan<T> {
  * than a note or file may be. Decided by path and size alone, so skipped files are never read. The server checks again.
  */
 export function planUpload<T extends { path: string; size: number }>(files: T[]): UploadPlan<T> {
-  const plan: UploadPlan<T> = { notes: [], files: [], tooLarge: [], skipped: [] };
+  const plan: UploadPlan<T> = { notes: [], files: [], markers: [], tooLarge: [], skipped: [] };
   for (const file of files) {
     const reason = reasonAgainst(file.path);
-    if (reason) plan.skipped.push({ path: file.path, reason });
+    if (reason === NOT_SUPPORTED && isFolderMarker(file.path)) plan.markers.push(file);
+    else if (reason) plan.skipped.push({ path: file.path, reason });
     else if (isMarkdown(file.path)) {
       if (file.size > MAX_NOTE_BYTES) plan.skipped.push({ path: file.path, reason: TOO_LARGE });
       else plan.notes.push(file);
