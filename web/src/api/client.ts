@@ -5,11 +5,12 @@ import { useSession } from "../state/session";
 import { useUpdate } from "../update/store";
 import type { paths } from "./schema";
 
-/** A refusal or fault from the API; `message` is the server's sentence for the user, if it sent one. */
+/** A refusal or fault from the API; `message` is the server's sentence for the user, if it sent one, `type` its machine-readable kind. */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly type?: string,
   ) {
     super(message);
   }
@@ -100,7 +101,8 @@ export async function call<T>(request: Promise<{ data?: T; error?: unknown; resp
   const { data, error, response } = await request;
   if (!response.ok) {
     const message = error && typeof error === "object" && "error" in error && typeof error.error === "string" ? error.error : "";
-    throw new HttpError(response.status, message);
+    const type = error && typeof error === "object" && "type" in error && typeof error.type === "string" ? error.type : undefined;
+    throw new HttpError(response.status, message, type);
   }
   return data as T;
 }

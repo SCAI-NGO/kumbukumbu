@@ -27,9 +27,10 @@ export default function SignIn() {
   const signedIn = useSession((s) => s.signedIn);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
 
   const signIn = useMutation({
-    mutationFn: () => call(api.POST("/api/session", { body: { username, password, remember: false } })),
+    mutationFn: () => call(api.POST("/api/session", { body: { username, password, remember } })),
     onSuccess: (view) => {
       // Nothing cached from an earlier session (maybe another user's) outlives this sign-in.
       queryClient.clear();
@@ -61,6 +62,15 @@ export default function SignIn() {
       <form onSubmit={submit} className="flex flex-col gap-4">
         <TextField label="Username" value={username} onChange={setUsername} autoComplete="username" />
         <PasswordField label="Password" value={password} onChange={setPassword} autoComplete="current-password" />
+        <label className="flex min-h-11 items-center gap-3 text-text">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="size-5 accent-accent" />
+          Keep me signed in on this device
+        </label>
+        {remember && (
+          <p role="note" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-text">
+            Comfortable, but less safe: anyone who gets into this device or browser gets into your notes until you sign out or 30 days are up. Use it only on a device of your own, with a screen lock.
+          </p>
+        )}
         {signIn.isError && <FormError>{errorText(signIn.error)}</FormError>}
         <button type="submit" disabled={signIn.isPending} className={primaryButtonClass}>
           Sign in

@@ -130,7 +130,7 @@ function UserItem({ user, self, onToggle, onDelete, onPromote }: { user: AdminUs
       <p className="text-sm break-all text-muted">@{user.username}</p>
       <p className="text-sm text-text-body">{user.active ? "Active" : "Deactivated"}</p>
       <p className="text-sm text-muted">
-        Created {date(user.createdAt)} · {user.lastActiveAt ? `Last sign-in ${date(user.lastActiveAt)}` : "Never signed in"}
+        Created {date(user.createdAt)} · {user.lastActiveAt ? `Last active ${date(user.lastActiveAt)}` : "Never signed in"}
       </p>
       <p className="flex gap-3 text-sm text-text-body">
         <span>

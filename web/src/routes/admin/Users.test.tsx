@@ -53,7 +53,7 @@ describe("Admin users", () => {
     expect(bob.getByText("5.3 MB")).toBeInTheDocument();
     const ada = within(card("Ada"));
     expect(ada.getByText("Admin")).toBeInTheDocument();
-    expect(ada.getByText(/Last sign-in 20 Oct 2026/)).toBeInTheDocument();
+    expect(ada.getByText(/Last active 20 Oct 2026/)).toBeInTheDocument();
     expect(ada.getByText("2 vaults")).toBeInTheDocument();
     expect(ada.getByText("1.5 KB")).toBeInTheDocument();
     expect(within(card("Root")).getByText("Primary admin")).toBeInTheDocument();

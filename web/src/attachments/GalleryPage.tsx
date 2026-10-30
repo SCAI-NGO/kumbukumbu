@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Download, Folder, FolderInput, Image as ImageIcon, Li
 import { useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useDeleteFile, useTree, type TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
@@ -124,7 +125,7 @@ export default function GalleryPage() {
   const selection = useSelection();
   const { selected, selecting, toggle, clear, keep, drop } = selection;
   // A dialog keeps the files it was opened for: the selection changes under it as they move or go.
-  const [dialog, setDialog] = useState<{ kind: "download" | "move" | "delete"; files: GalleryFile[] } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "download" | "move" | "delete"; files: GalleryFile[]; reason?: ZipReason } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -176,15 +177,20 @@ export default function GalleryPage() {
     setProblem(null);
     if (chosen.length === 1) return downloadFile(chosen[0].path);
     const files = chosen;
-    // Asked afresh: a setting turned back on elsewhere must not leave a ZIP without its ticket. Unknown, it asks.
+    // Both asked afresh, not from the caches: a setting turned back on elsewhere, or a password window that closed
+    // meanwhile, must not leave a ZIP without its ticket. Either unknown, it asks.
     // Meanwhile the button waits, so that a second tap doesn't start a second ZIP.
     setAsking(true);
-    const ask = await queryClient
-      .fetchQuery({ ...preferencesQuery, staleTime: 0 })
-      .then((p) => p.askPasswordForDownloads)
-      .catch(() => true)
-      .finally(() => setAsking(false));
-    if (ask) setDialog({ kind: "download", files });
+    const [setting, window] = await Promise.all([
+      queryClient
+        .fetchQuery({ ...preferencesQuery, staleTime: 0 })
+        .then((p) => p.askPasswordForDownloads)
+        .catch(() => true),
+      call(api.GET("/api/session"))
+        .then((s) => !s.passwordWindowOpen)
+        .catch(() => true),
+    ]).finally(() => setAsking(false));
+    if (setting || window) setDialog({ kind: "download", files, reason: setting ? "setting" : "window" });
     else void downloadZip(zipFrame, vault, files.map((f) => f.path));
   };
 
@@ -298,7 +304,7 @@ export default function GalleryPage() {
           </Suspense>
         </LoadBoundary>
       )}
-      {dialog?.kind === "download" && <ZipDialog vault={vault} paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "download" && <ZipDialog reason={dialog.reason ?? "setting"} vault={vault} paths={dialog.files.map((f) => f.path)} onClose={() => setDialog(null)} />}
       {dialog?.kind === "move" &&
         (dialog.files.length === 1 ? (
           <MoveDialog subject={{ kind: "attachment", path: dialog.files[0].path }} onClose={() => setDialog(null)} onMoved={clear} />
@@ -441,15 +447,22 @@ function ZipFrame({ onError }: { onError(message: string): void }) {
   );
 }
 
+/** Why the ZIP asks for the password: the user's setting, or a remembered session whose password window has closed. */
+type ZipReason = "setting" | "window";
+
 /** Several files as one ZIP after the password (unless the user turned that off in Settings). */
-function ZipDialog({ vault, paths, onClose }: { vault: string; paths: string[]; onClose(): void }) {
+function ZipDialog({ vault, paths, reason, onClose }: { vault: string; paths: string[]; reason: ZipReason; onClose(): void }) {
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
     <ConfirmTyped
       title={`Download ${paths.length} files?`}
-      text="They come as one ZIP. Your password confirms it; Settings can turn this question off."
+      text={
+        reason === "window"
+          ? "They come as one ZIP. It's a while since you last gave your password on this device, so it confirms the download."
+          : "They come as one ZIP. Your password confirms it; Settings can turn this question off."
+      }
       action="Download"
       pending={pending}
       error={error}
