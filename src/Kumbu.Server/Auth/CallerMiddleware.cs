@@ -99,7 +99,7 @@ public sealed class CallerMiddleware(
             // tools/call with the user's session.
             caller = context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
                      && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
-                         is var (user, userKey, readAt)
+                         is var (user, userKey, readAt, _)
                 ? RequestCaller.ForSession(user, userKey, readAt, catalog)
                 : null;
         }

@@ -349,4 +349,268 @@ public sealed class SessionTests(MongoFixture fixture)
         Assert.DoesNotContain(Convert.ToBase64String(secretBytes), dump);
         Assert.DoesNotContain(Convert.ToBase64String(key), dump);
     }
+
+    private DateTime Now => _time.GetUtcNow().UtcDateTime;
+
+    private Task<UserSlotDocument> SlotAsync() => Slots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+
+    private Task<BsonDocument> RawSlotAsync() =>
+        _db.GetCollection<BsonDocument>("user_slots").Find(new BsonDocument("kind", UserSlotDocument.Session)).SingleAsync(Ct);
+
+    private Task<UserDocument> UserDocAsync(string id) => _db.GetCollection<UserDocument>("users").Find(u => u.Id == id).SingleAsync(Ct);
+
+    private async Task<(User User, string Secret)> RememberedAsync()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        return (user, await Sessions().StartAsync(user, key, readAt, Ct, remember: true));
+    }
+
+    private async Task<bool> WindowOpenAsync(Sessions sessions, string secret, bool touch = true) =>
+        (await sessions.ResolveAsync(secret, Ct, touch))!.Value.WindowOpen;
+
+    [Fact]
+    public async Task A_remembered_session_lives_through_six_days_of_quiet()
+    {
+        var (_, secret) = await RememberedAsync();
+
+        _time.Advance(TimeSpan.FromDays(6));
+
+        Assert.NotNull(await Sessions().ResolveAsync(secret, Ct));
+    }
+
+    [Fact]
+    public async Task A_remembered_session_idle_for_seven_days_and_a_minute_is_refused_and_removed()
+    {
+        var (_, secret) = await RememberedAsync();
+
+        _time.Advance(TimeSpan.FromDays(7) + TimeSpan.FromMinutes(1));
+
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+        Assert.False(await Slots.Find(s => s.Kind == UserSlotDocument.Session).AnyAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_remembered_session_ends_after_30_days_despite_daily_use()
+    {
+        var started = Now;
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+        Assert.Equal(started.AddDays(30), (await SlotAsync()).ExpiresAt);
+
+        for (var day = 1; day < 30; day++)
+        {
+            _time.Advance(TimeSpan.FromDays(1));
+            Assert.NotNull(await sessions.ResolveAsync(secret, Ct));
+        }
+
+        _time.Advance(TimeSpan.FromDays(1));
+        Assert.Null(await sessions.ResolveAsync(secret, Ct));
+    }
+
+    [Fact]
+    public async Task The_window_is_open_after_sign_in_and_closes_after_31_idle_minutes()
+    {
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+
+        Assert.True(await WindowOpenAsync(sessions, secret));
+        _time.Advance(TimeSpan.FromMinutes(29));
+        Assert.True(await WindowOpenAsync(sessions, secret));
+        _time.Advance(TimeSpan.FromMinutes(31));
+
+        Assert.False(await WindowOpenAsync(sessions, secret));
+    }
+
+    [Fact]
+    public async Task The_window_closes_12_hours_after_the_password_despite_activity()
+    {
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+
+        for (var minutes = 20; minutes < 12 * 60; minutes += 20)
+        {
+            _time.Advance(TimeSpan.FromMinutes(20));
+            Assert.True(await WindowOpenAsync(sessions, secret));
+        }
+
+        _time.Advance(TimeSpan.FromMinutes(20));
+        Assert.False(await WindowOpenAsync(sessions, secret));
+    }
+
+    [Fact]
+    public async Task Using_a_session_after_its_window_closed_does_not_reopen_it()
+    {
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+        _time.Advance(TimeSpan.FromMinutes(31));
+        Assert.False(await WindowOpenAsync(sessions, secret));
+
+        for (var minutes = 5; minutes <= 60; minutes += 5)
+        {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            Assert.False(await WindowOpenAsync(sessions, secret));
+        }
+    }
+
+    [Fact]
+    public async Task Opening_the_window_restarts_both_window_clocks()
+    {
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+        _time.Advance(TimeSpan.FromMinutes(31));
+        Assert.False(await WindowOpenAsync(sessions, secret));
+
+        await sessions.OpenWindowAsync(secret, Ct);
+        var opened = Now;
+        Assert.True(await WindowOpenAsync(sessions, secret));
+
+        for (var minutes = 20; minutes < 12 * 60; minutes += 20)
+        {
+            _time.Advance(TimeSpan.FromMinutes(20));
+            Assert.True(await WindowOpenAsync(sessions, secret));
+        }
+
+        _time.Advance(TimeSpan.FromMinutes(19));
+        Assert.Equal(opened.AddHours(12).AddMinutes(-1), Now);
+        Assert.True(await WindowOpenAsync(sessions, secret));
+        Assert.Equal(opened, (await SlotAsync()).ConfirmedAt);
+    }
+
+    [Fact]
+    public async Task Opening_the_window_of_a_normal_session_writes_nothing()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
+        var before = await RawSlotAsync();
+        _time.Advance(TimeSpan.FromMinutes(5));
+
+        await Sessions().OpenWindowAsync(secret, Ct);
+
+        var slot = await RawSlotAsync();
+        Assert.Equal(before, slot);
+        Assert.False(slot.Contains("remembered"));
+        Assert.False(slot.Contains("confirmedAt"));
+        Assert.False(slot.Contains("windowUsedAt"));
+    }
+
+    [Fact]
+    public async Task Background_requests_move_no_clock_of_a_remembered_session()
+    {
+        var started = Now;
+        var (_, secret) = await RememberedAsync();
+        var sessions = Sessions();
+
+        for (var minutes = 5; minutes <= 35; minutes += 5)
+        {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            Assert.NotNull(await sessions.ResolveAsync(secret, Ct, touch: false));
+        }
+
+        Assert.False(await WindowOpenAsync(sessions, secret, touch: false));
+        var slot = await SlotAsync();
+        Assert.Equal(started, slot.LastUsedAt);
+        Assert.Equal(started, slot.WindowUsedAt);
+    }
+
+    [Fact]
+    public async Task A_normal_session_is_stored_and_limited_as_before()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var sessions = Sessions();
+        var secret = await sessions.StartAsync(user, key, readAt, Ct);
+
+        var slot = await RawSlotAsync();
+        Assert.False(slot.Contains("remembered"));
+        Assert.False(slot.Contains("confirmedAt"));
+        Assert.False(slot.Contains("windowUsedAt"));
+        Assert.True(await WindowOpenAsync(sessions, secret));
+
+        _time.Advance(TimeSpan.FromMinutes(31));
+        Assert.Null(await sessions.ResolveAsync(secret, Ct));
+    }
+
+    [Fact]
+    public async Task The_first_request_after_half_an_hour_begins_a_visit()
+    {
+        var (user, secret) = await RememberedAsync();
+        var sessions = Sessions();
+        var signedIn = (await UserDocAsync(user.Id)).LastSignInAt;
+        Assert.NotNull(signedIn);
+
+        _time.Advance(TimeSpan.FromMinutes(45));
+        var visit = Now;
+        var resolved = (await sessions.ResolveAsync(secret, Ct))!.Value;
+
+        var doc = await UserDocAsync(user.Id);
+        Assert.Equal(visit, doc.LastSignInAt);
+        Assert.Equal(signedIn, doc.PreviousSignInAt);
+        Assert.Equal(visit, resolved.User.LastSignInAt);
+        Assert.Equal(signedIn, resolved.User.PreviousSignInAt);
+
+        // Within the visit, and a background request after another lapse: neither begins one.
+        _time.Advance(TimeSpan.FromMinutes(10));
+        await sessions.ResolveAsync(secret, Ct);
+        _time.Advance(TimeSpan.FromMinutes(45));
+        await sessions.ResolveAsync(secret, Ct, touch: false);
+
+        doc = await UserDocAsync(user.Id);
+        Assert.Equal(visit, doc.LastSignInAt);
+        Assert.Equal(signedIn, doc.PreviousSignInAt);
+    }
+
+    [Fact]
+    public async Task Two_requests_at_the_start_of_a_visit_move_the_previous_visit_once()
+    {
+        var (user, secret) = await RememberedAsync();
+        var signedIn = (await UserDocAsync(user.Id)).LastSignInAt;
+
+        _time.Advance(TimeSpan.FromMinutes(45));
+        await Task.WhenAll(Sessions().ResolveAsync(secret, Ct), Sessions().ResolveAsync(secret, Ct));
+
+        var doc = await UserDocAsync(user.Id);
+        Assert.Equal(Now, doc.LastSignInAt);
+        Assert.Equal(signedIn, doc.PreviousSignInAt);
+    }
+
+    [Fact]
+    public async Task Ending_all_sessions_ends_remembered_ones()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var sessions = Sessions();
+        var first = await sessions.StartAsync(user, key, readAt, Ct, remember: true);
+        var second = await sessions.StartAsync(user, key, readAt, Ct, remember: true);
+
+        await sessions.EndAllAsync(user.Id, null, Ct);
+
+        Assert.Null(await sessions.ResolveAsync(first, Ct));
+        Assert.Null(await sessions.ResolveAsync(second, Ct));
+
+        var third = await sessions.StartAsync(user, key, readAt, Ct, remember: true);
+        var fourth = await sessions.StartAsync(user, key, readAt, Ct, remember: true);
+        using (var session = await _db.Client.StartSessionAsync(cancellationToken: Ct))
+        {
+            await session.WithTransactionAsync(
+                async (s, token) =>
+                {
+                    await sessions.EndAllAsync(s, user.Id, token);
+                    return true;
+                },
+                cancellationToken: Ct);
+        }
+
+        Assert.Null(await sessions.ResolveAsync(third, Ct));
+        Assert.Null(await sessions.ResolveAsync(fourth, Ct));
+    }
+
+    [Fact]
+    public async Task A_password_change_ends_a_remembered_session()
+    {
+        var (user, key, readAt) = await SignedInAsync();
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct, remember: true);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.True(await Users().ChangePasswordAsync(user, key, Password, NewPassword, revokeApiKeys: true, Ct));
+
+        Assert.Null(await Sessions().ResolveAsync(secret, Ct));
+    }
 }

@@ -45,9 +45,11 @@ public sealed class UserDocument
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; }
 
+    /// <summary>The latest visit: a sign-in, or the first request of a remembered session after half an hour without one.</summary>
     [BsonElement("lastSignInAt"), BsonIgnoreIfNull]
     public DateTime? LastSignInAt { get; set; }
 
+    /// <summary>The previous visit, as <see cref="LastSignInAt"/>.</summary>
     [BsonElement("previousSignInAt"), BsonIgnoreIfNull]
     public DateTime? PreviousSignInAt { get; set; }
 
@@ -146,4 +148,16 @@ public sealed class UserSlotDocument
 
     [BsonElement("lastUsedAt"), BsonIgnoreIfNull]
     public DateTime? LastUsedAt { get; set; }
+
+    /// <summary>Sessions only: "keep me signed in", so the session's outer limits are the remembered ones.</summary>
+    [BsonElement("remembered"), BsonIgnoreIfDefault]
+    public bool Remembered { get; set; }
+
+    /// <summary>A remembered session's normal window: when the password was last given (sign-in or confirmation).</summary>
+    [BsonElement("confirmedAt"), BsonIgnoreIfNull]
+    public DateTime? ConfirmedAt { get; set; }
+
+    /// <summary>A remembered session's normal window: when it was last used while open.</summary>
+    [BsonElement("windowUsedAt"), BsonIgnoreIfNull]
+    public DateTime? WindowUsedAt { get; set; }
 }

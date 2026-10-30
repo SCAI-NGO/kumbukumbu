@@ -15,8 +15,13 @@ namespace Kumbu.Server.Accounts;
 /// </summary>
 public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 {
+    /// <summary>The limits of a normal session, and of the normal window inside a remembered one.</summary>
     public static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan AbsoluteTimeout = TimeSpan.FromHours(12);
+
+    /// <summary>The limits of a remembered session ("keep me signed in").</summary>
+    public static readonly TimeSpan RememberedIdleTimeout = TimeSpan.FromDays(7);
+    public static readonly TimeSpan RememberedAbsoluteTimeout = TimeSpan.FromDays(30);
 
     /// <summary>A burst of requests shouldn't write on each; the idle clock may therefore run up to this much early.</summary>
     private static readonly TimeSpan LastUsedGranularity = TimeSpan.FromMinutes(1);
@@ -40,9 +45,10 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// is when that credential was read, before Argon2; it becomes the session's <c>createdAt</c>, so a password
     /// change that lands while the sign-in is still in Argon2 refuses the session too.
     /// <see cref="CredentialsChangedException"/> if the user no longer exists (deleted meanwhile), is inactive, or has
-    /// another user key now (rotated meanwhile).
+    /// another user key now (rotated meanwhile). A <paramref name="remember"/>ed session lasts longer and opens its
+    /// normal window with the password just given.
     /// </summary>
-    public async Task<string> StartAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct)
+    public async Task<string> StartAsync(User user, byte[] userKey, DateTime credentialReadAt, CancellationToken ct, bool remember = false)
     {
         await EnsureReadyAsync(ct);
         var secret = RandomNumberGenerator.GetBytes(SecretBytes);
@@ -55,9 +61,15 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             Lookup = Lookup(secret),
             Wrapped = VaultCrypto.Seal(Kek(secret, user.Id), userKey, SlotContext(user.Id)),
             CreatedAt = credentialReadAt,
-            ExpiresAt = now + AbsoluteTimeout,
+            ExpiresAt = now + (remember ? RememberedAbsoluteTimeout : AbsoluteTimeout),
             LastUsedAt = now,
         };
+        if (remember)
+        {
+            slot.Remembered = true;
+            slot.ConfirmedAt = slot.WindowUsedAt = now;
+        }
+
         using (var session = await db.Client.StartSessionAsync(cancellationToken: ct))
         {
             await session.WithTransactionAsync(
@@ -80,12 +92,17 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     }
 
     /// <summary>
-    /// The user, their user key and when the session's credential was read (its <c>createdAt</c>), or null if
-    /// the session is unknown, ended, idle too long, past its absolute limit, older than the user's last password
-    /// change or recovery, or the user is inactive. Without <paramref name="touch"/> the request doesn't count as the
-    /// session's use: the web app's poll in the background must not keep a session alive that nobody uses.
+    /// The user, their user key, when the session's credential was read (its <c>createdAt</c>) and whether its normal
+    /// window is open, or null if the session is unknown, ended, idle too long, past its absolute limit, older than the
+    /// user's last password change or recovery, or the user is inactive. A normal session ends after 30 minutes idle
+    /// and 12 hours at most, and its window is always open; a remembered one ends after 7 days idle and 30 days at
+    /// most, and its window is open for 30 minutes idle and 12 hours at most since the password was last given
+    /// (<see cref="OpenWindowAsync"/>). Without <paramref name="touch"/> the request doesn't count as the session's use
+    /// and moves no clock: the web app's poll in the background must not keep a session alive that nobody uses. The
+    /// first touching request after 30 minutes without one (only a remembered session lives that long) begins a visit:
+    /// the user's <c>lastSignInAt</c> moves to now, and the returned user carries it.
     /// </summary>
-    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
+    public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt, bool WindowOpen)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
     {
         if (Decode(secret) is not { } bytes) return null;
         await EnsureReadyAsync(ct);
@@ -96,7 +113,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         // The TTL index removes expired slots only eventually (MongoDB's sweep runs once a minute), and idle
         // ones not at all before their absolute limit, so the times are checked here.
         var now = Now;
-        if (slot.ExpiresAt is not { } expiresAt || slot.LastUsedAt is not { } lastUsedAt || now >= expiresAt || now - lastUsedAt > IdleTimeout)
+        if (slot.ExpiresAt is not { } expiresAt || slot.LastUsedAt is not { } lastUsedAt || now >= expiresAt || now - lastUsedAt > IdleLimit(slot))
         {
             await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
             return null;
@@ -123,17 +140,45 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
             return null;
         }
 
+        // Once closed, the window stays closed until the password is given again: using the session doesn't reopen it.
+        var windowOpen = !slot.Remembered
+            || (slot.ConfirmedAt is { } confirmedAt && slot.WindowUsedAt is { } windowUsedAt
+                && now < confirmedAt + AbsoluteTimeout && now - windowUsedAt <= IdleTimeout);
+
         if (touch && now - lastUsedAt >= LastUsedGranularity)
         {
-            // Conditional, so of concurrent requests only one writes.
-            var stale = now - LastUsedGranularity;
-            await Slots.UpdateOneAsync(
-                s => s.Id == slot.Id && s.LastUsedAt <= stale,
-                Builders<UserSlotDocument>.Update.Set(s => s.LastUsedAt, now),
-                cancellationToken: ct);
+            // Conditional on the exact value read, so of concurrent requests only one writes, and only that one can
+            // begin a visit.
+            var update = Builders<UserSlotDocument>.Update.Set(s => s.LastUsedAt, now);
+            if (slot.Remembered && windowOpen) update = update.Set(s => s.WindowUsedAt, now);
+            var touched = await Slots.UpdateOneAsync(s => s.Id == slot.Id && s.LastUsedAt == lastUsedAt, update, cancellationToken: ct);
+            if (touched.ModifiedCount > 0 && now - lastUsedAt > IdleTimeout)
+            {
+                user.PreviousSignInAt = user.LastSignInAt;
+                user.LastSignInAt = now;
+                await Users.UpdateOneAsync(
+                    u => u.Id == user.Id,
+                    Builders<UserDocument>.Update.Set(u => u.LastSignInAt, now).Set(u => u.PreviousSignInAt, user.PreviousSignInAt),
+                    cancellationToken: ct);
+            }
         }
 
-        return (user.ToUser(), userKey, slot.CreatedAt);
+        return (user.ToUser(), userKey, slot.CreatedAt, windowOpen);
+    }
+
+    /// <summary>
+    /// Opens the normal window of a remembered session again, with both its clocks from now; a normal session's
+    /// window is always open, so nothing is written for one. The caller has verified the password.
+    /// </summary>
+    public async Task OpenWindowAsync(string secret, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return;
+        var lookup = Lookup(bytes);
+        var now = Now;
+        await Slots.UpdateOneAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.Remembered,
+            Builders<UserSlotDocument>.Update.Set(s => s.ConfirmedAt, now).Set(s => s.WindowUsedAt, now).Set(s => s.LastUsedAt, now),
+            cancellationToken: ct);
     }
 
     /// <summary>Signs out: the session's slot is deleted, so its secret opens nothing any more.</summary>
@@ -156,6 +201,8 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     /// <summary>Ends every session of the user inside the caller's transaction (deactivating the user).</summary>
     internal Task EndAllAsync(IClientSessionHandle session, string userId, CancellationToken ct) =>
         Slots.DeleteManyAsync(session, s => s.User == userId && s.Kind == UserSlotDocument.Session, cancellationToken: ct);
+
+    private static TimeSpan IdleLimit(UserSlotDocument slot) => slot.Remembered ? RememberedIdleTimeout : IdleTimeout;
 
     private static byte[]? Decode(string secret)
     {
@@ -209,7 +256,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         var slot = await db.GetCollection<UserSlotDocument>("user_slots")
             .Find(s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.User == userId).FirstOrDefaultAsync(ct);
         var user = await db.GetCollection<UserDocument>("users").Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
-        if (slot is null || user is null || slot.CreatedAt <= user.CredentialsChangedAt || !(now < slot.ExpiresAt) || slot.LastUsedAt is not { } lastUsed || now - lastUsed > IdleTimeout)
+        if (slot is null || user is null || slot.CreatedAt <= user.CredentialsChangedAt || !(now < slot.ExpiresAt) || slot.LastUsedAt is not { } lastUsed || now - lastUsed > IdleLimit(slot))
         {
             return null;
         }
