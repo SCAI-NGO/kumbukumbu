@@ -33,7 +33,7 @@ public sealed class Shell
     private readonly IShellObserver? _observer;
     private readonly IAttachmentPixels? _pixels;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null, IAttachmentPixels? pixels = null)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null, IAttachmentPixels? pixels = null, string version = "0.0.0-dev")
     {
         _observer = observer;
         _pixels = pixels;
@@ -48,7 +48,7 @@ public sealed class Shell
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
             new Mv(mover), new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
-            new Help(_commands),
+            new Uname(version), new Help(_commands),
         ];
         foreach (var command in commands)
         {

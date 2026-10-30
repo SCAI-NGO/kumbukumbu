@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "rm", "trash", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "rm", "trash", "uname", "help"];
 
     private static Task<ShellResult> Run(string line) => TestShell.Of().RunAsync(line, CancellationToken.None);
 

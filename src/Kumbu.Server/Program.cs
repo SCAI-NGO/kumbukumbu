@@ -147,7 +147,7 @@ builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
-builder.Services.AddScoped<Shell>();
+builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type

@@ -84,7 +84,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 
 | Tool | Purpose | Payload |
 |---|---|---|
-| `sh` | Structure + reading: `ls`, `cat`, `outline`, `rg`, `semsearch`, `links`, `backlinks`, `history`, `diff`, `restore`, `mv`, `rm`, `trash`, `mkcp`, `lscp`, `rmcp`, `help` (`mkdir` is refused with a hint: folders exist through their notes) | Paths only — **never Markdown content** |
+| `sh` | Structure + reading: `ls`, `cat`, `outline`, `rg`, `semsearch`, `links`, `backlinks`, `history`, `diff`, `restore`, `mv`, `rm`, `trash`, `mkcp`, `lscp`, `rmcp`, `uname`, `help` (`mkdir` is refused with a hint: folders exist through their notes) | Paths only — **never Markdown content** |
 | `edit` | `str_replace`, replace/append/insert section — with version token | Content (JSON params) |
 | `write` | Create note or fully overwrite — with version token | Content (JSON params) |
 | `replace` | A literal change across a folder or vault, previewed with a plan token, then applied | JSON params |
