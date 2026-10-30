@@ -640,8 +640,8 @@
       },
       "System.Numerics.Tensors": {
         "type": "Transitive",
-        "resolved": "10.0.0",
-        "contentHash": "PxZKFx8ACAt7gRnTSDgtZFA06cimls5XL1Olv63bWF8qKL5+EQdqq3K02etW4LNut4xDoREPe9z7QYATLMkBPA=="
+        "resolved": "10.0.14",
+        "contentHash": "88DUO9lZZ/PfBwO51YKTd5TdVb+Cl31kd6imLKHUZxNXjnPU2V4mHIVT4f8rVK3T+sXXfDbHInzclnOHrK4azw=="
       },
       "System.Security.AccessControl": {
         "type": "Transitive",
@@ -753,7 +753,7 @@
           "Microsoft.ML.OnnxRuntime": "[1.31.1, )",
           "ModelContextProtocol.AspNetCore": "[2.3.0, )",
           "MongoDB.Driver": "[3.13.0, )",
-          "System.Numerics.Tensors": "[10.0.0, )",
+          "System.Numerics.Tensors": "[10.0.14, )",
           "prometheus-net": "[8.2.1, )",
           "prometheus-net.AspNetCore": "[8.2.1, )"
         }
