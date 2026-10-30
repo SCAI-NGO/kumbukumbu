@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
@@ -8,7 +9,7 @@ namespace Kumbu.Server.Notes;
 /// <summary>
 /// Startup for development. Applies <c>Kumbu:Recovery:Keys</c> (gives the dev token a slot in their vaults),
 /// then loads <c>Kumbu:Seed:Path</c>: a folder becomes a new encrypted vault, or fills one that is still
-/// empty. A vault that already holds notes, or trash, is left alone (decided by Chris, 2026-10-23): seeding
+/// empty. A vault that already holds notes, files or kept folders, or trash, is left alone (decided by Chris, 2026-10-23): seeding
 /// means starting from scratch, and agents' changes live only in the database.
 /// </summary>
 public sealed class Seeder(
@@ -74,20 +75,23 @@ public sealed class Seeder(
         var scan = SeedScanner.Scan(seedPath);
         var store = new EncryptedNoteStore(catalog, new FixedCredential(devToken), index);
         var existing = await store.ListVaultsAsync(ct);
-        int seeded = 0, filled = 0, left = 0, refused = 0;
+        int seeded = 0, folders = 0, filled = 0, left = 0, refused = 0;
         foreach (var name in scan.Vaults)
         {
             var root = Kumbu.Core.Paths.VaultPath.Root.Child(name);
+            // Files and kept folders count too, and so does their trash: a folder removed since must not come back.
             if (existing.Contains(name)
-                && ((await store.ListNotesUnderAsync(root, ct)).Count > 0 || (await store.ListTrashAsync(root, ct)).Count > 0))
+                && ((await store.ListNotesUnderAsync(root, ct)).Count > 0 || (await store.ListTrashAsync(root, ct)).Count > 0
+                    || (await store.ListAttachmentsUnderAsync(root, ct)).Count > 0 || (await store.ListAttachmentTrashAsync(root, ct)).Count > 0))
             {
                 left++;
-                log.LogInformation("Left vault {Vault} alone: it already holds notes (seeding only fills empty vaults)", name);
+                log.LogInformation("Left vault {Vault} alone: it is not empty (seeding only fills empty vaults)", name);
                 continue;
             }
 
             var files = scan.Files.Where(f => f.Path.Vault == name).ToList();
-            if (existing.Contains(name) && files.Count == 0)
+            var kept = scan.Folders.Where(f => f.Vault == name).Distinct().ToList();
+            if (existing.Contains(name) && files.Count == 0 && kept.Count == 0)
             {
                 left++;
                 log.LogInformation("Left vault {Vault} alone: it is empty, and so is its folder", name);
@@ -116,6 +120,21 @@ public sealed class Seeder(
             {
                 if (await store.TryCreateAsync(new StoredNote(file.Path, file.Content, 1, Writers.Seed, now, [], file.Content), ct)) seeded++;
             }
+
+            if (kept.Count > 0)
+            {
+                // Every marker has the same bytes, none: one blob serves them all.
+                var blob = await store.PutBlobAsync(name, ReadOnlyMemory<byte>.Empty, ct);
+                var batch = new NoteBatch();
+                foreach (var folder in kept)
+                {
+                    batch.AttachmentCreates.Add(new StoredAttachment(FolderMarker.In(folder), FolderMarker.State(blob), 1, Writers.Seed, now, [], null));
+                }
+
+                // All of them or none: one marker there already stops the batch.
+                if ((await store.TryCommitAsync(batch, Writers.Seed, now, ct)).Count == 0) folders += kept.Count;
+                else log.LogWarning("Made none of the {Count} of vault {Vault}: one exists already", Count(kept.Count, "kept folder"), name);
+            }
         }
 
         foreach (var warning in scan.Warnings)
@@ -124,8 +143,8 @@ public sealed class Seeder(
         }
 
         log.LogInformation(
-            "Seeded {Notes} into {Filled}; left {Left} alone{Refused} ({Skipped} skipped)",
-            Count(seeded, "note"), Count(filled, "vault"), Count(left, "vault"),
+            "Seeded {Notes}{Folders} into {Filled}; left {Left} alone{Refused} ({Skipped} skipped)",
+            Count(seeded, "note"), folders > 0 ? $" and {Count(folders, "folder")}" : "", Count(filled, "vault"), Count(left, "vault"),
             refused > 0 ? $"; did not create {Count(refused, "vault")} (see above)" : "", Count(scan.Warnings.Count, "file"));
     }
 

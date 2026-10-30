@@ -5,6 +5,13 @@ import { ACCEPT, MAX_ATTACHMENT_BYTES, MAX_FILES, MAX_NOTE_BYTES, NOT_SUPPORTED,
 const entry = (path: string, size = 10) => ({ path, size });
 
 describe("planUpload", () => {
+  it("planUpload sends markers apart", () => {
+    const { markers, skipped, notes } = planUpload([entry("Vault/Drafts/.vaultkeep", 0), entry("Vault/.obsidian/x/.vaultkeep", 0), entry("Vault/.git/x/.vaultkeep", 0), entry(".vaultkeep", 0), entry("Vault/a.md")]);
+    expect(markers.map((k) => k.path)).toEqual(["Vault/Drafts/.vaultkeep"]);
+    expect(notes.map((k) => k.path)).toEqual(["Vault/a.md"]);
+    expect(skipped.map((s) => s.path)).toEqual(["Vault/.obsidian/x/.vaultkeep", "Vault/.git/x/.vaultkeep", ".vaultkeep"]);
+  });
+
   it("keeps .md and .markdown in any case as notes and lists everything else as skipped, with the reason", () => {
     const { notes, skipped } = planUpload([entry("Vault/a.md"), entry("Vault/B.MD"), entry("Vault/notes/c.markdown"), entry("Vault/notes/.md"), entry("Vault/readme.txt")]);
     expect(notes.map((k) => k.path)).toEqual(["Vault/a.md", "Vault/B.MD", "Vault/notes/c.markdown"]);

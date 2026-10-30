@@ -74,4 +74,14 @@ public class LinkResolverTests
     [Fact]
     public void LinkTextIsTheVaultPathWithoutMd() =>
         Assert.Equal("projects/kumbu", LinkResolver.LinkText(P("/W/projects/kumbu.md")));
+
+    [Theory]
+    [InlineData(".vaultkeep")]
+    [InlineData("Drafts/.vaultkeep")]
+    [InlineData("/Drafts/.vaultkeep")]
+    public void AFolderMarkerIsNeverALinkTarget(string target)
+    {
+        var resolver = new LinkResolver("W", [P("/W/inbox.md")], [P("/W/Drafts/.vaultkeep"), P("/W/Drafts/shot.png")]);
+        Assert.Equal(LinkKind.NotFound, resolver.Resolve(P("/W/Drafts/n.md"), target).Kind);
+    }
 }

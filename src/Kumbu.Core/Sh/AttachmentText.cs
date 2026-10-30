@@ -32,7 +32,7 @@ internal static class AttachmentText
 
     /// <summary>What <c>ls</c> and <c>history</c> add to a name: "image 1440×3120 412 KB", "PDF 2.1 MB".</summary>
     public static string Summary(AttachmentState state) =>
-        string.Join(' ', new[] { IsPdf(state) ? "PDF" : "image", Dimensions(state), Size(state.Size) }.OfType<string>());
+        state.MediaType == FolderMarker.MediaType ? "folder" : string.Join(' ', new[] { IsPdf(state) ? "PDF" : "image", Dimensions(state), Size(state.Size) }.OfType<string>());
 
     /// <summary>
     /// <c>cat</c>'s line for a PDF: "paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB — read it with pdf (help pdf)";

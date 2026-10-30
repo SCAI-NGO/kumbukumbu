@@ -15,8 +15,8 @@ using Microsoft.AspNetCore.Http.HttpResults;
 namespace Kumbu.Server.Api;
 
 /// <summary>A note's path from the root of the vault tree and its version, as <c>GET /api/notes</c> gives it; an
-/// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c> or <c>pdf</c>) only with
-/// <c>attachments=1</c>.</summary>
+/// attachment's as <c>GET /api/files</c> does. <c>kind</c> (<c>note</c>, <c>image</c>, <c>pdf</c>, or <c>folder</c> for a
+/// <c>.vaultkeep</c> that keeps its folder, version <c>e3b0c44298fc</c>) only with <c>attachments=1</c>.</summary>
 public sealed record VersionEntry(
     string Path, string Version, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
 
@@ -27,7 +27,7 @@ public sealed record VersionEntry(
 /// time before the answer was read, to send back as <c>since</c>. <c>state</c>: a hash over the whole vault's paths,
 /// versions and damaged count, also the <c>ETag</c>. <c>damaged</c>: stored notes that don't open (their paths are
 /// sealed with them, so they can't be listed; a touched path whose note doesn't open is in neither list). Both lists in path order.
-/// <c>attachments</c>: true when asked with <c>attachments=1</c>; then <c>notes</c> lists attachments too, each entry
+/// <c>attachments</c>: true when asked with <c>attachments=1</c>; then <c>notes</c> lists attachments (folder markers among them) too, each entry
 /// with its <c>kind</c>, and <c>state</c> and <c>deleted</c> cover them. Without it, the answer is what clients that
 /// know no attachments have always had: no attachment path anywhere in it, and no <c>attachments</c> or <c>kind</c>.
 /// </summary>

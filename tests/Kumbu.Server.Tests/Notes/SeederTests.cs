@@ -86,6 +86,53 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
     }
 
     [Fact]
+    public async Task Seeding_makes_the_kept_empty_folders()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Work/Drafts/.vaultkeep", "");
+
+        var log = await SeedAsync(world);
+
+        var store = Store(world.Catalog());
+        Assert.Equal(["Work"], await store.ListVaultsAsync(Ct));
+        Assert.Equal(["/Work/Drafts/.vaultkeep"], (await store.ListAttachmentsUnderAsync(P("/Work"), Ct)).Select(a => a.Path.Value));
+        Assert.Contains(log.Entries, e => e.Message.StartsWith("Seeded 0 notes and 1 folder into 1 vault", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_removed_kept_folder_is_not_made_again()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Work/Drafts/.vaultkeep", "");
+        await SeedAsync(world);
+        var store = Store(world.Catalog());
+        var marker = (await store.GetAttachmentAsync(P("/Work/Drafts/.vaultkeep"), Ct))!;
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { marker } }, Writers.Dev, DateTime.UtcNow, Ct));
+
+        var log = await SeedAsync(world);
+
+        Assert.Empty(await Store(world.Catalog()).ListAttachmentsUnderAsync(P("/Work"), Ct));
+        Assert.Contains(log.Entries, e => e.Message == "Left vault Work alone: it is not empty (seeding only fills empty vaults)");
+    }
+
+    [Fact]
+    public async Task A_vault_holding_only_a_kept_folder_is_left_alone()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Work/Drafts/.vaultkeep", "");
+        await SeedAsync(world);
+        Write("Work/new.md", "new");
+        Write("Work/Other/.vaultkeep", "");
+
+        var log = await SeedAsync(world);
+
+        var store = Store(world.Catalog());
+        Assert.Null(await store.ReadAsync(P("/Work/new.md"), Ct));
+        Assert.Equal(["/Work/Drafts/.vaultkeep"], (await store.ListAttachmentsUnderAsync(P("/Work"), Ct)).Select(a => a.Path.Value));
+        Assert.Contains(log.Entries, e => e.Message == "Seeded 0 notes into 0 vaults; left 1 vault alone (0 files skipped)");
+    }
+
+    [Fact]
     public async Task A_vault_with_notes_is_left_alone()
     {
         var world = new VaultWorld(fixture.NewDatabase());
@@ -102,7 +149,7 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
         var after = Store(world.Catalog());
         Assert.Equal("agent", await after.ReadAsync(P("/Demo/a.md"), Ct));
         Assert.Null(await after.ReadAsync(P("/Demo/new.md"), Ct));
-        Assert.Contains(log.Entries, e => e.Message == "Left vault Demo alone: it already holds notes (seeding only fills empty vaults)");
+        Assert.Contains(log.Entries, e => e.Message == "Left vault Demo alone: it is not empty (seeding only fills empty vaults)");
         Assert.Single(Directory.GetFiles(_recovery));
     }
 

@@ -6,7 +6,7 @@ import type { ImportFile, ImportNote, ImportVault } from "./readImport";
 import { planImport, runImport, summaryText, type Choice, type ImportApi, type VaultPlan } from "./runImport";
 
 const note = (path: string, version = `v-${path}`, content = `text of ${path}`): ImportNote => ({ path, content, version });
-const vault = (name: string, notes: ImportNote[], skipped: ImportVault["skipped"] = [], files: ImportFile[] = []): ImportVault => ({ name, notes, files, skipped });
+const vault = (name: string, notes: ImportNote[], skipped: ImportVault["skipped"] = [], files: ImportFile[] = [], folders: string[] = []): ImportVault => ({ name, notes, files, folders, skipped });
 const bytesOf = (path: string) => new TextEncoder().encode(`bytes of ${path}`);
 const file = (path: string, version = `v-${path}`): ImportFile => ({ path, size: bytesOf(path).length, version, read: async () => bytesOf(path) });
 
@@ -380,5 +380,37 @@ describe("summaryText", () => {
     expect(summaryText({ ...clean, vaults: 1, failed: [{ vault: "X", reason: "r", written: 200 }] })).toBe(
       "1 vault, 412 notes imported · 1 vault partly imported",
     );
+  });
+
+  it("runImport puts each marker empty and counts it nowhere", async () => {
+    const { api, puts } = fakeApi();
+    const plans = planImport([vault("Work", [note("a.md")], [], [], ["Drafts/.vaultkeep", "a/b/.vaultkeep"])], []);
+    const progress = vi.fn();
+    const summary = await runImport(plans, new Map(), api, progress);
+    expect(puts.filter((p) => p.path.endsWith(".vaultkeep"))).toEqual([
+      { vault: "Work", path: "Drafts/.vaultkeep", body: "", version: null },
+      { vault: "Work", path: "a/b/.vaultkeep", body: "", version: null },
+    ]);
+    expect(summary).toMatchObject({ vaults: 1, imported: 1, files: 0, replaced: 0, kept: 0, skipped: [], failed: [] });
+    expect(progress).toHaveBeenLastCalledWith(1, 1);
+  });
+
+  it("a marker that exists already changes nothing, and a refused one is listed as its folder", async () => {
+    const { api } = fakeApi({
+      putFile: vi.fn(async (_v: string, path: string) => {
+        if (path === "bad/.vaultkeep") throw new HttpError(400, "A folder name may not start with a dot.");
+        // A 409 without a file state: a note sits at the folder's path.
+        if (path === "x.md/.vaultkeep") throw new HttpError(409, "/Work/x.md is a note.");
+        return "conflict" as const;
+      }),
+    });
+    const plans = planImport([vault("Work", [], [], [], ["Drafts/.vaultkeep", "bad/.vaultkeep", "x.md/.vaultkeep", "later/.vaultkeep"])], []);
+    const summary = await runImport(plans, new Map(), api, () => {});
+    expect(summary).toMatchObject({ vaults: 1, imported: 0, kept: 0, failed: [] });
+    expect(summary.skipped).toEqual([
+      { path: "Work/bad/", reason: "A folder name may not start with a dot." },
+      { path: "Work/x.md/", reason: "/Work/x.md is a note." },
+    ]);
+    expect(api.putFile).toHaveBeenLastCalledWith("Work", "later/.vaultkeep", new Uint8Array(0), null);
   });
 });

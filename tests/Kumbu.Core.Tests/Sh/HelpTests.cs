@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "rm", "trash", "uname", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "mkdir", "rm", "trash", "uname", "help"];
 
     private static Task<ShellResult> Run(string line) => TestShell.Of().RunAsync(line, CancellationToken.None);
 
@@ -43,6 +43,16 @@ public class HelpTests
             Assert.False(result.IsError);
             Assert.StartsWith(command, result.Output);
         }
+    }
+
+    [Fact]
+    public async Task Help_mkdir_says_an_empty_folder_stays()
+    {
+        var result = await Run("help mkdir");
+        Assert.False(result.IsError);
+        Assert.StartsWith("mkdir <path>", result.Output);
+        Assert.Contains("An empty folder stays until you remove it", result.Output);
+        Assert.Contains("There are no options.", result.Output);
     }
 
     [Fact]

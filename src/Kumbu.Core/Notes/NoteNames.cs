@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Notes;
@@ -23,8 +24,12 @@ public static class NoteNames
     /// the names are fine.</summary>
     public static string? NameProblem(VaultPath path)
     {
-        foreach (var segment in path.Segments)
+        for (var i = 0; i < path.Segments.Count; i++)
         {
+            var segment = path.Segments[i];
+
+            // A folder marker is the one dot name Kumbu² creates, and only as the last segment.
+            if (i == path.Segments.Count - 1 && segment == FolderMarker.Name) continue;
             if (segment.StartsWith('.')) return $"'{segment}' starts with '.', which hides it in Obsidian";
             foreach (var c in segment)
             {

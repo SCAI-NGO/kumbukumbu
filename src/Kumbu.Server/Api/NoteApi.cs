@@ -56,9 +56,10 @@ public sealed record TreeView(TreeFolder Root, int Damaged);
 public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFolder> Folders, IReadOnlyList<TreeNote> Notes);
 
 /// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
-/// <c>pdf</c>; <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment
-/// also has its <c>version</c> and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows);
-/// a note has neither, its entry is as before.</summary>
+/// <c>pdf</c> (never <c>folder</c>: a folder marker keeps its folder in the tree and is no entry of it); <c>mediaType</c>
+/// <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment also has its <c>version</c>
+/// and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows); a note has neither, its entry
+/// is as before.</summary>
 public sealed record TreeNote(
     string Name,
     string Path,
@@ -290,7 +291,9 @@ public static class NoteApi
             .OrderBy(g => g.Key, TextOrder.Default)
             .Select(g => TreeOf(dir.Child(g.Key), g))
             .ToList();
+        // A folder marker keeps its folder in the tree (it reached here through it) but is never one of its files.
         var files = groups.GetValueOrDefault(false, [])
+            .Where(n => !FolderMarker.Is(n.Path))
             .OrderBy(n => n.Path.Name, TextOrder.Default)
             .Select(n => n.File)
             .ToList();

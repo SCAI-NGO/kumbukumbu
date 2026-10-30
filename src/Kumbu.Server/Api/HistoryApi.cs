@@ -28,7 +28,8 @@ public sealed record NoteVersionView(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Height = null);
 
 /// <summary>A removed note or attachment; <c>expiresAt</c>: when it leaves the trash for good, <c>size</c> in bytes (a
-/// note's UTF-8), <c>lines</c> 0 for an attachment. <c>kind</c> and <c>mediaType</c> as in the tree.</summary>
+/// note's UTF-8), <c>lines</c> 0 for an attachment. <c>kind</c> and <c>mediaType</c> as in the tree; a removed folder is its marker,
+/// <c>/Work/Drafts/.vaultkeep</c> with the kind <c>folder</c>.</summary>
 public sealed record TrashEntryView(
     string Path, string Version, DateTime DeletedAt, string DeletedBy, DateTime ExpiresAt, int Lines, int Size,
     string Kind = "note", string MediaType = NoteApi.NoteMediaType);
@@ -37,7 +38,7 @@ public sealed record TrashEntryView(
 public sealed record TrashView(int RetentionDays, IReadOnlyList<TrashEntryView> Notes);
 
 /// <summary>A named checkpoint; <c>scope</c> what it covers (a folder or vault ends in '/'), <c>notes</c> and
-/// <c>attachments</c> how many of each it holds.</summary>
+/// <c>attachments</c> how many of each it holds (folder markers aren't counted).</summary>
 public sealed record CheckpointEntryView(string Name, string Scope, string CreatedBy, DateTime CreatedAt, int Notes, int Attachments = 0);
 
 /// <summary>The vault's checkpoints, oldest first; a vault keeps at most <c>limit</c>.</summary>
@@ -56,7 +57,8 @@ public sealed record CreateCheckpointRequest(string Name);
 /// A note a restore changes, at its path in the checkpoint. <c>kind</c>: <c>changed</c> (it gets its content
 /// then), <c>back</c> (removed since, it comes back), <c>trash</c> (made since, it goes to the trash) or
 /// <c>moved</c> (moved since from <c>from</c>, it moves back). <c>added</c> and <c>removed</c>: the lines the
-/// restore adds and removes, for a note whose content changes. <c>fileKind</c>: <c>note</c>, <c>image</c> or <c>pdf</c>.
+/// restore adds and removes, for a note whose content changes. <c>fileKind</c>: <c>note</c>, <c>image</c>, <c>pdf</c>
+/// or <c>folder</c> (the path a folder marker's, <c>/Work/Drafts/.vaultkeep</c>).
 /// </summary>
 public sealed record RestoreChangeView(string Kind, string Path, string? From, int? Added, int? Removed, string FileKind = "note");
 
@@ -78,7 +80,8 @@ public sealed record RestoredView(string Message);
 /// was none or it is no longer kept (<c>beforeLost</c>). <c>trashed</c>: the note is in the trash now. Both versions
 /// open with <c>?version=</c> on the note, or in the trash. For <c>renamed</c>: <c>from</c> → <c>to</c> is that rename;
 /// <c>path</c> is where the note is now (or was deleted), which differs when it moved on since. <c>fileKind</c>: what
-/// the file is, <c>note</c>, <c>image</c> or <c>pdf</c>; an attachment's versions open with <c>?version=</c> on
+/// the file is, <c>note</c>, <c>image</c>, <c>pdf</c> or <c>folder</c> (a folder made or removed: the path is its
+/// marker's, <c>/Work/Drafts/.vaultkeep</c>); an attachment's versions open with <c>?version=</c> on
 /// <c>GET /api/files</c>.
 /// </summary>
 public sealed record ActivityFileView(
@@ -415,5 +418,5 @@ public static class HistoryApi
         return root;
     }
 
-    private static CheckpointEntryView View(Checkpoint c) => new(c.Name, c.Scope, c.CreatedBy, c.CreatedAt, c.Notes.Count, c.Attachments.Count);
+    private static CheckpointEntryView View(Checkpoint c) => new(c.Name, c.Scope, c.CreatedBy, c.CreatedAt, c.Notes.Count, c.Attachments.Count(a => !FolderMarker.Is(a.Path)));
 }

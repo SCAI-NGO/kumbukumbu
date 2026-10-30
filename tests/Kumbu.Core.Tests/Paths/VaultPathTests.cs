@@ -101,4 +101,11 @@ public class VaultPathTests
         Assert.Equal(a, b);
         Assert.Equal(nfc, b.Value);
     }
+
+    [Fact]
+    public void A_folder_marker_is_an_attachment()
+    {
+        Assert.True(VaultPath.TryParse("/Work/Drafts/.vaultkeep", out var marker));
+        Assert.True(marker.IsAttachment);
+    }
 }

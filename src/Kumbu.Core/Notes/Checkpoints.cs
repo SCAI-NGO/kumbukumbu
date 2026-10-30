@@ -197,12 +197,12 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         var files = work.Attachments;
-        foreach (var path in files.Changed.Keys) rows.Add((path.Value, $"changed  {path.Value}"));
-        foreach (var path in files.Back.Keys) rows.Add((path.Value, $"removed  {path.Value}"));
-        foreach (var attachment in files.Trash) rows.Add((attachment.Path.Value, $"new      {attachment.Path.Value}"));
+        foreach (var path in files.Changed.Keys) rows.Add((path.Value, $"changed  {FolderMarker.Shown(path)}"));
+        foreach (var path in files.Back.Keys) rows.Add((path.Value, $"removed  {FolderMarker.Shown(path)}"));
+        foreach (var attachment in files.Trash) rows.Add((attachment.Path.Value, $"new      {FolderMarker.Shown(attachment.Path)}"));
         foreach (var (to, (now, then)) in files.Moved)
         {
-            rows.Add((to.Value, $"moved    {to.Value} → {now.Path.Value}{(then.Version == now.Version ? "" : "  changed")}"));
+            rows.Add((to.Value, $"moved    {FolderMarker.Shown(to)} → {FolderMarker.Shown(now.Path)}{(then.Version == now.Version ? "" : "  changed")}"));
         }
 
         var where = Where(checkpoint, scope);
@@ -519,9 +519,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         };
         lines.AddRange(preview.Changes.Select(c => c.Kind switch
         {
-            RestoreChangeKind.Changed => $"  changed     {c.Path.Value}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
-            RestoreChangeKind.Back => $"  back        {c.Path.Value}",
-            RestoreChangeKind.Trash => $"  to trash    {c.Path.Value}  (created since)",
+            RestoreChangeKind.Changed => $"  changed     {FolderMarker.Shown(c.Path)}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
+            RestoreChangeKind.Back => $"  back        {FolderMarker.Shown(c.Path)}",
+            RestoreChangeKind.Trash => $"  to trash    {FolderMarker.Shown(c.Path)}  (created since)",
             _ => $"  moved back  {c.From!.Value} → {c.Path.Value}{(c.Lines is { } delta ? "  " + Delta(delta) : "")}",
         }));
         if (preview.RewrittenLinks > 0)
@@ -663,8 +663,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     private static ShellResult Written(string message, VaultPath path, string version) =>
         ShellResult.Ok(message) with { Version = new NoteVersion(path.Value, version) };
 
-    /// <summary>What a checkpoint holds, e.g. "3 notes", "3 notes, 1 attachment" or "1 attachment".</summary>
-    private static string Contents(Checkpoint checkpoint) => (checkpoint.Notes.Count, checkpoint.Attachments.Count) switch
+    /// <summary>What a checkpoint holds, e.g. "3 notes", "3 notes, 1 attachment" or "1 attachment"; kept folders are no content.</summary>
+    private static string Contents(Checkpoint checkpoint) => (checkpoint.Notes.Count, checkpoint.Attachments.Count(a => !FolderMarker.Is(a.Path))) switch
     {
         (var notes, 0) => Count(notes, "note"),
         (0, var attachments) => Count(attachments, "attachment"),

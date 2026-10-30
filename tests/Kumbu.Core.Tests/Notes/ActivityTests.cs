@@ -274,4 +274,36 @@ public class ActivityTests
             rows[2].Files.Select(f => (f.Path, f.Kind, f.FileKind)));
         Assert.Equal((version, (string?)null), (rows[2].Files[0].Version, rows[2].Files[0].Before));
     }
+
+    [Fact]
+    public async Task Activity_lists_a_made_folder_in_the_writers_changeset()
+    {
+        var store = new InMemoryNoteStore(("/W/plan.md", "plan\n"));
+        var time = new FakeTimeProvider(T0);
+        var caller = new FixedCaller(Writers.Dev);
+        var shell = new Kumbu.Core.Sh.Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller));
+        var ct = CancellationToken.None;
+        await new NoteWriter(store, time, caller).WriteAsync("/W/plan.md", "plan 2\n", V("plan\n"), ct);
+        Assert.False((await shell.RunAsync("mkdir /W/Drafts", ct)).IsError);
+
+        async Task<IReadOnlyList<ActivityRow>> Fold()
+        {
+            var notes = new List<StoredNote>();
+            foreach (var path in await store.ListNotesUnderAsync(P("/W"), ct)) notes.Add((await store.GetAsync(path, ct))!);
+            return Activity.Rows(
+                notes, await store.ListTrashAsync(P("/W"), ct), await store.ListMovesAsync(P("/W"), ct), null, 50,
+                attachments: await store.ListAttachmentsUnderAsync(P("/W"), ct), attachmentTrash: await store.ListAttachmentTrashAsync(P("/W"), ct));
+        }
+
+        var made = (await Fold())[0];
+        Assert.Equal(
+            [("/W/Drafts/.vaultkeep", ActivityFileKind.Added, "folder"), ("/W/plan.md", ActivityFileKind.Changed, "note")],
+            made.Files.Select(f => (f.Path, f.Kind, f.FileKind)));
+
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await shell.RunAsync("rm /W/Drafts", ct)).IsError);
+
+        var removal = Assert.Single((await Fold())[0].Files);
+        Assert.Equal(("/W/Drafts/.vaultkeep", ActivityFileKind.Deleted, "folder"), (removal.Path, removal.Kind, removal.FileKind));
+    }
 }

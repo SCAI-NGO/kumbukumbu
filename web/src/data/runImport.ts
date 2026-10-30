@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
+import { shownPath } from "../api/paths";
 import { toBatches, type Skipped, type UploadFile } from "../upload/planUpload";
 import { putFile } from "../upload/putFile";
 import { vaultKey, type ImportVault } from "./readImport";
@@ -130,7 +131,8 @@ class SignedOut extends Error {}
  * a 409, which is never answered by sending the same replace batch blindly. Images and PDFs go one `PUT` each, after
  * the notes: a fresh one only to a free path, a differing one only over the version compared against, so the server
  * itself keeps one that changed meanwhile. One the server refuses (its format or size) is listed and the vault goes
- * on. Unchanged notes and files aren't sent. Any other failure stops that vault, and the next one goes on; a session
+ * on. Unchanged notes and files aren't sent. Empty folders (`vault.folders`) go last, one empty `PUT` each, and are
+ * counted in no total and no summary; only a refusal is listed. Any other failure stops that vault, and the next one goes on; a session
  * that ends stops the run. `onProgress`: notes and files done of all to send.
  */
 export async function runImport(
@@ -250,6 +252,16 @@ export async function runImport(
             }
           }
           for (const path of plan.differing) await sendFile(path, plan.seen.get(path) ?? null);
+        }
+        // Empty folders last: a marker that exists already is as good as a new one, and none is counted anywhere.
+        for (const path of plan.vault.folders) {
+          try {
+            await importApi.putFile(name, path, new Uint8Array(0), null);
+          } catch (err) {
+            // A 409 without a file state: a note or file is in the folder's way.
+            if (!(err instanceof HttpError && (err.status === 400 || err.status === 409))) throw err;
+            skip([{ path: shownPath(path), reason: errorText(err) }]);
+          }
         }
       } catch (err) {
         if (err instanceof HttpError && err.status === 401) throw new SignedOut();
