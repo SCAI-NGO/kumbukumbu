@@ -162,9 +162,9 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
     if (!isFile(entry)) continue;
     // A vault exists on its own: a marker at its root is ignored, as the server refuses it.
     if (relative === MARKER) continue;
-    // An empty folder's marker: whatever its size and content, it is sent empty.
+    // An empty folder's marker: whatever its size and content, it is sent empty, so a second copy is the same folder.
     if (isFolderMarker(relative) && !relative.includes("\\") && !relative.split("/").some((s) => s === "" || s === "." || s === "..")) {
-      if (seen.get(entry.name)! === 1 && !target.folders.includes(relative)) target.folders.push(relative);
+      if (!target.folders.includes(relative)) target.folders.push(relative);
       continue;
     }
     const note = noteName(relative.split("/").at(-1)!);

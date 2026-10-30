@@ -174,6 +174,27 @@ public class FolderCommandTests
     }
 
     [Fact]
+    public async Task A_folder_named_like_a_file_is_removed_and_restored_as_a_folder()
+    {
+        Assert.False((await Run("mkdir /Work/v1.png")).IsError);
+
+        Assert.Equal(
+            ShellResult.Ok("removed folder /Work/v1.png/; it stays in the trash for 30 days ('restore /Work/v1.png/' brings it back)"),
+            (await Run("rm /Work/v1.png")) with { Version = null });
+        Assert.Null(await Marker("/Work/v1.png/.vaultkeep"));
+
+        Assert.Equal("restored /Work/v1.png/ from the trash", (await Run("restore /Work/v1.png/")).Output);
+        Assert.NotNull(await Marker("/Work/v1.png/.vaultkeep"));
+    }
+
+    [Fact]
+    public async Task A_missing_file_path_is_still_no_such_file()
+    {
+        Assert.StartsWith("rm: /Work/nope.png: No such file or directory", (await Run("rm /Work/nope.png")).Output);
+        Assert.Equal("restore: /Work/nope.png is not in the trash ('trash' lists what is)", (await Run("restore /Work/nope.png")).Output);
+    }
+
+    [Fact]
     public async Task A_folder_stays_when_its_last_note_goes()
     {
         var writer = new NoteWriter(_store, _time, new FixedCaller(Writers.Dev));

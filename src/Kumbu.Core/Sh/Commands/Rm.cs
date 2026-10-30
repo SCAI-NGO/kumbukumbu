@@ -33,7 +33,9 @@ public sealed class Rm(NoteWriter writer, AttachmentWriter? files = null) : ICom
         if (!CommandArgs.TryParsePath(Name, args[0], out var path, out var pathError)) return pathError!;
 
         if (files is null) return await writer.RemoveAsync(path, ct);
-        if (path.IsAttachment) return await files.RemoveAsync(path.Value, ct);
-        return await files.IsFolderAsync(path, ct) ? await files.RemoveFolderAsync(path, ct) : await writer.RemoveAsync(path, ct);
+        // A folder may be named like a file (mkdir /Work/v1.png): a path is the file only while one is stored there.
+        if (path.IsAttachment && await files.HoldsAsync(path, orTrashed: false, ct)) return await files.RemoveAsync(path.Value, ct);
+        if (await files.IsFolderAsync(path, ct)) return await files.RemoveFolderAsync(path, ct);
+        return path.IsAttachment ? await files.RemoveAsync(path.Value, ct) : await writer.RemoveAsync(path, ct);
     }
 }

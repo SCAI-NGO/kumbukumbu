@@ -511,6 +511,20 @@ describe("empty folders", () => {
     expect(puts).toEqual([{ url: "/api/files/Work/Vault/Drafts/.vaultkeep", version: null, body: "" }]);
   });
 
+  it("a refused marker is listed as its folder", async () => {
+    uploadApi([], { refuse: { "Vault/Drafts/.vaultkeep": [409, "/Work/Vault/Drafts is a note."] } });
+    renderApp("/notes/Work/inbox.md");
+    const sheet = await openFromDock();
+    await userEvent.upload(within(sheet).getByLabelText("Choose a folder"), folderFiles(["Vault/a.md", "Vault/Drafts/.vaultkeep"]));
+    await userEvent.click(await within(sheet).findByRole("button", { name: "Upload" }));
+
+    expect(await within(sheet).findByText("1 note uploaded, 0 replaced, 1 file skipped")).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByText("1 file skipped"));
+    const list = within(sheet).getByRole("list", { name: "Skipped files" });
+    expect(list).toHaveTextContent("Vault/Drafts//Work/Vault/Drafts is a note.");
+    expect(list).not.toHaveTextContent(".vaultkeep");
+  });
+
   it("a pick of nothing but markers reviews as empty folders", async () => {
     uploadApi([]);
     renderApp("/notes/Work/inbox.md");

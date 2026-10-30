@@ -291,6 +291,13 @@ describe("readImport", () => {
     expect(vaults[0].skipped).toEqual([]);
   });
 
+  it("a marker that is in the ZIP twice still keeps its folder", async () => {
+    const archive = rename(zip({ "Work/Drafts/.vaultkeep": new Uint8Array(), "Work/Draftx/.vaultkeep": new Uint8Array(), "Work/a.md": "A" }), "Work/Draftx/", "Work/Drafts/");
+    const vaults = await readImport(archive, "export.zip");
+    expect(vaults[0].folders).toEqual(["Drafts/.vaultkeep"]);
+    expect(vaults[0].skipped).toEqual([]);
+  });
+
   it("other dotfiles stay skipped and a vault-root marker is ignored", async () => {
     const vaults = await readImport(zip({ "Work/.gitkeep": "", "Work/.vaultkeep": "", "Work/.git/x/.vaultkeep": "", "Work/a.md": "A" }), "export.zip");
     expect(vaults[0].folders).toEqual([]);

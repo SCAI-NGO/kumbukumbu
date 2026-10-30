@@ -4,6 +4,7 @@ import { FilePlus, FolderPlus } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
+import { shownPath } from "../api/paths";
 import { inputClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
@@ -269,7 +270,7 @@ export default function UploadSheet({ folder, dropped, onClose }: { folder: stri
       await putFile(vault, inVault ? `${inVault}/${step.path}` : step.path, new Uint8Array(0));
     } catch (err) {
       if (!(err instanceof HttpError && (err.status === 400 || err.status === 409))) throw err;
-      run.current.skipped.push({ path: step.path, reason: errorText(err) });
+      run.current.skipped.push({ path: shownPath(step.path), reason: errorText(err) });
     }
   }
 

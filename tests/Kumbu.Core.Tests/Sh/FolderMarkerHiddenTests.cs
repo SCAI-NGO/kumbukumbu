@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -53,6 +54,24 @@ public class FolderMarkerHiddenTests
         Assert.True(result.IsError, result.Output);
         Assert.Contains(": No such file or directory", result.Output);
         Assert.NotNull(await _store.GetAttachmentAsync(P("/Work/Drafts/.vaultkeep"), Ct));
+    }
+
+    [Fact]
+    public async Task Text_tools_on_a_marker_path_answer_no_such_file()
+    {
+        await Run("mkdir /Work/Drafts");
+        var replacer = new Replacer(_store, _time, new Plans(), new FixedCaller(Writers.Dev));
+
+        var results = new[]
+        {
+            await Writer.EditAsync("/Work/Drafts/.vaultkeep", FolderMarker.Version, null, "text", Ct),
+            await replacer.RunAsync("/Work/Drafts/.vaultkeep", "a", "b", false, null, Ct),
+        };
+
+        Assert.Equal(
+            ["edit: /Work/Drafts/.vaultkeep: No such file or directory", "replace: /Work/Drafts/.vaultkeep: No such file or directory"],
+            results.Select(r => r.Output));
+        Assert.All(results, r => Assert.True(r.IsError));
     }
 
     [Theory]

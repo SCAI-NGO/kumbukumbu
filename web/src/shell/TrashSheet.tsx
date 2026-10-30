@@ -91,7 +91,7 @@ function TrashRow({ entry, onRestored }: { entry: TrashEntry; onRestored(): void
         </button>
       </div>
       <p className="text-sm text-muted">
-        Removed {ago(entry.deletedAt)} by {entry.deletedBy} · {sizeText(Number(entry.size))} · gone for good {ago(entry.expiresAt)}
+        Removed {ago(entry.deletedAt)} by {entry.deletedBy} · {isMarker(entry.path) ? "" : `${sizeText(Number(entry.size))} · `}gone for good {ago(entry.expiresAt)}
       </p>
       {restore.isError && <FormError>{errorText(restore.error)}</FormError>}
     </li>

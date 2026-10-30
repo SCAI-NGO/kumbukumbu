@@ -228,6 +228,7 @@ describe("the trash", () => {
     expect(list).toHaveTextContent("Drafts/");
     expect(list).toHaveTextContent("Work");
     expect(list).not.toHaveTextContent(".vaultkeep");
+    expect(list).not.toHaveTextContent("0 B");
 
     await userEvent.click(within(list).getByRole("button", { name: "Restore Drafts/" }));
 

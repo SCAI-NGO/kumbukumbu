@@ -172,6 +172,11 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     public async Task<bool> IsFolderAsync(VaultPath folder, CancellationToken ct) =>
         (await notes.ListNotesUnderAsync(folder, ct)).Count > 0 || (await store.ListAttachmentsUnderAsync(folder, ct)).Count > 0;
 
+    /// <summary>Whether an attachment is stored at <paramref name="path"/>, or, with <paramref name="orTrashed"/>, lies in the trash there.</summary>
+    public async Task<bool> HoldsAsync(VaultPath path, bool orTrashed, CancellationToken ct) =>
+        await store.GetAttachmentAsync(path, ct) is not null
+        || (orTrashed && (await store.ListAttachmentTrashAsync(path, ct)).Any(t => t.Attachment.Path == path));
+
     /// <summary>Whether the marker of <paramref name="folder"/> is in the trash and nothing else stands at the path.</summary>
     public async Task<bool> FolderInTrashAsync(VaultPath folder, CancellationToken ct)
     {

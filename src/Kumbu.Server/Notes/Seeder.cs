@@ -9,7 +9,7 @@ namespace Kumbu.Server.Notes;
 /// <summary>
 /// Startup for development. Applies <c>Kumbu:Recovery:Keys</c> (gives the dev token a slot in their vaults),
 /// then loads <c>Kumbu:Seed:Path</c>: a folder becomes a new encrypted vault, or fills one that is still
-/// empty. A vault that already holds notes, or trash, is left alone (decided by Chris, 2026-10-23): seeding
+/// empty. A vault that already holds notes, files or kept folders, or trash, is left alone (decided by Chris, 2026-10-23): seeding
 /// means starting from scratch, and agents' changes live only in the database.
 /// </summary>
 public sealed class Seeder(
@@ -79,11 +79,13 @@ public sealed class Seeder(
         foreach (var name in scan.Vaults)
         {
             var root = Kumbu.Core.Paths.VaultPath.Root.Child(name);
+            // Files and kept folders count too, and so does their trash: a folder removed since must not come back.
             if (existing.Contains(name)
-                && ((await store.ListNotesUnderAsync(root, ct)).Count > 0 || (await store.ListTrashAsync(root, ct)).Count > 0))
+                && ((await store.ListNotesUnderAsync(root, ct)).Count > 0 || (await store.ListTrashAsync(root, ct)).Count > 0
+                    || (await store.ListAttachmentsUnderAsync(root, ct)).Count > 0 || (await store.ListAttachmentTrashAsync(root, ct)).Count > 0))
             {
                 left++;
-                log.LogInformation("Left vault {Vault} alone: it already holds notes (seeding only fills empty vaults)", name);
+                log.LogInformation("Left vault {Vault} alone: it is not empty (seeding only fills empty vaults)", name);
                 continue;
             }
 
@@ -129,7 +131,9 @@ public sealed class Seeder(
                     batch.AttachmentCreates.Add(new StoredAttachment(FolderMarker.In(folder), FolderMarker.State(blob), 1, Writers.Seed, now, [], null));
                 }
 
-                folders += kept.Count - (await store.TryCommitAsync(batch, Writers.Seed, now, ct)).Count;
+                // All of them or none: one marker there already stops the batch.
+                if ((await store.TryCommitAsync(batch, Writers.Seed, now, ct)).Count == 0) folders += kept.Count;
+                else log.LogWarning("Made none of the {Count} of vault {Vault}: one exists already", Count(kept.Count, "kept folder"), name);
             }
         }
 

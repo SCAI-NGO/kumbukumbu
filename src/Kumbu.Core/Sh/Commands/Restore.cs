@@ -52,8 +52,18 @@ public sealed class Restore(NoteWriter writer, Checkpoints checkpoints, Attachme
         if (operands.Count > 2) return ShellResult.Error("restore: too many arguments");
         if (!CommandArgs.TryParsePath(Name, operands[0], out var path, out var pathError)) return pathError!;
 
-        if (files is not null && path.IsAttachment) return await files.RestoreAsync(path.Value, operands.Count == 2 ? operands[1] : null, ct);
-        if (files is not null && operands.Count == 1 && await files.FolderInTrashAsync(path, ct)) return await files.RestoreAsync(FolderMarker.In(path).Value, null, ct);
-        return await writer.RestoreAsync(path, operands.Count == 2 ? operands[1] : null, ct);
+        var version = operands.Count == 2 ? operands[1] : null;
+        if (files is not null)
+        {
+            // A folder named like a file (/Work/v1.png/) comes back as the folder, unless a file is stored or trashed there.
+            if (version is null && await files.FolderInTrashAsync(path, ct) && !(path.IsAttachment && await files.HoldsAsync(path, orTrashed: true, ct)))
+            {
+                return await files.RestoreAsync(FolderMarker.In(path).Value, null, ct);
+            }
+
+            if (path.IsAttachment) return await files.RestoreAsync(path.Value, version, ct);
+        }
+
+        return await writer.RestoreAsync(path, version, ct);
     }
 }

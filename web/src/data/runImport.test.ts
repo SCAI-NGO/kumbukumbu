@@ -395,16 +395,22 @@ describe("summaryText", () => {
     expect(progress).toHaveBeenLastCalledWith(1, 1);
   });
 
-  it("a marker that exists already changes nothing, and a refused one is listed", async () => {
+  it("a marker that exists already changes nothing, and a refused one is listed as its folder", async () => {
     const { api } = fakeApi({
       putFile: vi.fn(async (_v: string, path: string) => {
         if (path === "bad/.vaultkeep") throw new HttpError(400, "A folder name may not start with a dot.");
+        // A 409 without a file state: a note sits at the folder's path.
+        if (path === "x.md/.vaultkeep") throw new HttpError(409, "/Work/x.md is a note.");
         return "conflict" as const;
       }),
     });
-    const plans = planImport([vault("Work", [], [], [], ["Drafts/.vaultkeep", "bad/.vaultkeep"])], []);
+    const plans = planImport([vault("Work", [], [], [], ["Drafts/.vaultkeep", "bad/.vaultkeep", "x.md/.vaultkeep", "later/.vaultkeep"])], []);
     const summary = await runImport(plans, new Map(), api, () => {});
     expect(summary).toMatchObject({ vaults: 1, imported: 0, kept: 0, failed: [] });
-    expect(summary.skipped).toEqual([{ path: "Work/bad/.vaultkeep", reason: "A folder name may not start with a dot." }]);
+    expect(summary.skipped).toEqual([
+      { path: "Work/bad/", reason: "A folder name may not start with a dot." },
+      { path: "Work/x.md/", reason: "/Work/x.md is a note." },
+    ]);
+    expect(api.putFile).toHaveBeenLastCalledWith("Work", "later/.vaultkeep", new Uint8Array(0), null);
   });
 });

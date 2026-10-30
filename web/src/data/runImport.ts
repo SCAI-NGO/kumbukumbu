@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
+import { shownPath } from "../api/paths";
 import { toBatches, type Skipped, type UploadFile } from "../upload/planUpload";
 import { putFile } from "../upload/putFile";
 import { vaultKey, type ImportVault } from "./readImport";
@@ -257,8 +258,9 @@ export async function runImport(
           try {
             await importApi.putFile(name, path, new Uint8Array(0), null);
           } catch (err) {
-            if (!(err instanceof HttpError && err.status === 400)) throw err;
-            skip([{ path, reason: errorText(err) }]);
+            // A 409 without a file state: a note or file is in the folder's way.
+            if (!(err instanceof HttpError && (err.status === 400 || err.status === 409))) throw err;
+            skip([{ path: shownPath(path), reason: errorText(err) }]);
           }
         }
       } catch (err) {
