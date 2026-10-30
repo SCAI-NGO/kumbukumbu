@@ -120,6 +120,22 @@ describe("api client", () => {
     expect(useSession.getState().ended).toBe(false);
   });
 
+  it("keeps no copy of an upload's body to repeat: uploads are never guarded", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    fakeApi({ "PUT /api/files/*": () => json(201, {}), "POST /api/upload/*": () => json(200, {}) });
+    const clone = vi.spyOn(Request.prototype, "clone");
+    const form = new FormData();
+    form.append("file", new Blob(["%PDF-1.4"]), "scan.pdf");
+    await api.POST("/api/upload/{vault}/{folder}", { params: { path: { vault: "Work", folder: "" } }, body: form as never });
+    await api.PUT("/api/files/{vault}/{path}", {
+      params: { path: { vault: "Work", path: "scan.pdf" } },
+      body: new Uint8Array([1, 2, 3]) as unknown as string,
+      bodySerializer: (body: unknown) => body as BodyInit,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    expect(clone).not.toHaveBeenCalled();
+  });
+
   it("does not ask a second time when the repeated request is refused again", async () => {
     useSession.getState().signedIn({ user, previousSignInAt: null });
     const ask = vi.spyOn(usePasswordPrompt.getState(), "ask");

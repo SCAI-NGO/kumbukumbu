@@ -45,8 +45,12 @@ const versionWatch: Middleware = {
 };
 
 // What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are
-// never guarded, so only the others are kept.
+// never guarded, so only the others are kept, and of those only the ones without a body or with a JSON one: every
+// guarded action sends JSON, while an upload's bytes (a file, a form) would be copied for nothing, as no upload is guarded.
 const sent = new Map<string, Request>();
+
+const repeatable = (request: Request) =>
+  request.method !== "GET" && (request.body === null || (request.headers.get("Content-Type") ?? "").startsWith("application/json"));
 
 /**
  * Asks for the password when a guarded action finds the window closed, and repeats the request once after it is
@@ -54,7 +58,7 @@ const sent = new Map<string, Request>();
  */
 const passwordWindow: Middleware = {
   onRequest({ request, id }) {
-    if (request.method !== "GET") sent.set(id, request.clone());
+    if (repeatable(request)) sent.set(id, request.clone());
   },
   async onResponse({ response, id }) {
     const clone = sent.get(id);
