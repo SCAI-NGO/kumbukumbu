@@ -181,7 +181,7 @@ export default function GalleryPage() {
     // meanwhile, must not leave a ZIP without its ticket. Either unknown, it asks.
     // Meanwhile the button waits, so that a second tap doesn't start a second ZIP.
     setAsking(true);
-    const [setting, window] = await Promise.all([
+    const [setting, windowClosed] = await Promise.all([
       queryClient
         .fetchQuery({ ...preferencesQuery, staleTime: 0 })
         .then((p) => p.askPasswordForDownloads)
@@ -190,7 +190,7 @@ export default function GalleryPage() {
         .then((s) => !s.passwordWindowOpen)
         .catch(() => true),
     ]).finally(() => setAsking(false));
-    if (setting || window) setDialog({ kind: "download", files, reason: setting ? "setting" : "window" });
+    if (setting || windowClosed) setDialog({ kind: "download", files, reason: setting ? "setting" : "window" });
     else void downloadZip(zipFrame, vault, files.map((f) => f.path));
   };
 

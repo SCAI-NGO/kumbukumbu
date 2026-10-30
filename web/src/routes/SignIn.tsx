@@ -67,7 +67,7 @@ export default function SignIn() {
           Keep me signed in on this device
         </label>
         {remember && (
-          <p role="note" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-text">
+          <p role="note" className="rounded-[10px] bg-red-700 px-3 py-2 text-white">
             Comfortable, but less safe: anyone who gets into this device or browser gets into your notes until you sign out or 30 days are up. Use it only on a device of your own, with a screen lock.
           </p>
         )}

@@ -36,6 +36,7 @@ describe("keeping the user signed in", () => {
     expect(screen.queryByText(warning)).not.toBeInTheDocument();
 
     await userEvent.click(box);
+    expect(screen.getByRole("note")).toHaveClass("bg-red-700", "text-white");
     expect(screen.getByRole("note")).toHaveTextContent(
       "Comfortable, but less safe: anyone who gets into this device or browser gets into your notes until you sign out or 30 days are up. Use it only on a device of your own, with a screen lock.",
     );
