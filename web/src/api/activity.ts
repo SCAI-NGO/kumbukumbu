@@ -68,10 +68,12 @@ export function writerText({ writer, writerKind }: Pick<ActivityRow, "writer" | 
 
 const kinds = ["changed", "added", "renamed", "deleted"] as const;
 
-/** "3 changed · 1 added · 2 deleted": the row's files by kind, only the kinds it has. */
-export const countsText = (files: Pick<ActivityFile, "kind">[]) =>
-  kinds
-    .map((kind) => [kind, files.filter((f) => f.kind === kind).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([kind, n]) => `${n} ${kind}`)
-    .join(" · ");
+/** "3 changed · 1 added · 2 deleted · 2 folders": the row's files by kind, only the kinds it has; folders are counted apart. */
+export const countsText = (files: Pick<ActivityFile, "kind" | "fileKind">[]) => {
+  const folders = files.filter((f) => f.fileKind === "folder").length;
+  const others = files.filter((f) => f.fileKind !== "folder");
+  return [
+    ...kinds.map((kind) => `${others.filter((f) => f.kind === kind).length} ${kind}`).filter((t) => !t.startsWith("0 ")),
+    ...(folders > 0 ? [`${folders} ${folders === 1 ? "folder" : "folders"}`] : []),
+  ].join(" · ");
+};

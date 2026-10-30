@@ -211,6 +211,32 @@ describe("the trash", () => {
     expect(noteReads).toBe(1);
   });
 
+  it("the trash lists a removed folder and restores it", async () => {
+    const marker = "/Work/Drafts/.vaultkeep";
+    const fetch = api({
+      "GET /api/vaults/Work/trash": () =>
+        json(200, {
+          retentionDays: 30,
+          notes: [{ path: marker, kind: "folder", version: "e3b0c44298fc", deletedAt: "2026-10-24T09:00:00Z", deletedBy: "ada", expiresAt: "2026-11-23T09:00:00Z", lines: 0, size: 0 }],
+        }),
+      "POST /api/restore/Work/Drafts/.vaultkeep": () => json(200, { path: marker, mediaType: "application/octet-stream", size: 0, version: "e3b0c44298fc", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+    });
+    await openVaultMenu("Trash");
+
+    const dialog = sheet("Trash");
+    const list = await within(dialog).findByRole("list", { name: "Removed notes" });
+    expect(list).toHaveTextContent("Drafts/");
+    expect(list).toHaveTextContent("Work");
+    expect(list).not.toHaveTextContent(".vaultkeep");
+
+    await userEvent.click(within(list).getByRole("button", { name: "Restore Drafts/" }));
+
+    expect(await within(dialog).findByRole("status")).toHaveTextContent("Restored Drafts/ to Work.");
+    expect(within(dialog).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    const restore = fetch.mock.calls.map(([r]) => r as Request).find((r) => r.method === "POST");
+    expect(await restore!.json()).toEqual({ version: "e3b0c44298fc" });
+  });
+
   it("says why a restore didn't go through", async () => {
     api({
       "GET /api/vaults/Work/trash": () =>
