@@ -28,7 +28,7 @@ RUN dotnet restore src/Kumbu.Server --locked-mode && \
     dotnet publish src/Kumbu.Server -c Release -o /app --no-restore -p:Version="$VERSION" -p:SourceRevisionId="$GIT_SHA"
 
 # mcr.microsoft.com/dotnet/aspnet:10.0
-FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:d247d17dd429d96580eeb96cfce220c1089d860dbbf9f94d599ca64cf3604fe4
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:de0ee358cdd672f7017a003bed21e9ac9ed48a27c922a59b18175b6e82fa7fee
 ARG VERSION=0.0.0-dev
 ARG GIT_SHA=""
 ARG BUILT_AT=""
