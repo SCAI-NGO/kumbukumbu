@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json, user } from "../test/app";
+import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
 import { api, call, HttpError } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  usePasswordPrompt.getState().settle(false);
   useSession.getState().reset();
 });
+
+const passwordRequired = () => json(401, { error: "Give your password again to go on.", type: "password-required" });
+const createKey = () => call(api.POST("/api/keys", { body: { name: "Laptop", vaults: { Work: "read" } } }));
+const created = { key: "kumbu_x" };
+
+/** Waits for the password dialog, then answers it. */
+async function answerPrompt(confirmed: boolean) {
+  await vi.waitFor(() => expect(usePasswordPrompt.getState().open).toBe(true));
+  usePasswordPrompt.getState().settle(confirmed);
+}
 
 describe("api client", () => {
   it("sends same-origin requests with the cookie", async () => {
@@ -69,7 +82,7 @@ describe("api client", () => {
   });
 
   it.each([
-    ["POST /api/session", () => api.POST("/api/session", { body: { username: "ada", password: "x" } })],
+    ["POST /api/session", () => api.POST("/api/session", { body: { username: "ada", password: "x", remember: false } })],
     ["POST /api/join", () => api.POST("/api/join", { body: { code: "c", username: "ada", password: "x" } })],
     ["POST /api/recover", () => api.POST("/api/recover", { body: { username: "ada", recoveryKey: "k", newPassword: "x" } })],
     ["POST /api/invitations/peek", () => api.POST("/api/invitations/peek", { body: { code: "c" } })],
@@ -81,9 +94,96 @@ describe("api client", () => {
     expect(useSession.getState().user).toEqual(user);
   });
 
+  it("keeps the session when the password dialog is cancelled", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    fakeApi({ "POST /api/keys": passwordRequired });
+    const result = createKey().catch((e) => e);
+    await answerPrompt(false);
+    const error = await result;
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.status).toBe(401);
+    expect(useSession.getState().user).toEqual(user);
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("repeats a guarded request once after the password is confirmed", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const answers = [passwordRequired, () => json(201, created)];
+    const fetch = fakeApi({ "POST /api/keys": () => answers.shift()!() });
+    const result = createKey();
+    await answerPrompt(true);
+    expect(await result).toEqual(created);
+    const bodies = await Promise.all(fetch.mock.calls.map((c) => c[0].text()));
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(JSON.parse(bodies[1])).toEqual({ name: "Laptop", vaults: { Work: "read" } });
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("keeps no copy of an upload's body to repeat: uploads are never guarded", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    fakeApi({ "PUT /api/files/*": () => json(201, {}), "POST /api/upload/*": () => json(200, {}) });
+    const clone = vi.spyOn(Request.prototype, "clone");
+    const form = new FormData();
+    form.append("file", new Blob(["%PDF-1.4"]), "scan.pdf");
+    await api.POST("/api/upload/{vault}/{folder}", { params: { path: { vault: "Work", folder: "" } }, body: form as never });
+    await api.PUT("/api/files/{vault}/{path}", {
+      params: { path: { vault: "Work", path: "scan.pdf" } },
+      body: new Uint8Array([1, 2, 3]) as unknown as string,
+      bodySerializer: (body: unknown) => body as BodyInit,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    expect(clone).not.toHaveBeenCalled();
+  });
+
+  it("does not ask a second time when the repeated request is refused again", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const ask = vi.spyOn(usePasswordPrompt.getState(), "ask");
+    const fetch = fakeApi({ "POST /api/keys": passwordRequired });
+    const result = createKey().catch((e) => e);
+    await answerPrompt(true);
+    const error = await result;
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.status).toBe(401);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(usePasswordPrompt.getState().open).toBe(false);
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("asks once for two guarded requests and repeats both", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const ask = vi.spyOn(usePasswordPrompt.getState(), "ask");
+    let opened = 0;
+    const unsubscribe = usePasswordPrompt.subscribe((s, prev) => {
+      if (s.open && !prev.open) opened++;
+    });
+    let confirmed = false;
+    const fetch = fakeApi({ "POST /api/keys": () => (confirmed ? json(201, created) : passwordRequired()) });
+    const first = createKey();
+    const second = createKey();
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(2));
+    confirmed = true;
+    usePasswordPrompt.getState().settle(true);
+    expect(await Promise.all([first, second])).toEqual([created, created]);
+    unsubscribe();
+    expect(opened).toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("still ends the session on a plain 401", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const fetch = fakeApi({ "POST /api/keys": () => json(401, { error: "Sign in first." }) });
+    await createKey().catch(() => {});
+    expect(usePasswordPrompt.getState().open).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(useSession.getState().user).toBeNull();
+    expect(useSession.getState().ended).toBe(true);
+  });
+
   it("call() returns the data or throws the server's sentence with the status", async () => {
     fakeApi({ "POST /api/session": () => json(429, { error: "Too many attempts; try again in a minute." }) });
-    const error = await call(api.POST("/api/session", { body: { username: "ada", password: "x" } })).catch((e) => e);
+    const error = await call(api.POST("/api/session", { body: { username: "ada", password: "x", remember: false } })).catch((e) => e);
     expect(error).toBeInstanceOf(HttpError);
     expect(error.status).toBe(429);
     expect(error.message).toBe("Too many attempts; try again in a minute.");

@@ -21,6 +21,12 @@ describe("errorText", () => {
     expect(errorText(new HttpError(503, ""))).toBe("The server can't be reached right now. Try again in a moment.");
   });
 
+  it("answers a password-required 401 with a sentence of its own", () => {
+    const sentence = "This needs your password, so nothing was done.";
+    expect(errorText(new HttpError(401, "This needs your password again: confirm it with POST /api/session/confirm.", "password-required"))).toBe(sentence);
+    expect(errorText(new HttpError(401, "Sign in first."))).toBe("Sign in first.");
+  });
+
   it("falls back to a plain sentence", () => {
     expect(errorText(new Error("boom"))).toBe("Something went wrong. Try again.");
   });

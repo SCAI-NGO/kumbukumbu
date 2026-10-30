@@ -8,6 +8,8 @@ import { HttpError } from "./client";
  */
 export function errorText(err: unknown): string {
   if (err instanceof HttpError) {
+    // The password dialog was cancelled: the server's sentence names an API call, which is no use to a person.
+    if (err.status === 401 && err.type === "password-required") return "This needs your password, so nothing was done.";
     // The one 503 with a sentence of the API's own: a vault being re-encrypted. A proxy's 503 has none.
     if (err.status === 503 && err.message) return err.message;
     if (err.status >= 500) return "The server can't be reached right now. Try again in a moment.";

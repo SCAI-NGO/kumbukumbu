@@ -3,6 +3,7 @@ using System.Globalization;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Microsoft.AspNetCore.Http.HttpResults;
 using BoardModel = Kumbu.Core.Board.Board;
@@ -37,7 +38,7 @@ public static class BoardApi
     public static void MapBoardApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api/vaults/{vault}/board").AddEndpointFilter(ApiErrors.Filter);
-        api.MapGet("", GetAsync).Errors(400, 401, 404, 409, 503);
+        api.MapGet("", GetAsync).WithMetadata(BackgroundMetadata.Instance).Errors(400, 401, 404, 409, 503);
         api.MapPost("", CreateAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("cards", AddAsync).Errors(400, 401, 403, 404, 409, 503);
         api.MapPost("move", MoveAsync).Errors(400, 401, 403, 404, 409, 503);
@@ -45,6 +46,10 @@ public static class BoardApi
         api.MapPost("rename-column", RenameColumnAsync).Errors(400, 401, 403, 404, 409, 503);
     }
 
+    /// <summary>
+    /// What the web app polls while the board is open and the page visible. Like the note's version it doesn't count
+    /// as the session's use (<see cref="BackgroundMetadata"/>): an open board tab would otherwise keep a session alive.
+    /// </summary>
     private static async Task<Ok<BoardView>> GetAsync(
         string vault, string? checkpoint, INoteStore store, Checkpoints checkpoints, TimeProvider time, CancellationToken ct)
     {

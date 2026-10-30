@@ -238,6 +238,116 @@ public sealed class RekeyingTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_pending_rekeying_resumes_at_the_first_request_of_a_session()
+    {
+        var (owner, vaults) = await OwnerAsync("Diary");
+        var users = Api.Services.GetRequiredService<UserCatalog>();
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(owner.User.Id, owner.UserKey, RestClient.Password, Ct);
+        // A recovery whose process died after its commit, and a session that outlived the process ("keep me signed
+        // in"): no sign-in follows that would resume the vaults.
+        var (_, user, newKey) = (await users.RecoverWithKeyAsync(owner.Username, recoveryKey!, NewPassword, Ct))!.Value;
+        var (_, _, readAt) = (await users.TrySignInAsync(owner.Username, NewPassword, Ct))!.Value;
+        var session = await Api.Services.GetRequiredService<Sessions>().StartAsync(user, newKey, readAt, Ct, remember: true);
+
+        // A new process: the owner's earlier requests in this one don't count.
+        await using var restarted = Api.WithWebHostBuilder(_ => { });
+        var catalog = restarted.Services.GetRequiredService<VaultCatalog>();
+        await using (var hold = Hold.Of(catalog, vaults.Values))
+        {
+            using var listed = await GetAsync(restarted, "/api/vaults", session);
+            Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+            await hold.Reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        }
+
+        await AllRekeyedAsync(owner.User.Id, vaults.Values);
+        foreach (var id in vaults.Values) Assert.True(await MetaOpensAsync(await VaultKeyAsync(newKey, id), id));
+
+        // Pending again behind the server's back: a second request of the session doesn't resume it, once per process is all.
+        await Raw("users").UpdateOneAsync(
+            new BsonDocument("_id", user.Id), new BsonDocument("$set", new BsonDocument("rekeyPending", new BsonArray { vaults["Arbeit"] })), cancellationToken: Ct);
+        using (var again = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+        await Task.Delay(TimeSpan.FromMilliseconds(500), Ct);
+        Assert.Equal([vaults["Arbeit"]], await RekeyPendingAsync(user.Id));
+        Assert.False(await StartedAsync(vaults.Values));
+
+        // A sign-in still resumes it.
+        await SignInAsync(owner.Username, NewPassword);
+        await AllRekeyedAsync(owner.User.Id, vaults.Values);
+    }
+
+    [Fact]
+    public async Task A_resume_that_failed_at_a_sessions_request_is_tried_again_at_the_next()
+    {
+        var (owner, vaults) = await OwnerAsync();
+        var users = Api.Services.GetRequiredService<UserCatalog>();
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(owner.User.Id, owner.UserKey, RestClient.Password, Ct);
+        var (_, user, newKey) = (await users.RecoverWithKeyAsync(owner.Username, recoveryKey!, NewPassword, Ct))!.Value;
+        var (_, _, readAt) = (await users.TrySignInAsync(owner.Username, NewPassword, Ct))!.Value;
+        var session = await Api.Services.GetRequiredService<Sessions>().StartAsync(user, newKey, readAt, Ct, remember: true);
+
+        await using var restarted = Api.WithWebHostBuilder(_ => { });
+        var rekeying = restarted.Services.GetRequiredService<Rekeying>();
+        var runs = 0;
+        // The first resume fails, as a blip of the database would make it.
+        rekeying.ResumeFault = () => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("the database didn't answer") : Task.CompletedTask;
+        try
+        {
+            using (var first = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (Volatile.Read(ref runs) < 2)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "The resume never retried.");
+                using (var again = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+                await Task.Delay(TimeSpan.FromMilliseconds(50), Ct);
+            }
+
+            await AllRekeyedAsync(owner.User.Id, vaults.Values);
+            // Once it worked, the next requests leave it be.
+            using (var later = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, later.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(200), Ct);
+            Assert.Equal(2, Volatile.Read(ref runs));
+        }
+        finally
+        {
+            rekeying.ResumeFault = null;
+        }
+    }
+
+    [Fact]
+    public async Task A_sign_in_and_the_sessions_requests_after_it_resume_once()
+    {
+        await using var restarted = Api.WithWebHostBuilder(_ => { });
+        var rekeying = restarted.Services.GetRequiredService<Rekeying>();
+        var runs = 0;
+        rekeying.ResumeFault = () =>
+        {
+            Interlocked.Increment(ref runs);
+            return Task.CompletedTask;
+        };
+        try
+        {
+            // Signs in, then creates a vault: the session's first request.
+            var owner = await RestClient.NewAsync(restarted);
+            using (var listed = await owner.GetAsync("/api/vaults")) Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), Ct);
+
+            Assert.Equal(1, Volatile.Read(ref runs));
+        }
+        finally
+        {
+            rekeying.ResumeFault = null;
+        }
+    }
+
+    private async Task<HttpResponseMessage> GetAsync(WebApplicationFactory<Program> api, string path, string session)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Add("Cookie", $"{CallerMiddleware.SessionCookie}={session}");
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+        return await client.SendAsync(request, Ct);
+    }
+
+    [Fact]
     public async Task Reencrypt_answers_the_recovery_key_after_stage_1()
     {
         var (owner, vaults) = await OwnerAsync("Diary");

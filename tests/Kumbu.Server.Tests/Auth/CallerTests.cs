@@ -113,7 +113,7 @@ public sealed class CallerTests(KumbuAppFactory app)
         var users = new UserCatalog(
             app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), app.Services.GetRequiredService<ApiKeys>(), app.Services.GetRequiredService<Connections>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
         var (_, key, readAt) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
-        var caller = RequestCaller.ForSession(user, key, readAt, app.Services.GetRequiredService<VaultCatalog>());
+        var caller = RequestCaller.ForSession(user, key, readAt, windowOpen: true, app.Services.GetRequiredService<VaultCatalog>());
 
         Assert.Equal(CallerKind.Session, caller.Kind);
         Assert.Equal(user.Username, caller.Writer);
@@ -150,6 +150,7 @@ public sealed class CallerTests(KumbuAppFactory app)
         builder.Services.AddSingleton(new WrongKeyLimiter());
         builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.Accounts.Connections>());
         builder.Services.AddSingleton(app.Services.GetRequiredService<Kumbu.Server.OAuth.OAuthTokens>());
+        builder.Services.AddSingleton(app.Services.GetRequiredService<Rekeying>());
         var minimal = builder.Build();
         minimal.UseRouting();
         minimal.UseMiddleware<CallerMiddleware>();

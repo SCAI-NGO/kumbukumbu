@@ -166,10 +166,10 @@ public sealed class DeletionTests(MongoFixture fixture)
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "", Ct));
         Assert.Null(await Deletion().DeleteVaultAsync(lea, key, "tagebuch", Password, "tagebuch", Ct));
         Assert.Null(await Deletion().DeleteVaultAsync(bob, bobKey, "Tagebuch", Password, "Tagebuch", Ct));
-        var wrong = await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "wrong password, long enough", "Tagebuch", Ct));
+        var wrong = await Assert.ThrowsAsync<WrongPasswordException>(() => Deletion().DeleteVaultAsync(lea, key, "Tagebuch", "wrong password, long enough", "Tagebuch", Ct));
         Assert.StartsWith("The password is wrong.", wrong.Message, StringComparison.Ordinal);
         // The right password, but for another user key: it must open exactly the caller's.
-        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteVaultAsync(lea, bobKey, "Tagebuch", Password, "Tagebuch", Ct));
+        await Assert.ThrowsAsync<WrongPasswordException>(() => Deletion().DeleteVaultAsync(lea, bobKey, "Tagebuch", Password, "Tagebuch", Ct));
 
         await AssertIntactAsync(diary.Id);
     }
@@ -453,10 +453,10 @@ public sealed class DeletionTests(MongoFixture fixture)
 
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(bob, bobKey, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "le", Ct));
-        var wrong = await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, annaKey, "not anna's password at all", lea.Id, "lea", Ct));
+        var wrong = await Assert.ThrowsAsync<WrongPasswordException>(() => Deletion().DeleteUserAsync(anna, annaKey, "not anna's password at all", lea.Id, "lea", Ct));
         Assert.StartsWith("Your password is wrong.", wrong.Message, StringComparison.Ordinal);
         // Anna's password, but the target's user key: it must open the admin's own.
-        await Assert.ThrowsAsync<ArgumentException>(() => Deletion().DeleteUserAsync(anna, key, Password, lea.Id, "lea", Ct));
+        await Assert.ThrowsAsync<WrongPasswordException>(() => Deletion().DeleteUserAsync(anna, key, Password, lea.Id, "lea", Ct));
         await Assert.ThrowsAsync<NotPermittedException>(() => Deletion().DeleteUserAsync(anna, annaKey, Password, chris.Id, "chris", Ct));
         Assert.Null(await Deletion().DeleteUserAsync(anna, annaKey, Password, "no-such-user", "x", Ct));
         await AssertIntactAsync(diary.Id);
@@ -631,7 +631,7 @@ public sealed class DeletionTests(MongoFixture fixture)
             Assert.Equal(["anna", "lea"], (await Restored().FindAsync(Ct)).Select(u => u.Username).Order());
             // Anna doesn't see herself: she can't delete herself here, so she isn't offered it.
             Assert.Equal(["lea"], (await Restored().ListAsync(anna, Ct)).Select(u => u.Username));
-            await Assert.ThrowsAsync<ArgumentException>(() => Deletion().RepeatAsync(anna, annaKey, "not anna's password at all", Ct));
+            await Assert.ThrowsAsync<WrongPasswordException>(() => Deletion().RepeatAsync(anna, annaKey, "not anna's password at all", Ct));
             var again = await Deletion().RepeatAsync(anna, annaKey, Password, Ct);
 
             var deleted = Assert.Single(again);

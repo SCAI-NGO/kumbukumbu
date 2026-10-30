@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
 
@@ -14,6 +15,12 @@ public sealed class Rekeying(
     TimeProvider time, ILogger<Rekeying> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
+
+    /// <summary>The users whose vaults were resumed in this process, by a sign-in, a recovery or a session (<see cref="ResumeOnce"/>).</summary>
+    private readonly ConcurrentDictionary<string, byte> _resumed = new(StringComparer.Ordinal);
+
+    /// <summary>Runs at the start of <see cref="ResumeAsync"/> (tests make it fail).</summary>
+    internal Func<Task>? ResumeFault { get; set; }
 
     /// <summary>Runs before the revocations of <see cref="ReencryptAccountAsync"/> (tests make them fail).</summary>
     internal Func<Task>? RevokeFault { get; set; }
@@ -58,12 +65,12 @@ public sealed class Rekeying(
     /// <summary>
     /// Re-keys the user's vault named <paramref name="vaultName"/> and waits for it (it may wait behind other vaults);
     /// null if the user has no such vault. The password is checked before the name is looked up, so that a stolen
-    /// session alone learns nothing (<see cref="ArgumentException"/> if it is wrong). Cancelling the wait leaves the run
+    /// session alone learns nothing (<see cref="WrongPasswordException"/> if it is wrong). Cancelling the wait leaves the run
     /// going.
     /// </summary>
     public async Task<RekeySummary?> RekeyVaultAsync(User user, byte[] userKey, string vaultName, string password, CancellationToken ct)
     {
-        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new ArgumentException("The password is wrong.", nameof(password));
+        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
 
         // Through the runner, never RekeyAsync directly: a run of its own would race the runner's.
@@ -77,24 +84,49 @@ public sealed class Rekeying(
     /// <summary>
     /// Hands the user's pending vaults to the runner, fire and forget: those recorded by a rotation and not started
     /// (<c>rekeyPending</c>), and those in their two-key period. Never waits and never throws: a sign-in or a recovery
-    /// must not depend on it, and a vault missed here is resumed by the next trigger.
+    /// must not depend on it, and a vault missed here is resumed by the next trigger. Always runs, and counts as the
+    /// user's resume for <see cref="ResumeOnce"/>, so the session's first request doesn't run a second one beside it.
     /// </summary>
-    public void ResumePending(User user, byte[] userKey) => _ = ResumeAsync(user, userKey);
+    public void ResumePending(User user, byte[] userKey)
+    {
+        _resumed[user.Id] = 0;
+        _ = ResumeOrForgetAsync(user, userKey);
+    }
 
-    /// <summary>What <see cref="ResumePending"/> runs; every failure is logged here, none goes unobserved.</summary>
-    internal async Task ResumeAsync(User user, byte[] userKey)
+    /// <summary>
+    /// <see cref="ResumePending"/> for a session's request, the first time per user and process: a session that outlived
+    /// a restart (a remembered one may not sign in for 30 days) resumes what the restart left, as a sign-in would.
+    /// </summary>
+    public void ResumeOnce(User user, byte[] userKey)
+    {
+        if (!_resumed.TryAdd(user.Id, 0)) return;
+        _ = ResumeOrForgetAsync(user, userKey);
+    }
+
+    /// <summary>A resume that failed (the database didn't answer) is tried again at the session's next request.</summary>
+    private async Task ResumeOrForgetAsync(User user, byte[] userKey)
+    {
+        if (!await ResumeAsync(user, userKey)) _resumed.TryRemove(user.Id, out _);
+    }
+
+    /// <summary>What <see cref="ResumePending"/> runs: false if it failed. Every failure is logged here, none goes
+    /// unobserved.</summary>
+    internal async Task<bool> ResumeAsync(User user, byte[] userKey)
     {
         try
         {
             // Off the caller's flow at once: the reads below must not delay the answer.
             await Task.Yield();
+            if (ResumeFault is { } fault) await fault();
             var recorded = await Users.Find(u => u.Id == user.Id).Project(u => u.RekeyPending).FirstOrDefaultAsync(CancellationToken.None) ?? [];
             var started = await catalog.PendingVaultIdsAsync(user.Id, userKey, CancellationToken.None);
             foreach (var vaultId in recorded.Concat(started).Distinct(StringComparer.Ordinal)) runner.Start(vaultId, user.Id, userKey);
+            return true;
         }
         catch (Exception e)
         {
-            log.LogWarning(e, "Resuming the re-keying of the vaults of user {Username} failed; the next sign-in tries again", user.Username);
+            log.LogWarning(e, "Resuming the re-keying of the vaults of user {Username} failed; the next sign-in or session request tries again", user.Username);
+            return false;
         }
     }
 

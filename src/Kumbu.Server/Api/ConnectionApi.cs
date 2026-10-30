@@ -60,8 +60,8 @@ public static class ConnectionApi
     {
         var group = app.MapGroup("/api/connections").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         group.MapGet("", ListAsync).Errors(401, 403, 503);
-        group.MapPost("", CreateAsync).Errors(400, 401, 403, 409, 503);
-        group.MapPut("/{id}/vaults", SetVaultsAsync).Errors(400, 401, 403, 404, 503);
+        group.MapPost("", CreateAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
+        group.MapPut("/{id}/vaults", SetVaultsAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 503);
         group.MapDelete("/{id}", RevokeAsync).Errors(401, 403, 404);
 
         // The consent page's calls (Ruling 8): session-only too, so the decision, a POST, also passes the Origin check
@@ -92,6 +92,8 @@ public static class ConnectionApi
         string id, ConsentDecisionRequest body, HttpContext http, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, OAuthTokens tokens,
         Connections connections, VaultCatalog catalog, IOptions<KumbuOptions> options, TimeProvider time, ILoggerFactory logs, CancellationToken ct)
     {
+        // Allow authorises an app, so it needs the password window; Deny is cleaning up and is never asked.
+        if (body.Allow) Security.RequirePasswordWindow(caller);
         var log = logs.CreateLogger(OAuthEndpoints.LogCategory);
         var pending = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
         var clientHost = OAuthEndpoints.ClientHost(pending.ClientId, pending.RedirectUri);

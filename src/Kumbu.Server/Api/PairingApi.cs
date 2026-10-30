@@ -27,7 +27,7 @@ public static class PairingApi
     public static void MapPairingApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapPost("/vaults/{vault}/pairing", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapPost("/vaults/{vault}/pairing", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 503);
         // It carries its own secret and no ambient credential, so there is nothing for a forged request to ride on;
         // and Obsidian sends no Origin of ours.
         api.MapPost("/pairing/redeem", RedeemAsync).AllowAnonymous().WithMetadata(OriginExemptMetadata.Instance).Errors(400, 404, 409, 429);

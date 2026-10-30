@@ -5,9 +5,10 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
-/// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.</summary>
+/// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.
+/// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).</summary>
 public sealed record UserSummary(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastSignInAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
 
 /// <summary>
 /// The admin's tools (accounts design, "Admin"): the user list, deactivating and reactivating, and roles. Every
@@ -166,3 +167,11 @@ internal static class AdminRules
 
 /// <summary>An action the acting user may not take: they aren't an admin, or it would touch the primary admin.</summary>
 public sealed class NotPermittedException(string message) : Exception(message);
+
+/// <summary>
+/// A password checked behind a session was wrong: a 400 with the message, and one of the wrong passwords in a row that
+/// end a remembered session (<see cref="Sessions.PasswordWrongAsync"/>, counted where <c>ApiErrors.Filter</c> answers
+/// it). Every such check throws this when the password is wrong, as it calls <c>AccountApi.PasswordGivenAsync</c> when
+/// it is right.
+/// </summary>
+public sealed class WrongPasswordException(string message) : Exception(message);

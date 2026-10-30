@@ -27,8 +27,8 @@ export function ago(iso: string, now = Date.now()) {
 }
 
 /**
- * The note's last write since the user's previous sign-in, when one of their API keys made it. The first
- * sign-in ever has no earlier visit to compare with, so it shows no banner and asks nothing.
+ * The note's last write since the user's previous visit, when one of their API keys made it. The first
+ * visit ever has no earlier one to compare with, so it shows no banner and asks nothing.
  */
 export function useAgentChange(path: string): Change | undefined {
   const since = useSession((s) => s.previousSignInAt);
@@ -39,7 +39,7 @@ export function useAgentChange(path: string): Change | undefined {
 export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
- * The version the user last saw, roughly: the newest one before the agents' writes since the previous sign-in,
+ * The version the user last saw, roughly: the newest one before the agents' writes since the previous visit,
  * i.e. written before it, by the user, or by one of their devices (Obsidian). Null when there is none: an agent
  * wrote the note from the start. A device back after a long pause (`change`) is not taken for the user: its writes
  * since then are what the banner asks about.

@@ -5,6 +5,7 @@ import { Outlet, useLocation, useNavigate, useSearchParams, type RouteObject } f
 import { api, call } from "./api/client";
 import { errorText } from "./api/error-text";
 import { RouteError } from "./components/AppError";
+import PasswordPrompt from "./components/PasswordPrompt";
 import ForgotPassword from "./routes/ForgotPassword";
 import SignIn from "./routes/SignIn";
 import MobileShell from "./shell/MobileShell";
@@ -47,6 +48,7 @@ function Root() {
     <>
       {!inShell && <UpdateBar />}
       <Outlet />
+      <PasswordPrompt />
     </>
   );
 }
