@@ -3,7 +3,7 @@ import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { useCheckpoints, useCreateCheckpoint, usePreviewCheckpoint, useRemoveCheckpoint, useRestoreCheckpoint, type CheckpointEntry, type RestorePreview } from "../api/history";
-import { checkpointUrl } from "../api/paths";
+import { checkpointUrl, shownPath } from "../api/paths";
 import { FormError, inputClass, labelClass, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
 import { PasswordField } from "../components/PasswordField";
@@ -213,11 +213,11 @@ function changeText(c: RestorePreview["changes"][number]) {
     case "changed":
       return c.fileKind === "image" || c.fileKind === "pdf" ? "goes back to how it was then" : `gets its text from then${lines}`;
     case "back":
-      return "comes back (it was removed since)";
+      return c.fileKind === "folder" ? "comes back" : "comes back (it was removed since)";
     case "trash":
-      return "goes to the trash (it was made since)";
+      return c.fileKind === "folder" ? "goes to the trash" : "goes to the trash (it was made since)";
     default:
-      return `moves back from ${c.from}${lines}`;
+      return `moves back from ${c.from ? shownPath(c.from) : c.from}${lines}`;
   }
 }
 
@@ -247,7 +247,7 @@ function RestoreStep({ vault, checkpoint, onBack, onDone }: { vault: string; che
             <ul aria-label="What changes" className="flex max-h-60 flex-col gap-1 overflow-y-auto">
               {changes.map((c) => (
                 <li key={`${c.kind}-${c.path}`} className="text-sm">
-                  <span className="font-mono text-[12px] text-text">{c.path}</span> {changeText(c)}
+                  <span className="font-mono text-[12px] text-text">{shownPath(c.path)}</span> {changeText(c)}
                 </li>
               ))}
             </ul>

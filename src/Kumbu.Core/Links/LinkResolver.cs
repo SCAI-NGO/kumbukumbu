@@ -54,7 +54,8 @@ public sealed class LinkResolver
         _attachmentsByName = new(StringComparer.OrdinalIgnoreCase);
         foreach (var attachment in attachments)
         {
-            if (attachment.Vault == vault) Add(_attachmentsByName, attachment.Name, attachment);
+            // A kept folder's marker is no file of the vault anyone links to.
+            if (attachment.Vault == vault && !FolderMarker.Is(attachment)) Add(_attachmentsByName, attachment.Name, attachment);
         }
     }
 

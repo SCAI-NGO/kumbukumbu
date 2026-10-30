@@ -31,6 +31,20 @@ public sealed class SeedScannerTests : IDisposable
     }
 
     [Fact]
+    public void Collects_vaultkeep_markers_as_folders()
+    {
+        Write("Work/Drafts/.vaultkeep", "x");
+        Write("Work/.vaultkeep", "");
+        Write("Work/.obsidian/a/.vaultkeep", "");
+        Write("Work/Drafts2/.gitkeep", "");
+
+        var scan = SeedScanner.Scan(_root);
+
+        Assert.Equal(["/Work/Drafts"], scan.Folders.Select(f => f.Value));
+        Assert.Empty(scan.Warnings);
+    }
+
+    [Fact]
     public void Skips_files_outside_a_vault_with_a_warning()
     {
         Write("loose.md", "x");

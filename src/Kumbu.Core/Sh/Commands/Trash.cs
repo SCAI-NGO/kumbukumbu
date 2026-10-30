@@ -40,7 +40,9 @@ public sealed class Trash(INoteStore notes) : ICommand
         if (notes is IAttachmentStore store)
         {
             rows.AddRange((await store.ListAttachmentTrashAsync(path.IsRoot ? null : path, ct)).Select(t =>
-                (t.DeletedAt, Line: $"{History.Time(t.DeletedAt)}  {t.Attachment.Path.Value}  {t.Attachment.Version}  {AttachmentText.Summary(t.Attachment.Current)}  (by {t.DeletedBy})")));
+                (t.DeletedAt, Line: FolderMarker.Is(t.Attachment.Path)
+                    ? $"{History.Time(t.DeletedAt)}  {FolderMarker.Shown(t.Attachment.Path)}  folder  (by {t.DeletedBy})"
+                    : $"{History.Time(t.DeletedAt)}  {t.Attachment.Path.Value}  {t.Attachment.Version}  {AttachmentText.Summary(t.Attachment.Current)}  (by {t.DeletedBy})")));
         }
 
         // Stable, so notes and attachments removed together keep the order they were listed in.

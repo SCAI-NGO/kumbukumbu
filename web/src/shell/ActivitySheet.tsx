@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { countsText, useActivity, writerText, type ActivityFile, type ActivityRow } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { fileInfoQuery } from "../api/notes";
-import { fileKindOf, folderOf, inVault, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { fileKindOf, folderOf, inVault, shownPath, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { Sheet, timeText } from "../components/Sheet";
@@ -21,7 +21,11 @@ const renameText = (from: string, to: string) =>
   folderOf(from) === folderOf(to) ? `${nameOf(from)} → ${nameOf(to)}` : `${inVault(from)} → ${inVault(to)}`;
 
 /** What the file is: the server's `fileKind`, else (an older server) its extension's. */
-const kindOf = (f: ActivityFile): FileKind => (f.fileKind === "image" || f.fileKind === "pdf" || f.fileKind === "note" ? f.fileKind : fileKindOf(f.path));
+const kindOf = (f: ActivityFile): FileKind => (f.fileKind === "image" || f.fileKind === "pdf" || f.fileKind === "note" || f.fileKind === "folder" ? f.fileKind : fileKindOf(f.path));
+
+/** A folder as its marker's folder, within the vault: "Drafts/". */
+const folderText = (path: string) => inVault(shownPath(path));
+const folderLabel = { added: "made", deleted: "removed", renamed: "moved" } as const;
 
 const spanText = (row: ActivityRow) => (row.from === row.to || timeText(row.from) === timeText(row.to) ? timeText(row.to) : `${timeText(row.from)} – ${timeText(row.to)}`);
 
@@ -113,6 +117,16 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
                   <ul aria-label="Files" className="flex flex-col border-t border-line py-1">
                     {row.files.map((f, j) => {
                       const Icon = fileKindIcon[kindOf(f)];
+                      if (kindOf(f) === "folder") {
+                        const moved = f.kind === "renamed" && f.from ? `${folderText(f.from)} → ${folderText(f.to ?? f.path)}` : folderText(f.path);
+                        return (
+                          <li key={`${j}-${f.path}`} data-file-kind="folder" className="flex min-h-11 items-center gap-2 px-3.5 py-1.5">
+                            <Icon size={16} strokeWidth={1.8} aria-hidden className="flex-none text-dim" />
+                            <span className="min-w-0 flex-1 truncate text-text">{moved}</span>
+                            <span className="flex-none font-mono text-[11px] text-dim">{folderLabel[f.kind as keyof typeof folderLabel] ?? f.kind}</span>
+                          </li>
+                        );
+                      }
                       return (
                         <li key={`${j}-${f.path}`} data-file-kind={kindOf(f)}>
                           <button

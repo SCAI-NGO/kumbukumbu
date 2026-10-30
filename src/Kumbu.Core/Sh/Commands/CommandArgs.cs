@@ -27,16 +27,23 @@ internal static class CommandArgs
 
     public static bool TryParsePath(string command, string arg, out VaultPath path, out ShellResult? error)
     {
-        if (VaultPath.TryParse(arg, out var parsed))
+        path = VaultPath.Root;
+        if (!VaultPath.TryParse(arg, out var parsed))
         {
-            path = parsed;
-            error = null;
-            return true;
+            error = ShellResult.Error($"{command}: {arg}: paths must be absolute (there is no working directory)");
+            return false;
         }
 
-        path = VaultPath.Root;
-        error = ShellResult.Error($"{command}: {arg}: paths must be absolute (there is no working directory)");
-        return false;
+        // A kept folder's marker is answered as a path that doesn't exist: nothing typed reaches it.
+        if (FolderMarker.Is(parsed))
+        {
+            error = ShellResult.Error($"{command}: {arg}: No such file or directory");
+            return false;
+        }
+
+        path = parsed;
+        error = null;
+        return true;
     }
 
     /// <summary>Reads one note, with the error <c>cat</c> would give for a directory or a missing path.</summary>

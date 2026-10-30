@@ -31,7 +31,7 @@ public sealed record VaultPath
 
     public bool IsNote => !IsRoot && Name.EndsWith(".md", StringComparison.Ordinal);
 
-    /// <summary>A PDF or image file (by extension, case-insensitive).</summary>
+    /// <summary>A PDF or image file (by extension, case-insensitive), or a folder marker (<c>.vaultkeep</c>).</summary>
     public bool IsAttachment => AttachmentFormat.ForPath(this) is not null;
 
     /// <summary>Parses an absolute path. Returns false only for relative or blank input,

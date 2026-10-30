@@ -12,7 +12,6 @@ public sealed class Shell
     // What models reach for first, and what to use here instead.
     private static readonly Dictionary<string, string> Hints = new(StringComparer.Ordinal)
     {
-        ["mkdir"] = "not needed: directories exist through the notes in them; 'write' creates a note at any path in a vault",
         ["touch"] = "use the write tool to create a note",
         ["echo"] = "use the write or edit tool to change a note",
         ["grep"] = "use rg (try 'help rg')",
@@ -46,7 +45,7 @@ public sealed class Shell
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
-            new Mv(mover), new Rm(writer, files), new Trash(notes),
+            new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
             new Uname(version), new Help(_commands),
         ];

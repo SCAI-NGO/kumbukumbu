@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Paths;
 
 namespace Kumbu.Server.Notes;
@@ -7,7 +8,9 @@ namespace Kumbu.Server.Notes;
 public sealed record SeedFile(VaultPath Path, string Content);
 
 /// <param name="Vaults">Every vault folder, also one without notes.</param>
-public sealed record SeedScan(IReadOnlyList<SeedFile> Files, IReadOnlyList<string> Warnings, IReadOnlyList<string> Vaults);
+/// <param name="Folders">The folders a <c>.vaultkeep</c> file names, so that empty ones are kept.</param>
+public sealed record SeedScan(
+    IReadOnlyList<SeedFile> Files, IReadOnlyList<string> Warnings, IReadOnlyList<string> Vaults, IReadOnlyList<VaultPath> Folders);
 
 public static class SeedScanner
 {
@@ -17,6 +20,7 @@ public static class SeedScanner
     {
         var files = new List<SeedFile>();
         var warnings = new List<string>();
+        var folders = new List<VaultPath>();
         var utf8 = new UTF8Encoding(false);
 
         // Hidden entries are filtered below by their dot segments; AttributesToSkip = 0 keeps the enumerator
@@ -32,6 +36,18 @@ public static class SeedScanner
         {
             var relative = Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/');
             var segments = relative.Split('/');
+            // A marker names its folder whatever it holds; one directly in a vault folder is skipped, as a vault needs none.
+            if (segments[^1] == FolderMarker.Name)
+            {
+                if (segments.Length > 2 && !segments[..^1].Any(s => s.StartsWith('.'))
+                    && VaultPath.TryParse("/" + string.Join('/', segments[..^1]), out var folder))
+                {
+                    folders.Add(folder);
+                }
+
+                continue;
+            }
+
             if (segments.Any(s => s.StartsWith('.')) || !relative.EndsWith(".md", StringComparison.Ordinal))
             {
                 continue;
@@ -83,6 +99,6 @@ public static class SeedScanner
             .Union(files.Select(f => f.Path.Vault!))
             .Order(StringComparer.Ordinal)
             .ToList();
-        return new SeedScan(files, warnings, vaults);
+        return new SeedScan(files, warnings, vaults, folders);
     }
 }

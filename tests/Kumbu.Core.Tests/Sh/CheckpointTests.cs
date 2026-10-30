@@ -410,5 +410,47 @@ public class CheckpointTests
         Assert.Contains("2026-10-24 11:00 UTC  dev (restore)  /Demo/arbeit/new.md → trash", rows);
         Assert.Contains("2026-10-24 11:00 UTC  dev            /Demo/welcome.md → trash", rows);
     }
+
+    [Fact]
+    public async Task A_checkpoint_brings_back_a_removed_empty_folder()
+    {
+        await Run("mkdir /Demo/Drafts");
+        await Run("mkcp /Demo before");
+        await Run("rm /Demo/Drafts");
+
+        var diff = (await Run("diff /Demo --checkpoint before")).Output;
+        Assert.Contains("removed  /Demo/Drafts/", diff.Split('\n'));
+        Assert.DoesNotContain(".vaultkeep", diff);
+
+        var preview = await Run("restore --checkpoint before /Demo");
+        Assert.Contains("  back        /Demo/Drafts/", preview.Output.Split('\n'));
+        Assert.DoesNotContain(".vaultkeep", preview.Output);
+        Assert.False((await Run($"restore --checkpoint before --plan {Plan(preview)} /Demo")).IsError);
+
+        Assert.Contains("Drafts/", (await Run("ls /Demo")).Output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task A_folder_made_after_a_checkpoint_goes_with_its_restore()
+    {
+        await Run("mkcp /Demo before");
+        await Run("mkdir /Demo/Drafts");
+
+        var preview = await Run("restore --checkpoint before /Demo");
+        Assert.Contains("  to trash    /Demo/Drafts/  (created since)", preview.Output.Split('\n'));
+        Assert.False((await Run($"restore --checkpoint before --plan {Plan(preview)} /Demo")).IsError);
+
+        Assert.DoesNotContain("Drafts/", (await Run("ls /Demo")).Output.Split('\n'));
+    }
+
+    [Fact]
+    public async Task Lscp_counts_no_marker()
+    {
+        await Run("mkdir /Demo/arbeit/sub/Drafts");
+        var made = await Run("mkcp /Demo/arbeit/sub one");
+
+        Assert.Contains("(1 note)", made.Output);
+        Assert.Contains("  1 note", (await Run("lscp /Demo")).Output);
+    }
 }
 

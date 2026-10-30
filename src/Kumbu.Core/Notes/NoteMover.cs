@@ -72,8 +72,10 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (await CheckTargetAsync(from, to, map.Keys.ToHashSet(), ct) is { } problem) return problem;
         }
 
-        var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count, "attachment") }.Where(c => c is not null));
-        return await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/ ({count})", ct);
+        // Kept folders' markers move along unmentioned, and a folder holding nothing else reports no file's version.
+        var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count(a => !FolderMarker.Is(a)), "attachment") }.Where(c => c is not null));
+        var result = await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", ct);
+        return map.Count == 1 && FolderMarker.Is(map.Keys.First()) ? result with { Version = null } : result;
     }
 
     private static string? Count(int n, string what) => n switch { 0 => null, 1 => $"1 {what}", _ => $"{n} {what}s" };
@@ -105,6 +107,10 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (AttachmentFormat.ForPath(source) is not null)
         {
             if (AttachmentFormat.RenameProblem(source, target) is { } renameProblem) return ShellResult.Error($"mv: {target.Value}: {renameProblem}");
+            if (FolderMarker.Is(target) && target.Segments.Count == 2)
+            {
+                return ShellResult.Error($"mv: {FolderMarker.Shown(target)}: {FolderMarker.InVaultRoot}");
+            }
 
             if (NoteNames.NameProblem(target) is { } nameProblem) return ShellResult.Error($"mv: {target.Value}: {nameProblem}");
         }

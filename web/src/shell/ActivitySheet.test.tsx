@@ -253,4 +253,43 @@ describe("the vault's activity", () => {
       URL.revokeObjectURL = revokeObjectURL;
     }
   });
+
+  it("the activity shows a made folder as the folder, not a button", async () => {
+    api(() =>
+      json(200, {
+        rows: [
+          row("ada", "user", [
+            { path: "/Work/Drafts/.vaultkeep", kind: "added", fileKind: "folder", before: null },
+            { path: "/Work/Old/.vaultkeep", kind: "deleted", fileKind: "folder", version: null },
+            { path: "/Work/New/.vaultkeep", kind: "renamed", fileKind: "folder", from: "/Work/Old/.vaultkeep", to: "/Work/New/.vaultkeep" },
+          ]),
+        ],
+        more: false,
+      }),
+    );
+    const dialog = await openActivity();
+
+    const [first] = await rowsOf(dialog);
+    expect(first).toHaveTextContent("3 folders");
+    await userEvent.click(within(first).getByRole("button", { expanded: false }));
+
+    const files = within(within(first).getByRole("list", { name: "Files" })).getAllByRole("listitem");
+    expect(files).toHaveLength(3);
+    expect(files[0]).toHaveTextContent("Drafts/");
+    expect(files[0]).toHaveTextContent("made");
+    expect(files[1]).toHaveTextContent("Old/");
+    expect(files[1]).toHaveTextContent("removed");
+    expect(files[2]).toHaveTextContent("Old/ → New/");
+    expect(files[2]).toHaveTextContent("moved");
+    for (const f of files) {
+      expect(f).not.toHaveTextContent(".vaultkeep");
+      expect(within(f).queryByRole("button")).not.toBeInTheDocument();
+    }
+  });
+
+  it("counts folders apart from notes", async () => {
+    api(() => json(200, { rows: [row("ada", "user", [{ path: "/Work/A/.vaultkeep", kind: "added", fileKind: "folder", before: null }, { path: "/Work/B/.vaultkeep", kind: "added", fileKind: "folder", before: null }])], more: false }));
+    const dialog = await openActivity();
+    expect((await rowsOf(dialog))[0]).toHaveTextContent("2 folders");
+  });
 });

@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Ellipsis, FilePlus, Folder, Plus, Search, Upload } from "lucide-react";
+import { Ellipsis, FilePlus, Folder, FolderPlus, Plus, Search, Upload } from "lucide-react";
 import { useRef } from "react";
 import { Menu, type MenuItem } from "../components/Menu";
 import { useEditor } from "../state/editor";
 
 /**
  * The bottom of Read mode: files, search (showing its mode), the open note's actions and "+", all in the thumb's
- * reach. `newNote` and `upload` are null while there is no vault, `noteActions` while no note is open.
+ * reach. `newNote`, `newFolder` and `upload` are null while there is no vault, `noteActions` while no note is open.
  */
-export default function Dock(props: { newNote: (() => void) | null; upload: (() => void) | null; noteActions: MenuItem[] | null }) {
-  const { newNote, upload, noteActions } = props;
+export default function Dock(props: { newNote: (() => void) | null; newFolder: (() => void) | null; upload: (() => void) | null; noteActions: MenuItem[] | null }) {
+  const { newNote, newFolder, upload, noteActions } = props;
   const searchMode = useEditor((s) => s.searchMode);
   const setOverlay = useEditor((s) => s.setOverlay);
   const standIn = useRef<HTMLInputElement>(null);
   const items: MenuItem[] = [
     { label: "New note", icon: FilePlus, onSelect: () => newNote?.(), disabled: !newNote },
+    { label: "New folder…", icon: FolderPlus, onSelect: () => newFolder?.(), disabled: !newFolder },
     { label: "Upload", icon: Upload, onSelect: () => upload?.(), disabled: !upload },
   ];
 

@@ -18,6 +18,7 @@ import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
+import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId } from "./TreeDrawer";
@@ -104,6 +105,8 @@ export default function MobileShell() {
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
   const [vaultDialog, setVaultDialog] = useState(false);
+  /** The folder a new folder goes into, while its dialog is open. */
+  const [folderDialog, setFolderDialog] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
@@ -183,7 +186,7 @@ export default function MobileShell() {
     });
   // From the dock: the open note's folder, or the root of the vault the drawer shows.
   const dockFolder = activeVault && (path && vaultOf(path) === activeVault ? folderOf(path) : `/${activeVault}`);
-  const treeProps = { onNewNote: newNote, onNewVault: () => setVaultDialog(true), onMove: setMoving, onVaultSheet: setVaultSheet };
+  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onVaultSheet: setVaultSheet };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
@@ -204,6 +207,7 @@ export default function MobileShell() {
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
               newNote={dockFolder ? () => newNote(dockFolder) : null}
+              newFolder={dockFolder ? () => setFolderDialog(dockFolder) : null}
               upload={dockFolder ? () => openUpload(dockFolder) : null}
               noteActions={
                 path
@@ -267,6 +271,7 @@ export default function MobileShell() {
         </LoadBoundary>
       )}
       {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
+      {folderDialog && <NewFolderDialog parent={folderDialog} onClose={() => setFolderDialog(null)} />}
       {vaultDialog && (
         <NewVaultDialog
           onClose={() => setVaultDialog(false)}

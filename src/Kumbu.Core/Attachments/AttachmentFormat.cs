@@ -7,6 +7,7 @@ public enum AttachmentKind
 {
     Image,
     Pdf,
+    Folder,
 }
 
 /// <summary>
@@ -30,6 +31,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         new(".webp", "image/webp", AttachmentKind.Image),
     ];
 
+    /// <summary>The folder marker: kept like an attachment, but no format users may upload, so not in <see cref="All"/>.</summary>
+    public static AttachmentFormat Marker { get; } = new(FolderMarker.Name, FolderMarker.MediaType, AttachmentKind.Folder);
+
     public static AttachmentFormat? ForPath(VaultPath path) => path.IsRoot ? null : ForName(path.Name);
 
     /// <summary>Whether a stored attachment is a PDF.</summary>
@@ -41,6 +45,8 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// <summary>The format a file name's extension names (case-insensitive); null for any other name.</summary>
     public static AttachmentFormat? ForName(string name)
     {
+        // Exactly the marker's name; a whole path (see KindOf) names it as its last segment.
+        if (name == FolderMarker.Name || name.EndsWith('/' + FolderMarker.Name, StringComparison.Ordinal)) return Marker;
         foreach (var format in All)
         {
             if (name.EndsWith(format.Extension, StringComparison.OrdinalIgnoreCase))
@@ -58,7 +64,9 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     /// </summary>
     public static string? RenameProblem(VaultPath source, VaultPath target)
     {
-        if (ForPath(source) is not { } format || ForPath(target)?.MediaType == format.MediaType) return null;
+        if (ForPath(source) is not { } format) return null;
+        if (format == Marker) return ForPath(target) == Marker ? null : $"{FolderMarker.Name} keeps its name";
+        if (ForPath(target)?.MediaType == format.MediaType) return null;
         var extensions = string.Join(" or ", All.Where(f => f.MediaType == format.MediaType).Select(f => f.Extension));
         return $"{source.Name} is {format.Description}; its new name must end in {extensions} (a new name doesn't change what the file is)";
     }
@@ -68,6 +76,7 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
     {
         AttachmentKind.Image => "image",
         AttachmentKind.Pdf => "pdf",
+        AttachmentKind.Folder => "folder",
         _ => "note",
     };
 
@@ -79,6 +88,11 @@ public sealed record AttachmentFormat(string Extension, string MediaType, Attach
         if (format is null)
         {
             return UnsupportedMessage;
+        }
+
+        if (format == Marker)
+        {
+            return head.IsEmpty ? null : $"A {FolderMarker.Name} keeps its folder and holds nothing; send it empty";
         }
 
         return format.Matches(head)

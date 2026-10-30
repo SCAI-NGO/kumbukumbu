@@ -420,6 +420,27 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task An_export_holds_an_empty_folder_as_a_zero_byte_vaultkeep()
+    {
+        var user = await RestClient.NewAsync(Api);
+        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        await user.CreateAsync("a.md", "a\n");
+        var made = await user.ShAsync("mkdir /Arbeit/Drafts", write);
+        Assert.False(made.IsError, made.Text);
+        await MakeCheckpointAsync(user, "cp");
+
+        using var vault = await ExportAsync(user, $"/api/vaults/{user.Vault}/export");
+        using var checkpoint = await ExportAsync(user, $"/api/vaults/{user.Vault}/checkpoints/cp/export");
+
+        using var vaultZip = await ZipAsync(vault);
+        using var checkpointZip = await ZipAsync(checkpoint);
+        foreach (var zip in new[] { vaultZip, checkpointZip })
+        {
+            Assert.Equal(0, zip.GetEntry("Arbeit/Drafts/.vaultkeep")!.Length);
+        }
+    }
+
+    [Fact]
     public async Task A_folder_checkpoint_exports_with_the_vault_folder_on_top()
     {
         var user = await RestClient.NewAsync(Api);

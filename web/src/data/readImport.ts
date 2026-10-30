@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readDirectory, readEntry, type ZipEntry } from "./zipReader";
-import { isAttachmentName, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
+import { MARKER } from "../api/paths";
+import { isAttachmentName, isFolderMarker, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, NOT_SUPPORTED, OBSIDIAN, TOO_LARGE, TOO_LARGE_FILE, type Skipped } from "../upload/planUpload";
 
 /** A note to import. `path`: below the vault, ending in ".md" as the server stores it. */
 export interface ImportNote {
@@ -25,6 +26,8 @@ export interface ImportVault {
   name: string;
   notes: ImportNote[];
   files: ImportFile[];
+  /** Markers of empty folders, below the vault (`Drafts/.vaultkeep`): sent empty, never unpacked. */
+  folders: string[];
   skipped: Skipped[];
 }
 
@@ -133,7 +136,7 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
   const vaults = new Map<string, { vault: ImportVault; paths: Set<string> }>();
   const vaultOf = (name: string) => {
     let entry = vaults.get(vaultKey(name));
-    if (!entry) vaults.set(vaultKey(name), (entry = { vault: { name, notes: [], files: [], skipped: [] }, paths: new Set() }));
+    if (!entry) vaults.set(vaultKey(name), (entry = { vault: { name, notes: [], files: [], folders: [], skipped: [] }, paths: new Set() }));
     return entry;
   };
   const whole = zipName.replace(/\.zip$/i, "").normalize("NFC").trim();
@@ -157,6 +160,13 @@ export async function readImport(source: Blob | Uint8Array, zipName: string, bud
     }
     const { vault: target, paths } = vaultOf(vault);
     if (!isFile(entry)) continue;
+    // A vault exists on its own: a marker at its root is ignored, as the server refuses it.
+    if (relative === MARKER) continue;
+    // An empty folder's marker: whatever its size and content, it is sent empty, so a second copy is the same folder.
+    if (isFolderMarker(relative) && !relative.includes("\\") && !relative.split("/").some((s) => s === "" || s === "." || s === "..")) {
+      if (!target.folders.includes(relative)) target.folders.push(relative);
+      continue;
+    }
     const note = noteName(relative.split("/").at(-1)!);
     const reason =
       (seen.get(entry.name)! > 1 ? TWICE : null) ??

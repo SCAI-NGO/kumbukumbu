@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
-import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, noteUrl, pathFromRoute, titleOf, untitledName, viewUrl } from "./paths";
+import { crumbOf, fileKindOf, fileUrl, folderOf, isAttachment, isMarker, markerOf, noteUrl, pathFromRoute, shownPath, titleOf, untitledName, viewUrl } from "./paths";
 
 describe("note paths", () => {
   it("puts a note into the URL one encoded segment at a time", () => {
@@ -44,5 +44,23 @@ describe("attachment paths", () => {
     expect(fileUrl("My Vault", "a b/c#?.png")).toBe("/api/files/My%20Vault/a%20b/c%23%3F.png");
     expect(fileUrl("W", "x.pdf", "abc123")).toBe("/api/files/W/x.pdf?version=abc123");
     expect(viewUrl("/My Vault/a b/c#.png")).toBe("/view/My%20Vault/a%20b/c%23.png");
+  });
+});
+
+describe("folder markers", () => {
+  it("fileKindOf names a marker a folder and nothing else", () => {
+    expect(fileKindOf("/Work/Drafts/.vaultkeep")).toBe("folder");
+    expect(isMarker("/Work/Drafts/.vaultkeep")).toBe(true);
+    expect(isAttachment("/Work/Drafts/.vaultkeep")).toBe(false);
+    expect(fileKindOf("/Work/Drafts/x.vaultkeep")).toBe("note");
+    expect(fileKindOf("/Work/Drafts/.VaultKeep")).toBe("note");
+    expect(isMarker("/Work/.vaultkeep/plan.md")).toBe(false);
+  });
+
+  it("markerOf and shownPath", () => {
+    expect(markerOf("/Work/Drafts")).toBe("Drafts/.vaultkeep");
+    expect(markerOf("/Work/Drafts/2026")).toBe("Drafts/2026/.vaultkeep");
+    expect(shownPath("/Work/Drafts/.vaultkeep")).toBe("/Work/Drafts/");
+    expect(shownPath("/Work/plan.md")).toBe("/Work/plan.md");
   });
 });

@@ -20,18 +20,33 @@ export const boardUrl = (vault: string, checkpoint?: string) =>
 /** The app's URL of a vault's gallery: its images and PDFs. */
 export const galleryUrl = (vault: string) => `/gallery/${encodeURIComponent(vault)}`;
 
-/** What a path holds by its extension, as the server tells files apart (`kind`): "image", "pdf" or "note". */
-export type FileKind = "note" | "image" | "pdf";
+/** What a path holds, as the server tells files apart (`kind`): "image", "pdf", "note", or "folder" for an empty folder's marker. */
+export type FileKind = "note" | "image" | "pdf" | "folder";
+
+/** The zero-byte file that keeps an empty folder; the server names it as its folder wherever it shows changes. */
+export const MARKER = ".vaultkeep";
+
+export const isMarker = (path: string) => path.slice(path.lastIndexOf("/") + 1) === MARKER;
+
+/** The marker of a folder (`/Work/Drafts`), below the vault as `putFile` takes it: `Drafts/.vaultkeep`. */
+export const markerOf = (folder: string) => `${folder.split("/").slice(2).join("/")}/${MARKER}`;
+
+/** A marker's path as its folder (`/Work/Drafts/`); any other path as it is. */
+export const shownPath = (path: string) => (isMarker(path) ? path.slice(0, path.length - MARKER.length) : path);
 
 /** The formats Kumbu² keeps besides notes, as the server accepts them (any case). */
 const attachmentKinds: Record<string, FileKind> = { ".pdf": "pdf", ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image" };
 
 export function fileKindOf(path: string): FileKind {
+  if (isMarker(path)) return "folder";
   const dot = path.lastIndexOf(".");
   return (dot > path.lastIndexOf("/") && attachmentKinds[path.slice(dot).toLowerCase()]) || "note";
 }
 
-export const isAttachment = (path: string) => fileKindOf(path) !== "note";
+export const isAttachment = (path: string) => {
+  const kind = fileKindOf(path);
+  return kind === "image" || kind === "pdf";
+};
 
 /** The API's URL of an attachment's bytes (`/api/files/{vault}/{path}`), at `version` if given. */
 export const fileUrl = (vault: string, path: string, version?: string) =>
