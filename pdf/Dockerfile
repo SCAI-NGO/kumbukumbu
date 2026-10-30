@@ -1,19 +1,19 @@
 # The PDF sidecar: parses untrusted PDFs and decodes untrusted images, away from the vault keys.
 # Base images by digest; the tag above each digest says which image it is and is what Dependabot follows.
 
-# node:22-bookworm-slim
-FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
+# node:26-bookworm-slim
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /app
-# pnpm at the version package.json's packageManager names.
-RUN corepack enable
+# Node 25+ ships no corepack, so pnpm comes from npm, at the version package.json's packageManager names.
+RUN npm install -g pnpm@10.32.1
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.json ./
 COPY src src
 RUN pnpm build && pnpm prune --prod
 
-# node:22-bookworm-slim
-FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+# node:26-bookworm-slim
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
 ENV NODE_ENV=production PORT=8090
 WORKDIR /app
 # Owned by root and read-only to the node user, which runs the service.
