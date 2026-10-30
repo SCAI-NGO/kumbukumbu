@@ -25,12 +25,13 @@ public sealed class RequestCaller : ICaller
 
     private RequestCaller(
         CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null, DateTime? credentialReadAt = null,
-        bool device = false)
+        bool device = false, bool passwordWindowOpen = false)
     {
         Kind = kind;
         _human = kind == CallerKind.Session || device;
         UserKey = userKey;
         CredentialReadAt = credentialReadAt;
+        PasswordWindowOpen = passwordWindowOpen;
         User = user;
         Writer = writer;
         Credential = credential;
@@ -53,6 +54,11 @@ public sealed class RequestCaller : ICaller
     /// <summary>For a session only: when its password (or recovery key) was read, for checks against a later credentials change.</summary>
     internal DateTime? CredentialReadAt { get; }
 
+    /// <summary>For a session only: whether its normal window is open, so that actions which need the password lately
+    /// given go ahead (keep-me-signed-in design); always open for a normal session. False for every other kind of
+    /// caller: fails closed.</summary>
+    internal bool PasswordWindowOpen { get; }
+
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
@@ -65,8 +71,8 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, new FixedCredential(devToken), catalog);
 
-    internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, VaultCatalog catalog) =>
-        new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey, credentialReadAt);
+    internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog) =>
+        new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey, credentialReadAt, passwordWindowOpen: windowOpen);
 
     /// <summary>An API key, its vaults already opened: <see cref="CanWrite"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)

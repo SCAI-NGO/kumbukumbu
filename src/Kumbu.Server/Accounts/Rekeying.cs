@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
 
@@ -14,6 +15,9 @@ public sealed class Rekeying(
     TimeProvider time, ILogger<Rekeying> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
+
+    /// <summary>The users whose sessions resumed their vaults in this process (<see cref="ResumeOnce"/>).</summary>
+    private readonly ConcurrentDictionary<string, byte> _resumed = new(StringComparer.Ordinal);
 
     /// <summary>Runs before the revocations of <see cref="ReencryptAccountAsync"/> (tests make them fail).</summary>
     internal Func<Task>? RevokeFault { get; set; }
@@ -80,6 +84,15 @@ public sealed class Rekeying(
     /// must not depend on it, and a vault missed here is resumed by the next trigger.
     /// </summary>
     public void ResumePending(User user, byte[] userKey) => _ = ResumeAsync(user, userKey);
+
+    /// <summary>
+    /// <see cref="ResumePending"/> for a session's request, the first time per user and process: a session that outlived
+    /// a restart (a remembered one may not sign in for 30 days) resumes what the restart left, as a sign-in would.
+    /// </summary>
+    public void ResumeOnce(User user, byte[] userKey)
+    {
+        if (_resumed.TryAdd(user.Id, 0)) ResumePending(user, userKey);
+    }
 
     /// <summary>What <see cref="ResumePending"/> runs; every failure is logged here, none goes unobserved.</summary>
     internal async Task ResumeAsync(User user, byte[] userKey)

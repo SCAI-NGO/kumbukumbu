@@ -48,7 +48,7 @@ describe("a session that ends mid-use", () => {
     await waitFor(() => expect(path(router)).toBe("/notes/Arbeit/plan.md?line=4"));
     expect(await screen.findByRole("heading", { name: "plan" })).toBeInTheDocument();
     const body = await fetch.mock.calls.find(([r]) => r.method === "POST")![0].json();
-    expect(body).toEqual({ username: "ada", password: "correct horse battery" });
+    expect(body).toEqual({ username: "ada", password: "correct horse battery", remember: false });
   });
 
   it("doesn't take someone else signing in to the previous user's note", async () => {

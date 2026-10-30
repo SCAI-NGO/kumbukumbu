@@ -36,7 +36,7 @@ public sealed class BackgroundMetadata
 /// </summary>
 public sealed class CallerMiddleware(
     RequestDelegate next, IOptions<KumbuOptions> options, Sessions sessions, ApiKeys apiKeys, VaultCatalog catalog, WrongKeyLimiter wrongKeys,
-    Connections connections, OAuthTokens tokens)
+    Connections connections, OAuthTokens tokens, Rekeying rekeying)
 {
     public const string SessionCookie = "kumbu_session";
 
@@ -97,11 +97,15 @@ public sealed class CallerMiddleware(
             // Only the web app's API takes the cookie. MCP clients send bearer keys; a cookie on /mcp would let a
             // page on a sibling subdomain (same site, so SameSite=Strict doesn't stop it) post a blind no-cors
             // tools/call with the user's session.
-            caller = context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
-                     && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
-                         is var (user, userKey, readAt, _)
-                ? RequestCaller.ForSession(user, userKey, readAt, catalog)
-                : null;
+            if (context.Request.Cookies.TryGetValue(SessionCookie, out var secret)
+                && await sessions.ResolveAsync(secret, context.RequestAborted, touch: context.GetEndpoint()?.Metadata.GetMetadata<BackgroundMetadata>() is null)
+                    is var (user, userKey, readAt, windowOpen))
+            {
+                caller = RequestCaller.ForSession(user, userKey, readAt, windowOpen, catalog);
+                // A remembered session may see no sign-in for 30 days, so its first request in this process resumes
+                // what a sign-in would.
+                rekeying.ResumeOnce(user, userKey);
+            }
         }
 
         if (caller is null)

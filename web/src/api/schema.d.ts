@@ -464,6 +464,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ConfirmPasswordRequest"];
+                };
+            };
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/password": {
         parameters: {
             query?: never;
@@ -6440,7 +6513,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
-            lastSignInAt: null | string;
+            lastActiveAt: null | string;
             /** Format: int32 */
             vaults: number | string;
             /** Format: int64 */
@@ -6544,6 +6617,9 @@ export interface components {
             archivable: boolean;
             needsReason: boolean;
             cards: components["schemas"]["CardView"][];
+        };
+        ConfirmPasswordRequest: {
+            password: string;
         };
         ConflictView: {
             error: string;
@@ -6939,6 +7015,7 @@ export interface components {
             user: components["schemas"]["UserView"];
             /** Format: date-time */
             previousSignInAt: null | string;
+            passwordWindowOpen: boolean;
         };
         SetConnectionVaultsRequest: {
             vaults: {
@@ -6951,6 +7028,8 @@ export interface components {
         SignInRequest: {
             username: string;
             password: string;
+            /** @default false */
+            remember: boolean;
         };
         SkippedView: {
             path: string;

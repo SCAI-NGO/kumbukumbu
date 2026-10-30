@@ -17,7 +17,8 @@ interface SessionState {
   previousUser: string | null;
   /** Signed out on purpose in this tab, until the next sign-in: a 401 then is that sign-out, not a lost session. */
   signedOut: boolean;
-  signedIn(view: SessionView): void;
+  /** What the store keeps of a session view: the join answers without the window flag. */
+  signedIn(view: Pick<SessionView, "user" | "previousSignInAt">): void;
   /** The user signed out: everything is forgotten, and the requests of the page being left may answer 401. */
   signOut(): void;
   /** `notice` replaces the usual "your session has ended" for an end the user caused, such as a new password. */

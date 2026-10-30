@@ -5,9 +5,10 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
-/// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.</summary>
+/// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.
+/// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).</summary>
 public sealed record UserSummary(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastSignInAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
 
 /// <summary>
 /// The admin's tools (accounts design, "Admin"): the user list, deactivating and reactivating, and roles. Every

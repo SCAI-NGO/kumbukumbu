@@ -168,15 +168,18 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
 
     /// <summary>
     /// Opens the normal window of a remembered session again, with both its clocks from now; a normal session's
-    /// window is always open, so nothing is written for one. The caller has verified the password.
+    /// window is always open, so nothing is written for one. Callers have resolved the session of
+    /// <paramref name="secret"/> for this request and verified the user's password; the filter still matches only a
+    /// remembered slot within both its limits, so a session that lapsed in between isn't brought back.
     /// </summary>
     public async Task OpenWindowAsync(string secret, CancellationToken ct)
     {
         if (Decode(secret) is not { } bytes) return;
         var lookup = Lookup(bytes);
         var now = Now;
+        var idleSince = now - RememberedIdleTimeout;
         await Slots.UpdateOneAsync(
-            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.Remembered,
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.Remembered && s.ExpiresAt > now && s.LastUsedAt >= idleSince,
             Builders<UserSlotDocument>.Update.Set(s => s.ConfirmedAt, now).Set(s => s.WindowUsedAt, now).Set(s => s.LastUsedAt, now),
             cancellationToken: ct);
     }

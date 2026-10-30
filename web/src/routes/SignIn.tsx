@@ -29,7 +29,7 @@ export default function SignIn() {
   const [password, setPassword] = useState("");
 
   const signIn = useMutation({
-    mutationFn: () => call(api.POST("/api/session", { body: { username, password } })),
+    mutationFn: () => call(api.POST("/api/session", { body: { username, password, remember: false } })),
     onSuccess: (view) => {
       // Nothing cached from an earlier session (maybe another user's) outlives this sign-in.
       queryClient.clear();

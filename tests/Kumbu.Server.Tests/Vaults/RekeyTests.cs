@@ -1083,7 +1083,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Contains((await Catalog().OpenForUserAsync(a.User.Id, a.Key, Ct)).Select(v => (v.Name, v.Pending)), v => v == ("Arbeit", true));
         Assert.Equal([id], await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
         // The key and connection lists and the consent page name it too.
-        var caller = Kumbu.Server.Auth.RequestCaller.ForSession(a.User, a.Key, a.ReadAt, Catalog());
+        var caller = Kumbu.Server.Auth.RequestCaller.ForSession(a.User, a.Key, a.ReadAt, windowOpen: true, Catalog());
         Assert.Equal("Arbeit", (await Kumbu.Server.Api.AccountApi.VaultNamesAsync(caller, Ct))[id]);
 
         // Every single-vault path refuses it.

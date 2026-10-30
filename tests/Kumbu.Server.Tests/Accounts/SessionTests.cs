@@ -494,6 +494,18 @@ public sealed class SessionTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task Opening_the_window_of_a_session_idle_for_more_than_seven_days_writes_nothing()
+    {
+        var (_, secret) = await RememberedAsync();
+        var before = await RawSlotAsync();
+        _time.Advance(TimeSpan.FromDays(7) + TimeSpan.FromMinutes(1));
+
+        await Sessions().OpenWindowAsync(secret, Ct);
+
+        Assert.Equal(before, await RawSlotAsync());
+    }
+
+    [Fact]
     public async Task Background_requests_move_no_clock_of_a_remembered_session()
     {
         var started = Now;

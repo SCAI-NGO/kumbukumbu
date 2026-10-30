@@ -69,7 +69,7 @@ describe("api client", () => {
   });
 
   it.each([
-    ["POST /api/session", () => api.POST("/api/session", { body: { username: "ada", password: "x" } })],
+    ["POST /api/session", () => api.POST("/api/session", { body: { username: "ada", password: "x", remember: false } })],
     ["POST /api/join", () => api.POST("/api/join", { body: { code: "c", username: "ada", password: "x" } })],
     ["POST /api/recover", () => api.POST("/api/recover", { body: { username: "ada", recoveryKey: "k", newPassword: "x" } })],
     ["POST /api/invitations/peek", () => api.POST("/api/invitations/peek", { body: { code: "c" } })],
@@ -83,7 +83,7 @@ describe("api client", () => {
 
   it("call() returns the data or throws the server's sentence with the status", async () => {
     fakeApi({ "POST /api/session": () => json(429, { error: "Too many attempts; try again in a minute." }) });
-    const error = await call(api.POST("/api/session", { body: { username: "ada", password: "x" } })).catch((e) => e);
+    const error = await call(api.POST("/api/session", { body: { username: "ada", password: "x", remember: false } })).catch((e) => e);
     expect(error).toBeInstanceOf(HttpError);
     expect(error.status).toBe(429);
     expect(error.message).toBe("Too many attempts; try again in a minute.");
