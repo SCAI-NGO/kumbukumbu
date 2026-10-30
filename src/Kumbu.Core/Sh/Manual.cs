@@ -10,9 +10,11 @@ public static class Manual
           ls [path]                       list a directory (directories end with '/'); no path lists the vaults
           cat <path>[#section]            print a note or one section; its version token comes as a separate block
           outline <path>                  the headings of a note, with line ranges and sizes
-          rg [options] <regex> [path...]  search notes, prints path:line:text; no path searches every vault
+          rg [options] <regex> [path...]  search notes and PDF text, prints path:line:text; no path searches every vault
           rg --files [path...]            list note paths; find a note by name: rg --files | rg -i kumbu
-          semsearch <query> [path]        ranked search by words and meaning; finds the best sections
+          semsearch <query> [path]        ranked search by words and meaning; finds the best sections and PDF pages
+          img <path>                      look at an image attachment, whole or a part of it
+          pdf <path> [pages]              read a PDF page by page: text, rendered pages, a part of one
           links <path>                    the links of a note ([[wikilinks]], [text](note.md)) and where they lead
           backlinks <path>                the notes that link to a note, as path:line:text
           tags [tag] [path]               the tags below a path with counts; with a tag, the notes that carry it
@@ -31,13 +33,14 @@ public static class Manual
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)
+          uname [-a|-r]                   the system: Kumbukumbu, and the server's version
           help [command]                  options and examples of a command
 
-        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, rg and semsearch skip them (help attachments).
+        Attachments: vaults also hold images and PDFs; ls lists them, cat describes one, img shows an image, pdf reads a PDF page by page, rg and semsearch find text in PDFs, not in scans, and semsearch by meaning only (help attachments).
         Which search: rg for exact words or a regex in note text (a note's title is often only its file name: rg --files | rg -i name); semsearch for a question or topic in your own words, or in another language.
         Tags: notes may carry #tags (Obsidian's, nested as #project/kumbu); when the user names one, or a topic spans many projects, narrow with rg --tag and semsearch --tag (several: all of them).
         Earlier versions: cat, outline, links, head, tail, wc, sort and rg on one note take --version <token>.
-        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints).
+        Checkpoints: ls, cat, rg and the other readers take --checkpoint <name>; diff and restore too (help checkpoints). rg searches notes only there, not PDFs.
         To change notes use the 'write', 'edit' and 'replace' tools, never this shell: content does not go through sh.
         Pipes: cat /Work/plan.md | rg -n TODO, rg -l Hecate | head -5, ls /Work | wc -l.
         '|' is the only operator: no redirection, &&, ;, $() or globbing. Right of a pipe: head, tail, wc, sort, rg.

@@ -103,6 +103,17 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary><see cref="Blobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
     private IMongoCollection<SealedDocument> BlobsByVault { get; } = db.GetCollection<SealedDocument>("blobs");
 
+    /// <summary>The analyses of PDFs, in parts under their blob's id (<see cref="Attachments.PdfAnalyses"/>); they go with the blob.</summary>
+    internal IMongoCollection<PdfAnalysisDocument> PdfParts { get; } = db.GetCollection<PdfAnalysisDocument>("pdf_analyses");
+
+    /// <summary>The PDFs' blobs waiting for an analysis (<see cref="Attachments.PdfAnalysisRunner"/>).</summary>
+    internal IMongoCollection<PdfJobDocument> PdfJobs { get; } = db.GetCollection<PdfJobDocument>("pdf_jobs");
+
+    /// <summary><see cref="PdfParts"/> and <see cref="PdfJobs"/> for what reads only the <c>vault</c> field (<see cref="ContentCollections"/>).</summary>
+    private IMongoCollection<SealedDocument> PdfPartsByVault { get; } = db.GetCollection<SealedDocument>("pdf_analyses");
+
+    private IMongoCollection<SealedDocument> PdfJobsByVault { get; } = db.GetCollection<SealedDocument>("pdf_jobs");
+
     internal DateTime Now => time.GetUtcNow().UtcDateTime;
 
     /// <summary>A session for one transaction over several documents.</summary>
@@ -530,12 +541,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The collections that hold a vault's documents (under their <c>vault</c> field), for storage figures.</summary>
     internal IEnumerable<IMongoCollection<SealedDocument>> ContentCollections =>
-        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault];
+        [Notes, Trash, Moves, Embeddings, Checkpoints, CheckpointTexts, Attachments, AttachmentTrash, BlobsByVault, PdfPartsByVault, PdfJobsByVault];
 
     /// <summary>
     /// Deletes vaults for good: the vault documents, every slot on them (the owner's, API keys', the dev token's,
     /// recovery) and every document they hold (notes with their history, trash, moves, embeddings, checkpoints and
-    /// their texts, attachments with their trash and blobs), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
+    /// their texts, attachments with their trash, blobs and the analyses and jobs of PDFs), in one transaction together with <paramref name="alsoDelete"/>, which may throw to abort it all.
     /// <para>
     /// Nothing may bring a deleted vault back or write for it afterwards. The ids are tombstoned first
     /// (<see cref="IsDeleted"/>), and an embedding of the vault under way is cancelled (<see cref="InterruptToken"/>):
@@ -912,6 +923,32 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>How many vaults are unlocked now.</summary>
     public int UnlockedCount => _open.Count;
 
+    /// <summary>The unlocked vaults that may be written and indexed now (<see cref="MayIndex"/>).</summary>
+    internal IReadOnlyList<UnlockedVault> UnlockedVaults => [.. _open.Values.Where(MayIndex)];
+
+    /// <summary>
+    /// A blob's bytes, read from MongoDB and opened; null if the vault doesn't hold it, <see cref="VaultUnavailableException"/>
+    /// if it doesn't open (changed or damaged outside Kumbu²). The read and the decryption take one of the server's
+    /// <see cref="FileReads"/> slots, waiting for one if all are taken; the slot goes back before the bytes are returned.
+    /// </summary>
+    internal async Task<byte[]?> ReadBlobAsync(UnlockedVault vault, byte[] blobId, CancellationToken ct)
+    {
+        await FileReads.WaitAsync(ct);
+        try
+        {
+            var doc = await Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, vault.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, blobId)).FirstOrDefaultAsync(ct);
+            return doc is null ? null : vault.OpenBlob(doc);
+        }
+        catch (Exception e) when (e is CryptographicException or InvalidDataException)
+        {
+            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
+        }
+        finally
+        {
+            FileReads.Release();
+        }
+    }
+
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => UnlockedCount;
 
@@ -1190,6 +1227,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<BlobDocument>(EncryptedNoteStore.BlobTimeIndex),
             ],
             ct);
+        await PdfParts.Indexes.CreateOneAsync(
+            new CreateIndexModel<PdfAnalysisDocument>(
+                Builders<PdfAnalysisDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId).Ascending(d => d.Part), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
+        await PdfJobs.Indexes.CreateOneAsync(
+            new CreateIndexModel<PdfJobDocument>(Builders<PdfJobDocument>.IndexKeys.Ascending(d => d.Vault).Ascending(d => d.BlobId), new CreateIndexOptions { Unique = true }),
+            cancellationToken: ct);
         await Slots.Indexes.CreateManyAsync(
             [
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.Lookup)),

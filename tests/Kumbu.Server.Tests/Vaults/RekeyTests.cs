@@ -936,6 +936,65 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task An_interrupted_rekeying_of_a_pdf_analysis_resumes_and_it_opens_under_the_new_key_and_id()
+    {
+        var a = await AccountAsync("Arbeit");
+        var id = a.Id("Arbeit");
+        var pdf = "%PDF-1.7 analysed before the re-keying"u8.ToArray();
+        var attachment = await AttachAsync(Store(a), "/Arbeit/paper.pdf", pdf);
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var texts = Enumerable.Range(1, 3).Select(n => $"Seite {n} " + new string('x', 600_000)).ToList();
+        var book = new Kumbu.Server.Attachments.SidecarAnalysis(
+            new PdfAnalysis(Kumbu.Server.Attachments.PdfAnalyses.Analyser, 3, 3, null, null,
+                [.. Enumerable.Range(1, 3).Select(n => new PdfPage(n, 595, 842, 0, PageType.Text, 600_000, 0.5, 0, 0, 0, []))]),
+            texts);
+        var analyses = new Kumbu.Server.Attachments.PdfAnalyses(Catalog(), NullLogger<Kumbu.Server.Attachments.PdfAnalyses>.Instance);
+        Assert.NotNull(await analyses.StoreAsync(vault, Convert.FromBase64String(attachment.Current.BlobId), book, Ct));
+        var parts = Raw("pdf_analyses");
+        var count = (int)await parts.CountDocumentsAsync(new BsonDocument("vault", id), cancellationToken: Ct);
+        Assert.True(count >= 3, $"{count} parts");
+        var oldKey = await VaultKeyAsync(a.Key, id);
+        // One document a batch: the blob's batch, then the first part of the analysis, then the crash.
+        Catalog().BatchDocuments = 1;
+        var batches = 0;
+        Catalog().RekeyFaultAt = p => p == "after-batch" && ++batches == 2 ? throw new InvalidOperationException("crash inside the analysis") : Task.CompletedTask;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
+
+        var newKey = await VaultKeyAsync(a.Key, id, SlotDocument.UserNext);
+        int Opening(byte[] key, IEnumerable<PdfAnalysisDocument> docs) => docs.Count(d =>
+        {
+            try
+            {
+                new UnlockedVault(id, "", key, Now, new VaultLocks()).OpenPdfAnalysis<JsonElement>(d);
+                return true;
+            }
+            catch (CryptographicException)
+            {
+                return false;
+            }
+        });
+        var midway = await _db.GetCollection<PdfAnalysisDocument>("pdf_analyses").Find(d => d.Vault == id).ToListAsync(Ct);
+        Assert.Equal((1, count - 1), (Opening(newKey, midway), Opening(oldKey, midway)));
+
+        // Resumed by another process, as after a restart.
+        Catalog().RekeyFaultAt = null;
+        var other = NewCatalog();
+        await other.RekeyAsync(id, a.User.Id, a.Key, Ct);
+
+        var store = Store(a, other);
+        var current = (await store.GetAttachmentAsync(P("/Arbeit/paper.pdf"), Ct))!.Current;
+        Assert.NotEqual(attachment.Current.BlobId, current.BlobId);
+        var after = await _db.GetCollection<PdfAnalysisDocument>("pdf_analyses").Find(d => d.Vault == id).ToListAsync(Ct);
+        Assert.Equal(count, after.Count);
+        Assert.All(after, d => Assert.Equal(current.BlobId, Convert.ToBase64String(d.BlobId)));
+        Assert.Equal((count, 0), (Opening(newKey, after), Opening(oldKey, after)));
+        var reopened = (await store.UnlockedVaultsAsync(Ct)).Single();
+        var read = new Kumbu.Server.Attachments.PdfAnalyses(other, NullLogger<Kumbu.Server.Attachments.PdfAnalyses>.Instance);
+        Assert.Equal(texts, await read.TextAsync(reopened, Convert.FromBase64String(current.BlobId), 1, 3, Ct));
+    }
+
+    [Fact]
     public async Task Rekeys_2000_notes_in_batches_within_the_limits()
     {
         var a = await AccountAsync("Arbeit");

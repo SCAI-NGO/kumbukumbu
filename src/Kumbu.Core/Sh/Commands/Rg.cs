@@ -11,9 +11,10 @@ namespace Kumbu.Core.Sh.Commands;
 
 /// <summary>
 /// Plain, unranked regex search in the style of ripgrep: over notes when it starts the pipeline,
-/// over the piped lines when it stands right of a pipe.
+/// over the piped lines when it stands right of a pipe. With <c>pixels</c> it also reads the stored text of PDFs,
+/// page by page, after the notes.
 /// </summary>
-public sealed class Rg(INoteReader notes) : ICommand
+public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : ICommand
 {
     // The engine is linear in the input, so the timeout is a backstop, not the protection.
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
@@ -31,7 +32,7 @@ public sealed class Rg(INoteReader notes) : ICommand
 
     public string Usage => "rg [options] <regex> [path...]";
 
-    public string Summary => "search notes (prints path:line:text); --files lists note paths";
+    public string Summary => "search notes and PDF text (prints path:line:text); --files lists note paths";
 
     public string Help => """
         rg [options] <regex> [path...]
@@ -40,7 +41,12 @@ public sealed class Rg(INoteReader notes) : ICommand
           print as path-line-text, and '--' separates groups that are not adjacent.
           Right of a pipe, rg filters the piped lines instead and prints them without a prefix.
           If nothing matches in the text but note names do, a hint line lists them (not when piped).
-          Images and PDFs are not searched, and --files does not list them: rg reads notes only
+          PDFs below the paths are searched after the notes, in the text stored when they were uploaded,
+          page by page: a match prints /Work/paper.pdf:p7: text (with -n the line within the page:
+          /Work/paper.pdf:p7:12: text), context lines /Work/paper.pdf:p7- text, and context stays within
+          a page. -l lists a PDF once, -c and -m count per PDF. Pages without a text layer (scans) and PDFs
+          not analysed yet have no text to find; look at pages with 'pdf'. PDFs are searched in the current
+          state only, not with --checkpoint; --files and --tag leave them out. Images are not searched
           ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
@@ -49,11 +55,11 @@ public sealed class Rg(INoteReader notes) : ICommand
           -F, --fixed-strings        the pattern is a literal string, not a regex
           -w, --word-regexp          match whole words only
           -v, --invert-match         select lines that do not match
-          -l, --files-with-matches   print only the paths of notes with a match
-          -c, --count                print path:count per note (piped: one total)
-          -n, --line-number          show line numbers (default for notes; piped: off)
+          -l, --files-with-matches   print only the paths of notes and PDFs with a match
+          -c, --count                print path:count per note or PDF (piped: one total)
+          -n, --line-number          show line numbers (default for notes; piped: off; PDFs: off)
           -N, --no-line-number       hide line numbers
-          -m, --max-count N          at most N matching lines per note
+          -m, --max-count N          at most N matching lines per note or PDF
           -e, --regexp PATTERN       a pattern, for one that starts with '-'; repeat for several
           --version V                search an earlier version (from 'history') of the one note given
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
@@ -67,6 +73,7 @@ public sealed class Rg(INoteReader notes) : ICommand
           rg -n -C 2 'TODO|FIXME' /Work/projects
           rg --files | rg -i kumbu          find a note by name (e.g. for a [[wikilink]])
           rg -l '\[\[kumbu\]\]'              which notes link to kumbu
+          rg -n -i 'attention is' /Work/Papers   notes and PDFs below a folder
           rg --tag research -i capabilit /Work
           cat /Demo/welcome.md | rg -n '^#'
         """;
@@ -141,6 +148,7 @@ public sealed class Rg(INoteReader notes) : ICommand
     private async Task<ShellResult> SearchNotesAsync(Search search, Options options, IReadOnlyList<string> operands, IReadOnlyList<string> tags, CancellationToken ct)
     {
         var found = new Dictionary<VaultPath, Note>();
+        var documents = new Dictionary<VaultPath, AttachmentState>();
         var scope = VaultPath.Root;
         foreach (var operand in operands.Count == 0 ? ["/"] : operands)
         {
@@ -153,12 +161,19 @@ public sealed class Rg(INoteReader notes) : ICommand
             if (operands.Count == 1) scope = path;
 
             var below = await notes.ReadNotesUnderAsync(path, ct);
-            if (below.Count == 0 && !path.IsRoot)
+            var pdfs = pixels is null ? [] : (await StoreAttachments.UnderAsync(notes, path, ct)).Where(a => AttachmentText.IsPdf(a.Current)).ToList();
+            if (below.Count == 0 && pdfs.Count == 0 && !path.IsRoot)
             {
                 var content = await notes.ReadAsync(path, ct);
-                if (content is null && await StoreAttachments.GetAsync(notes, path, ct) is not null)
+                if (content is null && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
                 {
-                    return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes only");
+                    if (pixels is null || !AttachmentText.IsPdf(attachment.Current))
+                    {
+                        return ShellResult.Error($"rg: {path.Value} is an attachment; rg searches the text of notes only");
+                    }
+
+                    documents.TryAdd(path, attachment.Current);
+                    continue;
                 }
 
                 if (content is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
@@ -166,6 +181,7 @@ public sealed class Rg(INoteReader notes) : ICommand
             }
 
             foreach (var note in below) found.TryAdd(note.Path, note);
+            foreach (var pdf in pdfs) documents.TryAdd(pdf.Path, pdf.Current);
         }
 
         IReadOnlyList<Note> searched = [.. found.Values];
@@ -176,7 +192,9 @@ public sealed class Rg(INoteReader notes) : ICommand
             searched = carrying;
         }
 
-        var result = SearchContents(search, options, searched);
+        var lines = NoteLines(search, options, searched);
+        if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, ct);
+        var result = ShellResult.Ok(Lines.Join(lines));
         return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, searched.Select(n => n.Path)) };
     }
 
@@ -209,7 +227,10 @@ public sealed class Rg(INoteReader notes) : ICommand
         return pattern.Contains('\'') ? $"\"{pattern}\"" : $"'{pattern}'";
     }
 
-    private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found)
+    private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found) =>
+        ShellResult.Ok(Lines.Join(NoteLines(search, options, found)));
+
+    private static List<string> NoteLines(Search search, Options options, IEnumerable<Note> found)
     {
         var lineNumbers = !options.Has("no-line-number");
         var output = new List<string>();
@@ -230,7 +251,83 @@ public sealed class Rg(INoteReader notes) : ICommand
             }
         }
 
-        return ShellResult.Ok(Lines.Join(output));
+        return output;
+    }
+
+    private const int PagesAtATime = 100;
+
+    /// <summary>
+    /// Appends the matches in the stored text of PDFs, one at a time and a hundred pages at a time, and stops reading
+    /// once the output is past what the shell would show anyway. A PDF without a stored analysis, or whose analysis
+    /// failed, has no text to find: it is skipped, never analysed here.
+    /// </summary>
+    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, CancellationToken ct)
+    {
+        var lineNumbers = options.Has("line-number") && !options.Has("no-line-number");
+        var size = output.Sum(l => l.Length + 1);
+        var counted = output.Count;
+        foreach (var (path, state) in documents.OrderBy(d => d.Key.Value, TextOrder.Default))
+        {
+            if (size > OutputLimit.MaxChars) return;
+
+            var name = path.Value;
+            var total = 0;
+            try
+            {
+                var analysis = await pixels!.AnalysisAsync(path, state, runIfPending: false, ct);
+                if (analysis is null) continue;
+
+                for (var first = 1; first <= analysis.AnalysedPages && size <= OutputLimit.MaxChars && search.Remaining(total) != 0; first += PagesAtATime)
+                {
+                    var last = Math.Min(first + PagesAtATime - 1, analysis.AnalysedPages);
+                    if (await pixels.PageTextAsync(path, state, first, last, ct) is not { } texts) break;
+
+                    for (var i = 0; i < texts.Count; i++)
+                    {
+                        if (texts[i].Length == 0) continue;
+                        var page = first + i;
+                        var lines = Lines.Split(texts[i]);
+                        var matches = search.Matches(lines, search.Remaining(total));
+                        if (matches.Count == 0) continue;
+
+                        total += matches.Count;
+                        if (options.Has("files-with-matches"))
+                        {
+                            output.Add(name);
+                            break;
+                        }
+
+                        if (!options.Has("count"))
+                        {
+                            if (search.HasContext && output.Count > 0) output.Add("--");
+                            output.AddRange(search.Render(lines, matches, (n, sep, text) =>
+                                lineNumbers ? $"{name}:p{page}{sep}{n}{sep} {text}" : $"{name}:p{page}{sep} {text}"));
+                        }
+
+                        size += Grown();
+                        if (search.Remaining(total) == 0 || size > OutputLimit.MaxChars) break;
+                    }
+
+                    if (options.Has("files-with-matches") && total > 0) break;
+                }
+            }
+            catch (Exception e) when (e is not (OperationCanceledException or RegexMatchTimeoutException))
+            {
+                // Whatever went wrong with this PDF's text, the notes, the other PDFs and its matches so far still count;
+                // a search that took too long is rg's error, not this PDF's.
+            }
+
+            if (options.Has("count") && total > 0) output.Add($"{name}:{total}");
+            size += Grown();
+        }
+
+        // The size of the lines added since the last look.
+        int Grown()
+        {
+            var added = output.Skip(counted).Sum(l => l.Length + 1);
+            counted = output.Count;
+            return added;
+        }
     }
 
     private static ShellResult SearchInput(Search search, Options options, IReadOnlyList<string> operands, string input)
@@ -349,10 +446,15 @@ public sealed class Rg(INoteReader notes) : ICommand
         public bool HasContext => before > 0 || after > 0;
 
         /// <summary>Indexes of the selected lines, at most <c>max</c> of them.</summary>
-        public List<int> Matches(IReadOnlyList<string> lines)
+        public List<int> Matches(IReadOnlyList<string> lines) => Matches(lines, max);
+
+        /// <summary>What -m still allows after <paramref name="found"/> matching lines; null without -m.</summary>
+        public int? Remaining(int found) => max is null ? null : Math.Max(0, max.Value - found);
+
+        public List<int> Matches(IReadOnlyList<string> lines, int? limit)
         {
             var result = new List<int>();
-            for (var i = 0; i < lines.Count && (max is null || result.Count < max); i++)
+            for (var i = 0; i < lines.Count && (limit is null || result.Count < limit); i++)
             {
                 if (regex.IsMatch(lines[i]) != invert) result.Add(i);
             }

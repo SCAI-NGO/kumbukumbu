@@ -6,7 +6,7 @@ using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class Cat(INoteReader notes) : ICommand
+public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null) : ICommand
 {
     public string Name => "cat";
 
@@ -24,7 +24,9 @@ public sealed class Cat(INoteReader notes) : ICommand
           --version V   print an earlier version from 'history <path>' instead (no version token: an
                         earlier version can be compared with 'diff' and brought back with 'restore')
           An attachment (an image or a PDF) prints one line instead of its bytes: its kind, pixel size
-          and file size ('cat /Work/shot.png' → shot.png: image (PNG), 1440×3120, 412 KB).
+          and file size ('cat /Work/shot.png' → shot.png: image (PNG), 1440×3120, 412 KB); for a PDF
+          its pages and their types (paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB).
+          'help img' and 'help pdf' say how to look at them.
           A whole note too long for one call (about 8000 tokens) prints its outline instead; read it in
           parts with cat "<path>#Section", head -n 40 <path> or rg -n. In a pipeline, cat passes the
           whole note on (cat <path> | tail -n 50).
@@ -46,7 +48,7 @@ public sealed class Cat(INoteReader notes) : ICommand
         var (pathText, _) = SectionAddress.Split(rest[0]);
         if (VaultPath.TryParse(pathText, out var path) && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
         {
-            return Describe(path, attachment, version);
+            return await DescribeAsync(path, attachment, version, ct);
         }
 
         // x.png#Layout: a section of an attachment, which has none (a '#' may also be part of a name, as in a#b.png).
@@ -61,7 +63,7 @@ public sealed class Cat(INoteReader notes) : ICommand
         return await CommandArgs.ReadAddressAsync(Name, notes, rest[0], ct, version);
     }
 
-    private static ShellResult Describe(VaultPath path, StoredAttachment attachment, string? version)
+    private async Task<ShellResult> DescribeAsync(VaultPath path, StoredAttachment attachment, string? version, CancellationToken ct)
     {
         var state = attachment.Current;
         if (version is not null)
@@ -76,7 +78,17 @@ public sealed class Cat(INoteReader notes) : ICommand
         }
 
         // No version block: a text tool can't write an attachment, so there is nothing to pass it to.
-        return ShellResult.Ok(AttachmentText.Line(path.Name, state));
+        if (pixels is null || !AttachmentText.IsPdf(state)) return ShellResult.Ok(AttachmentText.Line(path.Name, state));
+
+        // Only a stored analysis: cat is the cheap look, running one is for pdf.
+        try
+        {
+            return ShellResult.Ok(AttachmentText.PdfLine(path.Name, state, await pixels.AnalysisAsync(path, state, runIfPending: false, ct), null));
+        }
+        catch (PixelsUnavailableException e)
+        {
+            return ShellResult.Ok(AttachmentText.PdfLine(path.Name, state, null, e.Message));
+        }
     }
 
     /// <summary>

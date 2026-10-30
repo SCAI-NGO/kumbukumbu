@@ -15,7 +15,9 @@ internal static class ToolResult
     /// </summary>
     public static CallToolResult From(ShellResult result)
     {
-        List<ContentBlock> content = [new TextContentBlock { Text = result.Output }];
+        List<ContentBlock> content = result.Parts is { } parts
+            ? [.. parts.Select(Block)]
+            : [new TextContentBlock { Text = result.Output }];
         if (result.Version is { } version)
         {
             // Starts on its own line: some clients join the blocks without a separator.
@@ -24,6 +26,14 @@ internal static class ToolResult
 
         return new CallToolResult { IsError = result.IsError, Content = content };
     }
+
+    // FromBytes keeps the bytes and encodes them for Data (base64 text on the wire).
+    private static ContentBlock Block(ShellPart part) => part switch
+    {
+        TextPart text => new TextContentBlock { Text = text.Text },
+        ImagePart image => ImageContentBlock.FromBytes(image.Data, image.MediaType),
+        _ => throw new InvalidOperationException("unknown shell part"),
+    };
 
     /// <summary>Runs a tool body; vaults that can't be used at all become a tool error with the reason. Counts and times the call.</summary>
     public static async Task<CallToolResult> RunAsync(KumbuMetrics.Tool tool, Func<Task<ShellResult>> body)
@@ -66,6 +76,7 @@ internal static class ToolResult
                 ShellErrorKind.Refused => KumbuMetrics.ToolError.Refused,
                 ShellErrorKind.NotFound => KumbuMetrics.ToolError.NotFound,
                 ShellErrorKind.Conflict => KumbuMetrics.ToolError.Conflict,
+                ShellErrorKind.Unavailable => KumbuMetrics.ToolError.Unavailable,
                 _ => KumbuMetrics.ToolError.Other,
             });
         }

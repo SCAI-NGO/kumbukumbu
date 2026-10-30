@@ -49,29 +49,27 @@ public sealed class Help(IReadOnlyDictionary<string, ICommand> commands) : IComm
               What works on an attachment:
                 ls         lists it with its kind and size, an image with its pixel size:
                              shot.png  image 1440×3120 412 KB
-                cat        prints one line instead of bytes: shot.png: image (PNG), 1440×3120, 412 KB
+                cat        prints one line instead of bytes: shot.png: image (PNG), 1440×3120, 412 KB, and for a PDF
+                             paper.pdf: PDF, 12 pages (1-3 text, 4 mixed, 5-12 text), 2.1 MB
                 mv         moves or renames it (a folder move takes it along); links and embeds follow
                 rm         moves it to the trash ({NoteWriter.TrashRetention.Days} days) and says which links now lead nowhere
                 trash, restore, history   as for notes: an earlier version, or one from the trash, comes back
                 links, backlinks          backlinks lists the notes that link to it or embed it
-              What doesn't: rg and semsearch skip attachments (they search the text of notes only, and
-              'rg --files' lists notes only); head, tail, wc, sort and outline read notes, not attachments.
+                img        shows an image to the model, whole or a part of it ('help img')
+                pdf        reads a PDF page by page: its text, pages as images, a part of a page ('help pdf')
+                rg         searches the text of PDFs (not scans) as well as notes: /Work/paper.pdf:p7: text
+                semsearch  ranks the pages of PDFs (not scans) by meaning among the sections of notes:
+                             1. /Work/paper.pdf p7  score 0.61
+              What doesn't: semsearch --words and --tag find notes only, 'rg --files' lists notes only;
+              neither rg nor semsearch searches images, and rg not PDFs in a checkpoint; head, tail,
+              wc, sort and outline read notes, not attachments.
               A checkpoint holds the attachments too (see 'help checkpoints').
 
               ls /Work/Screens
               cat /Work/Screens/shot.png
+              pdf info /Work/Papers/paper.pdf
               backlinks /Work/Screens/shot.png
               mv /Work/Screens/shot.png /Work/archive/
-            """,
-        ["img"] = """
-            img
-              Coming in 0.2.5: looking at an image from the shell. Until then, 'cat <path>' says what an
-              image is (format, pixel size, file size); see 'help attachments'.
-            """,
-        ["pdf"] = """
-            pdf
-              Coming in 0.2.5: reading a PDF from the shell. Until then, 'cat <path>' says what a PDF
-              is (its size); see 'help attachments'.
             """,
     };
 

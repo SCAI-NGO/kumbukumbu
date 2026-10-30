@@ -222,3 +222,33 @@ Run it per client (claude.ai, Desktop, Claude Code, ChatGPT connector and Code M
 
 So run the test with the same picture as JPEG at about **50 KB, 200 KB and 1 MB** (same dimensions, different quality), and on Claude Code also with several images in one result. Record per client and step: the code read correctly, refused, or the result rejected, truncated or written to a file. The step at which a client fails tells whether it counts base64 characters or visual tokens, and gives v2.5 its server-side size target.
 
+
+### 6.1 Results, 2026-10-29 (first round)
+
+Server: `0.2.5-pre.1` (the first pre-release, `4fc2db9`) on the reference instance; Claude Code against a local stack with the CI images of `ea066c9` (the same `img`). Probes: 3000×2000 px JPEG (~3.2 MB) with a photo-like texture, so the steps reach their byte targets, and a fresh code per image in large digits on a white box. [M] marks what was measured here.
+
+| Client | `small` (768×512, ~91 KB) | `medium` (1341×894, ~239 KB) | `large` (2355×1570, ~1,000 KB) | Notes |
+|---|---|---|---|---|
+| Claude Code (2.1.312) | ✓ | ✓ | ✓ | inline and saved to `tool-results/mcp-kumbu-blob-….jpg`; `large` arrives "displayed at 2000x1333", with a factor for coordinates [M] |
+| claude.ai | ✓ | ✓ | ✓ | the baseline [M] |
+| Grok | – | ✓ | ✓ | chose `medium` by itself when no step was named, saying it was enough to read the codes [M] |
+| ChatGPT | ✓ | – | ✓ | the call shows as a "Bash" block; ChatGPT said the image was in `content_items`, not `content`, and that it read it after "adjusting" (see below) [M] |
+| Le Chat | ✗ | – | – | the chat fails with "Ein Fehler ist aufgetreten" already at `small`; the server log shows every `tools/call` completed without error [M] |
+
+What follows:
+
+- **Base64 does not count as text** on Claude Code (25,000-token limit) nor on claude.ai (~150,000 characters per result): `large` is ~1.37 million base64 characters and arrived whole on both. Neither client failed by size, so the steps and byte targets in `src/Kumbu.Core/Attachments/SizeSteps.cs` stay as they are. [M]
+- **The pixel budget binds on a 3:2 image** (`medium` 1341×894 = 1.2 MP, below the 1568 px edge), and `large` also met its byte target (quality lowered to fit 1 MB). [M]
+- **Claude Code scales `large` down to a 2000 px long edge** itself, so on Claude Code `large` beyond 2000 px costs bytes only. A crop read off the displayed image needs two conversions (displayed → delivered → original); Claude Code states its factor, our text block the original's size. [M]
+- **ChatGPT reads images now, at least through code.** This contradicts §2.6 (`{}` in connectors, "Image output is not supported" in Code Mode). The call ran as code, and the model picked the image out of the result itself; the UI shows no steps, so it is open whether the model saw the image or the sandbox read it with OCR. Large digits on white don't tell the two apart. [M, I]
+- **Le Chat cannot take an image part in a tool result**, whatever its size; nothing on our side to tune. Worth a report to Mistral. [M, I]
+- **Finding the connector is a separate question from seeing**: Le Chat first took "/probes" for a chat upload and only used Kumbu² when asked about the server. The server instructions speak of notes, not of images or attachments. [M] Not changed yet.
+
+Open for the next round:
+
+1. A probe that **OCR cannot solve** (e.g. coloured shapes: "what colour is the triangle, which corner holds the star?"), to tell seeing from reading, above all on ChatGPT; and ChatGPT's direct connector path versus the code path.
+2. **Small text** (screenshot-sized, ~14 px) at `medium`, then with `--crop`: do the steps keep details, not only pixels?
+3. **Several images in one result** on Claude Code (`pdf … --images=all`, four pages).
+4. Grok `small`; Claude Desktop, Cursor, VS Code, Codex not tested yet.
+5. Whether `help img` should mention that a client may scale the image again (crop coordinates).
+6. Uploading the probes through the Obsidian plugin: the attachment sync is merged in the plugin's repository but not released (0.1.1 keeps text only).

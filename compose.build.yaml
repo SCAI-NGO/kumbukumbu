@@ -2,3 +2,9 @@ services:
   kumbu:
     # Local development: build the image from this checkout instead of pulling the published one.
     build: .
+  pdf:
+    build:
+      context: pdf
+      # The licence and the notices the image carries come from the repository's root.
+      additional_contexts:
+        root: .

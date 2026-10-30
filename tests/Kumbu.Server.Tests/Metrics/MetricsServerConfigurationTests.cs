@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Server.Attachments;
 using Kumbu.Server.Metrics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server.Tests.Metrics;
@@ -17,7 +19,8 @@ public sealed class MetricsServerConfigurationTests
     {
         const string endpoint = "Kestrel__Endpoints__Main__Url";
         Environment.SetEnvironmentVariable(endpoint, "http://127.0.0.2:0");
-        var server = new MetricsServer(Options.Create(new KumbuOptions { Metrics = { Url = "http://127.0.0.1:0" } }));
+        var options = Options.Create(new KumbuOptions { Metrics = { Url = "http://127.0.0.1:0" } });
+        var server = new MetricsServer(options, new SidecarPeers(options, NullLogger<SidecarPeers>.Instance, TimeProvider.System));
         try
         {
             await server.StartAsync(TestContext.Current.CancellationToken);

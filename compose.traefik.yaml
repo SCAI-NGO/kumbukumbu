@@ -14,11 +14,12 @@
 #   doesn't pass on the X-Forwarded-* headers a client sends (no forwardedHeaders.trustedIPs here), so a client can't
 #   pick its address. Kumbu² trusts every peer the same way, though, so this holds only while Traefik is the one
 #   container on Kumbu²'s networks that takes requests from outside. The others there are MongoDB and, with
-#   compose.monitoring.yaml, Prometheus (Grafana is kept off them for this reason): they could still pick an address
-#   themselves, an accepted limit. Put no other container on Kumbu²'s networks.
+#   compose.monitoring.yaml, Prometheus (Grafana is kept off them for this reason; the PDF sidecar is refused by
+#   Kumbu²): they could still pick an address themselves, an accepted limit. Put no other container on its networks.
 # - Two networks: `proxy` (Traefik and Kumbu²) and the default one (Kumbu² and MongoDB), now internal. Traefik never
 #   sees MongoDB, and MongoDB has no way out. Kumbu² reaches the internet through `proxy` (model download, OAuth client
-#   metadata, external embedding providers).
+#   metadata, external embedding providers). The PDF sidecar stays on `pdf`, compose.yaml's internal network with
+#   Kumbu² alone, which this file leaves as it is.
 # - KUMBU_PUBLIC_URL is https://${KUMBU_HOST}; a KUMBU_PUBLIC_URL in .env is not used.
 #
 # Left as it is, on purpose: Strict-Transport-Security and the other security headers come from Kumbu² itself (with

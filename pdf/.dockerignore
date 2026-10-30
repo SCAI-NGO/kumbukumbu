@@ -1,0 +1,9 @@
+node_modules/
+dist/
+test/
+*.tsbuildinfo
+tsconfig.test.json
+vitest.config.ts
+Dockerfile
+.dockerignore
+vitest.setup.ts

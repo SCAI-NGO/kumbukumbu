@@ -12,6 +12,9 @@ public static class OutputLimit
     /// <summary>Cuts to <paramref name="maxChars"/> (plus the footer), for output that gets more text appended.</summary>
     public static ShellResult Apply(ShellResult result, int maxChars)
     {
+        // Parts are sized by the command that made them; a cut would drop an image or split a text from it.
+        if (result.Parts is not null) return result;
+
         var output = result.Output;
         if (output.Length <= maxChars) return result;
 

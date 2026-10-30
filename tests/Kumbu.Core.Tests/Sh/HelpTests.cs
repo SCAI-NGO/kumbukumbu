@@ -6,7 +6,7 @@ namespace Kumbu.Core.Tests.Sh;
 
 public class HelpTests
 {
-    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "rm", "trash", "help"];
+    private static readonly string[] Commands = ["ls", "cat", "outline", "rg", "links", "backlinks", "board", "head", "tail", "wc", "sort", "history", "restore", "mv", "rm", "trash", "uname", "help"];
 
     private static Task<ShellResult> Run(string line) => TestShell.Of().RunAsync(line, CancellationToken.None);
 
@@ -75,18 +75,24 @@ public class HelpTests
     }
 
     [Fact]
-    public async Task Help_lists_the_attachments_img_and_pdf_topics()
+    public async Task Help_lists_the_attachments_topic()
     {
         var topic = (await Run("help attachments")).Output;
         Assert.StartsWith("attachments", topic);
         Assert.Contains("15 MB each", topic);
         Assert.Contains("shot.png: image (PNG), 1440×3120, 412 KB", topic);
-        Assert.Contains("rg and semsearch skip attachments", topic);
+        Assert.Contains("semsearch  ranks the pages of PDFs (not scans) by meaning", topic);
+        Assert.Contains("semsearch --words and --tag find notes only", topic);
+        Assert.Contains("img        shows an image to the model", topic);
+        Assert.Contains("pdf        reads a PDF", topic);
+        // The search commands are items of the same list, their continuation under their description.
+        Assert.Contains("\n    pdf        reads a PDF", topic);
+        Assert.Contains("\n    rg         searches the text of PDFs", topic);
+        Assert.Contains("\n    semsearch  ranks the pages of PDFs", topic);
+        Assert.Contains("\n                 1. /Work/paper.pdf p7  score 0.61", topic);
 
-        Assert.StartsWith("img", (await Run("help img")).Output);
-        Assert.Contains("Coming in 0.2.5", (await Run("help img")).Output);
-        Assert.StartsWith("pdf", (await Run("help pdf")).Output);
-        Assert.Contains("Coming in 0.2.5", (await Run("help pdf")).Output);
+        // The stub is gone: a shell without the pixels has no pdf to explain.
+        Assert.Equal(ShellResult.Error("help: no such command: pdf — try 'help'"), await Run("help pdf"));
 
         Assert.Contains("'help attachments'", (await Run("help")).Output);
         Assert.Contains("help attachments", Manual.ToolDescription);

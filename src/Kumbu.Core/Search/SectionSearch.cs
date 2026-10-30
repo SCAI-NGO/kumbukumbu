@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sections;
@@ -20,7 +21,12 @@ public enum SearchMode
 
 /// <summary>A ranked section; <paramref name="Score"/> is null when it was ranked by words (BM25 scores say
 /// nothing outside their own search).</summary>
-public sealed record SectionHit(Chunk Chunk, double? Score);
+public sealed record SectionHit(Chunk Chunk, double? Score)
+{
+    /// <summary>For a page of a PDF: its number. <see cref="Chunk"/> then holds the PDF's path and no text (the
+    /// index has only the page's vector; its text is read for the output).</summary>
+    public int? Page { get; init; }
+}
 
 /// <param name="Semantic">The search by meaning, or null for <see cref="SearchMode.Words"/>.</param>
 /// <param name="FellBackToWords">Ranked by words because nothing had a cosine yet (first indexing, a model switch).</param>
@@ -39,9 +45,11 @@ public static class SectionSearch
     private const int SnippetLength = 160;
 
     /// <summary>Ranks the sections of <paramref name="notes"/> (the notes below <paramref name="scope"/>) and returns
-    /// the best <paramref name="max"/>; headings with nothing below them don't count.</summary>
+    /// the best <paramref name="max"/>; headings with nothing below them don't count. With <paramref name="pages"/>,
+    /// the pages of PDFs the index found by meaning rank among them, by their cosine alone (their text isn't at hand
+    /// for a word bonus); a search by words finds notes only.</summary>
     public static async Task<SectionSearchResult> RankAsync(
-        IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct)
+        IReadOnlyList<Note> notes, VaultPath scope, string query, SearchMode mode, int max, ISearchIndex index, CancellationToken ct, bool pages = false)
     {
         var chunks = notes.OrderBy(n => n.Path.Value, TextOrder.Default).SelectMany(Chunker.Split).ToList();
 
@@ -49,6 +57,7 @@ public static class SectionSearch
         SemanticResult? semantic = null;
         var fellBack = false;
         List<(Chunk Chunk, double? Score)> ranked;
+        var pageChunks = new Dictionary<Chunk, int>(ReferenceEqualityComparer.Instance);
         if (mode == SearchMode.Words) ranked = RankByWords(chunks, query);
         else
         {
@@ -60,6 +69,7 @@ public static class SectionSearch
                     ? (chunks, [])
                     : (chunks.Where(c => !wordsOnly.Contains(c.Path.Vault!)).ToList(), chunks.Where(c => wordsOnly.Contains(c.Path.Vault!)).ToList());
                 ranked = RankByMeaning(byMeaning, semantic, query, mode == SearchMode.Meaning);
+                if (pages) ranked = WithPages(ranked, semantic, pageChunks);
 
                 // Right after a model switch or on first indexing nothing has a cosine yet; the words still find something.
                 if (ranked.Count == 0 && semantic.Pending > 0 && mode != SearchMode.Meaning)
@@ -77,7 +87,8 @@ public static class SectionSearch
         }
 
         // A heading with nothing below it says little; it still ranks, but the next section takes its place.
-        var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max).Select(r => new SectionHit(r.Chunk, r.Score)).ToList();
+        var listed = ranked.Where(r => !IsHeadingOnly(r.Chunk)).Take(max)
+            .Select(r => new SectionHit(r.Chunk, r.Score) { Page = pageChunks.TryGetValue(r.Chunk, out var page) ? page : null }).ToList();
         return new SectionSearchResult(listed, semantic, fellBack);
     }
 
@@ -155,6 +166,25 @@ public static class SectionSearch
             .Select(c => (Chunk: c, Score: Fusion.Score(cosines[c.Key], terms, Bm25.Terms(c.EmbeddingText).ToHashSet())))
             .OrderByDescending(r => r.Score)
             .Select(r => (r.Chunk, (double?)r.Score))];
+    }
+
+    /// <summary>The pages of PDFs among the hits, best cosine per page, merged into <paramref name="ranked"/> by score;
+    /// a section goes first on a tie.</summary>
+    private static List<(Chunk, double?)> WithPages(List<(Chunk Chunk, double? Score)> ranked, SemanticResult semantic, Dictionary<Chunk, int> pageChunks)
+    {
+        var best = new Dictionary<(VaultPath, int), double>();
+        foreach (var hit in semantic.Hits)
+        {
+            if (!AttachmentFormat.IsPdf(hit.Path)) continue;
+            best[(hit.Path, hit.StartLine)] = Math.Max(best.GetValueOrDefault((hit.Path, hit.StartLine), double.MinValue), hit.Score);
+        }
+
+        if (best.Count == 0) return ranked;
+        foreach (var ((path, page), _) in best) pageChunks[new Chunk(path, "", page, page, "", "")] = page;
+        var found = pageChunks.Select(p => (Chunk: p.Key, Score: (double?)best[(p.Key.Path, p.Value)]))
+            .OrderBy(p => p.Chunk.Path.Value, TextOrder.Default).ThenBy(p => p.Chunk.StartLine);
+        return [.. ranked.Select(r => (r.Chunk, r.Score, List: 0)).Concat(found.Select(p => (p.Chunk, p.Score, List: 1)))
+            .OrderByDescending(r => r.Score).ThenBy(r => r.List).Select(r => (r.Chunk, r.Score))];
     }
 
     /// <summary>

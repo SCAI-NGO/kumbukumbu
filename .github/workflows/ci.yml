@@ -21,3 +21,21 @@ jobs:
       - run: dotnet restore --locked-mode
       - run: dotnet build --configuration Release --no-restore
       - run: dotnet test --configuration Release --no-build
+
+  pdf:
+    name: PDF sidecar
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pdf
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # pnpm at the version pdf/package.json's packageManager names, as the image build takes it.
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build

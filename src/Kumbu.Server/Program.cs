@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Search;
@@ -6,6 +7,7 @@ using Kumbu.Core.Sh;
 using Kumbu.Server;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Attachments;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Cli;
 using Kumbu.Server.Mcp;
@@ -40,6 +42,10 @@ builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<KumbuOptions>, KumbuOptionsValidator>();
+// The PDF sidecar's addresses, refused on both listeners: started before the metrics listener, and before the app's,
+// which the host starts after every hosted service registered here.
+builder.Services.AddSingleton<SidecarPeers>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SidecarPeers>());
 
 // /metrics is served on a listener of its own, not on the app's port: a proxy forwards whatever Host header a client
 // sends, so a route on the public port could not be told apart from the scraper's. Not in the bootstrap command.
@@ -60,6 +66,14 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
+// The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address
+// connected to is refused on the server's listeners before a byte is sent (SidecarPeers.ConnectAsync); no proxy, whose
+// address the callback would see instead.
+builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(sp => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2), UseProxy = false, ConnectCallback = sp.GetRequiredService<SidecarPeers>().ConnectAsync });
+builder.Services.AddSingleton<PdfAnalyses>();
+builder.Services.AddSingleton<PdfAnalysisRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PdfAnalysisRunner>());
 builder.Services.AddSingleton<OnnxEmbedder>();
 builder.Services.AddSingleton<IEmbeddingDriver>(sp => sp.GetRequiredService<OnnxEmbedder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<OnnxEmbedder>());
@@ -132,7 +146,8 @@ builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
     sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
-builder.Services.AddScoped<Shell>();
+builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
+builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
 // Stateless Streamable HTTP is the SDK default: no Mcp-Session-Id, no server state between requests.
 // Note: WithTools(typeof(ShTool)) compiles but binds to WithTools<T>(T target) with T = System.Type
@@ -172,6 +187,9 @@ if (!TextOrder.IsCultureAware)
     app.Logger.LogWarning("ICU is not available: sort, ls and rg order text by code point (umlauts after z)");
 }
 
+// Before anything else, forwarded headers included: the connection's own address decides (SidecarPeers).
+app.Use(app.Services.GetRequiredService<SidecarPeers>().RefuseAsync);
+
 if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Trusted)
 {
     // Traefik reaches the container over a Docker network whose addresses Docker assigns, so no proxy address
@@ -179,7 +197,7 @@ if (app.Services.GetRequiredService<IOptions<KumbuOptions>>().Value.Proxy.Truste
     // published port; the other containers on its networks are trusted too, an accepted limit). ForwardLimit 1 takes
     // the rightmost X-Forwarded-For entry, the one Traefik appended; whatever a client put there is ignored.
     // X-Forwarded-Proto (which Traefik overwrites) makes Request.IsHttps true for a request that reached Traefik over
-    // https, for HSTS. First, so that everything after sees the client's address and scheme. Otherwise neither is read.
+    // https, for HSTS. Next, so that everything after sees the client's address and scheme. Otherwise neither is read.
     var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto, ForwardLimit = 1 };
     forwarded.KnownIPNetworks.Clear();
     forwarded.KnownProxies.Clear();

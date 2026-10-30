@@ -36,10 +36,10 @@ public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<st
 /// </summary>
 public sealed partial class VaultCatalog
 {
-    /// <summary>The order of the passes: checkpoint texts and blobs first, since checkpoints and attachment records hold
-    /// their ids, which the new key changes (<see cref="UnlockedVault.RekeyIds"/>).</summary>
+    /// <summary>The order of the passes: checkpoint texts and blobs first, since checkpoints, attachment records and the
+    /// analyses of PDFs hold their ids, which the new key changes (<see cref="UnlockedVault.RekeyIds"/>).</summary>
     private static readonly string[] RekeyOrder =
-        ["checkpoint_texts", "blobs", "notes", "attachments", "trash", "attachment_trash", "moves", "embeddings", "checkpoints"];
+        ["checkpoint_texts", "blobs", "pdf_analyses", "notes", "attachments", "trash", "attachment_trash", "moves", "embeddings", "checkpoints"];
 
     /// <summary>At most this many documents are read at once in a pass, and at most <see cref="BatchBytes"/> sealed
     /// bytes (a larger document is read alone); each read is cut into batches by the same limits.</summary>
@@ -449,6 +449,8 @@ public sealed partial class VaultCatalog
             Builders<Accounts.UserDocument>.Filter.Eq(u => u.Id, userId),
             Builders<Accounts.UserDocument>.Update.Pull(u => u.RekeyPending, id).Inc(u => u.VaultsRekeyed, 1),
             cancellationToken: ct);
+        // The PDFs' jobs name their blobs by the old key's ids: the vault's next unlock queues them again by the new ones.
+        await PdfJobs.DeleteManyAsync(s, Builders<PdfJobDocument>.Filter.Eq(j => j.Vault, id), cancellationToken: ct);
         // Codes and tokens issued meanwhile (there should be none) conflict with this, and are refused when retried.
         var connections = db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName);
         await connections.UpdateManyAsync(
@@ -486,7 +488,7 @@ public sealed partial class VaultCatalog
         throw VaultBusyException.Being();
     }
 
-    /// <summary>A collection of sealed documents; blobs have their own type (<see cref="ReadRekeyAsync"/>).</summary>
+    /// <summary>A collection of sealed documents; blobs and analyses have their own types (<see cref="ReadRekeyAsync"/>).</summary>
     private IMongoCollection<SealedDocument> RekeyCollection(string name) => name switch
     {
         "notes" => Notes,
@@ -530,15 +532,23 @@ public sealed partial class VaultCatalog
     }
 
     /// <summary>Documents of <paramref name="name"/> by id, in id order; a blob as a sealed document with its <c>bid</c>
-    /// as the pid.</summary>
+    /// as the pid, a part of an analysis also with its part number as the revision.</summary>
     private async Task<List<SealedDocument>> ReadRekeyAsync(string name, IEnumerable<ObjectId> docIds, CancellationToken ct)
     {
+        if (name == "pdf_analyses")
+        {
+            var parts = await PdfParts.Find(Builders<PdfAnalysisDocument>.Filter.In(d => d.Id, docIds)).SortBy(d => d.Id).ToListAsync(ct);
+            return [.. parts.Select(AsSealed)];
+        }
+
         if (name != "blobs") return await RekeyCollection(name).Find(Builders<SealedDocument>.Filter.In(d => d.Id, docIds)).SortBy(d => d.Id).ToListAsync(ct);
         var blobs = await Blobs.Find(Builders<BlobDocument>.Filter.In(d => d.Id, docIds)).SortBy(d => d.Id).ToListAsync(ct);
         return [.. blobs.Select(AsSealed)];
     }
 
     private static SealedDocument AsSealed(BlobDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Blob = d.Blob, At = d.At };
+
+    private static SealedDocument AsSealed(PdfAnalysisDocument d) => new() { Id = d.Id, Vault = d.Vault, PathId = d.BlobId, Revision = d.Part, Blob = d.Blob, At = d.At };
 
     /// <summary>
     /// Writes a document's new pid and seal, if it still has the seal that was read. A blob's id names its bytes, which
@@ -552,6 +562,14 @@ public sealed partial class VaultCatalog
             return Blobs.UpdateOneAsync(
                 session, b.Eq(d => d.Id, doc.Id) & b.Eq(d => d.BlobId, doc.PathId),
                 Builders<BlobDocument>.Update.Set(d => d.BlobId, change.PathId).Set(d => d.Blob, change.Blob), cancellationToken: ct);
+        }
+
+        if (name == "pdf_analyses")
+        {
+            var a = Builders<PdfAnalysisDocument>.Filter;
+            return PdfParts.UpdateOneAsync(
+                session, a.Eq(d => d.Id, doc.Id) & a.Eq(d => d.Blob, doc.Blob),
+                Builders<PdfAnalysisDocument>.Update.Set(d => d.BlobId, change.PathId).Set(d => d.Blob, change.Blob), cancellationToken: ct);
         }
 
         var f = Builders<SealedDocument>.Filter;
@@ -603,7 +621,8 @@ public sealed partial class VaultCatalog
                     }
 
                     var change = resealed.Value.New!;
-                    var pid = Convert.ToBase64String(change.PathId);
+                    // The parts of one analysis share their blob's id: the part tells them apart.
+                    var pid = Convert.ToBase64String(change.PathId) + (name == "pdf_analyses" ? $":{doc.Revision}" : "");
                     // Two documents of one batch that claim one pid: the second waits for the next batch, where the
                     // unique index tells which one stays.
                     if (batch.Count > 0 && (batch.Count >= BatchDocuments || batchBytes + change.Blob.Length > BatchBytes || batchPids.Contains(pid)))
@@ -763,7 +782,7 @@ public sealed partial class VaultCatalog
         var keepDoc = name switch
         {
             "checkpoints" => doc.At > holder.At,
-            "checkpoint_texts" or "blobs" => false,
+            "checkpoint_texts" or "blobs" or "pdf_analyses" => false,
             _ => doc.Revision > holder.Revision,
         };
         var (kept, lost) = keepDoc ? (doc, holder) : (holder, doc);
@@ -781,6 +800,14 @@ public sealed partial class VaultCatalog
             return blob is null ? null : AsSealed(blob);
         }
 
+        if (name == "pdf_analyses")
+        {
+            var a = Builders<PdfAnalysisDocument>.Filter;
+            var part = await PdfParts.Find(a.Eq(d => d.Vault, doc.Vault) & a.Eq(d => d.BlobId, pid) & a.Eq(d => d.Part, (int)doc.Revision) & a.Ne(d => d.Id, doc.Id))
+                .FirstOrDefaultAsync(ct);
+            return part is null ? null : AsSealed(part);
+        }
+
         var f = Builders<SealedDocument>.Filter;
         return await RekeyCollection(name).Find(f.Eq(d => d.Vault, doc.Vault) & f.Eq(d => d.PathId, pid) & f.Ne(d => d.Id, doc.Id)).FirstOrDefaultAsync(ct);
     }
@@ -789,6 +816,7 @@ public sealed partial class VaultCatalog
     private Task DeleteRekeyedAsync(string name, SealedDocument doc, CancellationToken ct)
     {
         if (name == "blobs") return Blobs.DeleteOneAsync(Builders<BlobDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, doc.PathId), ct);
+        if (name == "pdf_analyses") return PdfParts.DeleteOneAsync(Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Id, doc.Id) & Builders<PdfAnalysisDocument>.Filter.Eq(d => d.Blob, doc.Blob), ct);
         var f = Builders<SealedDocument>.Filter;
         return RekeyCollection(name).DeleteOneAsync(f.Eq(d => d.Id, doc.Id) & f.Eq(d => d.Blob, doc.Blob), ct);
     }

@@ -13,7 +13,8 @@ namespace Kumbu.Server.Vaults;
 /// write is one MongoDB transaction over sealed documents (compare-and-swap on the revision), and changes the working
 /// set only after MongoDB committed it.
 /// </summary>
-public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null, Accounts.ApiKeys? keys = null)
+public sealed class EncryptedNoteStore(
+    VaultCatalog catalog, ICredential credential, Search.SearchIndex? index = null, Accounts.ApiKeys? keys = null, Attachments.PdfAnalysisRunner? pdf = null)
     : INoteStore, IAttachmentStore, Kumbu.Core.Search.ISearchIndex
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
@@ -239,6 +240,15 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             return () => apply.ForEach(a => a());
         }, ct);
 
+        // After the commit, which stands: a PDF whose job isn't queued now is queued at the vault's next unlock.
+        if (written && pdf is not null)
+        {
+            var states = batch.AttachmentCreates.Concat(batch.AttachmentReplaces.Select(r => r.Next))
+                .Concat(batch.AttachmentRestores.Select(r => r.Restored)).Concat(batch.AttachmentMoves.Select(m => m.Target))
+                .Select(a => a.Current);
+            await pdf.EnqueueAsync(vault, states, CancellationToken.None);
+        }
+
         return written ? [] : [conflict ?? paths[0]];
 
         Action? Refuse(VaultPath path)
@@ -352,29 +362,18 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
     }
 
     /// <summary>
-    /// The blob read from MongoDB and opened; <see cref="VaultUnavailableException"/> if it doesn't open (changed or
-    /// damaged outside Kumbu²). The read and the decryption, when a file costs about twice its size, take one of the
-    /// server's <see cref="VaultCatalog.FileReads"/> slots, waiting for one if all are taken; the slot goes back before
-    /// the bytes are returned, so a slow download holds only its own bytes, never a slot.
+    /// The blob read from MongoDB and opened (<see cref="VaultCatalog.ReadBlobAsync"/>): the read and the decryption,
+    /// when a file costs about twice its size, take one of the server's <see cref="VaultCatalog.FileReads"/> slots, so a
+    /// slow download holds only its own bytes, never a slot.
     /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
         if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v || !TryParseBlobId(blobId, out var id)) return null;
-        await catalog.FileReads.WaitAsync(ct);
-        try
-        {
-            var doc = await catalog.Blobs.Find(Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id)).FirstOrDefaultAsync(ct);
-            return doc is null ? null : new MemoryStream(v.OpenBlob(doc), writable: false);
-        }
-        catch (Exception e) when (e is System.Security.Cryptography.CryptographicException or InvalidDataException)
-        {
-            throw new VaultUnavailableException("an attachment's content doesn't open: it was changed or damaged outside Kumbu²");
-        }
-        finally
-        {
-            catalog.FileReads.Release();
-        }
+        return await catalog.ReadBlobAsync(v, id, ct) is { } bytes ? new MemoryStream(bytes, writable: false) : null;
     }
+
+    /// <summary>The unlocked vault of a path, as every read finds it; null if the credential has no such vault.</summary>
+    internal Task<UnlockedVault?> VaultOfAsync(VaultPath path, CancellationToken ct) => VaultAsync(path, ct);
 
     /// <summary>
     /// Stores the bytes sealed under their keyed hash unless the vault holds them already, in which case only their time
@@ -418,7 +417,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
         return Convert.ToBase64String(id);
     }
 
-    private static bool TryParseBlobId(string blobId, out byte[] id)
+    internal static bool TryParseBlobId(string blobId, out byte[] id)
     {
         id = new byte[32];
         return Convert.TryFromBase64String(blobId, id, out var written) && written == id.Length;
@@ -490,6 +489,21 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
                     }
 
                     if (e.Version != note.Version) pending++;
+                    foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                }
+
+                // The pages of PDFs, as embedded for their current version; any other version's pages are left out
+                // (their text is no longer the PDF's). PDFs don't count as pending: semsearch --words doesn't find them.
+                foreach (var (path, (_, file)) in vault.Attachments)
+                {
+                    if (!AttachmentFormat.IsPdf(file.Current) || !InScope(scope, path)) continue;
+                    if (!embeddings.TryGetValue(path, out var e) || e.Model != model || e.Version != file.Version) continue;
+                    if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
+                    {
+                        index.Enqueue(vault, [path]);
+                        continue;
+                    }
+
                     foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
                 }
             }
@@ -747,7 +761,7 @@ public sealed class EncryptedNoteStore(VaultCatalog catalog, ICredential credent
             // Once the commit is sent, wait for it: the working set must follow what MongoDB holds.
             await session.CommitTransactionAsync(CancellationToken.None);
             apply();
-            index?.Enqueue(vault, paths.Where(p => !p.IsAttachment));
+            index?.Enqueue(vault, paths.Where(p => !p.IsAttachment || AttachmentFormat.IsPdf(p)));
             await RecordAsync(vault, paths);
             return true;
         }
