@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeApi, json, user } from "../test/app";
+import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
 import { api, call, HttpError } from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  usePasswordPrompt.getState().settle(false);
   useSession.getState().reset();
 });
+
+const passwordRequired = () => json(401, { error: "Give your password again to go on.", type: "password-required" });
+const createKey = () => call(api.POST("/api/keys", { body: { name: "Laptop", vaults: { Work: "read" } } }));
+const created = { key: "kumbu_x" };
+
+/** Waits for the password dialog, then answers it. */
+async function answerPrompt(confirmed: boolean) {
+  await vi.waitFor(() => expect(usePasswordPrompt.getState().open).toBe(true));
+  usePasswordPrompt.getState().settle(confirmed);
+}
 
 describe("api client", () => {
   it("sends same-origin requests with the cookie", async () => {
@@ -79,6 +92,77 @@ describe("api client", () => {
     await send();
     expect(useSession.getState().ended).toBe(false);
     expect(useSession.getState().user).toEqual(user);
+  });
+
+  it("keeps the session when the password dialog is cancelled", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    fakeApi({ "POST /api/keys": passwordRequired });
+    const result = createKey().catch((e) => e);
+    await answerPrompt(false);
+    const error = await result;
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.status).toBe(401);
+    expect(useSession.getState().user).toEqual(user);
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("repeats a guarded request once after the password is confirmed", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const answers = [passwordRequired, () => json(201, created)];
+    const fetch = fakeApi({ "POST /api/keys": () => answers.shift()!() });
+    const result = createKey();
+    await answerPrompt(true);
+    expect(await result).toEqual(created);
+    const bodies = await Promise.all(fetch.mock.calls.map((c) => c[0].text()));
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(JSON.parse(bodies[1])).toEqual({ name: "Laptop", vaults: { Work: "read" } });
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("does not ask a second time when the repeated request is refused again", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const ask = vi.spyOn(usePasswordPrompt.getState(), "ask");
+    const fetch = fakeApi({ "POST /api/keys": passwordRequired });
+    const result = createKey().catch((e) => e);
+    await answerPrompt(true);
+    const error = await result;
+    expect(error).toBeInstanceOf(HttpError);
+    expect(error.status).toBe(401);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(usePasswordPrompt.getState().open).toBe(false);
+    expect(useSession.getState().ended).toBe(false);
+  });
+
+  it("asks once for two guarded requests and repeats both", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const ask = vi.spyOn(usePasswordPrompt.getState(), "ask");
+    let opened = 0;
+    const unsubscribe = usePasswordPrompt.subscribe((s, prev) => {
+      if (s.open && !prev.open) opened++;
+    });
+    let confirmed = false;
+    const fetch = fakeApi({ "POST /api/keys": () => (confirmed ? json(201, created) : passwordRequired()) });
+    const first = createKey();
+    const second = createKey();
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(2));
+    confirmed = true;
+    usePasswordPrompt.getState().settle(true);
+    expect(await Promise.all([first, second])).toEqual([created, created]);
+    unsubscribe();
+    expect(opened).toBe(1);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("still ends the session on a plain 401", async () => {
+    useSession.getState().signedIn({ user, previousSignInAt: null });
+    const fetch = fakeApi({ "POST /api/keys": () => json(401, { error: "Sign in first." }) });
+    await createKey().catch(() => {});
+    expect(usePasswordPrompt.getState().open).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(useSession.getState().user).toBeNull();
+    expect(useSession.getState().ended).toBe(true);
   });
 
   it("call() returns the data or throws the server's sentence with the status", async () => {

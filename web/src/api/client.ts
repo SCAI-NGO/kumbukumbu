@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import createClient, { type Middleware } from "openapi-fetch";
+import { usePasswordPrompt } from "../state/passwordPrompt";
 import { useSession } from "../state/session";
 import { useUpdate } from "../update/store";
 import type { paths } from "./schema";
@@ -17,10 +18,17 @@ export class HttpError extends Error {
 // These answer 401 for wrong credentials, not for a missing session; the screens show that themselves.
 const anonymous = new Set(["POST /api/session", "POST /api/join", "POST /api/recover", "POST /api/invitations/peek", "POST /api/pairing/redeem"]);
 
+/** A remembered session whose password window has closed: a guarded action wants the password again, the session lives on. */
+export async function isPasswordRequired(response: Response): Promise<boolean> {
+  if (response.status !== 401) return false;
+  const body: unknown = await response.clone().json().catch(() => null);
+  return !!body && typeof body === "object" && "type" in body && body.type === "password-required";
+}
+
 const sessionEnds: Middleware = {
-  onResponse({ request, response, schemaPath }) {
+  async onResponse({ request, response, schemaPath }) {
     const key = `${request.method} ${schemaPath}`;
-    if (response.status !== 401 || anonymous.has(key)) return;
+    if (response.status !== 401 || anonymous.has(key) || (await isPasswordRequired(response))) return;
     // After a sign-out, the page being left may still ask (or hear back) for a moment; those 401s are the sign-out
     // itself. Asking for the session is the way back in, and still leads to sign-in.
     if (useSession.getState().signedOut && key !== "GET /api/session") return;
@@ -32,6 +40,29 @@ const sessionEnds: Middleware = {
 const versionWatch: Middleware = {
   onResponse({ response }) {
     useUpdate.getState().report(response.headers.get("X-Kumbu-Version"));
+  },
+};
+
+// What a guarded request sent, by openapi-fetch's request id, to send again once the password is confirmed. Reads are
+// never guarded, so only the others are kept.
+const sent = new Map<string, Request>();
+
+/**
+ * Asks for the password when a guarded action finds the window closed, and repeats the request once after it is
+ * confirmed; the repeated answer goes back as it is. Cancelled, the action fails with the original answer.
+ */
+const passwordWindow: Middleware = {
+  onRequest({ request, id }) {
+    if (request.method !== "GET") sent.set(id, request.clone());
+  },
+  async onResponse({ response, id }) {
+    const clone = sent.get(id);
+    sent.delete(id);
+    if (!clone || !(await isPasswordRequired(response))) return;
+    if (await usePasswordPrompt.getState().ask()) return globalThis.fetch(clone);
+  },
+  onError({ id }) {
+    sent.delete(id);
   },
 };
 
@@ -61,6 +92,8 @@ export const api = createClient<paths>({
 });
 api.use(sessionEnds);
 api.use(versionWatch);
+// After the two above: openapi-fetch hands answers to the last one first, so they see the repeated answer.
+api.use(passwordWindow);
 
 /** The data of an openapi-fetch call, or an HttpError with the server's `{ error }` sentence. */
 export async function call<T>(request: Promise<{ data?: T; error?: unknown; response: Response }>): Promise<T> {
