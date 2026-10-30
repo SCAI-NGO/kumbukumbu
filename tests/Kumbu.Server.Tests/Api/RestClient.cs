@@ -47,13 +47,14 @@ public sealed class RestClient
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    public static async Task<RestClient> NewAsync(WebApplicationFactory<Program> api, string vault = "Arbeit")
+    /// <summary>A new user (of <paramref name="role"/>) signed in, with "Keep me signed in" if <paramref name="remember"/>.</summary>
+    public static async Task<RestClient> NewAsync(WebApplicationFactory<Program> api, string vault = "Arbeit", bool remember = false, string role = Roles.User)
     {
         var username = "u" + Guid.NewGuid().ToString("N")[..12];
-        await api.Services.GetRequiredService<UserCatalog>().CreateAsync(username, Password, Roles.User, Ct);
+        await api.Services.GetRequiredService<UserCatalog>().CreateAsync(username, Password, role, Ct);
         var (user, userKey, _) = (await api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(username, Password, Ct))!.Value;
 
-        using var signIn = await SendAsync(api, HttpMethod.Post, "/api/session", new { username, password = Password }, session: null, bearer: null);
+        using var signIn = await SendAsync(api, HttpMethod.Post, "/api/session", new { username, password = Password, remember }, session: null, bearer: null);
         Assert.Equal(HttpStatusCode.OK, signIn.StatusCode);
         var cookie = signIn.Headers.GetValues("Set-Cookie").First(v => v.StartsWith(CallerMiddleware.SessionCookie + "=", StringComparison.Ordinal));
         var session = cookie[(CallerMiddleware.SessionCookie.Length + 1)..].Split(';')[0];

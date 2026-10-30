@@ -230,13 +230,15 @@ public static class NoteApi
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
     private static async Task<NoContent> DeleteVaultAsync(
-        string vault, DeleteVaultRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+        string vault, DeleteVaultRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits,
+        CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        return await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct) is not null
-            ? TypedResults.NoContent()
-            : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // A wrong password throws; null is a right one and no such vault.
+        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
+        await AccountApi.PasswordGivenAsync(http, sessions, ct);
+        return deleted is not null ? TypedResults.NoContent() : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
 
     /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding.</summary>
@@ -250,12 +252,15 @@ public static class NoteApi
     /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps
     /// that list it disconnected: they can't be given the new key without their owner.</summary>
     private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
-        string vault, RekeyVaultRequest body, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+        string vault, RekeyVaultRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits,
+        CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct)
-            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // A wrong password throws; null is a right one and no such vault.
+        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+        await AccountApi.PasswordGivenAsync(http, sessions, ct);
+        if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));
     }
 

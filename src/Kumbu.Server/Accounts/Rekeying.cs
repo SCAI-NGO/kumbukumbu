@@ -19,6 +19,9 @@ public sealed class Rekeying(
     /// <summary>The users whose sessions resumed their vaults in this process (<see cref="ResumeOnce"/>).</summary>
     private readonly ConcurrentDictionary<string, byte> _resumed = new(StringComparer.Ordinal);
 
+    /// <summary>Runs at the start of <see cref="ResumeAsync"/> (tests make it fail).</summary>
+    internal Func<Task>? ResumeFault { get; set; }
+
     /// <summary>Runs before the revocations of <see cref="ReencryptAccountAsync"/> (tests make them fail).</summary>
     internal Func<Task>? RevokeFault { get; set; }
 
@@ -91,23 +94,34 @@ public sealed class Rekeying(
     /// </summary>
     public void ResumeOnce(User user, byte[] userKey)
     {
-        if (_resumed.TryAdd(user.Id, 0)) ResumePending(user, userKey);
+        if (!_resumed.TryAdd(user.Id, 0)) return;
+        _ = ForgetIfFailedAsync();
+
+        // A resume that failed (the database didn't answer) is tried again at the session's next request.
+        async Task ForgetIfFailedAsync()
+        {
+            if (!await ResumeAsync(user, userKey)) _resumed.TryRemove(user.Id, out _);
+        }
     }
 
-    /// <summary>What <see cref="ResumePending"/> runs; every failure is logged here, none goes unobserved.</summary>
-    internal async Task ResumeAsync(User user, byte[] userKey)
+    /// <summary>What <see cref="ResumePending"/> runs: false if it failed. Every failure is logged here, none goes
+    /// unobserved.</summary>
+    internal async Task<bool> ResumeAsync(User user, byte[] userKey)
     {
         try
         {
             // Off the caller's flow at once: the reads below must not delay the answer.
             await Task.Yield();
+            if (ResumeFault is { } fault) await fault();
             var recorded = await Users.Find(u => u.Id == user.Id).Project(u => u.RekeyPending).FirstOrDefaultAsync(CancellationToken.None) ?? [];
             var started = await catalog.PendingVaultIdsAsync(user.Id, userKey, CancellationToken.None);
             foreach (var vaultId in recorded.Concat(started).Distinct(StringComparer.Ordinal)) runner.Start(vaultId, user.Id, userKey);
+            return true;
         }
         catch (Exception e)
         {
-            log.LogWarning(e, "Resuming the re-keying of the vaults of user {Username} failed; the next sign-in tries again", user.Username);
+            log.LogWarning(e, "Resuming the re-keying of the vaults of user {Username} failed; the next sign-in or session request tries again", user.Username);
+            return false;
         }
     }
 

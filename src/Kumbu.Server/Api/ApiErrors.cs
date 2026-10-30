@@ -1,24 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Text.Json.Serialization;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
 
 namespace Kumbu.Server.Api;
 
-/// <summary>Every error the REST API returns: one sentence for a person to read.</summary>
-public sealed record ApiError(string Error);
+/// <summary>Every error the REST API returns: one sentence for a person to read. <c>type</c>, only on errors a client
+/// answers by itself: <c>password-required</c> (<see cref="ApiErrors.PasswordRequired"/>).</summary>
+public sealed record ApiError(string Error, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type = null);
 
 /// <summary>Thrown by a handler to answer with <see cref="Status"/> and an <see cref="ApiError"/>; turned into
 /// the response by <see cref="ApiErrors.Filter"/>, so handlers can keep their typed success results.</summary>
-public sealed class ApiException(int status, string message, TimeSpan? retryAfter = null) : Exception(message)
+public sealed class ApiException(int status, string message, TimeSpan? retryAfter = null, string? type = null) : Exception(message)
 {
     public int Status { get; } = status;
 
     public TimeSpan? RetryAfter { get; } = retryAfter;
+
+    /// <summary>The <see cref="ApiError.Type"/> of the answer, if any.</summary>
+    public string? Type { get; } = type;
 }
 
 public static class ApiErrors
 {
+    /// <summary>A remembered session whose normal window is closed asked for something that needs the password lately
+    /// given (<see cref="Security.RequirePasswordWindow"/>): a 401 that doesn't end the session; the web app asks for the
+    /// password, confirms it and repeats the request.</summary>
+    public const string PasswordRequired = "password-required";
+
     public static ApiException NotFound(string message) => new(StatusCodes.Status404NotFound, message);
 
     public static ApiException BadRequest(string message) => new(StatusCodes.Status400BadRequest, message);
@@ -39,7 +49,7 @@ public static class ApiErrors
         catch (ApiException e)
         {
             if (e.RetryAfter is { } retryAfter) SetRetryAfter(context.HttpContext, retryAfter);
-            return Result(e.Status, e.Message);
+            return TypedResults.Json(new ApiError(e.Message, e.Type), statusCode: e.Status);
         }
         catch (CredentialsChangedException e)
         {

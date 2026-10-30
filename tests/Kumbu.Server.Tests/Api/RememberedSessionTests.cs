@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -351,5 +352,27 @@ public sealed class RememberedSessionTests(KumbuAppFactory app)
 
         _time.Advance(TimeSpan.FromMinutes(10));
         Assert.Equal(signedInAt, (await SessionViewAsync(api, session))!["previousSignInAt"]!.GetValue<DateTime>());
+    }
+
+    [Fact]
+    public async Task A_confirmation_as_the_first_request_of_a_visit_moves_the_visit_once()
+    {
+        await using var api = Timed();
+        var username = await NewUserAsync(api);
+        var session = await RememberedAsync(api, username);
+        _time.Advance(TimeSpan.FromMinutes(45));
+        var firstVisit = Now;
+        Assert.NotNull(await SessionViewAsync(api, session));
+
+        // The confirmation is the first request after the gap: as a request it begins the visit, and confirming moves
+        // nothing more, so the previous visit is the first one, not the confirmation's own time.
+        _time.Advance(TimeSpan.FromMinutes(45));
+        var secondVisit = Now;
+        using (var confirmed = await ConfirmAsync(api, session)) Assert.Equal(HttpStatusCode.NoContent, confirmed.StatusCode);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.Equal(firstVisit, (await SessionViewAsync(api, session))!["previousSignInAt"]!.GetValue<DateTime>());
+        var user = await app.Database.GetCollection<UserDocument>("users").Find(u => u.Username == username).SingleAsync(Ct);
+        Assert.Equal((secondVisit, firstVisit), (user.LastSignInAt, user.PreviousSignInAt));
     }
 }

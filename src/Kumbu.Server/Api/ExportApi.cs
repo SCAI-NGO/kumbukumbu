@@ -31,7 +31,10 @@ public sealed record ExportTicketView(string Ticket, DateTime ExpiresAt);
 /// turned its password off. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An
 /// export is a heavyweight operation: it takes the notes out of the encryption at rest in one go, so it needs the
 /// password again, as deleting a vault does, through a ticket (<see cref="ExportTickets"/>), and each one is logged with
-/// ids and counts, never a name.
+/// ids and counts, never a name. The exports also carry <see cref="PasswordWindowMetadata"/>: the ticket's password
+/// check opens a remembered session's window, so a real export always passes it, and they are listed with every other
+/// guarded endpoint. The files ZIP is guarded inline instead: with the window closed it needs the ticket even when its
+/// preference is off, as a form posted into a frame can't answer the 401 the marker gives.
 /// </summary>
 public static class ExportApi
 {
@@ -40,12 +43,15 @@ public static class ExportApi
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         api.MapPost("/export/ticket", TicketAsync).Errors(400, 401, 403, 429);
         api.MapGet("/vaults/{vault}/export", (string vault, string? tz, string? ticket, [AsParameters] Export export) => ExportAsync([vault], tz, ticket, export))
+            .WithMetadata(PasswordWindowMetadata.Instance)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
         api.MapGet("/export", ([FromQuery(Name = "vault")] string[]? vault, string? tz, string? ticket, [AsParameters] Export export) => ExportAsync(vault ?? [], tz, ticket, export))
+            .WithMetadata(PasswordWindowMetadata.Instance)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
         api.MapGet("/vaults/{vault}/checkpoints/{name}/export", CheckpointExportAsync)
+            .WithMetadata(PasswordWindowMetadata.Instance)
             .Produces(StatusCodes.Status200OK, contentType: "application/zip")
             .Errors(400, 401, 403, 404, 503);
         // A literal segment outranks FileApi's catch-all, and no file is named "zip" (a file has an extension);
@@ -90,11 +96,13 @@ public static class ExportApi
 
     /// <summary>The password, checked as a password change checks it (and limited alike), for a ticket.</summary>
     private static async Task<Ok<ExportTicketView>> TicketAsync(
-        ExportTicketRequest body, RequestCaller caller, UserCatalog users, AccountLimits limits, ExportTickets tickets, CancellationToken ct)
+        ExportTicketRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits, ExportTickets tickets,
+        CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password ?? "", ct)) throw ApiErrors.BadRequest("The password is wrong.");
+        await AccountApi.PasswordGivenAsync(http, sessions, ct);
         var (ticket, expiresAt) = tickets.Issue(user.Id);
         return TypedResults.Ok(new ExportTicketView(ticket, expiresAt));
     }
@@ -213,7 +221,9 @@ public static class ExportApi
         // Parsed (NFC, no '.' or '..') before anything is read; one file named twice is one entry.
         var paths = asked.Select(p => ApiPaths.Parse(vault, p.TrimStart('/'), PathKind.Attachment)).Distinct().ToList();
 
-        var withPassword = await users.AsksPasswordForDownloadsAsync(export.Caller.User!.Id, ct);
+        // Not marked PasswordWindowMetadata: a form posted into a hidden frame can't answer a 401 with the password
+        // dialog, so a closed window asks for the ticket instead, as the preference does.
+        var withPassword = await users.AsksPasswordForDownloadsAsync(export.Caller.User!.Id, ct) || !export.Caller.PasswordWindowOpen;
         if (withPassword) export.RequireTicket(ticket);
 
         var root = ApiPaths.Parse(vault, null, note: false);

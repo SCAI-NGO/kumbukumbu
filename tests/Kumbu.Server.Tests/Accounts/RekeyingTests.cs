@@ -275,6 +275,44 @@ public sealed class RekeyingTests(KumbuAppFactory app)
         await AllRekeyedAsync(owner.User.Id, vaults.Values);
     }
 
+    [Fact]
+    public async Task A_resume_that_failed_at_a_sessions_request_is_tried_again_at_the_next()
+    {
+        var (owner, vaults) = await OwnerAsync();
+        var users = Api.Services.GetRequiredService<UserCatalog>();
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(owner.User.Id, owner.UserKey, RestClient.Password, Ct);
+        var (_, user, newKey) = (await users.RecoverWithKeyAsync(owner.Username, recoveryKey!, NewPassword, Ct))!.Value;
+        var (_, _, readAt) = (await users.TrySignInAsync(owner.Username, NewPassword, Ct))!.Value;
+        var session = await Api.Services.GetRequiredService<Sessions>().StartAsync(user, newKey, readAt, Ct, remember: true);
+
+        await using var restarted = Api.WithWebHostBuilder(_ => { });
+        var rekeying = restarted.Services.GetRequiredService<Rekeying>();
+        var runs = 0;
+        // The first resume fails, as a blip of the database would make it.
+        rekeying.ResumeFault = () => Interlocked.Increment(ref runs) == 1 ? throw new InvalidOperationException("the database didn't answer") : Task.CompletedTask;
+        try
+        {
+            using (var first = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            using var waited = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            waited.CancelAfter(TimeSpan.FromSeconds(30));
+            while (Volatile.Read(ref runs) < 2)
+            {
+                using (var again = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+                await Task.Delay(TimeSpan.FromMilliseconds(50), waited.Token);
+            }
+
+            await AllRekeyedAsync(owner.User.Id, vaults.Values);
+            // Once it worked, the next requests leave it be.
+            using (var later = await GetAsync(restarted, "/api/vaults", session)) Assert.Equal(HttpStatusCode.OK, later.StatusCode);
+            await Task.Delay(TimeSpan.FromMilliseconds(200), Ct);
+            Assert.Equal(2, Volatile.Read(ref runs));
+        }
+        finally
+        {
+            rekeying.ResumeFault = null;
+        }
+    }
+
     private async Task<HttpResponseMessage> GetAsync(WebApplicationFactory<Program> api, string path, string session)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
