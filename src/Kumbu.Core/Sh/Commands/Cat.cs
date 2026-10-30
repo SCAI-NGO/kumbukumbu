@@ -46,7 +46,7 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null) : I
         if (rest.Count > 1) return ShellResult.Error($"cat: too many arguments{CommandArgs.QuoteHint}");
 
         var (pathText, _) = SectionAddress.Split(rest[0]);
-        if (VaultPath.TryParse(pathText, out var path) && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
+        if (VaultPath.TryParse(pathText, out var path) && !FolderMarker.Is(path) && await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
         {
             return await DescribeAsync(path, attachment, version, ct);
         }
@@ -54,7 +54,7 @@ public sealed class Cat(INoteReader notes, IAttachmentPixels? pixels = null) : I
         // x.png#Layout: a section of an attachment, which has none (a '#' may also be part of a name, as in a#b.png).
         for (var at = rest[0].IndexOf('#'); at > 0; at = rest[0].IndexOf('#', at + 1))
         {
-            if (VaultPath.TryParse(rest[0][..at], out var file) && file.IsAttachment && await StoreAttachments.GetAsync(notes, file, ct) is not null)
+            if (VaultPath.TryParse(rest[0][..at], out var file) && file.IsAttachment && !FolderMarker.Is(file) && await StoreAttachments.GetAsync(notes, file, ct) is not null)
             {
                 return ShellResult.Error($"cat: {file.Value} is an attachment, which has no sections; 'cat {SectionLookup.Quote(file)}' describes it");
             }

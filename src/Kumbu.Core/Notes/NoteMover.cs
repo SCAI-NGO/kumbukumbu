@@ -72,8 +72,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (await CheckTargetAsync(from, to, map.Keys.ToHashSet(), ct) is { } problem) return problem;
         }
 
-        var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count, "attachment") }.Where(c => c is not null));
-        return await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/ ({count})", ct);
+        // Kept folders' markers move along unmentioned.
+        var count = string.Join(", ", new[] { Count(notes.Count, "note"), Count(attachments.Count(a => !FolderMarker.Is(a)), "attachment") }.Where(c => c is not null));
+        return await CommitAsync(map, rewriteLinks, $"moved {source.Value}/ to {target.Value}/{(count.Length > 0 ? $" ({count})" : "")}", ct);
     }
 
     private static string? Count(int n, string what) => n switch { 0 => null, 1 => $"1 {what}", _ => $"{n} {what}s" };
@@ -105,6 +106,10 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (AttachmentFormat.ForPath(source) is not null)
         {
             if (AttachmentFormat.RenameProblem(source, target) is { } renameProblem) return ShellResult.Error($"mv: {target.Value}: {renameProblem}");
+            if (FolderMarker.Is(target) && target.Segments.Count == 2)
+            {
+                return ShellResult.Error($"mv: {FolderMarker.Shown(target)}: A vault exists on its own; it needs no {FolderMarker.Name}");
+            }
 
             if (NoteNames.NameProblem(target) is { } nameProblem) return ShellResult.Error($"mv: {target.Value}: {nameProblem}");
         }
@@ -190,7 +195,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         else if (changed.Count == 0) message += "; no links needed rewriting";
         else message += $"; rewrote {links} {(links == 1 ? "link" : "links")} in {string.Join(", ", changed.Order(Comparer<VaultPath>.Create((a, b) => TextOrder.Default.Compare(a.Value, b.Value))).Select(p => p.Value))}";
 
-        return ShellResult.Ok(message) with { Version = map.Count == 1 ? version : null };
+        return ShellResult.Ok(message) with { Version = map.Count == 1 && !FolderMarker.Is(map.Values.First()) ? version : null };
     }
 
     private static ShellResult Changed(VaultPath path) =>

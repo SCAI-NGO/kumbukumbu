@@ -54,10 +54,12 @@ public sealed class Ls(INoteReader notes) : ICommand
         }
 
         var below = await notes.ListNotesUnderAsync(dir, ct);
-        var files = await StoreAttachments.UnderAsync(notes, dir, ct);
+        var all = await StoreAttachments.UnderAsync(notes, dir, ct);
+        // The folder's own marker adds no entry: a folder that holds nothing else lists as empty.
+        var files = all.Where(f => f.Path.Segments.Count != dir.Segments.Count + 1 || !FolderMarker.Is(f.Path)).ToList();
         var isVault = dir.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(dir.Segments[0]);
         var damaged = isVault ? await notes.CountDamagedAsync(dir, ct) : 0;
-        if (below.Count == 0 && files.Count == 0 && isVault)
+        if (below.Count == 0 && files.Count == 0 && (isVault || all.Count > 0))
         {
             return ShellResult.Ok(damaged > 0 ? Damage.Summary(damaged) : "");
         }
