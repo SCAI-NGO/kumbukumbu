@@ -50,21 +50,27 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
-type FolderActions = { onNewNote(folder: string): void; onNewFolder(parent: string): void; onMove(subject: MoveSubject): void; onRemove(folder: string): void };
+type FolderActions = {
+  onNewNote(folder: string): void;
+  onNewFolder(parent: string): void;
+  onMove(subject: MoveSubject): void;
+  onRemove(folder: string): void;
+  removing: boolean;
+};
 
 /**
  * The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). An
  * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
  * keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
   const inner = folder.path.split("/").length > 2;
   const items: MenuItem[] = [
     { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
     { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
     { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
     ...(inner ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
-    ...(inner && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path) }] : []),
+    ...(inner && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     ...extra,
   ];
   return (
@@ -74,12 +80,16 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, extra = 
   );
 }
 
-/** A folder's entry; the selected one (just made, or found by its name) is marked, scrolled to and focused. */
+/**
+ * A folder's entry; the selected one (just made, or found by its name) is marked, and the first time it is shown
+ * after that, scrolled to and focused: once only, not again each time it is shown anew (its parent opened again).
+ */
 function FolderButton({ folder, count, open, selected, onToggle }: { folder: TreeFolder; count: number; open: boolean; selected: boolean; onToggle(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!selected) return;
+    if (!selected || !useEditor.getState().revealing) return;
+    useEditor.getState().folderRevealed();
     button.current?.scrollIntoView?.({ block: "nearest" });
     // Not out of a dialog over the tree (New folder, still open on a name that exists): it keeps the focus.
     const top = topDialog();
@@ -300,7 +310,7 @@ export default function TreeDrawer(props: {
     },
     onSuccess: (_, folder) => queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(folder)] }),
   });
-  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder) };
+  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder), removing: removeFolder.isPending };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
   const openBoard = (vault: string) => {

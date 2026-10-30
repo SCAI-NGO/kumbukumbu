@@ -99,6 +99,27 @@ describe("new folders", () => {
     expect(folderRow("Drafts")).not.toHaveAttribute("aria-current");
   });
 
+  it("the mark ends with a note opened, and the focus goes to the folder once only", async () => {
+    api({ "PUT /api/files/Work/Drafts/Inbox/.vaultkeep": makes(() => root.folders[1], "/Work/Drafts/Inbox") });
+    await openDrawer();
+    await menuOf("Drafts");
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await createFolder("Inbox");
+    await waitFor(() => expect(folderRow("Inbox")).toHaveFocus());
+
+    // Drafts closed and opened again: Inbox is shown anew, yet the focus stays where it is.
+    await userEvent.click(folderRow("Drafts"));
+    await userEvent.click(folderRow("Drafts"));
+    expect(folderRow("Inbox")).toHaveAttribute("aria-current", "true");
+    expect(folderRow("Drafts")).toHaveFocus();
+
+    await userEvent.click(within(drawer()).getByRole("button", { name: "plan" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    expect(folderRow("Inbox")).not.toHaveAttribute("aria-current");
+    expect(useEditor.getState().selectedFolder).toBeNull();
+  });
+
   it("New folder in the vault's menu and in the dock", async () => {
     const fetch = api({
       "PUT /api/files/Work/Ideas/.vaultkeep": makes(() => root, "/Work/Ideas"),
@@ -137,6 +158,35 @@ describe("new folders", () => {
     expect(folderRow("Drafts")).toHaveAttribute("aria-current", "true");
     // The dialog keeps the focus while it is open.
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(requests(fetch, "PUT")).toEqual([]);
+  });
+
+  it("refuses an empty, \".\" or \"..\" segment, which would write elsewhere, and finds a folder by a name ending in a slash", async () => {
+    const fetch = api();
+    await openDrawer();
+    await menuOf("Drafts");
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    const dialog = await createFolder(".");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("A folder name can't be empty, “.” or “..”.");
+
+    const field = within(dialog).getByLabelText("Name");
+    await userEvent.clear(field);
+    // A new name, and what was said against the last one goes.
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    await userEvent.type(field, "../Ideas");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create folder" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("A folder name can't be empty, “.” or “..”.");
+    await userEvent.clear(field);
+    await userEvent.type(field, "x//y");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create folder" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("A folder name can't be empty, “.” or “..”.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await menuOf("Work");
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    const again = await createFolder("Drafts/");
+    expect(await within(again).findByRole("alert")).toHaveTextContent('A folder named "Drafts" exists already.');
+    expect(folderRow("Drafts")).toHaveAttribute("aria-current", "true");
     expect(requests(fetch, "PUT")).toEqual([]);
   });
 
@@ -182,6 +232,22 @@ describe("removing a folder", () => {
 
     await waitFor(() => expect(within(drawer()).queryByRole("button", { name: /^B\s*\d/ })).not.toBeInTheDocument());
     expect(requests(fetch, "DELETE").map((r) => new URL(r.url).pathname + new URL(r.url).search)).toEqual(["/api/files/Work/A/B/.vaultkeep"]);
+  });
+
+  it("Remove folder can't be chosen again while its request is on its way", async () => {
+    let answer: (r: Response) => void = () => {};
+    const fetch = api({ "DELETE /api/files/Work/A/B/.vaultkeep": () => new Promise<Response>((resolve) => (answer = resolve)) });
+    await openDrawer();
+    await userEvent.click(folderRow("A"));
+    await menuOf("B");
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Remove folder" }));
+    await waitFor(() => expect(requests(fetch, "DELETE")).toHaveLength(1));
+
+    await menuOf("B");
+    expect(within(drawer()).getByRole("menuitem", { name: "Remove folder" })).toBeDisabled();
+    root.folders[0].folders = [];
+    answer(noContent());
+    await waitFor(() => expect(within(drawer()).queryByRole("button", { name: /^B\s*\d/ })).not.toBeInTheDocument());
   });
 
   it("a folder removed meanwhile goes all the same", async () => {

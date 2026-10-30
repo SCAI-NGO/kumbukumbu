@@ -15,7 +15,8 @@ import { putFile } from "../upload/putFile";
  */
 export default function NewFolderDialog({ parent, onClose }: { parent: string; onClose(): void }) {
   const [name, setName] = useState("");
-  const [exists, setExists] = useState<string | null>(null);
+  /** What the dialog itself says against the name: it exists already, or a segment isn't a name. */
+  const [problem, setProblem] = useState<string | null>(null);
   const vault = vaultOf(parent);
   const tree = useTree(vault);
   const queryClient = useQueryClient();
@@ -30,16 +31,26 @@ export default function NewFolderDialog({ parent, onClose }: { parent: string; o
     },
   });
 
+  const changeName = (value: string) => {
+    setName(value);
+    setProblem(null);
+  };
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const path = `${parent}/${name.trim()}`;
+    create.reset();
+    // `Drafts/Later` makes both; the server would drop empty and "." segments and resolve "..", writing somewhere
+    // else than asked, so those are refused here. A slash at either end is left out.
+    const segments = name.trim().replace(/^\/+|\/+$/g, "").split("/").map((s) => s.trim());
+    if (segments.some((s) => s === "" || s === "." || s === "..")) return setProblem("A folder name can't be empty, “.” or “..”.");
+    const folder = segments.join("/");
+    const path = `${parent}/${folder}`;
     if (tree.data && findFolder(tree.data.root, path)) {
-      setExists(name.trim());
-      create.reset();
+      setProblem(`A folder named "${folder}" exists already.`);
       useEditor.getState().revealFolder(path);
       return;
     }
-    setExists(null);
+    setProblem(null);
     create.mutate(path);
   };
 
@@ -56,8 +67,8 @@ export default function NewFolderDialog({ parent, onClose }: { parent: string; o
         <h2 id="new-folder-title" className="text-[22px] font-bold text-text">
           New folder
         </h2>
-        <TextField label="Name" value={name} onChange={setName} autoComplete="off" />
-        {exists !== null && <FormError>A folder named "{exists}" exists already.</FormError>}
+        <TextField label="Name" value={name} onChange={changeName} autoComplete="off" />
+        {problem && <FormError>{problem}</FormError>}
         {create.isError && <FormError>{errorText(create.error)}</FormError>}
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className={secondaryButtonClass}>

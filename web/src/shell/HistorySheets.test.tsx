@@ -370,7 +370,7 @@ describe("checkpoints", () => {
     expect(await restore!.json()).toEqual({ plan: "p1an" });
   });
 
-  it("name folders in the preview as folders, never by their markers", async () => {
+  it("names folders in the preview as folders, never by their markers", async () => {
     api({
       "GET /api/vaults/Work/checkpoints": () => json(200, { limit: 10, checkpoints: [checkpoint] }),
       "POST /api/vaults/Work/checkpoints/before-cleanup/preview": () =>
