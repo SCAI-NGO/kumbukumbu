@@ -13,6 +13,9 @@ public static class FolderMarker
 {
     public const string Name = ".vaultkeep";
 
+    /// <summary>Why a marker directly in a vault's root is refused; the Obsidian plugin matches this wording, so it stays as it is.</summary>
+    public const string InVaultRoot = "A vault exists on its own; it needs no .vaultkeep";
+
     public const string MediaType = "application/octet-stream";
 
     /// <summary>Every marker has the version of no bytes.</summary>

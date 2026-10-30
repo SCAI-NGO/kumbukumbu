@@ -51,7 +51,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (caller.Refuse(Upload, path) is { } refused) return new WriteResult(refused with { Kind = ShellErrorKind.Refused });
         if (FolderMarker.Is(path) && path.Segments.Count == 2)
         {
-            return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: A vault exists on its own; it needs no {FolderMarker.Name}");
+            return Fail(ShellErrorKind.Invalid, $"mkdir: {Shown(path)}: {FolderMarker.InVaultRoot}");
         }
 
         if (AttachmentFormat.ForPath(path) is not { } format)

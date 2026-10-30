@@ -86,6 +86,20 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
     }
 
     [Fact]
+    public async Task Seeding_makes_the_kept_empty_folders()
+    {
+        var world = new VaultWorld(fixture.NewDatabase());
+        Write("Work/Drafts/.vaultkeep", "");
+
+        var log = await SeedAsync(world);
+
+        var store = Store(world.Catalog());
+        Assert.Equal(["Work"], await store.ListVaultsAsync(Ct));
+        Assert.Equal(["/Work/Drafts/.vaultkeep"], (await store.ListAttachmentsUnderAsync(P("/Work"), Ct)).Select(a => a.Path.Value));
+        Assert.Contains(log.Entries, e => e.Message.StartsWith("Seeded 0 notes and 1 folder into 1 vault", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_vault_with_notes_is_left_alone()
     {
         var world = new VaultWorld(fixture.NewDatabase());

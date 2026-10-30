@@ -109,7 +109,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (AttachmentFormat.RenameProblem(source, target) is { } renameProblem) return ShellResult.Error($"mv: {target.Value}: {renameProblem}");
             if (FolderMarker.Is(target) && target.Segments.Count == 2)
             {
-                return ShellResult.Error($"mv: {FolderMarker.Shown(target)}: A vault exists on its own; it needs no {FolderMarker.Name}");
+                return ShellResult.Error($"mv: {FolderMarker.Shown(target)}: {FolderMarker.InVaultRoot}");
             }
 
             if (NoteNames.NameProblem(target) is { } nameProblem) return ShellResult.Error($"mv: {target.Value}: {nameProblem}");
