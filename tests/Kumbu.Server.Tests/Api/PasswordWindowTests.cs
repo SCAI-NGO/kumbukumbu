@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
@@ -546,6 +547,113 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
 
         using var refused = await CreateKeyAsync(user);
         await AssertPasswordRequiredAsync(refused);
+    }
+
+    private const string Wrong = "not the password at all";
+
+    private static async Task ConfirmWrongAsync(RestClient user, int times)
+    {
+        for (var i = 0; i < times; i++)
+        {
+            using var wrong = await user.SendAsync(HttpMethod.Post, "/api/session/confirm", new { password = Wrong });
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+            Assert.Equal("The password is wrong.", await RestClient.ErrorAsync(wrong));
+        }
+    }
+
+    private static async Task<HttpStatusCode> SessionStatusAsync(RestClient user)
+    {
+        using var session = await user.GetAsync("/api/session");
+        return session.StatusCode;
+    }
+
+    private static Task<BsonDocument> RawSlotAsync(WebApplicationFactory<Program> api, RestClient user) =>
+        api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("user_slots")
+            .Find(new BsonDocument { ["user"] = user.User.Id, ["kind"] = UserSlotDocument.Session }).SingleAsync(Ct);
+
+    [Fact]
+    public async Task Four_wrong_passwords_keep_a_remembered_session_and_the_fifth_ends_it()
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true);
+
+        await ConfirmWrongAsync(user, 4);
+        Assert.Equal(HttpStatusCode.OK, await SessionStatusAsync(user));
+        Assert.Equal(4, (await RawSlotAsync(api, user))["wrongPasswords"].AsInt32);
+
+        await ConfirmWrongAsync(user, 1);
+        Assert.Equal(HttpStatusCode.Unauthorized, await SessionStatusAsync(user));
+    }
+
+    [Fact]
+    public async Task A_right_password_resets_the_count_of_wrong_ones()
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true);
+        await ConfirmWrongAsync(user, 4);
+
+        await ConfirmAsync(user);
+
+        Assert.False((await RawSlotAsync(api, user)).Contains("wrongPasswords"));
+        Assert.Equal(HttpStatusCode.OK, await SessionStatusAsync(user));
+    }
+
+    [Fact]
+    public async Task Wrong_passwords_never_end_a_normal_session()
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api);
+
+        await ConfirmWrongAsync(user, 5);
+
+        Assert.Equal(HttpStatusCode.OK, await SessionStatusAsync(user));
+        Assert.False((await RawSlotAsync(api, user)).Contains("wrongPasswords"));
+    }
+
+    /// <summary>Every password check behind a session counts, whatever it guards: a new one belongs here.</summary>
+    [Theory]
+    [InlineData("ticket")]
+    [InlineData("recovery-key")]
+    [InlineData("reencrypt")]
+    [InlineData("preferences")]
+    [InlineData("rekey")]
+    [InlineData("delete-vault")]
+    [InlineData("delete-user")]
+    [InlineData("repeat-deletions")]
+    [InlineData("invite-admin")]
+    [InlineData("make-admin")]
+    [InlineData("password")]
+    [InlineData("delete-account")]
+    public async Task A_wrong_password_on_any_check_counts_towards_the_five(string action)
+    {
+        await using var api = Timed();
+        var admin = action is "delete-user" or "repeat-deletions" or "invite-admin" or "make-admin";
+        var user = await RestClient.NewAsync(api, remember: true, role: admin ? Roles.Admin : Roles.User);
+        var other = action is "delete-user" or "make-admin" ? await OtherUserAsync(api) : default;
+        await ConfirmWrongAsync(user, 4);
+        const string password = Wrong;
+
+        using (var response = action switch
+        {
+            "ticket" => await user.SendAsync(HttpMethod.Post, "/api/export/ticket", new { password }),
+            "recovery-key" => await user.SendAsync(HttpMethod.Post, "/api/recovery-key", new { currentPassword = password }),
+            "reencrypt" => await user.SendAsync(HttpMethod.Post, "/api/account/reencrypt", new { password }),
+            "preferences" => await user.SendAsync(HttpMethod.Put, "/api/account/preferences", new { askPasswordForDownloads = false, password }),
+            "rekey" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/rekey", new { password }),
+            "delete-vault" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/delete", new { password, confirm = "Arbeit" }),
+            "delete-user" => await user.SendAsync(HttpMethod.Post, $"/api/admin/users/{other.Id}/delete", new { password, confirm = other.Username }),
+            "repeat-deletions" => await user.SendAsync(HttpMethod.Post, "/api/admin/deletions/repeat", new { password }),
+            "invite-admin" => await user.SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = Roles.Admin, password }),
+            "make-admin" => await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{other.Id}", new { role = Roles.Admin, password }),
+            "password" => await user.SendAsync(HttpMethod.Post, "/api/password", new { oldPassword = password, newPassword = "another long passphrase here" }),
+            "delete-account" => await user.SendAsync(HttpMethod.Post, "/api/account/delete", new { password, confirm = user.Username }),
+            _ => throw new ArgumentOutOfRangeException(nameof(action)),
+        })
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.Unauthorized, await SessionStatusAsync(user));
     }
 
     [Fact]

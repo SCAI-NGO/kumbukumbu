@@ -94,6 +94,12 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status400BadRequest, Sentence(e));
         }
+        // Counted before the answer, whatever happens to the request now: a remembered session ends at the fifth in a row.
+        catch (WrongPasswordException e)
+        {
+            await AccountApi.PasswordWrongAsync(context.HttpContext, CancellationToken.None);
+            return Result(StatusCodes.Status400BadRequest, e.Message);
+        }
     }
 
     /// <summary>Declares the error responses in the OpenAPI document, all in the one <see cref="ApiError"/> shape.</summary>

@@ -167,3 +167,11 @@ internal static class AdminRules
 
 /// <summary>An action the acting user may not take: they aren't an admin, or it would touch the primary admin.</summary>
 public sealed class NotPermittedException(string message) : Exception(message);
+
+/// <summary>
+/// A password checked behind a session was wrong: a 400 with the message, and one of the wrong passwords in a row that
+/// end a remembered session (<see cref="Sessions.PasswordWrongAsync"/>, counted where <c>ApiErrors.Filter</c> answers
+/// it). Every such check throws this when the password is wrong, as it calls <c>AccountApi.PasswordGivenAsync</c> when
+/// it is right.
+/// </summary>
+public sealed class WrongPasswordException(string message) : Exception(message);

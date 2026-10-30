@@ -53,7 +53,7 @@ public sealed class Deletion(
     {
         if (!string.Equals(confirm, name, StringComparison.Ordinal)) throw new ArgumentException("Type the vault's name exactly to confirm.", nameof(confirm));
         // Before the lookup: without the password, nobody learns whether a vault of that name exists.
-        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new ArgumentException("The password is wrong.", nameof(password));
+        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
         // Only the owner's user key finds a vault through a user slot: nobody else finds it by name.
         if (await catalog.FindForUserAsync(user.Id, userKey, name, ct) is not { } vaultId) return null;
 
@@ -93,7 +93,7 @@ public sealed class Deletion(
     {
         var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
         // Before anything about the target: without the password, nobody learns whether the user exists.
-        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
+        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new WrongPasswordException("Your password is wrong.");
         if (userId == acting.Id) throw new NotPermittedException("Delete your own account in Settings.");
         var target = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
         if (target is null) return null;
@@ -120,7 +120,7 @@ public sealed class Deletion(
     public async Task<IReadOnlyList<DeletedUser>> RepeatAsync(User actor, byte[] actorKey, string password, CancellationToken ct)
     {
         var acting = await AdminRules.RequireAdminAsync(Users, actor, ct);
-        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new ArgumentException("Your password is wrong.", nameof(password));
+        if (!await users.CheckPasswordAsync(acting.Id, actorKey, password, ct)) throw new WrongPasswordException("Your password is wrong.");
 
         var done = new List<DeletedUser>();
         foreach (var target in await restored.FindAsync(ct))

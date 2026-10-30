@@ -65,12 +65,12 @@ public sealed class Rekeying(
     /// <summary>
     /// Re-keys the user's vault named <paramref name="vaultName"/> and waits for it (it may wait behind other vaults);
     /// null if the user has no such vault. The password is checked before the name is looked up, so that a stolen
-    /// session alone learns nothing (<see cref="ArgumentException"/> if it is wrong). Cancelling the wait leaves the run
+    /// session alone learns nothing (<see cref="WrongPasswordException"/> if it is wrong). Cancelling the wait leaves the run
     /// going.
     /// </summary>
     public async Task<RekeySummary?> RekeyVaultAsync(User user, byte[] userKey, string vaultName, string password, CancellationToken ct)
     {
-        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new ArgumentException("The password is wrong.", nameof(password));
+        if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) throw new WrongPasswordException("The password is wrong.");
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
 
         // Through the runner, never RekeyAsync directly: a run of its own would race the runner's.

@@ -160,4 +160,9 @@ public sealed class UserSlotDocument
     /// <summary>A remembered session's normal window: when it was last used while open.</summary>
     [BsonElement("windowUsedAt"), BsonIgnoreIfNull]
     public DateTime? WindowUsedAt { get; set; }
+
+    /// <summary>A remembered session: the wrong passwords given through it since the last right one
+    /// (<see cref="Sessions.PasswordWrongAsync"/>).</summary>
+    [BsonElement("wrongPasswords"), BsonIgnoreIfDefault]
+    public int WrongPasswords { get; set; }
 }

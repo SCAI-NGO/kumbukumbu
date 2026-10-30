@@ -180,7 +180,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         var idleSince = now - RememberedIdleTimeout;
         await Slots.UpdateOneAsync(
             s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.Remembered && s.ExpiresAt > now && s.LastUsedAt >= idleSince,
-            Builders<UserSlotDocument>.Update.Set(s => s.ConfirmedAt, now).Set(s => s.WindowUsedAt, now).Set(s => s.LastUsedAt, now),
+            Builders<UserSlotDocument>.Update.Set(s => s.ConfirmedAt, now).Set(s => s.WindowUsedAt, now).Set(s => s.LastUsedAt, now).Unset(s => s.WrongPasswords),
             cancellationToken: ct);
     }
 
@@ -265,5 +265,30 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         }
 
         return new KeptSession(slot.Id, slot.Wrapped, VaultCrypto.Seal(Kek(bytes, userId), newUserKey, SlotContext(userId)));
+    }
+
+    /// <summary>The wrong passwords in a row that end a remembered session (<see cref="PasswordWrongAsync"/>).</summary>
+    public const int WrongPasswordLimit = 5;
+
+    /// <summary>
+    /// Counts a wrong password given through the remembered session of <paramref name="secret"/>; the
+    /// <see cref="WrongPasswordLimit"/>th in a row ends it (its slot deleted) and answers its user's id. Without this a
+    /// stolen cookie would be a password-guessing oracle for 30 days at the rate of password checks; with it, it is
+    /// good for at most <see cref="WrongPasswordLimit"/> guesses. A normal session counts nothing: its own limits are
+    /// short, and the rate limit bounds it as a sign-in.
+    /// </summary>
+    public async Task<string?> PasswordWrongAsync(string secret, CancellationToken ct)
+    {
+        if (Decode(secret) is not { } bytes) return null;
+        var lookup = Lookup(bytes);
+        // Atomic, and decided on the count it returns: of concurrent wrong passwords, each sees its own.
+        var slot = await Slots.FindOneAndUpdateAsync(
+            s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup && s.Remembered,
+            Builders<UserSlotDocument>.Update.Inc(s => s.WrongPasswords, 1),
+            new FindOneAndUpdateOptions<UserSlotDocument> { ReturnDocument = ReturnDocument.After },
+            ct);
+        if (slot is null || slot.WrongPasswords < WrongPasswordLimit) return null;
+        var ended = await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
+        return ended.DeletedCount > 0 ? slot.User : null;
     }
 }

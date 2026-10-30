@@ -191,15 +191,21 @@ public sealed class RememberedSessionTests(KumbuAppFactory app)
     public async Task Confirmations_are_rate_limited_with_the_other_password_checks()
     {
         await using var api = Timed();
-        var session = await RememberedAsync(api, await NewUserAsync(api));
+        var username = await NewUserAsync(api);
+        var session = await RememberedAsync(api, username);
+        // The budget is the username's: one wrong check through another session, so that four through this one,
+        // which keep it, use the rest up.
+        var other = (await SignInAsync(api, username, remember: false)).Secret;
+        using (var elsewhere = await ConfirmAsync(api, other, NewPassword)) Assert.Equal(HttpStatusCode.BadRequest, elsewhere.StatusCode);
         _time.Advance(TimeSpan.FromMinutes(31));
 
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 4; i++)
         {
             using var wrong = await ConfirmAsync(api, session, NewPassword);
             Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
         }
 
+        // Limited before the password is checked, so the refusal counts no fifth wrong password.
         using var limited = await ConfirmAsync(api, session, NewPassword);
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.True(limited.Headers.RetryAfter?.Delta > TimeSpan.Zero);
