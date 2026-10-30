@@ -9,8 +9,8 @@ using Microsoft.Extensions.Options;
 
 namespace Kumbu.Server.Auth;
 
-/// <summary>Marks an endpoint the web app calls in the background (the open note's version, every few seconds): with
-/// a session, it doesn't count as the session's use, so the idle timeout still ends a session left alone.</summary>
+/// <summary>Marks an endpoint the web app polls in the background (the open note's version, the open board): with a
+/// session, it doesn't count as the session's use, so the idle timeout still ends a session left alone.</summary>
 public sealed class BackgroundMetadata
 {
     public static readonly BackgroundMetadata Instance = new();

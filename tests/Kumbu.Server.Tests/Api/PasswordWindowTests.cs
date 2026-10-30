@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
 
@@ -545,6 +546,28 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
 
         using var refused = await CreateKeyAsync(user);
         await AssertPasswordRequiredAsync(refused);
+    }
+
+    [Fact]
+    public async Task Polling_the_board_moves_no_clock_of_a_remembered_session()
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true);
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/board")) Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var slots = api.Services.GetRequiredService<IMongoDatabase>().GetCollection<UserSlotDocument>("user_slots");
+        Task<UserSlotDocument> SlotAsync() => slots.Find(s => s.User == user.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+        var before = (await SlotAsync()).LastUsedAt;
+
+        // An open board tab asks every 5 seconds; every 5 minutes is enough to show that none of it counts as use.
+        for (var minutes = 5; minutes <= 35; minutes += 5)
+        {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            using var board = await user.GetAsync("/api/vaults/Arbeit/board");
+            Assert.Equal(HttpStatusCode.OK, board.StatusCode);
+        }
+
+        Assert.Equal(before, (await SlotAsync()).LastUsedAt);
+        Assert.False(await WindowOpenAsync(user));
     }
 
     [Fact]
