@@ -28,8 +28,9 @@ public static class Manual
           diff <path> <other path>        compare two notes
           restore <path> [version]        undo: back from the trash, or to a version from history
           mv <path> <target>              move or rename a note, or a folder (/Work/old/); links are rewritten
-          rm <path>                       move a note to the trash (kept 30 days)
-          trash [path]                    list removed notes
+          mkdir <path>                    make a folder; an empty folder stays until you remove it
+          rm <path>                       move a note or an empty folder to the trash (kept 30 days)
+          trash [path]                    list removed notes and folders
           mkcp <path> <name>              name the state of a note, folder or vault (only when the user asks)
           lscp [path]                     list named checkpoints
           rmcp <path> <name>              remove a checkpoint (only when the user asks)

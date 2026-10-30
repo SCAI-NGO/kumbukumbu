@@ -318,6 +318,6 @@ public class AttachmentWriterTests
 
         var result = await Writer().RemoveAsync("/Work/Drafts/.vaultkeep", Ct);
 
-        Assert.Equal("removed /Work/Drafts/; it stays in the trash for 30 days ('restore /Work/Drafts/' brings it back)", result.Output);
+        Assert.Equal("removed folder /Work/Drafts/; it stays in the trash for 30 days ('restore /Work/Drafts/' brings it back)", result.Output);
     }
 }

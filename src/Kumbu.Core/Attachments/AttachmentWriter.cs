@@ -76,7 +76,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             }
 
             if (await CheckNewAsync(path, ct) is { } newError) return newError;
-            if (await notes.IsDamagedAsync(path, ct)) return Fail(ShellErrorKind.Conflict, Damage.Message(Upload, path));
+            if (await notes.IsDamagedAsync(path, ct)) return Fail(ShellErrorKind.Conflict, Damage.Message(ToolOf(path), Shown(path)));
 
             var created = new StoredAttachment(
                 path, await StateAsync(path, format, bytes, image, ct), 1, caller.Writer, Now, [], await ChangesetAsync(path, ct));
@@ -115,7 +115,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         var existing = await store.GetAttachmentAsync(path, ct);
         if (existing is null)
         {
-            if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
+            if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, Shown(path)));
             return ShellResult.Error($"{tool}: {Shown(path)}: No such file or directory{await Moves.HintAsync(notes, path, ct)}");
         }
 
@@ -134,7 +134,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             return ShellResult.Error($"{tool}: {Shown(path)} changed while removing it; try again");
         }
 
-        var message = $"removed {Shown(path)}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
+        var message = $"removed {(FolderMarker.Is(path) ? "folder " : "")}{Shown(path)}; it stays in the trash for {NoteWriter.TrashRetention.Days} days ('restore {Quote(path)}' brings it back)";
         if (linking.Count > 0)
         {
             var links = linking.Sum(x => x.Count);
@@ -142,6 +142,59 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         }
 
         return ShellResult.Ok(message);
+    }
+
+    /// <summary>Makes a folder that stays when empty, by writing its marker; the folders above it are implied.</summary>
+    public async Task<ShellResult> MakeFolderAsync(VaultPath folder, CancellationToken ct)
+    {
+        const string tool = "mkdir";
+        var shown = FolderMarker.Shown(FolderMarker.In(folder));
+        if (caller.Refuse(tool, folder) is { } refused) return refused;
+
+        if (!(await notes.ListVaultsAsync(ct)).Contains(folder.Segments[0]))
+        {
+            return ShellResult.Error($"{tool}: there is no vault '{folder.Segments[0]}' (ls lists the vaults; mkdir does not create vaults)");
+        }
+
+        if (folder.Segments.Count == 1) return ShellResult.Ok($"{folder.Value}/ is a vault and exists already; nothing was written");
+
+        if (await notes.ReadAsync(folder, ct) is not null) return ShellResult.Error($"{tool}: {folder.Value}: File exists (it is a note)");
+        if (await store.GetAttachmentAsync(folder, ct) is not null) return ShellResult.Error($"{tool}: {folder.Value}: File exists (it is a file)");
+        if (await IsFolderAsync(folder, ct)) return ShellResult.Ok($"{shown} exists already; nothing was written");
+
+        var written = await WriteAsync(FolderMarker.In(folder).Value, ReadOnlyMemory<byte>.Empty, null, null, ct);
+        return written.Result.IsError
+            ? written.Result
+            : ShellResult.Ok($"made folder {shown}; an empty folder stays until you remove it (rm {Quote(folder)})") with { Version = written.Result.Version };
+    }
+
+    /// <summary>Whether anything lies at or below <paramref name="folder"/>: a note, a file or a kept folder's marker.</summary>
+    public async Task<bool> IsFolderAsync(VaultPath folder, CancellationToken ct) =>
+        (await notes.ListNotesUnderAsync(folder, ct)).Count > 0 || (await store.ListAttachmentsUnderAsync(folder, ct)).Count > 0;
+
+    /// <summary>Whether the marker of <paramref name="folder"/> is in the trash and nothing else stands at the path.</summary>
+    public async Task<bool> FolderInTrashAsync(VaultPath folder, CancellationToken ct)
+    {
+        var marker = FolderMarker.In(folder);
+        return await notes.ReadAsync(folder, ct) is null && await store.GetAttachmentAsync(folder, ct) is null
+            && (await store.ListAttachmentTrashAsync(marker, ct)).Any(t => t.Attachment.Path == marker);
+    }
+
+    /// <summary>Removes a folder that holds nothing but its marker; the marker goes to the trash.</summary>
+    public async Task<ShellResult> RemoveFolderAsync(VaultPath folder, CancellationToken ct)
+    {
+        const string tool = "rm";
+        if (caller.Refuse(tool, folder) is { } refused) return refused;
+
+        var marker = FolderMarker.In(folder);
+        var entries = (await notes.ListNotesUnderAsync(folder, ct)).Count + (await store.ListAttachmentsUnderAsync(folder, ct)).Count(a => a.Path != marker);
+        if (entries > 0)
+        {
+            return ShellResult.Error(
+                $"{tool}: {folder.Value}: Is a directory holding {entries} {(entries == 1 ? "entry" : "entries")} (rm removes one note or file at a time, or an empty folder)");
+        }
+
+        return await RemoveAsync(marker.Value, ct);
     }
 
     /// <summary>The notes whose links and embeds lead to the attachment, with how many each has, by path.</summary>
@@ -170,7 +223,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         var existing = await store.GetAttachmentAsync(path, ct);
         if (existing is null)
         {
-            if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
+            if (await notes.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, Shown(path)));
             var trashed = (await store.ListAttachmentTrashAsync(path, ct))
                 .FirstOrDefault(t => t.Attachment.Path == path && (version is null || t.Attachment.Version == version));
             if (trashed is null)
@@ -251,7 +304,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     }
 
     private async Task<WriteResult> MissingAsync(VaultPath path, CancellationToken ct) =>
-        await notes.IsDamagedAsync(path, ct) ? Fail(ShellErrorKind.Conflict, Damage.Message(Upload, path))
+        await notes.IsDamagedAsync(path, ct) ? Fail(ShellErrorKind.Conflict, Damage.Message(ToolOf(path), Shown(path)))
         : Fail(ShellErrorKind.NotFound, await Moves.HintAsync(notes, path, ct) is { Length: > 0 } moved
             ? $"{ToolOf(path)}: {Shown(path)}: No such file or directory{moved}"
             : $"{ToolOf(path)}: {Shown(path)}: No such file or directory (if it was removed, 'trash' lists it)");
