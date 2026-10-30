@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh.Commands;
@@ -30,21 +31,24 @@ public sealed class Shell
     private readonly Checkpoints _checkpoints;
     private readonly Func<DateTime> _now;
     private readonly IShellObserver? _observer;
+    private readonly IAttachmentPixels? _pixels;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null)
+    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null, IAttachmentPixels? pixels = null, string version = "0.0.0-dev")
     {
         _observer = observer;
+        _pixels = pixels;
         _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
         var files = writer.ForAttachments();
         ICommand[] commands =
         [
-            .. ReadingCommands(notes, _now),
-            new Semsearch(notes, search ?? new Search.NoSearchIndex()),
+            .. ReadingCommands(notes, _now, pixels),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels),
+            .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
             new Mv(mover), new Rm(writer, files), new Trash(notes),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
-            new Help(_commands),
+            new Uname(version), new Help(_commands),
         ];
         foreach (var command in commands)
         {
@@ -52,12 +56,15 @@ public sealed class Shell
         }
     }
 
+    /// <summary>Adds a command after the built-in ones; for tests of what the shell does with a kind of command.</summary>
+    internal void Register(ICommand command) => _commands[command.Name] = command;
+
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels, bool live = true) =>
     [
-        new Ls(notes), new Cat(notes), new OutlineCommand(notes), new Rg(notes),
+        new Ls(notes), new Cat(notes, pixels), new OutlineCommand(notes), new Rg(notes, live ? pixels : null),
         new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
@@ -72,6 +79,11 @@ public sealed class Shell
         if (stages.Count == 0) return ShellResult.Error("sh: empty command");
 
         _observer?.Ran([.. stages.Select(s => s[0])]);
+
+        if (stages.Count > 1 && stages.Select(s => s[0]).FirstOrDefault(n => _commands.TryGetValue(n, out var c) && c.ProducesImages) is { } shower)
+        {
+            return OutputLimit.Apply(ShellResult.Error($"sh: {shower} shows images and can't be part of a pipeline; run it on its own") with { Kind = ShellErrorKind.Invalid });
+        }
 
         string? input = null;
         NoteVersion? version = null;
@@ -185,7 +197,7 @@ public sealed class Shell
             }
         }
 
-        var command = ReadingCommands(view, _now).Single(c => c.Name == name);
+        var command = ReadingCommands(view, _now, _pixels, live: false).Single(c => c.Name == name);
         var result = await command.RunAsync(args, null, ct);
         if (command is Cat && args.Count == 1) result = Cat.OutlineIfTooLong(args[0], result);
         return result with { Version = null };

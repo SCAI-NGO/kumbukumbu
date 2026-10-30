@@ -17,6 +17,9 @@ public interface ICommand
     /// <summary>Whether the command may stand right of a pipe (a filter).</summary>
     bool ReadsInput { get; }
 
+    /// <summary>Whether the result carries images; such a command can't be part of a pipeline.</summary>
+    bool ProducesImages => false;
+
     /// <param name="input">The previous stage's output, or null if the command starts the pipeline.</param>
     Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct);
 }

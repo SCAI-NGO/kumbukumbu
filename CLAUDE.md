@@ -33,6 +33,8 @@ Only when the maintainer asks for a release.
 2. Pull request "Release vX.Y.Z", squash merge once CI is green.
 3. Annotated tag on the merge commit: `git tag -a vX.Y.Z -m "Kumbu² X.Y.Z"`, then `git push origin vX.Y.Z`. The tag's image build is the release; there are no GitHub release objects.
 
+A pre-release, for trying a build on a server pinned to it before the release: an annotated tag `vX.Y.Z-pre.N` (`-m "Kumbu² X.Y.Z-pre.N"`) on a `master` commit, without a release pull request; the version comes from the tag, and `:latest` stays where it is.
+
 The Obsidian plugin is versioned on its own; it only changes version when its code changes.
 
 ## Dependabot

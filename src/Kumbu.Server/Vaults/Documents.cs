@@ -147,3 +147,52 @@ public sealed class BlobDocument
     [BsonElement("at")]
     public DateTime At { get; set; }
 }
+
+/// <summary>
+/// A part of a PDF's analysis (collection <c>pdf_analyses</c>), which belongs to the PDF's blob as the bytes do:
+/// part 0 the measurements (or why there are none), parts 1… the page text. Sealed under the vault key, bound to the
+/// blob's id and the part number (<see cref="UnlockedVault.SealPdfAnalysis{T}"/>); in the clear only the vault, the
+/// blob's id (as in <see cref="BlobDocument"/>), the part and when it was stored.
+/// </summary>
+[BsonIgnoreExtraElements]
+public sealed class PdfAnalysisDocument
+{
+    [BsonId]
+    public ObjectId Id { get; set; }
+
+    [BsonElement("vault")]
+    public string Vault { get; set; } = "";
+
+    [BsonElement("bid")]
+    public byte[] BlobId { get; set; } = [];
+
+    [BsonElement("part")]
+    public int Part { get; set; }
+
+    [BsonElement("blob")]
+    public byte[] Blob { get; set; } = [];
+
+    [BsonElement("at")]
+    public DateTime At { get; set; }
+}
+
+/// <summary>A PDF's blob waiting for its analysis (collection <c>pdf_jobs</c>): no content, one per vault and blob.</summary>
+[BsonIgnoreExtraElements]
+public sealed class PdfJobDocument
+{
+    [BsonId]
+    public ObjectId Id { get; set; }
+
+    [BsonElement("vault")]
+    public string Vault { get; set; } = "";
+
+    [BsonElement("bid")]
+    public byte[] BlobId { get; set; } = [];
+
+    [BsonElement("at")]
+    public DateTime At { get; set; }
+
+    /// <summary>Analyses tried and failed so far.</summary>
+    [BsonElement("tries")]
+    public int Tries { get; set; }
+}

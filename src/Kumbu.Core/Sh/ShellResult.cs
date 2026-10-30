@@ -18,6 +18,9 @@ public enum ShellErrorKind
 
     /// <summary>The state of the vault stands in the way (a definition problem, a name taken, changes that kept racing).</summary>
     Conflict,
+
+    /// <summary>Something it needs is away for now (the PDF sidecar, a PDF's analysis): the same call may work later.</summary>
+    Unavailable,
 }
 
 /// <summary>Outcome of a shell command; commands never throw for user input.</summary>
@@ -33,6 +36,12 @@ public sealed record ShellResult(string Output, bool IsError)
     /// the next command reads the output, and a hint would be taken for data.
     /// </summary>
     public string? NoMatchHint { get; init; }
+
+    /// <summary>
+    /// Text and images in the order the model should see them; then <see cref="Output"/> is the parts' text joined
+    /// (for logs), and <see cref="OutputLimit"/> leaves the result alone.
+    /// </summary>
+    public IReadOnlyList<ShellPart>? Parts { get; init; }
 
     public static ShellResult Ok(string output) => new(output, false);
 

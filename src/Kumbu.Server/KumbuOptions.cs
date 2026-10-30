@@ -58,6 +58,21 @@ public sealed class KumbuOptions
     public DeletionsOptions Deletions { get; set; } = new();
 
     public MetricsOptions Metrics { get; set; } = new();
+
+    public PdfOptions Pdf { get; set; } = new();
+}
+
+/// <summary>The PDF sidecar, which parses PDFs and decodes images in a container of its own (<see cref="Attachments.PdfSidecar"/>).</summary>
+public sealed class PdfOptions
+{
+    /// <summary>Its base URL (Compose: <c>http://pdf:8090</c>); empty, PDFs aren't analysed and nothing is rendered.</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>The sidecar's base limit for an analysis; it adds 0.5 s per page, up to 20 minutes.</summary>
+    public int AnalysisSeconds { get; set; } = 30;
+
+    /// <summary>The sidecar's limit for rendering a page or an image.</summary>
+    public int RenderSeconds { get; set; } = 10;
 }
 
 /// <summary>The Prometheus endpoint, on a port of its own (<see cref="Metrics.MetricsServer"/>).</summary>
