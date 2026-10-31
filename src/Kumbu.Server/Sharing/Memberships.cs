@@ -347,12 +347,12 @@ public sealed partial class Memberships(
     /// unless it is an active membership of that vault. The caller then tells the sync hub and runs <see cref="CleanupAsync"/>.
     /// </summary>
     public Task<EndedMembership> RevokeAsync(string vaultId, string membershipId, CancellationToken ct) =>
-        EndAsync(Builders<MembershipDocument>.Filter.Eq(m => m.Vault, vaultId), membershipId, MembershipStatus.Revoked, ct);
+        EndAsync(BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Active, MembershipStatus.Revoked), MembershipStatus.Revoked, ct);
 
     /// <summary>The member leaves (collab design §6.1): as <see cref="RevokeAsync"/>, bound to her as the member instead
     /// of to the vault, to <c>left</c>.</summary>
     public Task<EndedMembership> LeaveAsync(string memberId, string membershipId, CancellationToken ct) =>
-        EndAsync(Builders<MembershipDocument>.Filter.Eq(m => m.Member, memberId), membershipId, MembershipStatus.Left, ct);
+        EndAsync(BoundFilter(membershipId, MembershipScope.OfMember(memberId), MembershipStatus.Active, MembershipStatus.Left), MembershipStatus.Left, ct);
 
     /// <summary>
     /// The owner changes the role of an active membership of <paramref name="vaultId"/> (collab design §6.3): one update
@@ -368,7 +368,7 @@ public sealed partial class Memberships(
         await EnsureReadyAsync(ct);
         var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
         var f = Builders<MembershipDocument>.Filter;
-        var bound = f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Active);
+        var bound = BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Active, MembershipStatus.Active);
         var text = MemberRoles.ToText(role);
         using var session = await catalog.StartSessionAsync(ct);
         await session.WithTransactionAsync(
@@ -392,12 +392,11 @@ public sealed partial class Memberships(
         return await OwnersViewAsync(await Docs.Find(m => m.Id == membershipId).FirstAsync(ct), vaultKey, ct);
     }
 
-    private async Task<EndedMembership> EndAsync(FilterDefinition<MembershipDocument> bound, string membershipId, string to, CancellationToken ct)
+    private async Task<EndedMembership> EndAsync(FilterDefinition<MembershipDocument> bound, string to, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var f = Builders<MembershipDocument>.Filter;
         var ended = await Docs.FindOneAndUpdateAsync(
-            f.Eq(m => m.Id, membershipId) & bound & TransitionFilter(MembershipStatus.Active, to)!,
+            bound,
             Builders<MembershipDocument>.Update.Set(m => m.Status, to).Set(m => m.RevokedAt, Now).Unset(m => m.Pin).Inc(m => m.Revision, 1),
             new FindOneAndUpdateOptions<MembershipDocument> { ReturnDocument = ReturnDocument.After },
             ct) ?? throw new MembershipNotFoundException();
@@ -526,6 +525,28 @@ public sealed partial class Memberships(
             _ => null,
         };
 
+    /// <summary>
+    /// The filter of every write a route makes to a membership (HARD RULE 2, collab design §6.0): its id, the scope the
+    /// caller may write in, which is the vault resolved from the owner's own slot (<see cref="MembershipScope.OfVault"/>)
+    /// or the caller as the member (<see cref="MembershipScope.OfMember"/>), and the status it may move from towards
+    /// <paramref name="to"/> (<paramref name="to"/> equal to <paramref name="from"/>: a change within it, as of a role).
+    /// An id of another vault's or another member's membership matches nothing, and the route answers 404.
+    /// </summary>
+    internal static FilterDefinition<MembershipDocument> BoundFilter(string membershipId, MembershipScope scope, string from, string to)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var bound = (scope.VaultId, scope.MemberId) switch
+        {
+            ({ Length: > 0 } vault, null) => f.Eq(m => m.Vault, vault),
+            (null, { Length: > 0 } member) => f.Eq(m => m.Member, member),
+            _ => throw new ArgumentException("A membership write is bound to one vault or one member.", nameof(scope)),
+        };
+        var status = from == to
+            ? f.Eq(m => m.Status, from)
+            : TransitionFilter(from, to) ?? throw new InvalidOperationException($"A membership doesn't move from {from} to {to}.");
+        return f.Eq(m => m.Id, membershipId) & bound & status;
+    }
+
     internal const string LiveMemberIndex = "vault_1_member_1_live";
 
     /// <summary>Creates the indexes once per process; lazy, so the server starts before MongoDB is reachable.</summary>
@@ -598,6 +619,15 @@ internal sealed record MembershipPin(
     [property: JsonPropertyName("member")] string Member,
     [property: JsonPropertyName("alg")] byte Alg,
     [property: JsonPropertyName("publicKey")] byte[] PublicKey);
+
+/// <summary>Whom a membership write is bound to (<see cref="Memberships.BoundFilter"/>): one vault, the owner's, or one
+/// member, the caller.</summary>
+internal readonly record struct MembershipScope(string? VaultId, string? MemberId)
+{
+    public static MembershipScope OfVault(string vaultId) => new(vaultId, null);
+
+    public static MembershipScope OfMember(string memberId) => new(null, memberId);
+}
 
 /// <summary>A membership just revoked or left: its vault and its member, for the sync hub and the cleanup.</summary>
 public sealed record EndedMembership(string Id, string Vault, string Member);

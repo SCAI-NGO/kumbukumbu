@@ -247,7 +247,7 @@ public sealed partial class Memberships
                 await RequireNotClosingAsync(s, vaultId, token);
                 var confirmed = await Docs.UpdateOneAsync(
                     s,
-                    Bound(membershipId, vaultId, MembershipStatus.Pending, MembershipStatus.Active) & f.Ne(m => m.Member, null),
+                    BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Pending, MembershipStatus.Active) & f.Ne(m => m.Member, null),
                     Builders<MembershipDocument>.Update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, Now).Inc(m => m.Revision, 1),
                     cancellationToken: token);
                 if (confirmed.MatchedCount == 0) throw new MembershipNotFoundException();
@@ -284,7 +284,7 @@ public sealed partial class Memberships
             {
                 var ended = await Docs.UpdateOneAsync(
                     s,
-                    Bound(membershipId, vaultId, MembershipStatus.Pending, MembershipStatus.Revoked) & (redeemed ? f.Ne(m => m.Member, null) : f.Eq(m => m.Member, null)),
+                    BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Pending, MembershipStatus.Revoked) & (redeemed ? f.Ne(m => m.Member, null) : f.Eq(m => m.Member, null)),
                     Builders<MembershipDocument>.Update
                         .Set(m => m.Status, MembershipStatus.Revoked).Set(m => m.RevokedAt, Now)
                         .Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Unset(m => m.Pin)
@@ -300,17 +300,6 @@ public sealed partial class Memberships
             },
             cancellationToken: ct);
         log.LogInformation("Membership {MembershipId} of vault {VaultId} was {Ended}", membershipId, vaultId, redeemed ? "declined" : "withdrawn");
-    }
-
-    /// <summary>
-    /// The filter of an owner's write to a membership (collab design §6.0): its id, the vault resolved from her own
-    /// slot, and the status it may move from towards <paramref name="to"/>; a membership of another vault matches nothing.
-    /// </summary>
-    private static FilterDefinition<MembershipDocument> Bound(string membershipId, string vaultId, string from, string to)
-    {
-        var f = Builders<MembershipDocument>.Filter;
-        return f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Vault, vaultId)
-            & (TransitionFilter(from, to) ?? throw new InvalidOperationException($"A membership doesn't move from {from} to {to}."));
     }
 
     /// <summary>
