@@ -158,7 +158,7 @@ public sealed class PairingTests(MongoFixture fixture)
 
         var info = Assert.Single(await Keys().ListAsync(a.User, a.Key, Ct));
         Assert.Equal(ApiKeyKind.Device, info.Kind);
-        Assert.Equal(new Dictionary<string, KeyRight> { [a.VaultId] = KeyRight.Write }, info.Vaults);
+        Assert.Equal(new Dictionary<string, KeyRight> { [a.VaultId] = KeyRight.Maintain }, info.Vaults);
         var resolved = await Keys().ResolveAsync(redeemed!.Key, Ct);
         Assert.Equal(info.Id, resolved!.Id);
     }

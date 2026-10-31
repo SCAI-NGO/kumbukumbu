@@ -139,6 +139,36 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal("device", Assert.Single((await JsonAsync(keys)).AsArray())!["kind"]!.GetValue<string>());
     }
 
+    // Green before task 0.5 too: from then on the board's definition is refused below maintain, and this guards that a
+    // device paired to an own vault keeps changing it (collab design §10.2).
+    [Fact]
+    public async Task A_device_paired_to_an_own_vault_may_change_the_board()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var version = await user.CreateAsync("Board/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n  - Done\n---\n");
+        using var redeemed = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        var key = (await JsonAsync(redeemed))["key"]!.GetValue<string>();
+
+        using var put = await user.SendAsync(
+            HttpMethod.Put, user.Url("Board/Board.md"), new { content = "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n  - Doing\n  - Done\n---\n", version }, bearer: key);
+
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_device_paired_to_an_own_vault_key_is_listed_as_maintain()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        using var redeemed = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+
+        using var keys = await user.GetAsync("/api/keys");
+
+        var device = Assert.Single((await JsonAsync(keys)).AsArray())!;
+        Assert.Equal("device", device["kind"]!.GetValue<string>());
+        Assert.Equal("maintain", device["vaults"]!["Gartenarbeit"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task A_wrong_code_says_only_that_it_is_not_valid()
     {

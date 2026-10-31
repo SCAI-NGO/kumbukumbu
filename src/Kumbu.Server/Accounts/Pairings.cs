@@ -134,8 +134,9 @@ public sealed class Pairings : IDisposable
                 var name = n == 1 ? baseName : $"{baseName} {n.ToString(CultureInfo.InvariantCulture)}";
                 try
                 {
+                    // Maintain: a device is the person themself in Obsidian, so it may change the vault's structure too.
                     var (key, info) = await keys.CreateAsync(
-                        record.User, record.UserKey, record.CredentialReadAt, name, new Dictionary<string, KeyRight> { [record.VaultId] = KeyRight.Write }, ct,
+                        record.User, record.UserKey, record.CredentialReadAt, name, new Dictionary<string, KeyRight> { [record.VaultId] = KeyRight.Maintain }, ct,
                         record.ExpiresInDays, ApiKeyKind.Device);
                     log.LogInformation("User {UserId} paired a device as API key {KeyId}", record.User.Id, info.Id);
                     return new RedeemedKey(key, record.VaultName, info.Name);
