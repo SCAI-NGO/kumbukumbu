@@ -534,7 +534,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         foreach (var card in candidates)
         {
             var target = await ArchivePathAsync(vault, card.Title, ct);
-            var result = await mover.MoveAsync(card.Path, target, rewriteLinks: true, ct);
+            var result = await mover.MoveCardAsync(card.Path, target, ct);
             if (result.IsError)
             {
                 stopped = $"; archiving stopped at '{card.Title}': {result.Output}";

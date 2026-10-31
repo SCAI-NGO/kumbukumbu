@@ -401,6 +401,25 @@ public class BoardServiceTests
     }
 
     [Fact]
+    public async Task A_writer_archives_a_card_that_Board_md_links_to()
+    {
+        const string definition = "---\nkumbu-board: 1\ncolumns: [Doing, { Done: [archivable] }]\narchive: { after: 1, minDays: 14 }\n---\nSee [[Board/A]].\n";
+        var store = new InMemoryNoteStore(
+            ("/Work/Board/Board.md", definition),
+            ("/Work/Board/A.md", Aged("Done", "H", new DateOnly(2026, 9, 1))),
+            ("/Work/Board/X.md", Card("Doing", "V")));
+        var service = Service(store, WriteLevel);
+
+        var result = await service.MoveAsync("Work", "X", "Done", "top", null, Ct);
+
+        // A card operation is write (concept §7), the link the board rewrites in its own Board.md included.
+        Assert.Equal("board: moved 'X' to Done (1 of 2); archived 'A' to /Work/Board/Archive/", result.Output);
+        var board = await Content(store, "/Work/Board/Board.md");
+        Assert.DoesNotContain("[[Board/A]]", board);
+        Assert.Contains("Archive/A]]", board);
+    }
+
+    [Fact]
     public async Task Archived_cards_get_archived_and_links_follow()
     {
         var store = new InMemoryNoteStore(

@@ -12,7 +12,16 @@ namespace Kumbu.Core.Notes;
 /// </summary>
 public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
-    public async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
+    public Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct) =>
+        MoveAsync(source, target, rewriteLinks, card: false, ct);
+
+    /// <summary>A card's move by the board (to its archive): a card operation, so it needs <c>write</c> only, even where
+    /// the move rewrites a link in <c>Board.md</c> (decided by the controller, after concept §7). A person's own
+    /// <c>mv</c> that rewrites such a link is structural.</summary>
+    internal Task<ShellResult> MoveCardAsync(VaultPath source, VaultPath target, CancellationToken ct) =>
+        MoveAsync(source, target, rewriteLinks: true, card: true, ct);
+
+    private async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, bool card, CancellationToken ct)
     {
         // As a folder: a folder named without its '/' is refused below as one, but a structural refusal comes first.
         if (caller.RefuseFolder("mv", source) is { } refused) return refused;
@@ -36,7 +45,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (await CheckTargetAsync(source, target, [], ct) is { } problem) return problem;
 
         return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
-            $"moved {source.Value} to {target.Value}", ct);
+            $"moved {source.Value} to {target.Value}", ct, card);
     }
 
     /// <summary>Moves every note and attachment below <paramref name="source"/>, keeping the structure below it. Like
@@ -144,7 +153,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// all other notes. A move changes no text, so a note or attachment without rewrites keeps its writer; rewritten
     /// notes get their own history entry, marked "(mv)".</summary>
     private async Task<ShellResult> CommitAsync(
-        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct)
+        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct, bool card = false)
     {
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);
@@ -186,8 +195,9 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
         foreach (var (path, list) in rewrites.Where(r => !map.ContainsValue(r.Key)))
         {
-            // Rewriting a link is a write too: in a structural file only for those who may maintain the vault.
-            if (caller.Refuse("mv", path) is { } refused) return refused;
+            // Rewriting a link is a write too: in a structural file only for those who may maintain the vault, unless
+            // the board moves one of its cards.
+            if (!card && caller.Refuse("mv", path) is { } refused) return refused;
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
             batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, caller.Reference, now, changeset)));

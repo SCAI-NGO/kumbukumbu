@@ -230,7 +230,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     /// </summary>
     public async Task<ShellResult> RestoreAsync(VaultPath path, string name, string? token, CancellationToken ct)
     {
-        if (writer.Caller.Refuse("restore", path) is { } refused) return refused;
+        // Restoring Board.md itself answers as any restore that would change the board does.
+        if (writer.Caller.Refuse("restore", path) is { } refused) return refused.Code == Refusals.Structural ? StructuralRefusal(path.Segments[0]) : refused;
         var by = writer.Caller.Writer;
         if (path.IsRoot) return ShellResult.Error("restore: give a path in the checkpoint's vault, e.g. restore --checkpoint before-cleanup /Demo");
         var (view, error) = await OpenAsync("restore", path.Segments[0], name, ct);
@@ -262,8 +263,29 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     {
         var vault = scope.Segments[0];
         if (writer.Caller.Level(vault) >= AccessLevel.Maintain || !await StructuralChangeAsync(view, scope, ct)) return null;
-        return Refusals.Of("restore", Refusals.Structural,
-            $"This checkpoint changes the board's structure; only those who may maintain *{vault}* can restore it.");
+        return StructuralRefusal(vault);
+    }
+
+    private static ShellResult StructuralRefusal(string vault) => Refusals.Of("restore", Refusals.Structural,
+        $"This checkpoint changes the board's structure; only those who may maintain *{vault}* can restore it.");
+
+    /// <summary>
+    /// The same refusal for what the plan does outside its scope: a note moved back out of the board's place, a link
+    /// rewritten in a <c>Board.md</c> elsewhere. Every path the plan writes, moves or rewrites is asked.
+    /// </summary>
+    private ShellResult? RefusePlan(RestoreWork work, VaultPath scope)
+    {
+        var vault = scope.Segments[0];
+        if (writer.Caller.Level(vault) >= AccessLevel.Maintain) return null;
+        var files = work.Attachments;
+        IEnumerable<VaultPath> touched =
+        [
+            .. work.Changed.Keys, .. work.Back.Keys, .. work.Trash.Select(n => n.Path),
+            .. work.Moved.Keys, .. work.Moved.Values.Select(m => m.Now.Path), .. work.Rewrites.Keys,
+            .. files.Changed.Keys, .. files.Back.Keys, .. files.Trash.Select(a => a.Path),
+            .. files.Moved.Keys, .. files.Moved.Values.Select(m => m.Now.Path),
+        ];
+        return touched.Any(StructuralFiles.IsStructural) ? StructuralRefusal(vault) : null;
     }
 
     /// <summary>Whether a structural file in <paramref name="scope"/> differs between the checkpoint and now, a file
@@ -491,7 +513,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var (view, error) = await OpenAsync("restore", vault, name, ct);
         if (view is null) return (null, error);
         if (await RefuseStructuralAsync(view, view.Checkpoint.Path, ct) is { } structural) return (null, structural);
-        var (preview, current) = await PreviewOfAsync(view, view.Checkpoint.Path, ct);
+        var (preview, current, refusedPlan) = await PreviewOfAsync(view, view.Checkpoint.Path, ct);
+        if (preview is null) return (null, refusedPlan);
         if (preview.Plan is { } token) plans.Add(token, new RestorePlan(view.Checkpoint.Path.Value, name, current, writer.Now), writer.Now);
         return (preview, null);
     }
@@ -508,11 +531,12 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     }
 
     /// <summary>The preview of a restore of <paramref name="scope"/>, and the versions its plan depends on.</summary>
-    private async Task<(RestorePreview Preview, IReadOnlyList<(VaultPath Path, string Version)> Current)> PreviewOfAsync(
+    private async Task<(RestorePreview? Preview, IReadOnlyList<(VaultPath Path, string Version)> Current, ShellResult? Refused)> PreviewOfAsync(
         CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
         var work = await PlanAsync(view, scope, ct);
+        if (RefusePlan(work, scope) is { } refused) return (null, [], refused);
         var changes = new List<RestoreChange>();
         foreach (var (path, (now, then)) in work.Changed) changes.Add(new(RestoreChangeKind.Changed, path, null, TextDiff.Count(now.Content, then)));
         foreach (var path in work.Back.Keys) changes.Add(new(RestoreChangeKind.Back, path, null, null));
@@ -540,13 +564,14 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             [.. work.Rewrites.Keys.OrderBy(p => p.Value, StringComparer.Ordinal)],
             [.. work.Broken.Select(b => b[2..])],
             token);
-        return (preview, current);
+        return (preview, current, null);
     }
 
     private async Task<ShellResult> PreviewAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
     {
         var checkpoint = view.Checkpoint;
-        var (preview, current) = await PreviewOfAsync(view, scope, ct);
+        var (preview, current, refused) = await PreviewOfAsync(view, scope, ct);
+        if (preview is null) return refused!;
         var where = preview.Where;
         if (preview.Plan is not { } token) return ShellResult.Ok($"{where} already matches checkpoint '{checkpoint.Name}'; nothing to restore");
 
@@ -600,6 +625,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         var work = await PlanAsync(view, scope, ct);
+        if (RefusePlan(work, scope) is { } refused) return refused;
         var current = work.Current(await BothAsync(view, scope, ct)).ToDictionary(c => c.Path, c => c.Version);
         var planned = plan.Current.ToDictionary(c => c.Path, c => c.Version);
         var changed = current.Where(c => planned.GetValueOrDefault(c.Key) != c.Value).Select(c => c.Key)
