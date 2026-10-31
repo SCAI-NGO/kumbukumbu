@@ -1257,6 +1257,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 new CreateIndexModel<SlotDocument>(
                     Builders<SlotDocument>.IndexKeys.Ascending(s => s.ConnectionId),
                     new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.ConnectionId) }),
+                // A membership's slots, and a member's keys and connections derived through it (collab design §2.2).
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.Membership),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.Membership) }),
+                new CreateIndexModel<SlotDocument>(
+                    Builders<SlotDocument>.IndexKeys.Ascending(s => s.GrantedVia),
+                    new CreateIndexOptions<SlotDocument> { PartialFilterExpression = Builders<SlotDocument>.Filter.Exists(s => s.GrantedVia) }),
                 // A token's slots vanish physically when it expires (spec §5); only slots with expiresAt carry one.
                 new CreateIndexModel<SlotDocument>(Builders<SlotDocument>.IndexKeys.Ascending(s => s.ExpiresAt), new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
                 // One run at a time per vault: at most one slot with its new key.

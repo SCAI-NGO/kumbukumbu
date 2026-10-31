@@ -41,6 +41,16 @@ public sealed class SlotDocument
     /// <summary>A slot of one OAuth token (code, access or refresh) of a connection; vanishes with the token.</summary>
     public const string Connection = "connection";
 
+    /// <summary>
+    /// A member's way into a shared vault (collab design §2.2), under the member's own <see cref="Lookup"/> and with the
+    /// alias's hash in <see cref="NameId"/>. Never ownership: it carries no <see cref="Owner"/>, and only a <see cref="User"/>
+    /// slot makes its user the vault's owner. Opens only while its <see cref="Membership"/> is active.
+    /// </summary>
+    public const string Member = "member";
+
+    /// <summary>A pending invitation's slot, wrapped under a key from the invite secret; expires with it.</summary>
+    public const string Invite = "invite";
+
     [BsonId]
     public ObjectId Id { get; set; }
 
@@ -54,8 +64,9 @@ public sealed class SlotDocument
     [BsonElement("lookup"), BsonIgnoreIfNull]
     public byte[]? Lookup { get; set; }
 
-    /// <summary>User slots only: a keyed hash of the vault's normalised name, so MongoDB can keep a user's vault
-    /// names unique (partial unique index with <see cref="Lookup"/>) without ever seeing a name.</summary>
+    /// <summary>User and member slots only: a keyed hash of the vault's normalised name (for a member slot, the alias),
+    /// so MongoDB can keep a user's vault names unique (partial unique index with <see cref="Lookup"/>) without ever
+    /// seeing a name.</summary>
     [BsonElement("nameId"), BsonIgnoreIfNull]
     public byte[]? NameId { get; set; }
 
@@ -84,6 +95,23 @@ public sealed class SlotDocument
     /// since the TTL monitor runs only about once a minute.</summary>
     [BsonElement("expiresAt"), BsonIgnoreIfNull]
     public DateTime? ExpiresAt { get; set; }
+
+    /// <summary>Slots of kind <see cref="Member"/> and <see cref="Invite"/>: the membership they belong to.</summary>
+    [BsonElement("membership"), BsonIgnoreIfNull]
+    public string? Membership { get; set; }
+
+    /// <summary>A member's API key and connection slots: the membership they were derived through. Slots without it
+    /// are the owner's.</summary>
+    [BsonElement("grantedVia"), BsonIgnoreIfNull]
+    public string? GrantedVia { get; set; }
+
+    /// <summary>Member slots: the member's name for the vault, sealed under a key from her user key.</summary>
+    [BsonElement("alias"), BsonIgnoreIfNull]
+    public byte[]? Alias { get; set; }
+
+    /// <summary>Slots with <see cref="GrantedVia"/>: when they last opened the vault, to the minute.</summary>
+    [BsonElement("usedAt"), BsonIgnoreIfNull]
+    public DateTime? UsedAt { get; set; }
 
     [BsonElement("wrapped")]
     public byte[] Wrapped { get; set; } = [];
