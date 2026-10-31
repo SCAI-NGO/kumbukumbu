@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -386,6 +387,47 @@ public sealed class ConnectionTests(MongoFixture fixture)
         await docs.UpdateOneAsync(Builders<BsonDocument>.Filter.Eq("_id", second.Id), Builders<BsonDocument>.Update.Set("meta", meta), cancellationToken: Ct);
 
         Assert.Equal(first.Id, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Id);
+    }
+
+    [Fact]
+    public async Task A_legacy_write_connection_slot_opens_as_maintain()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes", "Diary");
+        var created = await Connections().CreateAsync(user, userKey, JustRead, "phone", Grant(vaults["Notes"]), Ct);
+        const string tokenId = "token-1";
+        var token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        var (slots, vaultKeys) = await Catalog().ConnectionSlotsFromUserAsync(
+            user.Id, userKey, created.Id, tokenId, token, new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Write }, null, Ct);
+        Assert.All(slots, s => Assert.Equal(2, LegacySlot.OpenConnection(token, s.Vault, created.Id, tokenId, s.Wrapped).V));
+        // Notes as a slot sealed before 0.3.0 (no version); Diary as one sealed now.
+        var legacy = slots.Single(s => s.Vault == vaults["Notes"]);
+        legacy.Wrapped = LegacySlot.SealConnection(token, legacy.Vault, created.Id, tokenId, vaultKeys[legacy.Vault], "write");
+        await _db.GetCollection<SlotDocument>("slots").InsertManyAsync(slots, cancellationToken: Ct);
+
+        var opened = await Catalog().OpenConnectionSlotsAsync(created.Id, tokenId, token, Ct);
+
+        Assert.Equal(KeyRight.Maintain, opened.Single(k => k.Vault == vaults["Notes"]).Right);
+        Assert.Equal(KeyRight.Write, opened.Single(k => k.Vault == vaults["Diary"]).Right);
+    }
+
+    [Fact]
+    public async Task A_legacy_write_connection_meta_lists_as_maintain()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Notes", "Diary");
+        var created = await Connections().CreateAsync(
+            user, userKey, JustRead, "phone", new Dictionary<string, KeyRight> { [vaults["Notes"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct);
+        Assert.Equal(KeyRight.Write, Assert.Single(await Connections().ListAsync(user, userKey, Ct)).Vaults[vaults["Notes"]]);
+        // The meta as every connection had it before 0.3.0: no version.
+        var oldMeta = Encoding.UTF8.GetBytes($$$"""{"name":"phone","vaults":{"{{{vaults["Notes"]}}}":"write","{{{vaults["Diary"]}}}":"read"}}""");
+        var sealedMeta = Kumbu.Core.Crypto.VaultCrypto.Seal(
+            Kumbu.Core.Crypto.VaultCrypto.Derive(userKey, "kumbu/v1/connection-meta", Encoding.UTF8.GetBytes(user.Id)), oldMeta, $"connection:{created.Id}:meta");
+        await _db.GetCollection<BsonDocument>("connections").UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id), Builders<BsonDocument>.Update.Set("meta", sealedMeta), cancellationToken: Ct);
+
+        var listed = Assert.Single(await Connections().ListAsync(user, userKey, Ct));
+
+        Assert.Equal(KeyRight.Maintain, listed.Vaults[vaults["Notes"]]);
+        Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Diary"]]);
     }
 
     [Fact]

@@ -178,7 +178,7 @@ public sealed class OAuthTokens(
                 // and the retry sees the other.
                 var current = await ConnectionDocs.Find(s, c => c.Id == connectionId).FirstOrDefaultAsync(token);
                 if (current is null || !IsLive(current, user.Id, Now)) throw new ConnectionUnavailableException("This connection is revoked or expired.");
-                if (connections.OpenMeta(user, userKey, current) is not { } currentMeta || !SameRights(currentMeta.Vaults, meta.Vaults))
+                if (connections.OpenMeta(user, userKey, current) is not { } currentMeta || !SameRights(currentMeta, meta))
                     throw new ConnectionUnavailableException("This connection's rights changed; start the connection again in the app.");
                 // A password change, recovery or deactivation stamps the user first and then revokes the tokens of
                 // every connection: before the stamp this code is found by the revocation, after it it's refused here.
@@ -731,11 +731,12 @@ public sealed class OAuthTokens(
     /// since: gone from the connection's clear list of vaults, though not from its sealed meta.</summary>
     internal static Dictionary<string, KeyRight> Rights(ConnectionDocument doc, Connections.ConnectionMeta meta, bool readOnly) =>
         meta.Vaults
-            .Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key))
-            .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.Parse(v.Value)!.Value, StringComparer.Ordinal);
+            .Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key))
+            .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.ParseSealed(v.Value, meta.V)!.Value, StringComparer.Ordinal);
 
-    private static bool SameRights(Dictionary<string, string> a, Dictionary<string, string> b) =>
-        a.Count == b.Count && a.All(v => b.TryGetValue(v.Key, out var right) && right == v.Value);
+    // The version too: a legacy "write" (maintain) and a new one are different rights in the same words.
+    private static bool SameRights(Connections.ConnectionMeta a, Connections.ConnectionMeta b) =>
+        a.V == b.V && a.Vaults.Count == b.Vaults.Count && a.Vaults.All(v => b.Vaults.TryGetValue(v.Key, out var right) && right == v.Value);
 
     /// <summary>16 random bytes in hex, as API key ids.</summary>
     private static string NewTokenId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));

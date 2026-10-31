@@ -406,7 +406,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             Kind = SlotDocument.ApiKey,
             KeyId = keyId,
             Wrapped = VaultCrypto.Seal(
-                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value))), ApiKeySlotContext(v.Key, keyId)),
+                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key], Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion)), ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
         await IssueFaultAsync("after-wrap");
@@ -455,7 +455,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(
                     VaultCrypto.Open(ConnectionKek(token, slot.Vault), slot.Wrapped, ConnectionSlotContext(slot.Vault, connectionId, tokenId)))!;
-                result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, Accounts.KeyRights.Parse(payload.Rights) ?? throw new JsonException("unknown right")));
+                result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, RightOf(payload)));
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
@@ -480,7 +480,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             ExpiresAt = expiresAt,
             Wrapped = VaultCrypto.Seal(
                 ConnectionKek(token, k.Vault),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right))),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion)),
                 ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
@@ -525,7 +525,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             try
             {
                 payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(ApiKeyKek(apiKey, slot.Vault), slot.Wrapped, ApiKeySlotContext(slot.Vault, keyId)))!;
-                right = Accounts.KeyRights.Parse(payload.Rights) ?? throw new JsonException("unknown right");
+                right = RightOf(payload);
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
@@ -1151,10 +1151,16 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     private static string ConnectionSlotContext(string vaultId, string connectionId, string tokenId) =>
         $"slot:{vaultId}:{SlotDocument.Connection}:{connectionId}:{tokenId}";
 
-    /// <summary>What an API key's slot seals: the vault key and the key's right on the vault, together.</summary>
+    /// <summary>What an API key's or a connection's slot seals: the vault key and the right on the vault, together;
+    /// <c>v</c> is <see cref="Accounts.KeyRights.SealedVersion"/> from 0.3.0 on, absent before.</summary>
     private sealed record ApiKeySlotPayload(
         [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
-        [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights);
+        [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
+        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null);
+
+    /// <summary>The right a slot grants: a <c>write</c> sealed before 0.3.0 reads as <c>maintain</c> (<see cref="Accounts.KeyRights.ParseSealed"/>).</summary>
+    private static Accounts.KeyRight RightOf(ApiKeySlotPayload payload) =>
+        Accounts.KeyRights.ParseSealed(payload.Rights, payload.V) ?? throw new JsonException("unknown right");
 
     /// <summary>Creates the indexes, refuses a MongoDB without transactions and plaintext notes from before
     /// encryption, once per process. Lazy, so the server starts before MongoDB is reachable.</summary>

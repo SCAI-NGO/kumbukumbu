@@ -461,6 +461,68 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_legacy_write_slot_opens_as_maintain()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "old agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct);
+        var filter = Builders<BsonDocument>.Filter.Eq("apiKey", info.Id) & Builders<BsonDocument>.Filter.Eq("vault", vaults["Work"]);
+        var slot = await SlotDocs.Find(filter).SingleAsync(Ct);
+        var vaultKey = LegacySlot.Open(key, vaults["Work"], info.Id, slot["wrapped"].AsByteArray).VaultKey;
+
+        // The payload as every key had it before 0.3.0: no version.
+        await SlotDocs.UpdateOneAsync(
+            filter, Builders<BsonDocument>.Update.Set("wrapped", LegacySlot.Seal(key, vaults["Work"], info.Id, vaultKey, "write")), cancellationToken: Ct);
+
+        var opened = Assert.Single(await app.Services.GetRequiredService<VaultCatalog>().OpenForApiKeyAsync(info.Id, key, Ct));
+        Assert.Equal(KeyRight.Maintain, opened.Right);
+    }
+
+    [Fact]
+    public async Task A_new_write_slot_stays_write()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work");
+        var (key, info) = await Keys.CreateAsync(user, userKey, JustRead, "agent", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write }, Ct);
+        var slot = await SlotDocs.Find(Builders<BsonDocument>.Filter.Eq("apiKey", info.Id)).SingleAsync(Ct);
+
+        Assert.Equal(2, LegacySlot.Open(key, vaults["Work"], info.Id, slot["wrapped"].AsByteArray).V);
+        var opened = Assert.Single(await app.Services.GetRequiredService<VaultCatalog>().OpenForApiKeyAsync(info.Id, key, Ct));
+        Assert.Equal(KeyRight.Write, opened.Right);
+    }
+
+    [Fact]
+    public async Task A_maintain_key_may_write()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
+        var (key, info) = await Keys.CreateAsync(
+            user, userKey, JustRead, "maintainer", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Maintain, [vaults["Diary"]] = KeyRight.Read }, Ct);
+        var credential = new ApiKeyCredential(info.Id, key);
+
+        await credential.OpenWithRightsAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
+
+        Assert.True(credential.CanWrite("Work"));
+        Assert.False(credential.CanWrite("Diary"));
+    }
+
+    [Fact]
+    public async Task The_list_shows_a_legacy_write_key_as_maintain()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Work", "Diary");
+        var (_, created) = await Keys.CreateAsync(
+            user, userKey, JustRead, "old", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Write, [vaults["Diary"]] = KeyRight.Read }, Ct);
+        // The meta as every key had it before 0.3.0: no version.
+        var oldMeta = Encoding.UTF8.GetBytes($$$"""{"name":"old","vaults":{"{{{vaults["Work"]}}}":"write","{{{vaults["Diary"]}}}":"read"}}""");
+        await KeyDocs.UpdateOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", created.Id),
+            Builders<BsonDocument>.Update.Set("meta", ApiKeys.SealMeta(userKey, user.Id, created.Id, oldMeta)),
+            cancellationToken: Ct);
+
+        var listed = Assert.Single(await Keys.ListAsync(user, userKey, Ct));
+
+        Assert.Equal(KeyRight.Maintain, listed.Vaults[vaults["Work"]]);
+        Assert.Equal(KeyRight.Read, listed.Vaults[vaults["Diary"]]);
+    }
+
+    [Fact]
     public async Task A_well_formed_but_unknown_key_is_401()
     {
         Assert.Equal(HttpStatusCode.Unauthorized, await InitializeStatusAsync("kumbu_" + new string('A', 43)));
@@ -485,4 +547,45 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
         Assert.True(statuses.Count(s => s == HttpStatusCode.Unauthorized) <= 20, $"{statuses.Count(s => s == HttpStatusCode.Unauthorized)} tries");
         Assert.All(statuses, s => Assert.Contains(s, new[] { HttpStatusCode.Unauthorized, HttpStatusCode.TooManyRequests }));
     }
+}
+
+/// <summary>
+/// Slot payloads of API keys and connections as the server seals them, reproduced from the outside (derivations and
+/// contexts as in <see cref="VaultCatalog"/>): to read a payload's version, and to write one as it was before 0.3.0.
+/// </summary>
+internal static class LegacySlot
+{
+    internal sealed record Payload(
+        [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
+        [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
+        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null);
+
+    private static byte[] ApiKeyKek(string apiKey, string vaultId) =>
+        Kumbu.Core.Crypto.VaultCrypto.Derive(apiKey, "kumbu/v1/api-key-kek", Encoding.UTF8.GetBytes(vaultId));
+
+    private static string ApiKeyContext(string vaultId, string keyId) => $"slot:{vaultId}:key:{keyId}";
+
+    private static byte[] ConnectionKek(string token, string vaultId) =>
+        Kumbu.Core.Crypto.VaultCrypto.Derive(token, "kumbu/v1/oauth-kek", Encoding.UTF8.GetBytes(vaultId));
+
+    private static string ConnectionContext(string vaultId, string connectionId, string tokenId) => $"slot:{vaultId}:connection:{connectionId}:{tokenId}";
+
+    /// <summary>An API key's slot payload as sealed before 0.3.0: vault key and right, no version.</summary>
+    public static byte[] Seal(string apiKey, string vaultId, string keyId, byte[] vaultKey, string rights) =>
+        Kumbu.Core.Crypto.VaultCrypto.Seal(ApiKeyKek(apiKey, vaultId), Legacy(vaultKey, rights), ApiKeyContext(vaultId, keyId));
+
+    public static Payload Open(string apiKey, string vaultId, string keyId, byte[] wrapped) =>
+        System.Text.Json.JsonSerializer.Deserialize<Payload>(Kumbu.Core.Crypto.VaultCrypto.Open(ApiKeyKek(apiKey, vaultId), wrapped, ApiKeyContext(vaultId, keyId)))!;
+
+    /// <summary>A connection token's slot payload as sealed before 0.3.0.</summary>
+    public static byte[] SealConnection(string token, string vaultId, string connectionId, string tokenId, byte[] vaultKey, string rights) =>
+        Kumbu.Core.Crypto.VaultCrypto.Seal(ConnectionKek(token, vaultId), Legacy(vaultKey, rights), ConnectionContext(vaultId, connectionId, tokenId));
+
+    public static Payload OpenConnection(string token, string vaultId, string connectionId, string tokenId, byte[] wrapped) =>
+        System.Text.Json.JsonSerializer.Deserialize<Payload>(
+            Kumbu.Core.Crypto.VaultCrypto.Open(ConnectionKek(token, vaultId), wrapped, ConnectionContext(vaultId, connectionId, tokenId)))!;
+
+    // Without "v" at all, as the old record had no such property.
+    private static byte[] Legacy(byte[] vaultKey, string rights) =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object> { ["vaultKey"] = vaultKey, ["rights"] = rights });
 }

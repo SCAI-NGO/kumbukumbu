@@ -61,7 +61,7 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential,
     /// <summary>Only for a vault opened with the right to write (named as the store names vaults, ordinally).
     /// Fails closed: false before the vaults were opened, and for a vault this key doesn't have.</summary>
     public bool CanWrite(string vault) =>
-        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right >= Accounts.KeyRight.Write);
 }
 
 /// <summary>
@@ -82,7 +82,7 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
 
     /// <summary>As <see cref="ApiKeyCredential.CanWrite"/>: fails closed before the vaults were opened and for a vault it doesn't have.</summary>
     public bool CanWrite(string vault) =>
-        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right == Accounts.KeyRight.Write);
+        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right >= Accounts.KeyRight.Write);
 }
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>

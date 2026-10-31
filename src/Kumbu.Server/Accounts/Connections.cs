@@ -105,7 +105,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct);
 
         var id = NewId();
-        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null);
+        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null, KeyRights.SealedVersion);
         // Sealed under this user key: it must still be the one in force (UserKeyRotation).
         var keyId = UserCatalog.KeyId(userKey, user.Id);
         var now = Now;
@@ -230,7 +230,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var now = Now;
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
-                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)) };
+                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion };
                     // As at creation: the user document is checked and written here, so a credentials change, a
                     // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
                     // above is seen here, or its deletion conflicts on the user document.
@@ -400,7 +400,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
             doc.Id,
             meta.Name,
             // A vault deleted since is gone from the clear list, not from the sealed meta: it isn't listed.
-            meta.Vaults.Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.Parse(v.Value)!.Value),
+            meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
             doc.CreatedAt,
             doc.LastUsedAt,
             doc.ExpiresAt,
@@ -471,12 +471,13 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return result;
     }
 
-    /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>) and,
-    /// once authorised, the client.</summary>
+    /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>/<c>maintain</c>,
+    /// read with <see cref="KeyRights.ParseSealed"/>) and, once authorised, the client.</summary>
     internal sealed record ConnectionMeta(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
-        [property: JsonPropertyName("client"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectedClient? Client);
+        [property: JsonPropertyName("client"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectedClient? Client,
+        [property: JsonPropertyName("v")] int? V = null);
 }
 
 /// <summary>
