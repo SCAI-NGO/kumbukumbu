@@ -63,6 +63,11 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             .OrderBy(x => x.Note.Path.Value, TextOrder.Default)
             .ToList();
         if (affected.Count == 0) return ShellResult.Ok($"no occurrences of \"{oldText}\" {Where(path, notes.Count)}");
+        // A folder's replace may reach a structural file (the board's Board.md) the path itself doesn't name.
+        foreach (var (note, _) in affected)
+        {
+            if (caller.Refuse(tool, note.Path) is { } refused) return refused;
+        }
 
         var total = affected.Sum(x => x.Matches.Count);
         var output = new List<string> { $"{Count(total, "occurrence")} of \"{oldText}\" in {Count(affected.Count, "note")} {Where(path, notes.Count)}, to become \"{newText}\":" };
@@ -184,6 +189,11 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         {
             plans.Return(token, plan, plan.Created);
             return ShellResult.Error("replace: this plan was made for a call with another path, old_text, new_text or word; make the same call as the preview");
+        }
+
+        foreach (var (notePath, _) in plan.Notes)
+        {
+            if (caller.Refuse("replace", notePath) is { } refused) return refused;
         }
 
         var batch = new NoteBatch();

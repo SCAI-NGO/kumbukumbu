@@ -444,7 +444,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     public async Task A_folder_checkpoint_exports_with_the_vault_folder_on_top()
     {
         var user = await RestClient.NewAsync(Api);
-        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Maintain);
         await user.CreateAsync("a.md", "a\n");
         await user.CreateAsync("p/b.md", "b\n");
         var made = await user.ShAsync("mkcp /Arbeit/p cp", write);

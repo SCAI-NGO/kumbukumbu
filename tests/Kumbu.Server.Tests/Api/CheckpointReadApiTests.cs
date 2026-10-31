@@ -67,7 +67,7 @@ public sealed class CheckpointReadApiTests(KumbuAppFactory app)
     public async Task A_folder_checkpoint_shows_the_folders_above_it_and_nothing_beside()
     {
         var user = await RestClient.NewAsync(Api);
-        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Maintain);
         await user.CreateAsync("a.md", "a\n");
         await user.CreateAsync("p/x.md", "x\n");
         await user.CreateAsync("p/q/b.md", "b\n");

@@ -410,7 +410,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
         var reading = (await catalog.CreateForUserAsync("Reading", user.Id, userKey, Ct)).Id;
         var writing = (await catalog.CreateForUserAsync("Writing", user.Id, userKey, Ct)).Id;
         var keys = app.Services.GetRequiredService<Kumbu.Server.Accounts.ApiKeys>();
-        var (writer, _) = await keys.CreateAsync(user, userKey, readAt, "seeder", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Write }, Ct);
+        var (writer, _) = await keys.CreateAsync(user, userKey, readAt, "seeder", new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Maintain }, Ct);
         var (reader, _) = await keys.CreateAsync(
             user, userKey, readAt, "reader",
             new Dictionary<string, Kumbu.Server.Accounts.KeyRight> { [reading] = Kumbu.Server.Accounts.KeyRight.Read, [writing] = Kumbu.Server.Accounts.KeyRight.Write },

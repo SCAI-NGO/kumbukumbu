@@ -34,7 +34,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         var (user, userKey, _) = (await users.TrySignInAsync(username, "correct horse battery staple", Ct))!.Value;
         var vault = "Kanban" + Guid.NewGuid().ToString("N")[..6];
         var id = (await app.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync(vault, user.Id, userKey, Ct)).Id;
-        var (write, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "writer", new Dictionary<string, KeyRight> { [id] = KeyRight.Write }, Ct);
+        var (write, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "writer", new Dictionary<string, KeyRight> { [id] = KeyRight.Maintain }, Ct);
         var (read, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "reader", new Dictionary<string, KeyRight> { [id] = KeyRight.Read }, Ct);
         return (vault, write, read);
     }

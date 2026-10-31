@@ -31,6 +31,9 @@ public sealed record ShellResult(string Output, bool IsError)
     /// <summary>Why an error happened, where the command says; null otherwise.</summary>
     public ShellErrorKind? Kind { get; init; }
 
+    /// <summary>A refusal's machine-readable code (<see cref="Notes.Refusals"/>); null for every other result.</summary>
+    public string? Code { get; init; }
+
     /// <summary>
     /// A line for an empty result, shown only when the command stands alone: right of a pipe or on the left of one,
     /// the next command reads the output, and a hint would be taken for data.

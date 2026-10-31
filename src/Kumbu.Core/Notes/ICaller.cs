@@ -20,11 +20,28 @@ public interface ICaller
     bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
     /// <summary>The refusal for a write by <paramref name="command"/> to <paramref name="path"/>, or null if allowed.
-    /// Asked once per entry point, before the store is touched.</summary>
-    ShellResult? Refuse(string command, VaultPath path) =>
-        path.Vault is { } vault && !CanWrite(vault)
-            ? ShellResult.Error($"{command}: this key can only read vault {vault}")
-            : null;
+    /// Asked once per entry point, before the store is touched: first whether the caller may write at all, then
+    /// whether it may change the vault's structure (<see cref="StructuralFiles"/>).</summary>
+    ShellResult? Refuse(string command, VaultPath path)
+    {
+        if (path.Vault is not { } vault) return null;
+        if (!CanWrite(vault)) return Refusals.Of(command, Refusals.ReadOnly, $"this key can only read vault {vault}");
+        if (Level(vault) >= AccessLevel.Maintain) return null;
+        if (StructuralFiles.StructuralCommands.Contains(command) || StructuralFiles.IsStructural(path))
+        {
+            return Refusals.StructuralChange(command, vault);
+        }
+
+        return null;
+    }
+
+    /// <summary><see cref="Refuse"/> for a move or removal of the folder <paramref name="folder"/>, which takes the
+    /// structural files below it along.</summary>
+    ShellResult? RefuseFolder(string command, VaultPath folder) =>
+        Refuse(command, folder)
+        ?? (folder.Vault is { } vault && StructuralFiles.ContainsStructural(folder) && Level(vault) < AccessLevel.Maintain
+            ? Refusals.StructuralChange(command, vault)
+            : null);
 }
 
 /// <summary>A caller with a fixed label; owner of every vault unless <paramref name="LevelOf"/> says otherwise, or

@@ -282,7 +282,7 @@ public class CheckpointTests
         var (_, missing) = await new Checkpoints(_store, _writer, new Plans()).PreviewWholeAsync("Demo", "nope", CancellationToken.None);
 
         Assert.Null(preview);
-        Assert.Equal(ShellResult.Error("restore: this key can only read vault Demo"), refused);
+        Assert.Equal(ShellResult.Error("restore: this key can only read vault Demo") with { Code = Refusals.ReadOnly }, refused);
         Assert.Equal(ShellResult.Error("restore: no checkpoint 'nope' in Demo ('lscp /Demo' lists them)"), missing);
         Assert.True((await checkpoints.ApplyWholeAsync("Demo", "w", "0123", CancellationToken.None)).IsError);
     }

@@ -79,7 +79,7 @@ public class CallerTests
 
         foreach (var (command, result) in results)
         {
-            Assert.Equal(ShellResult.Error($"{command}: this key can only read vault Work"), result);
+            Assert.Equal(ShellResult.Error($"{command}: this key can only read vault Work") with { Code = Refusals.ReadOnly }, result);
         }
 
         Assert.Equal(before, await SnapshotAsync());
@@ -88,7 +88,7 @@ public class CallerTests
     [Fact]
     public async Task AReadOnlyCallerCanStillWriteWhereTheKeyAllowsIt()
     {
-        var result = await ShellFor(ReadsWork).RunAsync("mkcp /Home mine", Ct);
+        var result = await ShellFor(ReadsWork).RunAsync("mv /Home/a.md /Home/b.md", Ct);
 
         Assert.False(result.IsError);
     }
