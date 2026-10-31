@@ -28,6 +28,10 @@ public sealed record KeypairRotation(byte[]? OldPrivateKey, byte[] NewPublicKey,
 /// key's public key, and the revision its membership was read at; the pin is sealed again only at that revision.</summary>
 public sealed record MemberSlotRewrap(ObjectId SlotId, string MembershipId, int Revision, byte[] OldWrapped, byte[] OldPublicKey, byte[] VaultKey);
 
+/// <summary>A member slot her old private key opens but that has no membership, and so no pin (collab design §5.4):
+/// damaged, deleted in the rotation's transaction while it still holds <c>OldWrapped</c>.</summary>
+public sealed record DamagedMemberSlot(ObjectId SlotId, string VaultId, byte[] OldWrapped);
+
 /// <summary>An API key's or connection's meta sealed again under the new user key, with its name id. One that didn't
 /// open has its old values as the new ones: it is left as it is, but still counted among the user's.</summary>
 public sealed record MetaReseal(string Id, byte[] OldMeta, byte[]? OldNameId, byte[] NewMeta, byte[]? NewNameId);
@@ -53,6 +57,9 @@ public sealed record PreparedRotation(
 
     /// <summary>The member slots wrapped again to the new public key, in the rotation's transaction.</summary>
     public IReadOnlyList<MemberSlotRewrap> MemberSlots { get; init; } = [];
+
+    /// <summary>The member slots without a membership, deleted in the rotation's transaction.</summary>
+    public IReadOnlyList<DamagedMemberSlot> DamagedMemberSlots { get; init; } = [];
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -111,7 +118,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         var connections = await Accounts.Connections.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
         var kept = keepSessionSecret is null ? null : await Sessions.PrepareKeepAsync(db, userId, keepSessionSecret, newUserKey, now, ct);
         var passwordUsed = (await UserSlots.Find(s => s.User == userId && s.Kind == UserSlotDocument.Password).FirstOrDefaultAsync(ct))?.Wrapped;
-        var (keypair, memberSlots) = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
+        var (keypair, memberSlots, damaged) = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
 
         var recoveryKey = RecoveryKey.New();
         return new PreparedRotation(
@@ -135,16 +142,18 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         {
             Keypair = keypair,
             MemberSlots = memberSlots,
+            DamagedMemberSlots = damaged,
         };
     }
 
     /// <summary>
     /// A new keypair for the user (collab design §5.1), and her member slots, each opened with her old private key (opened
     /// with the old user key) for the vault key, to be wrapped to the new public key. A private key that doesn't open,
-    /// or a member slot that doesn't, is logged: it opened nothing before either, and is left as it is. The member slots
-    /// are all those under the old lookup, those left as they are for their alias too: none may stay open to the old key.
+    /// or a member slot that doesn't, is logged: it opened nothing before either, and is left as it is. A member slot
+    /// without a membership has no pin to wrap to: it is damaged, and deleted (§5.4). The member slots are all those
+    /// under the old lookup, those left as they are for their alias too: none may stay open to the old key.
     /// </summary>
-    private async Task<(KeypairRotation Keypair, IReadOnlyList<MemberSlotRewrap> MemberSlots)> PrepareKeypairAsync(
+    private async Task<(KeypairRotation Keypair, IReadOnlyList<MemberSlotRewrap> MemberSlots, IReadOnlyList<DamagedMemberSlot> Damaged)> PrepareKeypairAsync(
         string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
     {
         var doc = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
@@ -156,10 +165,10 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         }
 
         var keypair = new KeypairRotation(doc?.PrivateKey, newPublic, newPrivate);
-        if (doc?.PrivateKey is null) return (keypair, []);
+        if (doc?.PrivateKey is null) return (keypair, [], []);
         var f = Builders<SlotDocument>.Filter;
         var slots = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.Member) & f.Eq(s => s.Lookup, VaultCatalog.UserSlotLookup(oldUserKey, userId))).ToListAsync(ct);
-        if (slots.Count == 0) return (keypair, []);
+        if (slots.Count == 0) return (keypair, [], []);
 
         ECDiffieHellman oldKey;
         try
@@ -169,7 +178,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         catch (CryptographicException)
         {
             log.LogWarning("The private key of user {UserId} does not open; their {Count} member slots open nothing and are left as they are", userId, slots.Count);
-            return (keypair, []);
+            return (keypair, [], []);
         }
 
         using (oldKey)
@@ -179,11 +188,13 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
                 .Find(Builders<Sharing.MembershipDocument>.Filter.In(m => m.Id, slots.Select(s => s.Membership ?? "")))
                 .ToListAsync(ct)).ToDictionary(m => m.Id, StringComparer.Ordinal);
             var rewraps = new List<MemberSlotRewrap>();
+            var damaged = new List<DamagedMemberSlot>();
             foreach (var slot in slots)
             {
                 if (slot.Membership is not { } id || !memberships.TryGetValue(id, out var membership))
                 {
-                    log.LogWarning("A member slot of vault {VaultId} of user {UserId} has no membership; it is left as it is", slot.Vault, userId);
+                    // Read after the slots: a grant's membership commits with its slot, so this is no grant under way.
+                    damaged.Add(new DamagedMemberSlot(slot.Id, slot.Vault, slot.Wrapped));
                     continue;
                 }
 
@@ -197,7 +208,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
                 }
             }
 
-            return (keypair, rewraps);
+            return (keypair, rewraps, damaged);
         }
     }
 
@@ -375,6 +386,15 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
     /// </summary>
     private async Task ApplyMemberSlotsAsync(IClientSessionHandle session, PreparedRotation rotation, CancellationToken ct)
     {
+        foreach (var slot in rotation.DamagedMemberSlots)
+        {
+            // Whatever its lookup is now (ApplyVaultSlotsAsync moved it): only while it still wraps what was opened.
+            var deleted = await Slots.DeleteOneAsync(
+                session, Builders<SlotDocument>.Filter.Eq(s => s.Id, slot.SlotId) & Builders<SlotDocument>.Filter.Eq(s => s.Wrapped, slot.OldWrapped), cancellationToken: ct);
+            if (deleted.DeletedCount == 0) throw new RotationConflictException();
+            log.LogWarning("A member slot of vault {VaultId} of user {UserId} has no membership: damaged; it was deleted", slot.VaultId, rotation.UserId);
+        }
+
         var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
         var f = Builders<Sharing.MembershipDocument>.Filter;
         // By membership: a second member slot of one (written to the database) must not make the pin conflict with itself.

@@ -59,7 +59,9 @@ public sealed partial class Memberships(
     /// owns, under <paramref name="alias"/> (the member's name for it) and <paramref name="label"/> (the owner's for
     /// the member). One transaction: the member's keypair if she has none yet, the membership, with its label and its
     /// empty writers sealed under the vault key, the member slot (<see cref="VaultCatalog.MemberSlot"/>) and a write to
-    /// the vault document, which makes two grants at once conflict, so the member limit, counted inside, holds. The core of an acceptance; returns the
+    /// the vault document, which makes two grants at once conflict, so the member limit, counted inside, holds, and to the
+    /// member's user document, conditioned on her user key (<see cref="CredentialsChangedException"/> if it isn't hers
+    /// any more). The core of an acceptance; returns the
     /// membership's id. <see cref="NotPermittedException"/> for the owner as member, <see cref="MemberLimitException"/>
     /// at the limit, <see cref="AlreadyMemberException"/>, <see cref="VaultNameTakenException"/> if the member has a
     /// vault or an alias of that name; nothing is written then.
@@ -76,6 +78,9 @@ public sealed partial class Memberships(
         await session.WithTransactionAsync(
             async (s, token) =>
             {
+                // Her user document first, conditioned on her user key (§13 M8): a rotation of it or her account's deletion
+                // at the same time conflicts, so no slot commits wrapped to her old public key under her old lookup.
+                await CountAcceptedAsync(s, memberId, memberKey, token);
                 // Her keypair, if she has none, in this transaction (collab design §5.1): an invitation never waits for one,
                 // and a crash leaves neither a keypair without the grant nor a slot without a keypair.
                 var memberPublic = await MemberPublicKeyAsync(s, memberId, memberKey, token);
