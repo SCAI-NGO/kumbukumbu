@@ -43,6 +43,9 @@ public sealed record RedeemerView(string Name, string Username);
 public sealed record MembershipView(
     string Id, string Label, string Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, RedeemerView? Redeemer);
 
+/// <summary>A member's new role: <c>read</c>, <c>write</c> or <c>maintain</c>.</summary>
+public sealed record ChangeRoleRequest(string Role);
+
 /// <summary>Sharing a vault (collab design §4): invitations and memberships.</summary>
 public static class SharingApi
 {
@@ -58,6 +61,7 @@ public static class SharingApi
         api.MapPost("/vaults/{vault}/memberships/{id}/decline", DeclineAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapDelete("/vaults/{vault}/memberships/{id}", WithdrawAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/memberships/{id}/revoke", RevokeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
@@ -151,6 +155,28 @@ public static class SharingApi
     {
         await EndedAsync(await memberships.RevokeAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct), memberships, hub, ct);
         return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// The owner changes a member's role (collab design §6.3). Guarded inline: raising it needs the password window,
+    /// since it widens what the member's credentials reach; lowering never does. The hub is told as for a revocation.
+    /// </summary>
+    private static async Task<Ok<MembershipView>> ChangeRoleAsync(
+        string vault, string id, ChangeRoleRequest body, RequestCaller caller, VaultCatalog catalog, Memberships memberships, SyncHub hub, CancellationToken ct)
+    {
+        var role = MemberRoles.Parse(body.Role) ?? throw ApiErrors.BadRequest($"A role is 'read', 'write' or 'maintain', not '{body.Role}'.");
+        var vaultId = await OwnVaultIdAsync(vault, caller, catalog, ct);
+        var changed = await memberships.ChangeRoleAsync(caller.User!.Id, caller.UserKey!, vaultId, id, role, () => Security.RequirePasswordWindow(caller), ct);
+        try
+        {
+            await hub.MembershipChangedAsync(vaultId, changed.MemberId!, id, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            memberships.Log.LogWarning(e, "Telling the sync hub of the role change of membership {MembershipId} failed", id);
+        }
+
+        return TypedResults.Ok(View(changed));
     }
 
     /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>

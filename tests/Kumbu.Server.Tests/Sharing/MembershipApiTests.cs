@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Sharing;
@@ -456,5 +457,75 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         using var view = await alice.GetAsync(Url(alice, membershipId));
         var json = await RestClient.JsonAsync(view);
         Assert.Equal(("Bob", "revoked"), (json["label"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
+    }
+
+    private static Task<HttpResponseMessage> RoleAsync(RestClient owner, string membershipId, string role) =>
+        owner.SendAsync(HttpMethod.Put, Url(owner, membershipId, "role"), new { role });
+
+    [Fact]
+    public async Task Raising_a_role_needs_the_password_window()
+    {
+        await using var api = Timed();
+        var (alice, _, _, membershipId) = await SharedAsync(api, MemberRole.Read);
+        var revision = (await Share.MembershipAsync(app.Database, membershipId)).Revision;
+        CloseWindow();
+
+        using (var refused = await RoleAsync(alice, membershipId, "maintain"))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+            Assert.Equal("password-required", (await RestClient.JsonAsync(refused))["type"]!.GetValue<string>());
+        }
+
+        var unchanged = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal(("read", revision, null), (unchanged.Role, unchanged.Revision, unchanged.RoleChangedAt));
+        Assert.Empty(await VaultEvents.OfMemberAsync(app.Database, unchanged.Vault, unchanged.Member!, Ct));
+        using (var confirm = await alice.SendAsync(HttpMethod.Post, "/api/session/confirm", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.NoContent, confirm.StatusCode);
+        using var raised = await RoleAsync(alice, membershipId, "maintain");
+        Assert.Equal(HttpStatusCode.OK, raised.StatusCode);
+        Assert.Equal("maintain", (await RestClient.JsonAsync(raised))["role"]!.GetValue<string>());
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal(("maintain", revision + 1), (doc.Role, doc.Revision));
+        Assert.NotNull(doc.RoleChangedAt);
+    }
+
+    [Fact]
+    public async Task Lowering_a_role_needs_none_and_caps_Bobs_key_at_once()
+    {
+        await using var api = Timed();
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api, MemberRole.Write);
+        var (key, _) = await api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Maintain }, Ct);
+        using (var written = await bob.SendAsync(HttpMethod.Put, "/api/notes/Garten/a.md", new { content = "Beet\n" }, bearer: key)) Assert.Equal(HttpStatusCode.Created, written.StatusCode);
+        CloseWindow();
+
+        using var lowered = await RoleAsync(alice, membershipId, "read");
+
+        Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        Assert.Equal("read", (await Share.MembershipAsync(app.Database, membershipId)).Role);
+        using var refused = await bob.SendAsync(HttpMethod.Put, "/api/notes/Garten/b.md", new { content = "Beet\n" }, bearer: key);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("read-only", (await RestClient.JsonAsync(refused))["code"]!.GetValue<string>());
+        using (var read = await bob.GetAsync("/api/notes/Garten/a.md", key)) Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_role_change_is_an_event_Bob_sees()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api, MemberRole.Read);
+        var carol = await RestClient.NewAsync(api, vault: "Notizen");
+        await alice.ShareWithAsync(carol, "Garten");
+
+        using (var raised = await RoleAsync(alice, membershipId, "write")) Assert.Equal(HttpStatusCode.OK, raised.StatusCode);
+        // The same role again changes nothing and records nothing.
+        using (var same = await RoleAsync(alice, membershipId, "write")) Assert.Equal(HttpStatusCode.OK, same.StatusCode);
+
+        var seen = Assert.Single(await VaultEvents.OfMemberAsync(app.Database, vaultId, bob.User.Id, Ct));
+        Assert.Equal((VaultEvents.RoleChanged, membershipId, "write"), (seen.Kind, seen.Membership, seen.Role));
+        Assert.Empty(await VaultEvents.OfMemberAsync(app.Database, vaultId, carol.User.Id, Ct));
+        // Ids, a kind, a time and a role: nothing that names anyone.
+        var raw = (await app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName).Find(new BsonDocument("membership", membershipId)).SingleAsync(Ct)).ToJson();
+        Assert.DoesNotContain("Bob", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain(bob.Username, raw, StringComparison.Ordinal);
     }
 }

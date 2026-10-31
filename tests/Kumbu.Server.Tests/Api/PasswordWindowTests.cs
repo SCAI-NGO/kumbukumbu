@@ -167,6 +167,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/oauth/requests/{id}/decision"] = GrantingInline,
         ["PATCH /api/admin/users/{id}"] = GrantingInline,
         ["POST /api/admin/invitations"] = GrantingInline,
+        ["PUT /api/vaults/{vault}/memberships/{id}/role"] = GrantingInline,
     };
 
     [Fact]
@@ -312,6 +313,34 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
                 Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
                 using (var exported = await user.GetAsync(WithTicket(url!, await TicketAsync(user)))) Assert.Equal(HttpStatusCode.OK, exported.StatusCode);
                 break;
+        }
+    }
+
+    [Theory]
+    [InlineData("maintain", false)]
+    [InlineData("maintain", true)]
+    [InlineData("read", false)]
+    public async Task A_members_role_is_raised_only_inside_the_window_and_lowered_any_time(string role, bool open)
+    {
+        await using var api = Timed();
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
+        var bob = await RestClient.NewAsync(api, vault: "Work");
+        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", Kumbu.Server.Sharing.MemberRole.Write);
+        CloseWindow();
+        if (open) await ConfirmAsync(alice);
+
+        using var response = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role });
+
+        var stored = (await Kumbu.Server.Tests.Sharing.Share.MembershipAsync(app.Database, membership)).Role;
+        if (role == "maintain" && !open)
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.Equal("write", stored);
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(role, stored);
         }
     }
 

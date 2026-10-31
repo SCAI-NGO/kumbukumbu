@@ -354,6 +354,44 @@ public sealed partial class Memberships(
     public Task<EndedMembership> LeaveAsync(string memberId, string membershipId, CancellationToken ct) =>
         EndAsync(Builders<MembershipDocument>.Filter.Eq(m => m.Member, memberId), membershipId, MembershipStatus.Left, ct);
 
+    /// <summary>
+    /// The owner changes the role of an active membership of <paramref name="vaultId"/> (collab design §6.3): one update
+    /// of <c>role</c>, <c>roleChangedAt</c> and <c>revision</c>, conditioned on the role it had, with an event for the
+    /// member in the same transaction. Raising it calls <paramref name="raising"/> first, which throws unless the
+    /// password window is open (§13 M7); lowering never does, so the owner can always reduce access at once. Effective
+    /// on the member's next request; no slot changes. <see cref="MembershipNotFoundException"/> unless it is an active
+    /// membership of that vault. Returns the membership, with the role it has now.
+    /// </summary>
+    public async Task<OwnersMembership> ChangeRoleAsync(
+        string ownerId, byte[] ownerKey, string vaultId, string membershipId, MemberRole role, Action raising, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
+        var f = Builders<MembershipDocument>.Filter;
+        var bound = f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Active);
+        var text = MemberRoles.ToText(role);
+        using var session = await catalog.StartSessionAsync(ct);
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                var doc = await Docs.Find(s, bound).FirstOrDefaultAsync(token) ?? throw new MembershipNotFoundException();
+                if (doc.Role == text) return false;
+                if (role > (MemberRoles.Parse(doc.Role) ?? MemberRole.Read)) raising();
+                var now = Now;
+                // On the role it had: a change in between conflicts, and is decided afresh on the retry.
+                var changed = await Docs.UpdateOneAsync(
+                    s, bound & f.Eq(m => m.Role, doc.Role),
+                    Builders<MembershipDocument>.Update.Set(m => m.Role, text).Set(m => m.RoleChangedAt, now).Inc(m => m.Revision, 1),
+                    cancellationToken: token);
+                if (changed.MatchedCount == 0) throw new MembershipNotFoundException();
+                await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.RoleChanged, membershipId, now, text, token);
+                return true;
+            },
+            cancellationToken: ct);
+        log.LogInformation("Membership {MembershipId} of vault {VaultId} has the role {Role} now", membershipId, vaultId, text);
+        return await OwnersViewAsync(await Docs.Find(m => m.Id == membershipId).FirstAsync(ct), vaultKey, ct);
+    }
+
     private async Task<EndedMembership> EndAsync(FilterDefinition<MembershipDocument> bound, string membershipId, string to, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
@@ -538,6 +576,9 @@ public sealed partial class Memberships(
                     }),
             ],
             ct);
+        await VaultEvents.Docs(db).Indexes.CreateOneAsync(
+            new CreateIndexModel<VaultEventDocument>(Builders<VaultEventDocument>.IndexKeys.Ascending(e => e.Vault).Ascending(e => e.Membership).Descending(e => e.At)),
+            cancellationToken: ct);
         _ready = true;
     }
 }

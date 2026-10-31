@@ -26,9 +26,11 @@ public sealed record AcceptedInvite(string MembershipId, string Alias, MemberRol
 
 /// <summary>A membership as its owner sees it before confirming (collab design §4.2): her label for the person, and who
 /// redeemed it, from the redeemer's user document: the display name as typed (to be shown sanitised) and the username,
-/// only while it waits for her confirmation. The one place the owner sees a member's username.</summary>
+/// only while it waits for her confirmation. The one place the owner sees a member's username. <c>MemberId</c> is for
+/// the server only (the sync hub), never shown.</summary>
 public sealed record OwnersMembership(
-    string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, string? RedeemerDisplay, string? RedeemerUsername);
+    string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, string? RedeemerDisplay, string? RedeemerUsername,
+    string? MemberId);
 
 /// <summary>
 /// Vault invitations (collab design §4): a pending membership with a single-use link <c>/share#{secret}</c>. MongoDB
@@ -222,7 +224,8 @@ public sealed partial class Memberships
             ? await Users.Find(u => u.Id == member).FirstOrDefaultAsync(ct)
             : null;
         return new OwnersMembership(
-            doc.Id, label, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, doc.Status, doc.Confirm, doc.ExpiresAt, doc.RedeemedAt, redeemer?.Display, redeemer?.Username);
+            doc.Id, label, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, doc.Status, doc.Confirm, doc.ExpiresAt, doc.RedeemedAt, redeemer?.Display, redeemer?.Username,
+            doc.Member);
     }
 
     /// <summary>
