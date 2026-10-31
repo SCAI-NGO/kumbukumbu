@@ -912,6 +912,7 @@ public sealed class EncryptedNoteStore(
         if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var access)) return null;
         if (access.Vault.Pending) throw VaultBusyException.Being();
         access.Vault.Touch(catalog.Now);
+        catalog.Used(access);
         return access;
     }
 
@@ -920,7 +921,12 @@ public sealed class EncryptedNoteStore(
     private async Task<IEnumerable<VaultAccess>> AllVaultsAsync(CancellationToken ct)
     {
         var all = (await VaultsAsync(ct)).Values.Where(v => !v.Vault.Pending).ToList();
-        foreach (var v in all) v.Vault.Touch(catalog.Now);
+        foreach (var v in all)
+        {
+            v.Vault.Touch(catalog.Now);
+            catalog.Used(v);
+        }
+
         return all;
     }
 

@@ -451,6 +451,53 @@ public sealed partial class Memberships(
         log.LogInformation("Membership {MembershipId} was cleaned up", membershipId);
     }
 
+    /// <summary>
+    /// The memberships of <paramref name="vaultId"/> that give or wait to give access, for its owner's access list
+    /// (collab design §8.6): pending and active, each with her label for the person and the member's credentials on
+    /// the vault, by the name and the kind <c>writers</c> holds (sealed under the vault key, which the owner holds; the
+    /// member's own key meta she can't open), with the last use <b>on this vault</b>: the derived slots' <c>usedAt</c>,
+    /// never the credential's own last use, which would tell her of the member's use of his own vaults (§13 L5).
+    /// Credentials without a live slot on the vault (revoked, expired, removed) have no access and aren't listed.
+    /// </summary>
+    internal async Task<IReadOnlyList<MemberAccess>> AccessListAsync(string vaultId, byte[] vaultKey, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var docs = await Docs.Find(m => m.Vault == vaultId && Live.Contains(m.Status)).SortBy(m => m.CreatedAt).ToListAsync(ct);
+        if (docs.Count == 0) return [];
+        var now = Now;
+        var sl = Builders<SlotDocument>.Filter;
+        var slots = await catalog.Slots.Find(sl.Eq(x => x.Vault, vaultId) & sl.In(x => x.GrantedVia, docs.Select(d => d.Id)))
+            .Project<SlotDocument>(Builders<SlotDocument>.Projection.Include(x => x.Kind).Include(x => x.KeyId).Include(x => x.ConnectionId)
+                .Include(x => x.GrantedVia).Include(x => x.UsedAt).Include(x => x.ExpiresAt))
+            .ToListAsync(ct);
+        var result = new List<MemberAccess>();
+        foreach (var doc in docs)
+        {
+            string label;
+            IReadOnlyDictionary<string, string> writers;
+            try
+            {
+                label = Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, vaultId, LabelPurpose, doc.Label, $"membership-label:{vaultId}:{doc.Id}"));
+                writers = OpenWriters(doc, vaultKey);
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("Membership {MembershipId} of vault {VaultId} does not open", doc.Id, vaultId);
+                continue;
+            }
+
+            var credentials = slots
+                .Where(x => x.GrantedVia == doc.Id && !(now >= x.ExpiresAt) && (x.KeyId ?? x.ConnectionId) is not null)
+                .GroupBy(x => (Id: (x.KeyId ?? x.ConnectionId)!, Kind: x.Kind == SlotDocument.ApiKey ? MemberCredentialKinds.Key : MemberCredentialKinds.Connection))
+                .Select(g => new MemberCredential(writers.GetValueOrDefault(g.Key.Id) ?? Kumbu.Core.Notes.PlainWriterLabels.UnknownWriter, g.Key.Kind, g.Max(x => x.UsedAt)))
+                .OrderBy(c => c.Name, StringComparer.Ordinal).ThenBy(c => c.Kind, StringComparer.Ordinal)
+                .ToList();
+            result.Add(new MemberAccess(doc.Id, label, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, doc.Status, doc.Confirm, doc.AcceptedAt, doc.RedeemedAt, doc.ExpiresAt, credentials));
+        }
+
+        return result;
+    }
+
     /// <summary>The tombstones' statuses.</summary>
     private static readonly string[] Ended = [MembershipStatus.Revoked, MembershipStatus.Left];
 
@@ -651,3 +698,21 @@ public sealed class AlreadyMemberException() : Exception("This person is already
 /// <see cref="Memberships.SessionWriter"/>).</summary>
 internal sealed record MembershipNames(
     string Id, string Owner, string Status, string Label, IReadOnlyDictionary<string, string> Writers, IReadOnlyDictionary<string, string> WriterIds);
+
+/// <summary>A membership on its owner's access list: her label, the role, the status, and the member's credentials on the vault.</summary>
+internal sealed record MemberAccess(
+    string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? AcceptedAt, DateTime? RedeemedAt, DateTime? ExpiresAt,
+    IReadOnlyList<MemberCredential> Credentials);
+
+/// <summary>A member's credential on a shared vault: the name it has in the membership's <c>writers</c>, its kind
+/// (<see cref="MemberCredentialKinds"/>) and its last use on this vault.</summary>
+internal sealed record MemberCredential(string Name, string Kind, DateTime? LastUsedAt);
+
+public static class MemberCredentialKinds
+{
+    /// <summary>An API key, an agent's or a device's.</summary>
+    public const string Key = "key";
+
+    /// <summary>A connected app (OAuth).</summary>
+    public const string Connection = "connection";
+}

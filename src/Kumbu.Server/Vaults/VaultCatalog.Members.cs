@@ -337,25 +337,30 @@ public sealed partial class VaultCatalog
     };
 
     /// <summary>
-    /// "Last use on this vault" of derived slots (planner's decision 9): <c>usedAt</c>, set at most once a minute per
-    /// slot, by one update that doesn't hold up the request; a failure is only logged.
+    /// "Last use on this vault" of a member's credential (planner's decision 9, collab design §8.6, §13 L5): the request
+    /// that touches the vault through <paramref name="access"/> sets its derived slot's <c>usedAt</c>, at most once a
+    /// minute, by one update that doesn't hold up the request; a failure is only logged. Opening a credential's vaults
+    /// isn't a use of each: only the vault a request reads or writes (<see cref="EncryptedNoteStore"/>) is, so the owner
+    /// learns nothing of the member's use of her own vaults.
     /// </summary>
-    private void TouchUsed(IEnumerable<SlotDocument> slots)
+    internal void Used(VaultAccess access)
     {
+        if (access.DerivedSlot is not { } slot) return;
         var now = Now;
-        var stale = slots.Where(s => s.UsedAt is not { } at || now - at >= UsedGranularity).Select(s => s.Id).ToList();
-        if (stale.Count == 0) return;
+        if (slot.UsedAt is { } at && now - at < UsedGranularity) return;
+        // Once per slot and request object: the store touches a vault on every call.
+        slot.UsedAt = now;
         var f = Builders<SlotDocument>.Filter;
         _ = Task.Run(async () =>
         {
             try
             {
-                await Slots.UpdateManyAsync(
-                    f.In(s => s.Id, stale) & (f.Eq(s => s.UsedAt, null) | f.Lt(s => s.UsedAt, now - UsedGranularity)), Builders<SlotDocument>.Update.Set(s => s.UsedAt, now));
+                await Slots.UpdateOneAsync(
+                    f.Eq(s => s.Id, slot.Id) & (f.Eq(s => s.UsedAt, null) | f.Lt(s => s.UsedAt, now - UsedGranularity)), Builders<SlotDocument>.Update.Set(s => s.UsedAt, now));
             }
             catch (Exception e)
             {
-                log.LogWarning(e, "Recording the last use of {Count} slots failed", stale.Count);
+                log.LogWarning(e, "Recording the last use of slot {SlotId} failed", slot.Id);
             }
         });
     }

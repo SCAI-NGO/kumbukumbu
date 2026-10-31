@@ -153,7 +153,8 @@ public sealed class DerivedCredentialTests(KumbuAppFactory app)
         var own = await bob.VaultIdAsync();
         var (key, info) = await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write, [own] = KeyRight.Write });
 
-        var (failed, text) = await bob.ShAsync("ls /", key);
+        // A use of the shared vault: only a request that touches it counts, not one that opens the key's vaults.
+        var (failed, text) = await bob.ShAsync("ls /garten", key);
         Assert.False(failed, text);
 
         // Written beside the request, not in it.

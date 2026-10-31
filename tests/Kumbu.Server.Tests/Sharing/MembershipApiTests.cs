@@ -519,6 +519,116 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.Equal($"close {(int)SyncHub.KeyInactive}", await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
     }
 
+    private static async Task<System.Text.Json.Nodes.JsonNode> AccessListAsync(RestClient owner)
+    {
+        using var response = await owner.GetAsync($"/api/vaults/{Uri.EscapeDataString(owner.Vault)}/access");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await RestClient.JsonAsync(response);
+    }
+
+    [Fact]
+    public async Task The_access_list_shows_Bob_his_role_and_his_credentials_by_name()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (key, info) = await KeyAsync(api, bob, "Claude", vaultId, await bob.VaultIdAsync());
+        await NamedConnectionAsync(api, bob, "Chat", vaultId);
+        var (_, own) = await KeyAsync(api, alice, "Alices Agent", vaultId);
+        var carol = await api.Services.GetRequiredService<Memberships>().InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Carol", MemberRole.Read, TimeSpan.FromDays(7), false, Ct);
+        var (failed, text) = await bob.ShAsync("cat /Garten/plan.md", key);
+        Assert.False(failed, text);
+
+        var list = await AccessListAsync(alice);
+
+        // Her own key, not Bob's, among the keys a re-key takes access from.
+        Assert.Equal(["Alices Agent"], list["apiKeys"]!.AsArray().Select(k => k!.GetValue<string>()));
+        var members = list["members"]!.AsArray();
+        Assert.Equal(2, members.Count);
+        var b = members.Single(m => m!["id"]!.GetValue<string>() == membershipId)!;
+        Assert.Equal(("Bob", "write", "active"), (b["label"]!.GetValue<string>(), b["role"]!.GetValue<string>(), b["status"]!.GetValue<string>()));
+        Assert.NotNull(b["acceptedAt"]?.GetValue<DateTime>());
+        var credentials = b["credentials"]!.AsArray().Select(c => (c!["name"]!.GetValue<string>(), c["kind"]!.GetValue<string>())).ToList();
+        Assert.Equal([("Chat", "connection"), ("Claude", "key")], credentials);
+        var c = members.Single(m => m!["id"]!.GetValue<string>() == carol.MembershipId)!;
+        Assert.Equal(("Carol", "read", "pending"), (c["label"]!.GetValue<string>(), c["role"]!.GetValue<string>(), c["status"]!.GetValue<string>()));
+        Assert.Empty(c["credentials"]!.AsArray());
+        // Nothing of Bob's own: neither his username nor his key's id.
+        var raw = list.ToJsonString();
+        Assert.DoesNotContain(bob.Username, raw, StringComparison.Ordinal);
+        Assert.DoesNotContain(info.Id, raw, StringComparison.Ordinal);
+        Assert.NotNull(own);
+    }
+
+    [Fact]
+    public async Task Last_use_is_the_use_on_this_vault_not_the_keys_global_one()
+    {
+        await using var api = Timed();
+        var (alice, bob, vaultId, _) = await SharedAsync(api);
+        await bob.CreateAsync("todo.md", "Arbeit\n");
+        var (key, info) = await KeyAsync(api, bob, "Claude", vaultId, await bob.VaultIdAsync());
+        var slot = Builders<SlotDocument>.Filter.Eq(s => s.KeyId, info.Id) & Builders<SlotDocument>.Filter.Eq(s => s.Vault, vaultId);
+
+        await app.Database.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 2), cancellationToken: Ct);
+        DateTime used;
+        try
+        {
+            var (failed, text) = await bob.ShAsync("cat /Garten/plan.md", key);
+            Assert.False(failed, text);
+            used = await UsedAtAsync(slot, null);
+            // A second use within the minute writes nothing.
+            _time.Advance(TimeSpan.FromSeconds(30));
+            (failed, text) = await bob.ShAsync("cat /Garten/plan.md", key);
+            Assert.False(failed, text);
+            await Task.Delay(300, Ct);
+            Assert.Equal(1, await app.Database.GetCollection<BsonDocument>("system.profile").CountDocumentsAsync(
+                Builders<BsonDocument>.Filter.Eq("ns", $"{app.Database.DatabaseNamespace.DatabaseName}.slots") & Builders<BsonDocument>.Filter.Eq("op", "update")
+                & Builders<BsonDocument>.Filter.Exists("command.u.$set.usedAt"),
+                cancellationToken: Ct));
+        }
+        finally
+        {
+            await app.Database.RunCommandAsync<BsonDocument>(new BsonDocument("profile", 0), cancellationToken: Ct);
+        }
+
+        // Then the key works on Bob's own vault only: its own last use moves on, the shared vault's stays.
+        _time.Advance(TimeSpan.FromMinutes(5));
+        var (ownFailed, ownText) = await bob.ShAsync("cat /Work/todo.md", key);
+        Assert.False(ownFailed, ownText);
+        var keys = app.Database.GetCollection<ApiKeyDocument>(ApiKeys.CollectionName);
+        for (var i = 0; i < 50 && (await keys.Find(k => k.Id == info.Id).SingleAsync(Ct)).LastUsedAt <= used; i++) await Task.Delay(100, Ct);
+        Assert.True((await keys.Find(k => k.Id == info.Id).SingleAsync(Ct)).LastUsedAt > used);
+        await Task.Delay(300, Ct);
+
+        var credential = (await AccessListAsync(alice))["members"]!.AsArray().Single()!["credentials"]!.AsArray().Single()!;
+        Assert.Equal(used, credential["lastUsedAt"]!.GetValue<DateTime>().ToUniversalTime());
+    }
+
+    /// <summary>The slot's <c>usedAt</c> once it is other than <paramref name="before"/> (it is written beside the request).</summary>
+    private async Task<DateTime> UsedAtAsync(FilterDefinition<SlotDocument> slot, DateTime? before)
+    {
+        DateTime? at = before;
+        for (var i = 0; i < 50 && at == before; i++)
+        {
+            at = (await Slots.Find(slot).SingleAsync(Ct)).UsedAt;
+            if (at == before) await Task.Delay(100, Ct);
+        }
+
+        Assert.NotEqual(before, at);
+        return at!.Value;
+    }
+
+    [Fact]
+    public async Task A_member_gets_404_for_the_access_list()
+    {
+        var api = app.PublicApi;
+        var (_, bob, _, _) = await SharedAsync(api);
+
+        using var response = await bob.GetAsync("/api/vaults/Garten/access");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain("members", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
+
     private static Task<HttpResponseMessage> RoleAsync(RestClient owner, string membershipId, string role) =>
         owner.SendAsync(HttpMethod.Put, Url(owner, membershipId, "role"), new { role });
 

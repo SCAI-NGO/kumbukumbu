@@ -20,6 +20,10 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     /// the owner, and for a member whose writer id didn't open, whose writes are then refused.</summary>
     public string? WriterId { get; init; }
 
+    /// <summary>The credential's slot on the vault when it was derived through a membership, with its <c>usedAt</c> as
+    /// read: the request that touches the vault records "last use on this vault" on it (planner's decision 9).</summary>
+    public SlotDocument? DerivedSlot { get; init; }
+
     /// <summary>The vault is seen under another name than its own: its paths are translated in both directions.</summary>
     public bool Renamed => !string.Equals(Name, Vault.Name, StringComparison.Ordinal);
 

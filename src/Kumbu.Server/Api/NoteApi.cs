@@ -24,9 +24,21 @@ namespace Kumbu.Server.Api;
 /// whether the caller may write to it (an API key or connection with only <c>read</c> may not).</summary>
 public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite);
 
-/// <summary>What would lose access if the vault were re-encrypted: the names of the API keys with access to it and of
-/// the connected apps that list it.</summary>
-public sealed record VaultAccessView(string[] ApiKeys, string[] Connections);
+/// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
+/// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
+/// <c>members</c>: the people it is shared with or who are invited, oldest first.</summary>
+public sealed record VaultAccessView(string[] ApiKeys, string[] Connections, MemberAccessView[] Members);
+
+/// <summary>A membership of the owner's vault: her <c>label</c> for the person, <c>role</c> (<c>read</c>, <c>write</c>,
+/// <c>maintain</c>), <c>status</c> (<c>pending</c>: invited, or redeemed and waiting for her confirmation when
+/// <c>redeemedAt</c> is set; <c>active</c>), when it was <c>acceptedAt</c>, an open invitation's <c>expiresAt</c>, and
+/// the member's <c>credentials</c> on this vault.</summary>
+public sealed record MemberAccessView(
+    string Id, string Label, string Role, string Status, bool Confirm, DateTime? AcceptedAt, DateTime? RedeemedAt, DateTime? ExpiresAt, MemberCredentialView[] Credentials);
+
+/// <summary>A member's credential on the vault: its <c>name</c> (the agent's or device's part), <c>kind</c> (<c>key</c>
+/// or <c>connection</c>), and <c>lastUsedAt</c>, its last use on this vault (to the minute), never its use elsewhere.</summary>
+public sealed record MemberCredentialView(string Name, string Kind, DateTime? LastUsedAt);
 
 /// <summary>Re-encrypting one vault: the owner's current password.</summary>
 public sealed record RekeyVaultRequest(string Password);
@@ -245,12 +257,15 @@ public static class NoteApi
         return deleted is not null ? TypedResults.NoContent() : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
 
-    /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding.</summary>
+    /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding, and whom
+    /// she shares it with. Owner-only: a member's alias answers 404, and she sees no member list (collab design §8.6).</summary>
     private static async Task<Ok<VaultAccessView>> AccessAsync(string vault, RequestCaller caller, Rekeying rekeying, CancellationToken ct)
     {
-        var (keys, connections) = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
+        var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
             ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        return TypedResults.Ok(new VaultAccessView(keys, connections));
+        return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
+            m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
+            [.. m.Credentials.Select(c => new MemberCredentialView(c.Name, c.Kind, c.LastUsedAt))]))]));
     }
 
     /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps

@@ -504,6 +504,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         public string? Alias { get; init; }
 
         public Sharing.MembershipDocument? Membership { get; init; }
+
+        /// <summary>The token's slot, for a derived one: where a request that uses the vault records it.</summary>
+        public SlotDocument? Slot { get; init; }
     }
 
     /// <summary>
@@ -539,7 +542,6 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
         var aliases = await MemberAliasesAsync(active, ct);
         var result = new List<ConnectionVaultKey>();
-        var used = new List<SlotDocument>();
         foreach (var (slot, payload, right) in opened)
         {
             MembershipDocument? membership = null;
@@ -549,13 +551,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 // Skipped as if absent: its membership isn't active (any more).
                 if ((membership = ActiveGrant(active, slot)) is null) continue;
                 alias = AliasOf(aliases, slot, payload.AliasKey);
-                used.Add(slot);
             }
 
-            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, AliasKey = payload.AliasKey, Alias = alias, Membership = membership });
+            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right)
+            {
+                GrantedVia = slot.GrantedVia, AliasKey = payload.AliasKey, Alias = alias, Membership = membership, Slot = slot.GrantedVia is null ? null : slot,
+            });
         }
 
-        TouchUsed(used);
         return result;
     }
 
@@ -592,7 +595,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
         {
             if (key.Membership is not null && key.Alias is null) continue;
-            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId));
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault)
+            {
+                result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId) with { DerivedSlot = key.Slot });
+            }
         }
 
         return result;
@@ -633,7 +639,6 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
         var aliases = await MemberAliasesAsync(active, ct);
         var result = new List<VaultAccess>();
-        var used = new List<SlotDocument>();
         foreach (var (slot, payload, right) in opened)
         {
             MembershipDocument? membership = null;
@@ -643,13 +648,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 // Skipped as if absent, before the vault is loaded: its membership isn't active (any more), or the
                 // alias its member slot holds now doesn't open.
                 if ((membership = ActiveGrant(active, slot)) is null || (alias = AliasOf(aliases, slot, payload.AliasKey)) is null) continue;
-                used.Add(slot);
             }
 
-            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId));
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault)
+            {
+                result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
+            }
         }
 
-        TouchUsed(used);
         return result;
     }
 

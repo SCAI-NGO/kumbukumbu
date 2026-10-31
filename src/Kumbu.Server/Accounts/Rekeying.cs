@@ -12,7 +12,7 @@ namespace Kumbu.Server.Accounts;
 /// </summary>
 public sealed class Rekeying(
     UserCatalog users, UserKeyRotation rotation, VaultCatalog catalog, ApiKeys keys, Connections connections, RekeyRunner runner, IMongoDatabase db,
-    TimeProvider time, ILogger<Rekeying> log)
+    TimeProvider time, ILogger<Rekeying> log, Sharing.Memberships memberships)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -131,8 +131,9 @@ public sealed class Rekeying(
     }
 
     /// <summary>The names of what a re-keying of the vault would take access from: API keys with a slot on it, and
-    /// connections that list it and aren't revoked; null if the user has no such vault.</summary>
-    public async Task<(string[] ApiKeys, string[] Connections)?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct)
+    /// connections that list it and aren't revoked; and who the vault is shared with (collab design §8.6), with the
+    /// members' credentials on it. Null if the user has no such vault: a vault shared with her is not hers to list.</summary>
+    internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct)
     {
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
         var (keyIds, connectionIds) = await catalog.AccessAsync(vaultId, ct);
@@ -143,6 +144,10 @@ public sealed class Rekeying(
             .Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).Select(k => k.Name);
         var connectionNames = (await connections.ListAsync(user, userKey, ct))
             .Where(c => connectionIds.Contains(c.Id) && c.RevokedAt is null && !(c.ExpiresAt <= now)).Select(c => c.Name);
-        return ([.. keyNames.Order(StringComparer.Ordinal)], [.. connectionNames.Order(StringComparer.Ordinal)]);
+        var members = await memberships.AccessListAsync(vaultId, await catalog.OwnerVaultKeyAsync(user.Id, userKey, vaultId, ct), ct);
+        return new VaultAccessList([.. keyNames.Order(StringComparer.Ordinal)], [.. connectionNames.Order(StringComparer.Ordinal)], members);
     }
 }
+
+/// <summary>The owner's access list of a vault: her own keys' and apps' names, and the memberships.</summary>
+internal sealed record VaultAccessList(string[] ApiKeys, string[] Connections, IReadOnlyList<Sharing.MemberAccess> Members);
