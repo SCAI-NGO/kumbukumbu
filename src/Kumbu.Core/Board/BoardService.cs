@@ -42,7 +42,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board add", vaultPath) is { } refused) return refused;
         if (!TryTags(tags, out var tagList, out error)) return error;
         title = title.Normalize(NormalizationForm.FormC);
         var folder = BoardPaths.Folder(vaultPath.Name);
@@ -92,7 +92,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> MoveAsync(string vault, string card, string column, string? position, string? reason, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board move", vaultPath) is { } refused) return refused;
         reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
         if (reason is { Length: > MaxReason }) return Error($"a reason has at most {MaxReason} characters; this one has {reason.Length}");
 
@@ -148,7 +148,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         string vault, string card, Optional<DateOnly?> due, Optional<IReadOnlyList<string>?> tags, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board update", vaultPath) is { } refused) return refused;
         if (!due.IsGiven && !tags.IsGiven) return Error("update needs at least one of due or tags, to set or remove (given as null, it removes)");
         IReadOnlyList<string>? tagList = null;
         if (tags.IsGiven && !TryTags(tags.Value, out tagList, out error)) return error;
@@ -188,7 +188,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> RenameColumnAsync(string vault, string from, string to, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board rename_column", vaultPath) is { } refused) return refused;
         var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
         if (board is null) return boardError!;
         if (!TryColumn(board, from, out var column, out error)) return error;
@@ -253,7 +253,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> CreateAsync(string vault, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board create", vaultPath) is { } refused) return refused;
         var path = BoardPaths.Definition(vaultPath.Name);
         if (await store.GetAsync(path, ct) is not null) return Error($"{path.Value} exists already; 'board {Quote(vaultPath)}' shows it", ShellErrorKind.Conflict);
 
@@ -685,6 +685,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     }
 
     private static string Quote(VaultPath path) => path.Value.Contains(' ') ? $"\"{path.Value}\"" : path.Value;
+
+    /// <summary>The caller's refusal of <paramref name="operation"/> (<c>board create</c>, <c>board add</c>, …): named
+    /// apart, since creating a board and renaming its columns change the vault's structure, the cards don't.</summary>
+    private ShellResult? Refuse(string operation, VaultPath vaultPath) =>
+        caller.Refuse(operation, vaultPath) is { } refused ? refused with { Kind = ShellErrorKind.Refused } : null;
 
     private static ShellResult Error(string message, ShellErrorKind kind = ShellErrorKind.Invalid) =>
         ShellResult.Error($"{Tool}: {message}") with { Kind = kind };

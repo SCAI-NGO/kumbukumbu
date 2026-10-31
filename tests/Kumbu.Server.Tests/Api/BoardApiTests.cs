@@ -237,6 +237,24 @@ public sealed class BoardApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Renaming_a_column_with_a_write_key_is_403_structural()
+    {
+        var user = await BoardUserAsync();
+        await CardAsync(user, "Task", "Doing", "a1");
+        var write = await user.KeyAsync("w", KeyRight.Write);
+
+        using var renamed = await user.SendAsync(HttpMethod.Post, Board(user, "/rename-column"), new { from = "Doing", to = "Active" }, bearer: write);
+        using var moved = await user.SendAsync(HttpMethod.Post, Board(user, "/move"), new { card = "Task", column = "Ideas" }, bearer: write);
+
+        Assert.Equal(HttpStatusCode.Forbidden, renamed.StatusCode);
+        var body = await RestClient.JsonAsync(renamed);
+        Assert.Equal("structural", body["code"]!.GetValue<string>());
+        Assert.Equal("Only those who may maintain *Work* can change its board's columns.", body["error"]!.GetValue<string>());
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        Assert.Equal(["Task"], Titles(await RestClient.JsonAsync(await user.GetAsync(Board(user))), "Ideas"));
+    }
+
+    [Fact]
     public async Task A_problem_board_is_409()
     {
         var user = await BoardUserAsync("---\nkumbu-board: 1\ncolumns: [Ideas, ideas]\n---\n# Broken\n");

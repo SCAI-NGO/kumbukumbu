@@ -23,7 +23,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         Text(await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct));
 
     /// <summary>A new user with a vault; a key for it with the given right.</summary>
-    private async Task<(string Vault, string WriteKey, string ReadKey)> OwnVaultAsync()
+    private async Task<(string Vault, string MaintainKey, string ReadKey, string WriteKey)> OwnVaultAsync()
     {
         var keys = app.Services.GetRequiredService<ApiKeys>();
         var users = new UserCatalog(
@@ -34,9 +34,10 @@ public sealed class BoardToolTests(KumbuAppFactory app)
         var (user, userKey, _) = (await users.TrySignInAsync(username, "correct horse battery staple", Ct))!.Value;
         var vault = "Kanban" + Guid.NewGuid().ToString("N")[..6];
         var id = (await app.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync(vault, user.Id, userKey, Ct)).Id;
-        var (write, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "writer", new Dictionary<string, KeyRight> { [id] = KeyRight.Maintain }, Ct);
+        var (maintain, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "maintainer", new Dictionary<string, KeyRight> { [id] = KeyRight.Maintain }, Ct);
+        var (write, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "writer", new Dictionary<string, KeyRight> { [id] = KeyRight.Write }, Ct);
         var (read, _) = await keys.CreateAsync(user, userKey, DateTime.UtcNow, "reader", new Dictionary<string, KeyRight> { [id] = KeyRight.Read }, Ct);
-        return (vault, write, read);
+        return (vault, maintain, read, write);
     }
 
     [Fact]
@@ -63,7 +64,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
     [Fact]
     public async Task Add_then_move_through_mcp()
     {
-        var (vault, key, _) = await OwnVaultAsync();
+        var (vault, key, _, _) = await OwnVaultAsync();
         await using var client = await app.ConnectAsync(key);
 
         Assert.StartsWith("board: created", Text(await BoardAsync(client, new() { ["vault"] = vault, ["action"] = "create" })), StringComparison.Ordinal);
@@ -89,7 +90,7 @@ public sealed class BoardToolTests(KumbuAppFactory app)
     [Fact]
     public async Task A_missing_argument_names_it()
     {
-        var (vault, key, _) = await OwnVaultAsync();
+        var (vault, key, _, _) = await OwnVaultAsync();
         await using var client = await app.ConnectAsync(key);
 
         var add = await BoardAsync(client, new() { ["vault"] = vault, ["action"] = "add", ["title"] = "x" });
@@ -113,8 +114,8 @@ public sealed class BoardToolTests(KumbuAppFactory app)
     [Fact]
     public async Task A_read_key_is_refused()
     {
-        var (vault, writeKey, readKey) = await OwnVaultAsync();
-        await using (var writer = await app.ConnectAsync(writeKey))
+        var (vault, maintainKey, readKey, _) = await OwnVaultAsync();
+        await using (var writer = await app.ConnectAsync(maintainKey))
             await BoardAsync(writer, new() { ["vault"] = vault, ["action"] = "create" });
         await using var client = await app.ConnectAsync(readKey);
 
@@ -122,5 +123,21 @@ public sealed class BoardToolTests(KumbuAppFactory app)
 
         Assert.True(result.IsError);
         Assert.Equal($"board: this key can only read vault {vault}", Text(result));
+    }
+
+    [Fact]
+    public async Task A_write_key_moves_cards_but_does_not_rename_columns()
+    {
+        var (vault, maintainKey, _, writeKey) = await OwnVaultAsync();
+        await using (var maintainer = await app.ConnectAsync(maintainKey))
+            await BoardAsync(maintainer, new() { ["vault"] = vault, ["action"] = "create" });
+        await using var client = await app.ConnectAsync(writeKey);
+
+        var added = await BoardAsync(client, new() { ["vault"] = vault, ["action"] = "add", ["title"] = "Card", ["column"] = "Ideas" });
+        var renamed = await BoardAsync(client, new() { ["vault"] = vault, ["action"] = "rename_column", ["from"] = "Doing", ["to"] = "Active" });
+
+        Assert.NotEqual(true, added.IsError);
+        Assert.True(renamed.IsError);
+        Assert.Equal($"board: Only those who may maintain *{vault}* can change its board's columns.", Text(renamed));
     }
 }
