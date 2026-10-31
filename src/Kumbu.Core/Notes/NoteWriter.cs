@@ -66,7 +66,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
     /// <summary>The changeset a write by the caller in the vault of <paramref name="path"/> joins now.</summary>
     public Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
-        Changeset.ForAsync(store, path.Segments[0], caller.Writer, caller.ChangesetIdle, Now, ct);
+        Changeset.ForAsync(store, path.Segments[0], caller.Reference, caller.Writer, caller.ChangesetIdle, Now, ct);
 
     /// <summary>Creates a note (no version) or overwrites it (the version the writer last read).</summary>
     public async Task<ShellResult> WriteAsync(string pathText, string content, string? version, CancellationToken ct)

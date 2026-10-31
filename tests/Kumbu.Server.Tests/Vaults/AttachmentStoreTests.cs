@@ -92,7 +92,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal(bytes, await ReadBlobAsync(later, read.Current.BlobId));
         Assert.Equal(older, await ReadBlobAsync(later, read.History[0].State.BlobId));
         // Notes and attachments share one changeset per writer.
-        Assert.Equal((changeset, T0), await later.LatestChangesetAsync("Work", Writers.Dev, Ct));
+        Assert.Equal((changeset, T0), await later.LatestChangesetAsync("Work", WriterRef.Server.ChangesetKey(Writers.Dev)!, Ct));
     }
 
     [Fact]
@@ -109,13 +109,13 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var changeset = Changeset.New(Now);
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next }, Changeset = changeset }, "lea", WriterRef.Server, Now.AddMinutes(1), Ct));
         Assert.Null(await store.GetAttachmentAsync(P("/Work/a.png"), Ct));
-        Assert.Equal((changeset, Now.AddMinutes(1)), await store.LatestChangesetAsync("Work", "lea", Ct));
+        Assert.Equal((changeset, Now.AddMinutes(1)), await store.LatestChangesetAsync("Work", WriterRef.Server.ChangesetKey("lea")!, Ct));
 
         var later = Store(world.Catalog(time: _time));
         var trashed = Assert.Single(await later.ListAttachmentTrashAsync(P("/Work"), Ct));
         Assert.Equal(next.Current, trashed.Attachment.Current);
         Assert.Equal(("lea", Now.AddMinutes(1), changeset), (trashed.DeletedBy, trashed.DeletedAt, trashed.Changeset));
-        Assert.Equal((changeset, Now.AddMinutes(1)), await later.LatestChangesetAsync("Work", "lea", Ct));
+        Assert.Equal((changeset, Now.AddMinutes(1)), await later.LatestChangesetAsync("Work", WriterRef.Server.ChangesetKey("lea")!, Ct));
 
         var restored = trashed.Attachment with { Revision = trashed.Attachment.Revision + 1, Changeset = null };
         Assert.Empty(await later.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, WriterRef.Server, Now, Ct));

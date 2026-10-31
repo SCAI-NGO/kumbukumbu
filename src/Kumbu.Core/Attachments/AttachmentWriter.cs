@@ -274,7 +274,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     }
 
     private Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
-        Changeset.ForAsync(notes, path.Segments[0], caller.Writer, caller.ChangesetIdle, Now, ct);
+        Changeset.ForAsync(notes, path.Segments[0], caller.Reference, caller.Writer, caller.ChangesetIdle, Now, ct);
 
     private async Task<AttachmentState> StateAsync(
         VaultPath path, AttachmentFormat format, ReadOnlyMemory<byte> bytes, (int W, int H)? image, CancellationToken ct) =>

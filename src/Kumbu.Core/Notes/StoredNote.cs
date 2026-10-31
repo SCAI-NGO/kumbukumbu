@@ -37,29 +37,37 @@ public sealed record Changeset(string Id, DateTime Started)
     public string Short => Id[..Math.Min(8, Id.Length)];
 
     /// <summary>The writer's changeset for a write at <paramref name="now"/>: the latest one, if it is still open after
-    /// <paramref name="idle"/> without a write (<see cref="ICaller.ChangesetIdle"/>).</summary>
-    public static async Task<Changeset> ForAsync(INoteStore store, string vault, string writer, TimeSpan idle, DateTime now, CancellationToken ct) =>
-        await store.LatestChangesetAsync(vault, Writers.Identity(writer), ct) is { } latest
-        && now - latest.LastWrite < idle && now - latest.Changeset.Started < MaxLength
-            ? latest.Changeset
-            : New(now);
+    /// <paramref name="idle"/> without a write (<see cref="ICaller.ChangesetIdle"/>). Keyed by the writer's reference
+    /// (<see cref="WriterRef.ChangesetKey"/>); the owner's writer also continues a changeset written before 0.3.0 under
+    /// the same label, the only key such an entry has. Without a reference, a new changeset: the store then refuses
+    /// the write.</summary>
+    public static async Task<Changeset> ForAsync(
+        INoteStore store, string vault, WriterRef? reference, string label, TimeSpan idle, DateTime now, CancellationToken ct)
+    {
+        var latest = reference?.ChangesetKey(label) is { } key ? await store.LatestChangesetAsync(vault, key, ct) : null;
+        if (latest is null && reference is { Owner: true }) latest = await store.LatestChangesetAsync(vault, WriterRef.Legacy.ChangesetKey(label)!, ct);
+        return latest is { } open && now - open.LastWrite < idle && now - open.Changeset.Started < MaxLength ? open.Changeset : New(now);
+    }
 
     /// <summary>
-    /// For <see cref="INoteStore.LatestChangesetAsync"/>: the newest changeset of <paramref name="writer"/> among a
-    /// vault's current note and attachment states, moves and trash records, with its time. Moves and removals count, so
-    /// removing two notes in a row is one changeset even without another write; notes and attachments share it.
+    /// For <see cref="INoteStore.LatestChangesetAsync"/>: the newest changeset of the writer <paramref name="changesetKey"/>
+    /// (<see cref="WriterRef.ChangesetKey"/>) among a vault's current note and attachment states, moves and trash
+    /// records, with its time. Moves and removals count, so removing two notes in a row is one changeset even without
+    /// another write; notes and attachments share it.
     /// </summary>
     public static (Changeset Changeset, DateTime LastWrite)? Latest(
-        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string writer,
+        IEnumerable<StoredNote> notes, IEnumerable<TrashedNote> trash, IEnumerable<MoveRecord> moves, string changesetKey,
         IEnumerable<StoredAttachment>? attachments = null, IEnumerable<TrashedAttachment>? attachmentTrash = null) =>
-        notes.Where(n => n.Changeset is not null && Writers.Identity(n.LastWriter) == writer).Select(n => (n.Changeset!, n.LastWriteAt))
-            .Concat(trash.Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
-            .Concat(moves.Where(m => m.Changeset is not null && Writers.Identity(m.MovedBy) == writer).Select(m => (m.Changeset!, m.MovedAt)))
-            .Concat((attachments ?? []).Where(a => a.Changeset is not null && Writers.Identity(a.LastWriter) == writer).Select(a => (a.Changeset!, a.LastWriteAt)))
-            .Concat((attachmentTrash ?? []).Where(t => t.Changeset is not null && Writers.Identity(t.DeletedBy) == writer).Select(t => (t.Changeset!, t.DeletedAt)))
+        notes.Where(n => n.Changeset is not null && Of(n.Ref, n.LastWriter) == changesetKey).Select(n => (n.Changeset!, n.LastWriteAt))
+            .Concat(trash.Where(t => t.Changeset is not null && Of(t.Ref, t.DeletedBy) == changesetKey).Select(t => (t.Changeset!, t.DeletedAt)))
+            .Concat(moves.Where(m => m.Changeset is not null && Of(m.Ref, m.MovedBy) == changesetKey).Select(m => (m.Changeset!, m.MovedAt)))
+            .Concat((attachments ?? []).Where(a => a.Changeset is not null && Of(a.Ref, a.LastWriter) == changesetKey).Select(a => (a.Changeset!, a.LastWriteAt)))
+            .Concat((attachmentTrash ?? []).Where(t => t.Changeset is not null && Of(t.Ref, t.DeletedBy) == changesetKey).Select(t => (t.Changeset!, t.DeletedAt)))
             .OrderByDescending(x => x.Item2)
             .Select(x => ((Changeset, DateTime)?)x)
             .FirstOrDefault();
+
+    private static string? Of(WriterRef? reference, string label) => reference?.ChangesetKey(label);
 }
 
 /// <summary>An earlier state of a note: its content, who wrote it when, and in which changeset.</summary>

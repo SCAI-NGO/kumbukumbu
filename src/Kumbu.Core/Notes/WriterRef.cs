@@ -31,4 +31,15 @@ public sealed record WriterRef(bool Owner, string Kind, string? Id, string? Writ
     public static readonly WriterRef Legacy = new(true, "legacy", null, null) { IsLegacy = true };
 
     public static readonly WriterRef Unknown = new(false, "unknown", null, null) { IsUnknown = true };
+
+    /// <summary>
+    /// What changesets are keyed by (collab design §8.1): the owner and her credential (or session), a member's
+    /// writer id, so that members, who store no label, don't share one. A legacy entry has only its label to go by
+    /// (<see cref="Writers.Identity"/>); an unknown one belongs to no writer's changeset.
+    /// </summary>
+    public string? ChangesetKey(string label) =>
+        IsUnknown ? null
+        : IsLegacy ? "label:" + Writers.Identity(label)
+        : Owner ? $"owner:{Kind}:{Id}"
+        : "member:" + Writer;
 }

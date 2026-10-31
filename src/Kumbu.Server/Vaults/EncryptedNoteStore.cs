@@ -58,10 +58,10 @@ public sealed class EncryptedNoteStore(
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
 
-    public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
+    public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct) =>
         await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
             ? Changeset.Latest(
-                v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, writer,
+                v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, changesetKey,
                 v.Attachments.Values.Select(a => a.Attachment), v.AttachmentTrash.Select(t => t.Trashed))
             : null;
 

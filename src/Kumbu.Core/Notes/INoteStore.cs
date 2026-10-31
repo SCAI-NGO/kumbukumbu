@@ -9,9 +9,10 @@ public interface INoteStore : INoteReader
 {
     Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct);
 
-    /// <summary>The changeset of <paramref name="writer"/>'s most recent write that is still a note's current
-    /// state in the vault, and when it was written; null if there is none.</summary>
-    Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct);
+    /// <summary>The changeset of the most recent write by the writer <paramref name="changesetKey"/>
+    /// (<see cref="WriterRef.ChangesetKey"/>) that is still a note's current state in the vault, and when it was
+    /// written; null if there is none.</summary>
+    Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct);
 
     /// <summary>Returns false if a note already exists at the path.</summary>
     Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct);

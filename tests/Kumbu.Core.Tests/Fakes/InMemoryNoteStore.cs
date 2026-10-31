@@ -95,9 +95,9 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct) =>
         Task.FromResult(_notes.GetValueOrDefault(path));
 
-    public Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string writer, CancellationToken ct) =>
+    public Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct) =>
         Task.FromResult(Changeset.Latest(
-            _notes.Values.Where(n => n.Path.Vault == vault), _trash.Where(t => t.Note.Path.Vault == vault), _moves.Where(m => m.From.Vault == vault), writer,
+            _notes.Values.Where(n => n.Path.Vault == vault), _trash.Where(t => t.Note.Path.Vault == vault), _moves.Where(m => m.From.Vault == vault), changesetKey,
             _attachments.Values.Where(a => a.Path.Vault == vault), _attachmentTrash.Where(t => t.Attachment.Path.Vault == vault)));
 
     public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>

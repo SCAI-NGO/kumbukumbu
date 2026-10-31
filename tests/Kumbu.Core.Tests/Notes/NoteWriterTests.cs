@@ -224,7 +224,7 @@ public class NoteWriterTests
         var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;
         _time.Advance(TimeSpan.FromMinutes(10));
         var v2 = (await Edit("/Work/plan.md", v1, null, "b")).Version!.Token;
-        await new NoteWriter(_store, _time, new FixedCaller("other")).EditAsync("/Work/plan.md", v2, null, "c", Ct);
+        await new NoteWriter(_store, _time, new FixedCaller("other") { Reference = WriterRef.ForOwner(WriterRef.Agent, "other") }).EditAsync("/Work/plan.md", v2, null, "c", Ct);
 
         var note = await Get("/Work/plan.md");
         Assert.Equal([Plan + "a\nb", Plan + "a", Plan], note.History.Select(h => h.Content));

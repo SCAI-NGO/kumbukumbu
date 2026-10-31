@@ -177,8 +177,8 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         var later = Store(world.Catalog());
         Assert.Equal(changeset, (await later.GetAsync(P("/Work/a.md"), Ct))!.Changeset);
-        Assert.Equal((changeset, T0), await later.LatestChangesetAsync("Work", Writers.Dev, Ct));
-        Assert.Null(await later.LatestChangesetAsync("Work", "someone-else", Ct));
+        Assert.Equal((changeset, T0), await later.LatestChangesetAsync("Work", WriterRef.Server.ChangesetKey(Writers.Dev)!, Ct));
+        Assert.Null(await later.LatestChangesetAsync("Work", WriterRef.ForOwner(WriterRef.Agent, "someone-else").ChangesetKey("someone-else")!, Ct));
     }
 
     [Fact]
@@ -199,7 +199,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         Assert.Equal(changeset, Assert.Single(await later.ListMovesAsync(P("/Work"), Ct)).Changeset);
         Assert.Equal(changeset, Assert.Single(await later.ListTrashAsync(P("/Work"), Ct)).Changeset);
         // Removals and moves keep a writer's changeset open, also without a note written in it.
-        Assert.Equal((changeset, T0.AddMinutes(1)), await later.LatestChangesetAsync("Work", Writers.Dev, Ct));
+        Assert.Equal((changeset, T0.AddMinutes(1)), await later.LatestChangesetAsync("Work", WriterRef.Server.ChangesetKey(Writers.Dev)!, Ct));
     }
 
     [Fact]

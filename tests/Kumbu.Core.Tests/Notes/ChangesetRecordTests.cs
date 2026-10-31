@@ -127,4 +127,71 @@ public class ChangesetRecordTests
         var back = (await _store.ListMovesAsync(P("/Work"), Ct)).Single(m => m.From == P("/Work/moved.md"));
         Assert.Null(back.Changeset);
     }
+
+    /// <summary>A writer for <paramref name="reference"/> with the label <paramref name="label"/>, on this test's store.</summary>
+    private NoteWriter WriterFor(string label, WriterRef reference) => new(_store, _time, new FixedCaller(label) { Reference = reference });
+
+    private async Task<Changeset> WriteAsync(NoteWriter writer, string path)
+    {
+        Assert.False((await writer.WriteAsync(path, path + "\n", null, Ct)).IsError);
+        return (await _store.GetAsync(P(path), Ct))!.Changeset!;
+    }
+
+    [Fact]
+    public async Task Two_writers_with_the_same_label_get_two_changesets()
+    {
+        var first = WriterFor("Claude", WriterRef.ForOwner(WriterRef.Agent, "key-1"));
+        var second = WriterFor("Claude", WriterRef.ForOwner(WriterRef.Agent, "key-2"));
+
+        var a = await WriteAsync(first, "/Work/a.md");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var b = await WriteAsync(second, "/Work/b.md");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var c = await WriteAsync(first, "/Work/c.md");
+
+        Assert.NotEqual(a.Id, b.Id);
+        Assert.Equal(a.Id, c.Id);
+    }
+
+    [Fact]
+    public async Task Two_members_storing_no_label_get_two_changesets()
+    {
+        var first = WriterFor("", WriterRef.ForMember("w1"));
+        var second = WriterFor("", WriterRef.ForMember("w2"));
+
+        var a = await WriteAsync(first, "/Work/a.md");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var b = await WriteAsync(second, "/Work/b.md");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        var c = await WriteAsync(second, "/Work/c.md");
+
+        Assert.NotEqual(a.Id, b.Id);
+        Assert.Equal(b.Id, c.Id);
+    }
+
+    [Fact]
+    public async Task A_legacy_entry_continues_its_writers_changeset_by_label()
+    {
+        var before = Changeset.New(_time.GetUtcNow().UtcDateTime);
+        Assert.True(await _store.TryCreateAsync(
+            new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude (mv)", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy), Ct));
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        var continued = await WriteAsync(WriterFor("Claude", WriterRef.ForOwner(WriterRef.Agent, "key-1")), "/Work/a.md");
+
+        Assert.Equal(before.Id, continued.Id);
+    }
+
+    [Fact]
+    public async Task A_member_never_continues_a_legacy_changeset()
+    {
+        var before = Changeset.New(_time.GetUtcNow().UtcDateTime);
+        Assert.True(await _store.TryCreateAsync(
+            new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy), Ct));
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        var own = await WriteAsync(WriterFor("Claude", WriterRef.ForMember("w1")), "/Work/a.md");
+
+        Assert.NotEqual(before.Id, own.Id);
+    }
 }

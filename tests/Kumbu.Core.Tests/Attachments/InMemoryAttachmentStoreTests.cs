@@ -130,13 +130,13 @@ public class InMemoryAttachmentStoreTests
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]) with { LastWriter = "lea (upload)", Changeset = changeset };
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea (upload)", WriterRef.Server, Now, CancellationToken.None));
 
-        Assert.Equal((changeset, Now), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
+        Assert.Equal((changeset, Now), await store.LatestChangesetAsync("work", WriterRef.Server.ChangesetKey("lea")!, CancellationToken.None));
 
         var removal = Changeset.New(Now.AddMinutes(5));
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment }, Changeset = removal }, "lea (rm)", WriterRef.Server, Now.AddMinutes(5), CancellationToken.None));
 
-        Assert.Equal((removal, Now.AddMinutes(5)), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
-        Assert.Null(await store.LatestChangesetAsync("other", "lea", CancellationToken.None));
+        Assert.Equal((removal, Now.AddMinutes(5)), await store.LatestChangesetAsync("work", WriterRef.Server.ChangesetKey("lea")!, CancellationToken.None));
+        Assert.Null(await store.LatestChangesetAsync("other", WriterRef.Server.ChangesetKey("lea")!, CancellationToken.None));
     }
 
     [Fact]

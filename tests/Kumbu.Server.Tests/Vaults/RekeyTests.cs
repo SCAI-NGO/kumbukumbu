@@ -1097,7 +1097,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             () => store.SearchAsync(P("/Arbeit"), "alpha", 5, Ct),
             () => store.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct),
             () => store.TryRemoveCheckpointAsync("Arbeit", "eins", Ct),
-            () => store.LatestChangesetAsync("Arbeit", "lea", Ct),
+            () => store.LatestChangesetAsync("Arbeit", WriterRef.Server.ChangesetKey("lea")!, Ct),
             () => Catalog().SetEmbeddingProviderAsync(placeholder, EmbeddingProviders.Internal, Ct),
         };
         foreach (var read in reads) Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(read)).Message);
