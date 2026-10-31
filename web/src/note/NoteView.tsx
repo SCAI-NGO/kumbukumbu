@@ -405,9 +405,10 @@ export function Properties({ yaml, changed, still = false }: { yaml: string; cha
 
 /**
  * Asks before a note goes: the API's `DELETE` answers only 204, so the notes that link to it (whose links then
- * lead nowhere) are named here first. Afterwards the folder's next note opens, or the vaults.
+ * lead nowhere) are named here first. Afterwards, if it was the open note (`open`), the folder's next note opens, or
+ * the vaults; another note's deletion leaves the page as it is.
  */
-export function DeleteNoteDialog({ path, onClose }: { path: string; onClose(): void }) {
+export function DeleteNoteDialog({ path, open = true, onClose }: { path: string; open?: boolean; onClose(): void }) {
   const backlinks = useBacklinks(path);
   const remove = useDeleteNote();
   const navigate = useNavigate();
@@ -419,7 +420,7 @@ export function DeleteNoteDialog({ path, onClose }: { path: string; onClose(): v
       onSuccess: (next) => {
         useEditor.getState().forgetNote(path);
         onClose();
-        navigate(next ? noteUrl(next) : "/", { replace: true });
+        if (open) navigate(next ? noteUrl(next) : "/", { replace: true });
       },
     });
 

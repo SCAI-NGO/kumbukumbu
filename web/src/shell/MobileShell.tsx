@@ -16,12 +16,13 @@ import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
 import UpdateBar from "../update/UpdateBar";
 import { useEditor } from "../state/editor";
+import DeleteFileDialog from "../attachments/DeleteFileDialog";
 import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
 import TopBar, { sidebarToggleId } from "./TopBar";
-import TreeDrawer, { sidebarId } from "./TreeDrawer";
+import TreeDrawer, { sidebarId, type DeleteSubject } from "./TreeDrawer";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -107,7 +108,7 @@ export default function MobileShell() {
   const [vaultDialog, setVaultDialog] = useState(false);
   /** The folder a new folder goes into, while its dialog is open. */
   const [folderDialog, setFolderDialog] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<DeleteSubject | null>(null);
   const [moving, setMoving] = useState<MoveSubject | null>(null);
   const [history, setHistory] = useState<string | null>(null);
   const [vaultSheet, setVaultSheet] = useState<{ kind: "trash" | "activity" | "checkpoints"; vault: string } | null>(null);
@@ -186,7 +187,7 @@ export default function MobileShell() {
     });
   // From the dock: the open note's folder, or the root of the vault the drawer shows.
   const dockFolder = activeVault && (path && vaultOf(path) === activeVault ? folderOf(path) : `/${activeVault}`);
-  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onVaultSheet: setVaultSheet };
+  const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
@@ -215,7 +216,7 @@ export default function MobileShell() {
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
                       { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
-                      { label: "Delete note", icon: Trash2, onSelect: () => setDeleting(path) },
+                      { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
                     ]
                   : null
               }
@@ -270,7 +271,10 @@ export default function MobileShell() {
           </Suspense>
         </LoadBoundary>
       )}
-      {deleting && <DeleteNoteDialog path={deleting} onClose={() => setDeleting(null)} />}
+      {deleting?.kind === "note" && <DeleteNoteDialog path={deleting.path} open={deleting.path === path} onClose={() => setDeleting(null)} />}
+      {deleting?.kind === "attachment" && (
+        <DeleteFileDialog path={deleting.path} version={deleting.version} onDeleted={() => setDeleting(null)} onClose={() => setDeleting(null)} />
+      )}
       {folderDialog && <NewFolderDialog parent={folderDialog} onClose={() => setFolderDialog(null)} />}
       {vaultDialog && (
         <NewVaultDialog

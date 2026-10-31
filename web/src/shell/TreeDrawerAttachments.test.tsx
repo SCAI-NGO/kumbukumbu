@@ -6,7 +6,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 
-const entry = (path: string, kind = "note", mediaType = "text/markdown") => ({ name: path.split("/").at(-1)!, path, size: 10, kind, mediaType });
+const entry = (path: string, kind = "note", mediaType = "text/markdown") => ({ name: path.split("/").at(-1)!, path, size: 10, kind, mediaType, version: `v-${path}` });
 const tree = {
   damaged: 0,
   root: {
@@ -24,7 +24,7 @@ const tree = {
 
 const drawer = () => screen.getByRole("dialog", { name: "File tree" });
 
-async function openDrawer() {
+async function openDrawer(extra: Parameters<typeof fakeApi>[0] = {}, start = "/notes/Work/plan.md") {
   fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 4, embeddings: "internal" }]),
@@ -37,8 +37,9 @@ async function openDrawer() {
     // The lightbox, once open: the file is gone meanwhile.
     "GET /api/files/*": () => json(404, { error: "No such file" }),
     "GET /api/version/*": () => json(404, { error: "No such file" }),
+    ...extra,
   });
-  const router = renderApp("/notes/Work/plan.md");
+  const router = renderApp(start);
   await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
   await within(drawer()).findByText("report.pdf");
   return router;
@@ -62,8 +63,7 @@ describe("attachments in the tree", () => {
     await openDrawer();
     const kinds = [...drawer().querySelectorAll("[data-file-kind]")].map((e) => `${e.getAttribute("data-file-kind")} ${e.textContent}`);
     expect(kinds).toEqual(["image a shot.png", "note plan", "pdf report.pdf", "image z photo.jpg"]);
-    // Moving an attachment is the lightbox's: the note's dialog would make it a note.
-    expect(within(drawer()).queryByRole("button", { name: "Actions for report.pdf" })).toBeNull();
+    expect(within(drawer()).getByRole("button", { name: "Actions for report.pdf" })).toBeInTheDocument();
     expect(within(drawer()).getByRole("button", { name: "Actions for plan" })).toBeInTheDocument();
   });
 
@@ -81,5 +81,50 @@ describe("attachments in the tree", () => {
     expect(items.indexOf("Gallery")).toBe(items.indexOf("Create board") + 1);
     await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Gallery" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/gallery/Work"));
+  });
+
+  it("renames or moves an attachment from its menu in the tree, keeping its extension", async () => {
+    await openDrawer();
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for report.pdf" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename or move" }));
+    const dialog = await screen.findByRole("dialog", { name: /report\.pdf/ });
+    expect(within(dialog).getByRole("textbox")).toHaveValue("report");
+  });
+
+  it("deletes an attachment from its menu in the tree, at the version the tree shows", async () => {
+    const deleted: string[] = [];
+    await openDrawer({
+      "DELETE /api/files/*": (r) => {
+        const url = new URL(r.url);
+        deleted.push(`${decodeURIComponent(url.pathname)}?${decodeURIComponent(url.search.slice(1))}`);
+        return new Response(null, { status: 204 });
+      },
+    });
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for report.pdf" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete report.pdf?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(deleted).toEqual(["/api/files/Work/report.pdf?version=v-/Work/report.pdf"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete report.pdf?" })).toBeNull());
+  });
+
+  it("deletes a note from its menu in the tree and stays on the open note when that is another", async () => {
+    const deleted: string[] = [];
+    const router = await openDrawer(
+      {
+        "DELETE /api/notes/*": (r) => {
+          deleted.push(decodeURIComponent(new URL(r.url).pathname));
+          return new Response(null, { status: 204 });
+        },
+      },
+      "/notes/Work/elsewhere.md",
+    );
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for plan" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete plan?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(deleted).toEqual(["/api/notes/Work/plan.md"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete plan?" })).toBeNull());
+    expect(router.state.location.pathname).toBe("/notes/Work/elsewhere.md");
   });
 });
