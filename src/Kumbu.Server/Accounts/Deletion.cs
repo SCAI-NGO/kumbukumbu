@@ -152,8 +152,9 @@ public sealed class Deletion(
 
     /// <summary>
     /// In one transaction: the user's vaults with everything in them, the user, their password, recovery and
-    /// session slots, their API keys with the keys' slots, and their connections with their codes and tokens (tombstones
-    /// included), the tokens' slots and the pending authorisation requests. Null, and nothing deleted, if the user no
+    /// session slots, their API keys with the keys' slots, their connections with their codes and tokens (tombstones
+    /// included), the tokens' slots and the pending authorisation requests, and their memberships of shared vaults with
+    /// their member slots (the vaults stay their owners'). Null, and nothing deleted, if the user no
     /// longer matches <paramref name="stillDeletable"/>.
     /// </summary>
     private async Task<DeletionSummary?> DeleteAccountAsync(string userId, FilterDefinition<UserDocument> stillDeletable, CancellationToken ct)
@@ -165,6 +166,7 @@ public sealed class Deletion(
         var connectionCount = 0;
         var invitationCount = 0;
         long revokedCount = 0;
+        var membershipCount = 0;
         long documents;
         try
         {
@@ -189,6 +191,8 @@ public sealed class Deletion(
                     cancellationToken: token)).ModifiedCount;
                 // The ones they created stay as the record of who invited whom, but none that is open stays usable.
                 revokedCount = await Invitations.RevokeOpenOfAsync(db, s, userId, time.GetUtcNow().UtcDateTime, token);
+                // Their memberships of other people's vaults, with the slots they reach them by; those vaults stay.
+                membershipCount = await Sharing.Memberships.DeleteOfMemberAsync(db, s, userId, token);
             }, ct);
         }
         catch (UserChangedException)
@@ -197,6 +201,7 @@ public sealed class Deletion(
         }
 
         if (revokedCount > 0) log.LogInformation("{Count} open invitations of deleted user {UserId} revoked", revokedCount, userId);
+        if (membershipCount > 0) log.LogInformation("{Count} memberships of deleted user {UserId} ended", membershipCount, userId);
 
         // A vault the user made between the read above and the transaction (from another tab, say) has an owner
         // that no longer exists: it goes too.

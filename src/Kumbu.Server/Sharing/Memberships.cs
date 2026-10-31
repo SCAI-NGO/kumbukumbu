@@ -161,6 +161,24 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
         if (vault.MatchedCount == 0) throw refused;
     }
 
+    /// <summary>
+    /// Inside the transaction of <paramref name="userId"/>'s account deletion (collab design §7.2): every membership
+    /// with that user as member goes, tombstones included, with its member slot and the slots derived through it
+    /// (<c>grantedVia</c>). Nothing that names the member stays with the vault; her writes resolve to "a former member".
+    /// Only <c>member == userId</c>: the vaults she owns, and their memberships, go with her vaults. The number deleted.
+    /// </summary>
+    internal static async Task<int> DeleteOfMemberAsync(IMongoDatabase db, IClientSessionHandle s, string userId, CancellationToken ct)
+    {
+        var docs = db.GetCollection<MembershipDocument>(CollectionName);
+        var ids = await docs.Find(s, m => m.Member == userId).Project(m => m.Id).ToListAsync(ct);
+        if (ids.Count == 0) return 0;
+        var f = Builders<SlotDocument>.Filter;
+        await db.GetCollection<SlotDocument>("slots").DeleteManyAsync(
+            s, (f.Eq(sl => sl.Kind, SlotDocument.Member) & f.In(sl => sl.Membership, ids)) | f.In(sl => sl.GrantedVia, ids), cancellationToken: ct);
+        await docs.DeleteManyAsync(s, Builders<MembershipDocument>.Filter.In(m => m.Id, ids), cancellationToken: ct);
+        return ids.Count;
+    }
+
     /// <summary>The writers a membership's sealed <c>writers</c> holds (credential id → display name), opened with the vault key.</summary>
     internal static IReadOnlyDictionary<string, string> OpenWriters(MembershipDocument doc, byte[] vaultKey) =>
         JsonSerializer.Deserialize<Dictionary<string, string>>(
