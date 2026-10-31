@@ -232,6 +232,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             return ShellResult.Error($"restore: {path.Value} is not in checkpoint '{name}' (it covers {checkpoint.Scope})");
         }
 
+        // Before telling a note from a folder: the path may name the vault while the checkpoint holds only Board.md.
+        if (await RefuseStructuralAsync(view, scope, ct) is { } structural) return structural;
         var isAttachment = await view.GetAttachmentAsync(scope, ct) is not null || await StoreAttachments.GetAsync(store, scope, ct) is not null;
         var isNote = (!checkpoint.Folder && scope == checkpoint.Path) || await view.ReadAsync(scope, ct) is not null || await store.ReadAsync(scope, ct) is not null;
         if (isNote || isAttachment)
@@ -241,6 +243,30 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         }
 
         return token is null ? await PreviewAsync(view, scope, ct) : await ApplyAsync(view, scope, token, by, ct);
+    }
+
+    /// <summary>
+    /// A folder restore is refused whole below maintain when it would change a structural file (collab design §3.3):
+    /// a board whose columns came back without its cards, or the other way round, would be worse than no restore.
+    /// </summary>
+    private async Task<ShellResult?> RefuseStructuralAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    {
+        var vault = scope.Segments[0];
+        if (writer.Caller.Level(vault) >= AccessLevel.Maintain || !await StructuralChangeAsync(view, scope, ct)) return null;
+        return Refusals.Of("restore", Refusals.Structural,
+            $"This checkpoint changes the board's structure; only those who may maintain *{vault}* can restore it.");
+    }
+
+    /// <summary>Whether a structural file in <paramref name="scope"/> differs between the checkpoint and now, a file
+    /// on one side only included.</summary>
+    private async Task<bool> StructuralChangeAsync(CheckpointView view, VaultPath scope, CancellationToken ct)
+    {
+        foreach (var path in StructuralFiles.Of(scope.Segments[0]).Where(p => p == scope || Checkpoint.IsBelow(p, scope)))
+        {
+            if (await view.ReadAsync(path, ct) != await store.ReadAsync(path, ct)) return true;
+        }
+
+        return false;
     }
 
     private async Task<ShellResult> RestoreNoteAsync(CheckpointView view, VaultPath path, string by, CancellationToken ct)
@@ -455,6 +481,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (writer.Caller.Refuse("restore", vaultPath) is { } refused) return (null, refused);
         var (view, error) = await OpenAsync("restore", vault, name, ct);
         if (view is null) return (null, error);
+        if (await RefuseStructuralAsync(view, view.Checkpoint.Path, ct) is { } structural) return (null, structural);
         var (preview, current) = await PreviewOfAsync(view, view.Checkpoint.Path, ct);
         if (preview.Plan is { } token) plans.Add(token, new RestorePlan(view.Checkpoint.Path.Value, name, current, writer.Now), writer.Now);
         return (preview, null);
@@ -467,6 +494,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (writer.Caller.Refuse("restore", vaultPath) is { } refused) return refused;
         var (view, error) = await OpenAsync("restore", vault, name, ct);
         if (view is null) return error!;
+        if (await RefuseStructuralAsync(view, view.Checkpoint.Path, ct) is { } structural) return structural;
         return await ApplyAsync(view, view.Checkpoint.Path, token, writer.Caller.Writer, ct);
     }
 

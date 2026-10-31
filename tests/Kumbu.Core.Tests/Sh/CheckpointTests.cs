@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
@@ -452,5 +453,114 @@ public class CheckpointTests
         Assert.Contains("(1 note)", made.Output);
         Assert.Contains("  1 note", (await Run("lscp /Demo")).Output);
     }
-}
 
+    private const string BoardPath = "/Demo/Board/Board.md";
+
+    /// <summary>A caller who may write Demo but not maintain it: the shell for the restore, and its checkpoints for the
+    /// whole restore the web app offers.</summary>
+    private (Shell Sh, Checkpoints Checkpoints) AsWriter()
+    {
+        var caller = new FixedCaller("bob", LevelOf: _ => AccessLevel.Write);
+        var writer = new NoteWriter(_store, _time, caller);
+        var checkpoints = new Checkpoints(_store, writer, new Plans(), limit: 3);
+        return (new Shell(_store, writer, new NoteMover(_store, _time, caller), checkpoints), checkpoints);
+    }
+
+    private async Task<string> SnapshotAsync()
+    {
+        var notes = await _store.ReadNotesUnderAsync(P("/Demo"), CancellationToken.None);
+        return string.Join('|', notes.OrderBy(n => n.Path.Value, StringComparer.Ordinal).Select(n => $"{n.Path.Value}={n.Content}"));
+    }
+
+    /// <summary>The writer's restore of all of Demo, by the shell and as a whole: each refused with the board's sentence,
+    /// and nothing restored.</summary>
+    private async Task AssertRefusedAsync()
+    {
+        var before = await SnapshotAsync();
+        var (sh, checkpoints) = AsWriter();
+
+        var preview = await sh.RunAsync("restore --checkpoint cp /Demo", CancellationToken.None);
+        var (whole, refused) = await checkpoints.PreviewWholeAsync("Demo", "cp", CancellationToken.None);
+        var applied = await checkpoints.ApplyWholeAsync("Demo", "cp", "0123", CancellationToken.None);
+
+        const string sentence = "restore: This checkpoint changes the board's structure; only those who may maintain *Demo* can restore it.";
+        Assert.Equal(ShellResult.Error(sentence) with { Code = Refusals.Structural }, preview);
+        Assert.Null(whole);
+        Assert.Equal(ShellResult.Error(sentence) with { Code = Refusals.Structural }, refused);
+        Assert.Equal(ShellResult.Error(sentence) with { Code = Refusals.Structural }, applied);
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    private BoardService Boards() =>
+        new(_store, _writer, new NoteMover(_store, _time, new FixedCaller(Writers.Dev)), _time, new FixedCaller(Writers.Dev));
+
+    [Fact]
+    public async Task A_writer_restores_a_checkpoint_whose_board_is_unchanged()
+    {
+        await Boards().CreateAsync("Demo", CancellationToken.None);
+        await Boards().AddAsync("Demo", "Card", "Ideas", null, null, null, null, CancellationToken.None);
+        await Run("mkcp /Demo cp");
+        await Write("/Demo/welcome.md", "changed\n");
+        await Boards().MoveAsync("Demo", "Card", "Doing", null, null, CancellationToken.None);
+        var (sh, checkpoints) = AsWriter();
+
+        var preview = await sh.RunAsync("restore --checkpoint cp /Demo", CancellationToken.None);
+        var applied = await sh.RunAsync($"restore --checkpoint cp --plan {Plan(preview)} /Demo", CancellationToken.None);
+        var (whole, refused) = await checkpoints.PreviewWholeAsync("Demo", "cp", CancellationToken.None);
+
+        Assert.False(applied.IsError, applied.Output);
+        Assert.Equal("hi [[plan]]\n", await Content("/Demo/welcome.md"));
+        Assert.Contains("column: Ideas", await Content("/Demo/Board/Card.md"));
+        Assert.Null(refused);
+        Assert.NotNull(whole);
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_restore_a_checkpoint_with_another_board()
+    {
+        await Boards().CreateAsync("Demo", CancellationToken.None);
+        await Boards().AddAsync("Demo", "Card", "Doing", null, null, null, null, CancellationToken.None);
+        await Run("mkcp /Demo cp");
+        await Write("/Demo/welcome.md", "changed\n");
+        Assert.False((await Boards().RenameColumnAsync("Demo", "Doing", "Active", CancellationToken.None)).IsError);
+
+        await AssertRefusedAsync();
+        Assert.Contains("column: Active", await Content("/Demo/Board/Card.md"));
+        Assert.Equal("changed\n", await Content("/Demo/welcome.md"));
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_restore_a_checkpoint_with_a_board_where_there_is_none_now()
+    {
+        await Boards().CreateAsync("Demo", CancellationToken.None);
+        await Run("mkcp /Demo cp");
+        await Run($"rm {BoardPath}");
+
+        await AssertRefusedAsync();
+        Assert.Null(await Content(BoardPath));
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_restore_a_checkpoint_without_the_board_there_is_now()
+    {
+        await Run("mkcp /Demo cp");
+        await Boards().CreateAsync("Demo", CancellationToken.None);
+
+        await AssertRefusedAsync();
+        Assert.Equal(BoardTemplate.Text("Demo"), await Content(BoardPath));
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_restore_a_checkpoint_of_Board_md_alone_through_the_vault()
+    {
+        await Boards().CreateAsync("Demo", CancellationToken.None);
+        await Run($"mkcp {BoardPath} cp");
+        Assert.False((await Boards().RenameColumnAsync("Demo", "Doing", "Active", CancellationToken.None)).IsError);
+        var before = await SnapshotAsync();
+
+        var result = await AsWriter().Sh.RunAsync("restore --checkpoint cp /Demo", CancellationToken.None);
+
+        Assert.Equal(Refusals.Structural, result.Code);
+        Assert.Equal(before, await SnapshotAsync());
+    }
+}

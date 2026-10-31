@@ -670,6 +670,9 @@ public static class NoteApi
         if (caller.Refuse(command, path) is { } refused) throw new ApiException(StatusCodes.Status403Forbidden, refused.Output);
     }
 
+    /// <summary>The 403 of a refusal a command answered with (<see cref="ShellResult.Code"/> set), with its code.</summary>
+    internal static ApiException Refused(ShellResult refused) => new(StatusCodes.Status403Forbidden, refused.Output, code: refused.Code);
+
     internal static async Task<ApiException> MissingAsync(INoteStore store, VaultPath path, CancellationToken ct) =>
         ApiErrors.NotFound(await store.IsDamagedAsync(path, ct)
             ? Damage.Message("read", path)

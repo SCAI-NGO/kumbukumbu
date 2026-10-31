@@ -368,7 +368,7 @@ public static class HistoryApi
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
 
-        if (preview is null) throw new ApiException(StatusCodes.Status409Conflict, error!.Output);
+        if (preview is null) throw error!.Code is not null ? NoteApi.Refused(error) : new ApiException(StatusCodes.Status409Conflict, error.Output);
         return TypedResults.Ok(new RestorePreviewView(
             preview.Checkpoint.Scope,
             [.. preview.Changes.Select(c => new RestoreChangeView(
@@ -395,6 +395,7 @@ public static class HistoryApi
         }
 
         // An unknown, expired or used plan, or a note that changed since the preview.
+        if (result.Code is not null) throw NoteApi.Refused(result);
         return result.IsError ? throw new ApiException(StatusCodes.Status409Conflict, result.Output) : TypedResults.Ok(new RestoredView(result.Output));
     }
 

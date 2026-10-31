@@ -293,6 +293,31 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_whole_restore_preview_refuses_a_changed_board_for_a_write_key()
+    {
+        var user = await UserAsync();
+        var board = "---\nkumbu-board: 1\ncolumns: [Ideas, Doing]\n---\n";
+        var version = await user.CreateAsync("Board/Board.md", board);
+        await user.CreateAsync("plan.md", "then\n");
+        using var _ = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints", new { name = "cp" });
+        using var __ = await user.SendAsync(HttpMethod.Put, user.Url("Board/Board.md"), new { content = board.Replace("Doing", "Active"), version });
+        var key = await user.KeyAsync("writer", KeyRight.Write);
+
+        using var preview = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/cp/preview", bearer: key);
+        using var restore = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/cp/restore", new { plan = "0123" }, bearer: key);
+
+        foreach (var refused in new[] { preview, restore })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            var body = await JsonAsync(refused);
+            Assert.Equal("structural", Text(body, "code"));
+            Assert.Equal("restore: This checkpoint changes the board's structure; only those who may maintain *Arbeit* can restore it.", Text(body, "error"));
+        }
+
+        Assert.Contains("Active", Text(await user.ReadAsync("Board/Board.md"), "content"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_read_only_key_lists_the_trash_and_checkpoints_but_changes_nothing()
     {
         var user = await UserAsync();
