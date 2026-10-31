@@ -7,14 +7,16 @@ import { useVaults } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
+import { maintainSentence } from "./rights";
 
 type Created = components["schemas"]["CreatedApiKeyView"];
-export type Right = "none" | "read" | "write";
+export type Right = "none" | "read" | "write" | "maintain";
 
 const rights: { value: Right; label: string }[] = [
   { value: "none", label: "None" },
   { value: "read", label: "Read" },
   { value: "write", label: "Read and write" },
+  { value: "maintain", label: "Maintain" },
 ];
 
 /** The lifetimes the server accepts; 0 stands for "never". */
@@ -27,11 +29,17 @@ export const expiries: { days: number; label: string }[] = [
 
 const segmentClass =
   "flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-text-body has-checked:bg-accent has-checked:text-on-accent has-focus-visible:outline-2 has-focus-visible:outline-accent";
+// Maintain keeps its warning colour when chosen: a ring on the darker ground instead of the accent fill.
+const maintainClass =
+  "flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-warning has-checked:bg-bg has-checked:font-medium has-checked:inset-ring has-checked:inset-ring-warning has-focus-visible:outline-2 has-focus-visible:outline-accent";
 
 /** The vaults that got a right, as the server takes them. */
 export const grant = (chosen: Record<string, Right>) => Object.fromEntries(Object.entries(chosen).filter(([, right]) => right !== "none"));
 
-/** A right per vault, as one group of radios for each; "none" leaves the vault out. `children` is the hint underneath. */
+/**
+ * A right per vault, as one group of radios for each; "none" leaves the vault out. `children` is the hint underneath.
+ * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it.
+ */
 export function RightsPicker({
   vaults,
   chosen,
@@ -55,7 +63,7 @@ export function RightsPicker({
           <legend className="mb-1 text-text">{vault.name}</legend>
           <div className="flex rounded-[10px] border border-line bg-surface-2 p-0.5">
             {rights.map((right) => (
-              <label key={right.value} className={segmentClass}>
+              <label key={right.value} className={right.value === "maintain" ? maintainClass : segmentClass}>
                 <input
                   type="radio"
                   name={`${id}-${vault.name}`}
@@ -68,6 +76,7 @@ export function RightsPicker({
               </label>
             ))}
           </div>
+          {chosen[vault.name] === "maintain" && <p className="text-sm text-warning">{maintainSentence}</p>}
         </fieldset>
       ))}
       {children && <p className="text-sm text-muted">{children}</p>}
@@ -146,7 +155,8 @@ export default function NewKeyDialog({ onClose, onCreated }: { onClose(): void; 
         <TextField label="Name" value={name} onChange={setName} autoComplete="off" />
 
         <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen}>
-          A key needs a name and at least one vault it may read.
+          A key needs a name and at least one vault it may read. Read and write is enough for most agents; choose Maintain only for one you
+          trust with the vault's structure.
         </RightsPicker>
 
         <ExpiryPicker value={expiresInDays} onChange={setExpiresInDays}>

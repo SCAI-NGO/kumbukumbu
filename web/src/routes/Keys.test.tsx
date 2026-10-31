@@ -76,6 +76,16 @@ describe("Keys", () => {
     expect(within(old).queryByRole("button", { name: /Revoke/ })).not.toBeInTheDocument();
   });
 
+  it("lists a maintain key as 'read, write and maintain', in the warning colour", async () => {
+    api({ "GET /api/keys": () => json(200, [{ ...listed, vaults: { Work: "maintain", Home: "write" } }]) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Laptop")).closest("li")!;
+    expect(item).toHaveTextContent("Work: read, write and maintain");
+    expect(item).toHaveTextContent("Home: read and write");
+    expect(within(item).getByText("read, write and maintain")).toHaveClass("text-warning");
+    expect(item.querySelectorAll(".text-warning")).toHaveLength(1);
+  });
+
   it("shows when a key was last used, to the minute", async () => {
     api({ "GET /api/keys": () => json(200, [{ ...listed, lastUsedAt: "2026-10-05T14:37:00Z" }]) });
     renderApp("/keys");
@@ -165,6 +175,37 @@ describe("Keys", () => {
 
     expect(await within(dialog).findByText("You already have a key named 'Claude'.")).toBeInTheDocument();
     expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "write", Home: "read" }, expiresInDays: 90 }]);
+  });
+
+  it("offers maintain in the warning colour with its sentence, and sends it", async () => {
+    const bodies: unknown[] = [];
+    api({ "POST /api/keys": async (r) => (bodies.push(await r.json()), json(409, { error: "No." })) });
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Claude");
+    const work = within(dialog).getByRole("group", { name: "Work" });
+    const sentence = "Can change the vault's structure: the board's columns, checkpoints.";
+    expect(within(work).getByText("Maintain")).toHaveClass("text-warning");
+    expect(work).not.toHaveTextContent(sentence);
+
+    await userEvent.click(within(work).getByLabelText("Maintain"));
+    expect(within(work).getByText(sentence)).toHaveClass("text-warning");
+    expect(within(dialog).getByRole("group", { name: "Home" })).not.toHaveTextContent(sentence);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ name: "Claude", vaults: { Work: "maintain" }, expiresInDays: 90 }]));
+  });
+
+  it("suggests write for a new key: no vault starts at maintain, and the hint says maintain is a deliberate choice", async () => {
+    api();
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    for (const vault of ["Work", "Home"]) {
+      const group = within(dialog).getByRole("group", { name: vault });
+      expect(within(group).getByLabelText("None")).toBeChecked();
+      expect(within(group).getByLabelText("Maintain")).not.toBeChecked();
+    }
+    expect(dialog).toHaveTextContent("Read and write is enough for most agents; choose Maintain only for one you trust with the vault's structure.");
   });
 
   it("lets a key expire after 30, 90 or 365 days, 90 unless chosen otherwise, or never", async () => {

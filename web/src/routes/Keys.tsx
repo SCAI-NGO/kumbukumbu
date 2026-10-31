@@ -10,13 +10,13 @@ import { useDialog } from "../hooks/useDialog";
 import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
+import { RightText } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const date = (iso: string) => day.format(new Date(iso));
-const rightText = (right: string) => (right === "write" ? "read and write" : right);
 
 /** The user's API keys for agents: made here, shown once, revoked here. */
 export default function Keys() {
@@ -99,7 +99,7 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
       <ul className="flex flex-col text-sm text-text-body">
         {Object.entries(apiKey.vaults).map(([vault, right]) => (
           <li key={vault}>
-            {vault}: {rightText(right)}
+            {vault}: <RightText right={right} />
           </li>
         ))}
       </ul>

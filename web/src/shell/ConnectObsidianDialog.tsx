@@ -6,6 +6,7 @@ import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from 
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { ExpiryPicker } from "../routes/NewKeyDialog";
+import { maintainSentence } from "../routes/rights";
 
 /** What to add in BRAT; when the plugin is in Obsidian's community directory, the dialog says to search for it there. */
 export const pluginRepo = "SCAI-NGO/kumbu-obsidian";
@@ -128,6 +129,9 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
         <ExpiryPicker value={expiresInDays} onChange={setExpiresInDays}>
           The device's key. A new choice makes a new code.
         </ExpiryPicker>
+
+        {/* A device is the person themself in Obsidian: the server pairs it as maintain. */}
+        <p className="text-sm text-warning">The device may read, write and maintain this vault. {maintainSentence}</p>
 
         <p className="text-sm text-muted">
           Each device gets its own key, named "{vault} – Obsidian &lt;device&gt;". You can revoke it under API keys. Re-encrypting this vault disconnects

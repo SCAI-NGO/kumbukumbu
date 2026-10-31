@@ -12,13 +12,13 @@ import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, RightsPicker, type Right } from "./NewKeyDialog";
+import { RightText } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type Connection = components["schemas"]["ConnectionView"];
 
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const date = (iso: string) => day.format(new Date(iso));
-const rightText = (right: string) => (right === "write" ? "read and write" : right);
 
 /** Why the server ended or interrupted a connection, in the words the user would use. */
 const reasons: Record<string, string> = {
@@ -136,7 +136,7 @@ function ConnectionItem({ connection: c, onChange, onRevoke }: { connection: Con
       <ul className="flex flex-col text-sm text-text-body">
         {Object.entries(c.vaults).map(([vault, right]) => (
           <li key={vault} className="break-words">
-            {vault}: {rightText(right)}
+            {vault}: <RightText right={right} />
           </li>
         ))}
       </ul>

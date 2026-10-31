@@ -82,6 +82,15 @@ describe("Connect Obsidian", () => {
     expect(bodies).toEqual([{ expiresInDays: null }]);
   });
 
+  it("says the device may maintain the vault, in the warning colour with its sentence", async () => {
+    api();
+    const { dialog } = await openDialog();
+
+    const level = within(dialog).getByText("The device may read, write and maintain this vault.", { exact: false });
+    expect(level).toHaveTextContent("The device may read, write and maintain this vault. Can change the vault's structure: the board's columns, checkpoints.");
+    expect(level).toHaveClass("text-warning");
+  });
+
   it("counts down, and at 0:00 offers only a new code", async () => {
     api();
     const { u, dialog } = await openDialog();

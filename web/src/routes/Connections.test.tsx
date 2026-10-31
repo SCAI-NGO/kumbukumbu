@@ -202,6 +202,23 @@ describe("Connections", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("shows maintain in the list, and keeps it when the rights are saved unchanged", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, vaults: { Arbeit: "maintain", Home: "read" } }], { "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Work")).closest("li")!;
+    expect(item).toHaveTextContent("Arbeit: read, write and maintain");
+    expect(within(item).getByText("read, write and maintain")).toHaveClass("text-warning");
+
+    await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
+    const dialog = screen.getByRole("dialog", { name: "Change rights" });
+    expect(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Maintain")).toBeChecked();
+    expect(within(dialog).getByText("Can change the vault's structure: the board's columns, checkpoints.")).toHaveClass("text-warning");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "maintain", Home: "read" } }]));
+  });
+
   it("revoking asks first", async () => {
     let calls = 0;
     const fetch = api([base], { "DELETE /api/connections/c1": () => (calls++, noContent()) });
