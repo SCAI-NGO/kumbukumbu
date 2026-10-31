@@ -101,10 +101,11 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             _attachments.Values.Where(a => a.Path.Vault == vault), _attachmentTrash.Where(t => t.Attachment.Path.Vault == vault)));
 
     public Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct) =>
-        Task.FromResult(_vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path) && _notes.TryAdd(note.Path, note));
+        Task.FromResult(RequireRef(note.Ref) && _vaults.Contains(note.Path.Vault!) && !Damaged.Contains(note.Path) && _notes.TryAdd(note.Path, note));
 
     public Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
     {
+        RequireRef(next.Ref);
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
         _notes[current.Path] = next;
@@ -116,6 +117,15 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
+        // As the real store: every entry the batch stores has a reference, or nothing is written.
+        foreach (var note in batch.Replaces.Select(r => r.Next).Concat(batch.Moves.Select(m => m.Target)).Concat(batch.Creates)) RequireRef(note.Ref);
+        foreach (var attachment in batch.AttachmentReplaces.Select(r => r.Next).Concat(batch.AttachmentMoves.Select(m => m.Target))
+            .Concat(batch.AttachmentCreates).Concat(batch.AttachmentRestores.Select(r => r.Restored)))
+        {
+            RequireRef(attachment.Ref);
+        }
+
+        if (batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentTrashes.Count > 0 || batch.AttachmentMoves.Count > 0) RequireRef(byRef);
         var existing = batch.Replaces.Select(r => r.Current).Concat(batch.Moves.Select(m => m.Current)).Concat(batch.Trashes).ToList();
         foreach (var current in existing) Race(current.Path);
 
@@ -196,6 +206,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
     {
+        RequireRef(checkpoint.Ref);
         if (_checkpoints.Any(c => c.Checkpoint.Vault == checkpoint.Vault && c.Checkpoint.Name == checkpoint.Name)) return Task.FromResult(false);
         _checkpoints.Add((checkpoint, notes));
         return Task.FromResult(true);
@@ -209,6 +220,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public Task<bool> TryTrashAsync(StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, CancellationToken ct)
     {
+        RequireRef(deletedByRef);
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
         _notes.Remove(current.Path);
@@ -225,6 +237,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
     {
+        RequireRef(reference);
         var latest = _trash
             .Where(t => t.Note.Path == path && (version is null || t.Note.Version == version))
             .OrderByDescending(t => t.DeletedAt)
@@ -274,6 +287,11 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         Interfere = null;
         _notes[path] = interfere(stored) with { Revision = stored.Revision + 1 };
     }
+
+    /// <summary>Fails closed as the real store does (<c>EncryptedNoteStore.RequireRef</c>), so a Core write path that
+    /// forgets the writer reference fails here too.</summary>
+    private static bool RequireRef(WriterRef? reference) =>
+        reference is not null ? true : throw new InvalidOperationException("A write without a writer reference");
 
     private static bool IsBelow(VaultPath path, VaultPath dir) =>
         path.Value.StartsWith(dir.IsRoot ? "/" : dir.Value + "/", StringComparison.Ordinal);

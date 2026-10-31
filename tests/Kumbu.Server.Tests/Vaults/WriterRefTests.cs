@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text.Json.Nodes;
+using Kumbu.Core.Board;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
+using Kumbu.Server.Notes;
 using Kumbu.Server.Vaults;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using static Kumbu.Server.Tests.Vaults.VaultWorld;
 
@@ -129,5 +133,146 @@ public sealed class WriterRefTests(MongoFixture fixture)
             _ => (await store.ListCheckpointsAsync(VaultPath.Root, Ct)).Single().Ref,
         };
         Assert.Equal(Key, reference);
+    }
+
+    public static TheoryData<string> WritePaths =>
+    [
+        "write", "edit", "replace", "mv", "mv folder", "rm", "restore from trash", "restore version", "restore --checkpoint",
+        "board add", "board move", "board rename_column", "mkcp", "upload", "upload replace", "rm attachment", "restore attachment",
+        "mkdir", "import",
+    ];
+
+    /// <summary>
+    /// Every write path stores a reference (collab design §8.1, fail closed): after the write, every sealed payload
+    /// that carries a writer, in every vault, has <c>v: 2</c> and a reference, and so has every entry inside it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(WritePaths))]
+    public async Task Every_write_path_stores_a_reference(string path)
+    {
+        var w = await WorldAsync();
+        var caller = new FixedCaller("Claude") { Reference = Key };
+        var files = w.Writer.ForAttachments()!;
+        var mover = new NoteMover(w.Store, TimeProvider.System, caller);
+        var board = new BoardService(w.Store, w.Writer, mover, TimeProvider.System, caller);
+        Assert.False((await w.Writer.WriteAsync("/Work/a.md", "a foo\n", null, Ct)).IsError);
+        Assert.False((await w.Writer.WriteAsync("/Work/sub/b.md", "b foo\n", null, Ct)).IsError);
+        Assert.False((await w.Writer.WriteAsync("/Work/gone.md", "gone\n", null, Ct)).IsError);
+        Assert.False((await files.WriteAsync("/Work/x.png", Png, (1, 1), null, Ct)).Result.IsError);
+        Assert.False((await files.WriteAsync("/Work/y.png", (byte[])[.. Png, 3], (1, 1), null, Ct)).Result.IsError);
+        Assert.False((await board.CreateAsync("Work", Ct)).IsError);
+        Assert.False((await board.AddAsync("Work", "Card", "Ideas", null, null, null, null, Ct)).IsError);
+        Assert.False((await w.Shell.RunAsync("mkcp /Work before", Ct)).IsError);
+        Assert.False((await w.Shell.RunAsync("rm /Work/gone.md", Ct)).IsError);
+        Assert.False((await w.Shell.RunAsync("rm /Work/y.png", Ct)).IsError);
+        Assert.False((await w.Writer.WriteAsync("/Work/a.md", "a foo again\n", VersionToken.Of("a foo\n"), Ct)).IsError);
+        var before = await DocumentsAsync(w);
+
+        var result = path switch
+        {
+            "write" => await w.Writer.WriteAsync("/Work/new.md", "new\n", null, Ct),
+            "edit" => await w.Writer.EditAsync("/Work/sub/b.md", VersionToken.Of("b foo\n"), null, "more\n", Ct),
+            "replace" => await ReplaceAsync(w.Store, caller),
+            "mv" => await w.Shell.RunAsync("mv /Work/a.md /Work/c.md", Ct),
+            "mv folder" => await w.Shell.RunAsync("mv /Work/sub/ /Work/other/", Ct),
+            "rm" => await w.Shell.RunAsync("rm /Work/a.md", Ct),
+            "restore from trash" => await w.Shell.RunAsync("restore /Work/gone.md", Ct),
+            "restore version" => await w.Shell.RunAsync("restore /Work/a.md " + VersionToken.Of("a foo\n"), Ct),
+            "restore --checkpoint" => await w.Shell.RunAsync("restore --checkpoint before /Work/a.md", Ct),
+            "board add" => await board.AddAsync("Work", "Second", "Backlog", null, null, null, null, Ct),
+            "board move" => await board.MoveAsync("Work", "Card", "Today", null, null, Ct),
+            "board rename_column" => await board.RenameColumnAsync("Work", "Ideas", "Thoughts", Ct),
+            "mkcp" => await w.Shell.RunAsync("mkcp /Work after", Ct),
+            "upload" => (await files.WriteAsync("/Work/z.png", (byte[])[.. Png, 4], (1, 1), null, Ct)).Result,
+            "upload replace" => (await files.WriteAsync("/Work/x.png", (byte[])[.. Png, 5], (1, 1), VersionToken.Of(Png), Ct)).Result,
+            "rm attachment" => await w.Shell.RunAsync("rm /Work/x.png", Ct),
+            "restore attachment" => await w.Shell.RunAsync("restore /Work/y.png", Ct),
+            "mkdir" => await w.Shell.RunAsync("mkdir /Work/empty", Ct),
+            _ => await ImportAsync(w),
+        };
+
+        Assert.False(result.IsError, result.Output);
+        var after = await DocumentsAsync(w);
+        Assert.NotEmpty(after.Keys.Except(before.Keys));
+        foreach (var (where, payload) in after) AssertReferenced(where, payload);
+    }
+
+    [Fact]
+    public async Task A_caller_without_a_reference_is_refused()
+    {
+        var w = await WorldAsync(new FixedCaller("Claude") { Reference = null! });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => w.Writer.WriteAsync("/Work/a.md", "a\n", null, Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => w.Writer.ForAttachments()!.WriteAsync("/Work/x.png", Png, (1, 1), null, Ct));
+
+        Assert.Empty(await DocumentsAsync(w));
+        Assert.Empty(await Store(w.Vaults.Catalog()).ListNotesUnderAsync(VaultPath.Root, Ct));
+    }
+
+    private static async Task<ShellResult> ReplaceAsync(EncryptedNoteStore store, ICaller caller)
+    {
+        var replacer = new Replacer(store, TimeProvider.System, new Plans(), caller);
+        var preview = await replacer.RunAsync("/Work", "foo", "bar", false, null, Ct);
+        var plan = preview.Output.Split('\n').Single(l => l.StartsWith("plan: ", StringComparison.Ordinal))["plan: ".Length..];
+        return await replacer.RunAsync("/Work", "foo", "bar", false, plan, Ct);
+    }
+
+    /// <summary>A seed folder with a note and a kept empty folder, imported into a vault the seeder creates.</summary>
+    private static async Task<ShellResult> ImportAsync(World w)
+    {
+        var root = Directory.CreateTempSubdirectory("kumbu-seed-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "Demo", "kept"));
+            await File.WriteAllTextAsync(Path.Combine(root, "Demo", "hello.md"), "hello\n", Ct);
+            var options = Options.Create(new KumbuOptions { DevToken = VaultWorld.Token, Seed = new SeedOptions { Path = root } });
+            await new Seeder(options, w.Vaults.Catalog(), TimeProvider.System, Microsoft.Extensions.Logging.Abstractions.NullLogger<Seeder>.Instance).StartAsync(Ct);
+            return ShellResult.Ok("imported");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Every payload that carries a writer, in every vault of the world, by collection, document and revision.</summary>
+    private static async Task<Dictionary<string, JsonObject>> DocumentsAsync(World w)
+    {
+        var all = new Dictionary<string, JsonObject>();
+        foreach (var vault in await w.Vaults.Db.GetCollection<BsonDocument>("vaults").Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(Ct))
+        {
+            var id = vault["_id"].AsString;
+            var key = await SealedPayloads.KeyOfTokenVaultAsync(w.Vaults.Db, id, VaultWorld.Token, Ct);
+            foreach (var collection in SealedPayloads.WithWriter)
+            {
+                foreach (var doc in await w.Vaults.Db.GetCollection<SealedDocument>(collection).Find(d => d.Vault == id).ToListAsync(Ct))
+                {
+                    all[$"{collection}/{doc.Id}/{doc.Revision}"] = SealedPayloads.Open(id, key, collection, doc);
+                }
+            }
+        }
+
+        return all;
+    }
+
+    private static readonly string[] Writers = ["LastWriter", "WrittenBy", "DeletedBy", "MovedBy", "CreatedBy"];
+
+    /// <summary>The payload, and every entry inside it that names a writer, has <c>v: 2</c> and a reference.</summary>
+    private static void AssertReferenced(string where, JsonNode? node)
+    {
+        if (node is JsonArray array)
+        {
+            foreach (var item in array) AssertReferenced(where, item);
+            return;
+        }
+
+        if (node is not JsonObject obj) return;
+        if (Writers.Any(obj.ContainsKey))
+        {
+            Assert.True(obj["v"] is JsonValue v && (int)v == 2, $"{where}: no v in {obj.ToJsonString()[..Math.Min(200, obj.ToJsonString().Length)]}");
+            Assert.True(obj["ref"] is JsonObject, $"{where}: no ref");
+        }
+
+        foreach (var (_, child) in obj) AssertReferenced(where, child);
     }
 }

@@ -208,7 +208,7 @@ public sealed class WelcomeVaultTests(KumbuAppFactory app)
         {
             var store = new EncryptedNoteStore(catalog, new UserCredential(user.Id, userKey));
             var path = Kumbu.Core.Paths.VaultPath.Root.Child(WelcomeVault.Name).Child(firstName);
-            Assert.True(await store.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "in the way", 1, "test", DateTime.UtcNow, []), token));
+            Assert.True(await store.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "in the way", 1, "test", DateTime.UtcNow, [], Ref: Kumbu.Core.Notes.WriterRef.Server), token));
         };
 
         await welcome.CreateAsync(user, userKey, readAt, Ct);

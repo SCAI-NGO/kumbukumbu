@@ -57,7 +57,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv-Übernahme/Geheimakte Übernahme.md"), Revision = other.Revision + 1 });
         var moved = (await store.GetAsync(P("/Geheimprojekt/Archiv-Übernahme/Geheimakte Übernahme.md"), Ct))!;
         Assert.True(await store.TryAddCheckpointAsync(
-            new Checkpoint("vor-Acme-Übernahme-Geheimprojekt-Kauf", P("/Geheimprojekt/Archiv-Übernahme"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]),
+            new Checkpoint("vor-Acme-Übernahme-Geheimprojekt-Kauf", P("/Geheimprojekt/Archiv-Übernahme"), true, Writers.Dev, T0, [new CheckpointNote(moved.Path, moved.Version)]) { Ref = WriterRef.Server },
             [new Note(moved.Path, moved.Content)], Ct));
 
         var everything = new StringBuilder();
@@ -81,7 +81,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>
-        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), Writers.Dev, T0, [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]);
+        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), Writers.Dev, T0, [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]) { Ref = WriterRef.Server };
 
     [Fact]
     public async Task A_checkpoint_survives_a_restart_and_stores_each_text_once()

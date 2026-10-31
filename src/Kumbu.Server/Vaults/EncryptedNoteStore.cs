@@ -127,6 +127,7 @@ public sealed class EncryptedNoteStore(
             var apply = new List<Action>();
             foreach (var (current, next) in batch.Replaces)
             {
+                RequireRef(next.Ref);
                 if (!vault.Notes.TryGetValue(current.Path, out var entry)
                     || !await ReplaceAtRevisionAsync(session, catalog.Notes, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealNote(entry.Id, next), ct))
                 {
@@ -138,6 +139,7 @@ public sealed class EncryptedNoteStore(
 
             foreach (var (current, next) in batch.AttachmentReplaces)
             {
+                RequireRef(next.Ref);
                 if (!vault.Attachments.TryGetValue(current.Path, out var entry)
                     || !await ReplaceAtRevisionAsync(session, catalog.Attachments, vault, entry.Id, current.Path, current.Revision, next.Revision, vault.SealAttachment(entry.Id, next), ct))
                 {
@@ -160,6 +162,7 @@ public sealed class EncryptedNoteStore(
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
 
                 var trashed = new TrashedAttachment(current, by, at, batch.Changeset, byRef);
+                RequireRef(trashed.Ref);
                 var trashId = ObjectId.GenerateNewId();
                 await catalog.AttachmentTrash.InsertOneAsync(
                     session,
@@ -260,6 +263,7 @@ public sealed class EncryptedNoteStore(
         async Task<MoveRecord> RecordMoveAsync(IClientSessionHandle session, VaultPath from, VaultPath to)
         {
             var move = new MoveRecord(from, to, by, at, batch.Changeset, byRef);
+            RequireRef(move.Ref);
             var moveId = ObjectId.GenerateNewId();
             await catalog.Moves.InsertOneAsync(
                 session,
@@ -563,6 +567,7 @@ public sealed class EncryptedNoteStore(
     /// the checkpoint exists.</summary>
     public async Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
     {
+        RequireRef(checkpoint.Ref);
         if (await VaultAsync(checkpoint.Path, ct) is not { } vault) return false;
         var textIds = notes.ToDictionary(n => n.Path, n => vault.TextId(n.Content));
         return await WriteAsync(vault, [], async session =>
@@ -663,6 +668,7 @@ public sealed class EncryptedNoteStore(
         if (deleted.DeletedCount == 0) return null;
 
         var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset, deletedByRef);
+        RequireRef(trashed.Ref);
         var trashId = ObjectId.GenerateNewId();
         await catalog.Trash.InsertOneAsync(
             session,
@@ -815,11 +821,26 @@ public sealed class EncryptedNoteStore(
         }
     }
 
-    private Task<bool> InsertNoteAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredNote note, CancellationToken ct) =>
-        InsertAtPathAsync(session, catalog.Notes, vault, id, note.Path, note.Revision, vault.SealNote(id, note), ct);
+    private Task<bool> InsertNoteAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredNote note, CancellationToken ct)
+    {
+        RequireRef(note.Ref);
+        return InsertAtPathAsync(session, catalog.Notes, vault, id, note.Path, note.Revision, vault.SealNote(id, note), ct);
+    }
 
-    private Task<bool> InsertAttachmentAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredAttachment attachment, CancellationToken ct) =>
-        InsertAtPathAsync(session, catalog.Attachments, vault, id, attachment.Path, attachment.Revision, vault.SealAttachment(id, attachment), ct);
+    private Task<bool> InsertAttachmentAsync(IClientSessionHandle session, UnlockedVault vault, ObjectId id, StoredAttachment attachment, CancellationToken ct)
+    {
+        RequireRef(attachment.Ref);
+        return InsertAtPathAsync(session, catalog.Attachments, vault, id, attachment.Path, attachment.Revision, vault.SealAttachment(id, attachment), ct);
+    }
+
+    /// <summary>
+    /// Fails closed (collab design §8.1): from 0.3.0 no entry is stored without a writer reference, so a write path
+    /// that forgets one is refused whole (the transaction aborts) instead of storing an entry that would show as unknown.
+    /// </summary>
+    internal static void RequireRef(WriterRef? reference)
+    {
+        if (reference is null) throw new InvalidOperationException("A write without a writer reference");
+    }
 
     /// <summary>Inserts a sealed note or attachment record; false if one exists at that path (the unique index refuses it).</summary>
     private static async Task<bool> InsertAtPathAsync(

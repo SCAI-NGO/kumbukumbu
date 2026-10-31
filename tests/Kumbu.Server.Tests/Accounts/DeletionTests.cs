@@ -517,7 +517,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         foreach (var (path, bytes) in new[] { ("/Tagebuch/a.png", new byte[] { 1, 2, 3 }), ("/Tagebuch/b.png", [1, 2, 3]), ("/Tagebuch/c.pdf", [4, 5]) })
         {
             var state = new Kumbu.Core.Attachments.AttachmentState("image/png", bytes.Length, 1, 1, VersionToken.Of(bytes), await store.PutBlobAsync("Tagebuch", bytes, Ct));
-            batch.AttachmentCreates.Add(new Kumbu.Core.Attachments.StoredAttachment(P(path), state, 1, lea.Username, Now, [], null));
+            batch.AttachmentCreates.Add(new Kumbu.Core.Attachments.StoredAttachment(P(path), state, 1, lea.Username, Now, [], null, WriterRef.Server));
         }
 
         Assert.Empty(await store.TryCommitAsync(batch, lea.Username, WriterRef.Server, Now, Ct));

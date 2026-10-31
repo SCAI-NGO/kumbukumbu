@@ -325,7 +325,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var otherCatalog = world.Catalog(time: _time);
         var other = Store(otherCatalog);
         var shot = await CreateAsync(other, "/Work/shot.png", Png(100));
-        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)], Ref = WriterRef.Server };
         Assert.True(await other.TryAddCheckpointAsync(checkpoint, [], Ct));
         // The attachment is removed and its trash entry expires: the checkpoint alone references the bytes.
         Assert.Empty(await other.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
@@ -418,7 +418,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     private async Task<(StoredAttachment Shot, IMongoCollection<BsonDocument> Blobs)> HeldByACheckpointAsync(VaultWorld world, VaultCatalog catalog, EncryptedNoteStore store)
     {
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
-        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)], Ref = WriterRef.Server };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromDays(31));
@@ -524,7 +524,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     {
         var (world, _, store) = await WorldAsync();
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
-        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
+        var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)], Ref = WriterRef.Server };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
         var held = Assert.Single(Assert.Single(await store.ListCheckpointsAsync(P("/Work"), Ct)).Attachments);

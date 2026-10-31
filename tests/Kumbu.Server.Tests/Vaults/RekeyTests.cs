@@ -126,7 +126,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     private StoredNote New(string path, string content) => new(P(path), content, 1, "lea", Now, [], Ref: WriterRef.Server);
 
     private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>
-        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), "lea", new DateTime(2026, 10, 26, 9, 0, 0, DateTimeKind.Utc), [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]);
+        new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), "lea", new DateTime(2026, 10, 26, 9, 0, 0, DateTimeKind.Utc), [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]) { Ref = WriterRef.Server };
 
     /// <summary>
     /// The vault "Arbeit" as the brief has it: notes, one with history, a trashed note, a move, embeddings by an external
@@ -867,7 +867,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var store = Store(a);
         var x = await AttachAsync(store, "/Arbeit/x.png", Png(2000, 3));
         var y = await AttachAsync(store, "/Arbeit/y.png", Png(2000, 3));
-        var checkpoint = new Checkpoint("cp", P("/Arbeit"), true, "lea", Now, []) { Attachments = [new(x.Path, x.Current), new(y.Path, y.Current)] };
+        var checkpoint = new Checkpoint("cp", P("/Arbeit"), true, "lea", Now, []) { Attachments = [new(x.Path, x.Current), new(y.Path, y.Current)], Ref = WriterRef.Server };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
         // x.png goes to the trash, y.png gets other bytes and keeps no history: the shared bytes are left to the trash
         // entry and the checkpoint.

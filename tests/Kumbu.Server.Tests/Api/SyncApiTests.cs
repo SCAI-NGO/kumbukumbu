@@ -278,7 +278,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
         var path = Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("late.md");
 
-        Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+        Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: Kumbu.Core.Notes.WriterRef.Server), Ct));
 
         Assert.True(current.Notes.ContainsKey(path));
         Assert.True(current.ChangedAt.ContainsKey(path));
@@ -306,7 +306,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Catalog.RefreshFaultAt = () => throw new MongoDB.Driver.MongoConnectionException(new MongoDB.Driver.Core.Connections.ConnectionId(new MongoDB.Driver.Core.Servers.ServerId(new MongoDB.Driver.Core.Clusters.ClusterId(), new System.Net.DnsEndPoint("localhost", 27017))), "gone");
         try
         {
-            Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+            Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: Kumbu.Core.Notes.WriterRef.Server), Ct));
         }
         finally
         {
