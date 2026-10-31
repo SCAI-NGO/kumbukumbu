@@ -15,7 +15,7 @@ namespace Kumbu.Core.Sh.Commands;
 /// <c>rg</c> stays the plain, unranked regex search. With <c>pixels</c>, pages of PDFs rank among the sections by
 /// meaning, shown with the start of their stored text.
 /// </summary>
-public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachmentPixels? pixels = null) : ICommand
+public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachmentPixels? pixels = null, WriterMarks? marks = null) : ICommand
 {
     private const int DefaultMax = 10;
 
@@ -132,7 +132,8 @@ public sealed class Semsearch(INoteReader notes, ISearchIndex index, IAttachment
         }
 
         lines.Add(Footer(semantic, options.Has("words"), options.Has("meaning"), notIndexed, listed.Count > 0, listed.Any(h => h.Page is not null)));
-        return ShellResult.Ok(Lines.Join(lines));
+        var notice = marks is null ? null : await marks.NoticeAsync(listed.Where(h => h.Page is null).Select(h => h.Chunk.Path), ct);
+        return ShellResult.Ok(Lines.Join(lines)) with { Notice = notice };
     }
 
     /// <summary>The start of a page's stored text on one line, as a section's snippet.</summary>

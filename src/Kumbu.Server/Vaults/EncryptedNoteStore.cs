@@ -67,6 +67,23 @@ public sealed class EncryptedNoteStore(
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
 
+    private readonly Dictionary<string, VaultInfo> _infos = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// What the caller is to the vault (collab design §8.6, §10.3), once per request: on a vault shared with her, the
+    /// owner's display name (sanitised and quoted, as names that cross between users are) and her effective level, the
+    /// one her requests act at (role and credential together); on her own, her level and whether it is shared.
+    /// </summary>
+    public async Task<VaultInfo?> VaultInfoAsync(string vault, CancellationToken ct)
+    {
+        if (!(await VaultsAsync(ct)).TryGetValue(vault, out var access)) return null;
+        if (_infos.TryGetValue(vault, out var known)) return known;
+        var info = access.Membership is { } membership
+            ? new VaultInfo(Api.WriterLabels.Quoted(await catalog.DisplayNameAsync(membership.Owner, ct) ?? ""), access.Level, Shared: true)
+            : new VaultInfo(null, access.Level, await catalog.IsSharedAsync(null, access.Id, ct));
+        return _infos[vault] = info;
+    }
+
     public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct) =>
         await VaultAsync(VaultPath.Root.Child(vault), ct) is { Vault: var v }
             ? Changeset.Latest(

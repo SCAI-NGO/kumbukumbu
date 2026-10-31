@@ -123,4 +123,15 @@ public class HelpTests
             Assert.Contains("\n  " + command + " ", Manual.ToolDescription);
         }
     }
+
+    [Fact]
+    public async Task Help_mentions_shared_vaults()
+    {
+        var result = await Run("help");
+
+        Assert.Contains("garten/ (shared by \"Alice\", read)", result.Output);
+        Assert.Contains("last written by another user", result.Output);
+        Assert.Contains("shared by", (await Run("help ls")).Output);
+        Assert.Contains("last written by another user", (await Run("help cat")).Output);
+    }
 }

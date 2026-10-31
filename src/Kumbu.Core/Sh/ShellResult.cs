@@ -41,6 +41,12 @@ public sealed record ShellResult(string Output, bool IsError)
     public string? NoMatchHint { get; init; }
 
     /// <summary>
+    /// A line about what the command read, put above the pipeline's output once it has run, never passed down the
+    /// pipe: "last written by another user" (collab design §10.3).
+    /// </summary>
+    public string? Notice { get; init; }
+
+    /// <summary>
     /// Text and images in the order the model should see them; then <see cref="Output"/> is the parts' text joined
     /// (for logs), and <see cref="OutputLimit"/> leaves the result alone.
     /// </summary>

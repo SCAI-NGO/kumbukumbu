@@ -11,6 +11,14 @@ public sealed record Note(VaultPath Path, string Content);
 /// <param name="Ref">The reference sealed beside <paramref name="MovedBy"/>.</param>
 public sealed record MoveRecord(VaultPath From, VaultPath To, string MovedBy, DateTime MovedAt, Changeset? Changeset = null, WriterRef? Ref = null);
 
+/// <summary>
+/// What the caller is to a vault (collab design §8.6, §10.3): <paramref name="Owner"/>, for a vault shared with the
+/// caller, its owner's display name as the caller is shown it (sanitised and quoted), null for her own;
+/// <paramref name="Level"/>, her effective level there; <paramref name="Shared"/>, whether others reach it too (her own
+/// vault shared with anyone, or one shared with her).
+/// </summary>
+public sealed record VaultInfo(string? Owner, AccessLevel Level, bool Shared);
+
 /// <summary>Read-only access to the notes of the vault tree.</summary>
 public interface INoteReader
 {
@@ -41,6 +49,10 @@ public interface INoteReader
     /// <summary>How many stored notes don't open, in all vaults (root) or in one vault (its root).
     /// Damaged notes can't be placed in a directory, since their paths are what doesn't open.</summary>
     Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct);
+
+    /// <summary>What the caller is to <paramref name="vault"/> (named as the store names it to her); null if the store
+    /// doesn't say (an own vault nobody else reaches), or there is no such vault.</summary>
+    Task<VaultInfo?> VaultInfoAsync(string vault, CancellationToken ct) => Task.FromResult<VaultInfo?>(null);
 
     /// <summary>How many vaults exist that the caller's credential doesn't open. Only meaningful while the dev
     /// token is the only credential; with per-user keys (step 8) this would tell one user about another's vaults.</summary>

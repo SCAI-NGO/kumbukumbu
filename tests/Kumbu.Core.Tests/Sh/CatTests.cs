@@ -49,4 +49,34 @@ public class CatTests
     [Fact]
     public async Task InvalidOption() =>
         Assert.Equal(ShellResult.Error("cat: invalid option -- 'n'"), await Run("-n", "/Work/a.md"));
+
+    [Fact]
+    public async Task A_note_last_written_by_another_user_is_marked()
+    {
+        // Alice's own shell: Bob's write (an empty label, a member's reference) is marked.
+        var alice = TestShell.Of(SharedVaults.SharedGarten(asMember: false));
+
+        var result = await alice.RunAsync("cat /Garten/plan.md", CancellationToken.None);
+
+        Assert.Equal("[/Garten/plan.md: last written by another user]\nBeete planen\n", result.Output);
+        // In a pipeline the mark stays out of what the pipe passes on.
+        Assert.Equal("[/Garten/plan.md: last written by another user]\n1", (await alice.RunAsync("cat /Garten/plan.md | wc -l", CancellationToken.None)).Output);
+        // As Bob, the owner's agent's write is another user's.
+        var bob = SharedVaults.AsBob(SharedVaults.SharedGarten(asMember: true));
+        Assert.StartsWith("[/Garten/beet.md: last written by another user]\n", (await bob.RunAsync("cat /Garten/beet.md", CancellationToken.None)).Output);
+        Assert.StartsWith("[/Garten/plan.md: last written by another user]\n", (await bob.RunAsync("cat /Garten/plan.md", CancellationToken.None)).Output);
+    }
+
+    [Fact]
+    public async Task The_callers_own_agents_writes_are_not_marked()
+    {
+        // Alice's agent wrote beet.md under its own label: hers.
+        Assert.Equal("Beete gießen\n", (await TestShell.Of(SharedVaults.SharedGarten(asMember: false)).RunAsync("cat /Garten/beet.md", CancellationToken.None)).Output);
+        // Bob's agent's write stores the empty label, as every member's: his by the writer id alone.
+        Assert.Equal("Beete jäten\n", (await SharedVaults.AsBob(SharedVaults.SharedGarten(asMember: true)).RunAsync("cat /Garten/own.md", CancellationToken.None)).Output);
+        // A vault nobody else reaches marks nothing.
+        var alone = SharedVaults.SharedGarten(asMember: false);
+        alone.Infos.Clear();
+        Assert.Equal("Beete planen\n", (await TestShell.Of(alone).RunAsync("cat /Garten/plan.md", CancellationToken.None)).Output);
+    }
 }

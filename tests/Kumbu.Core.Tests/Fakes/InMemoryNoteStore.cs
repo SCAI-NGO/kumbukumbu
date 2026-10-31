@@ -59,6 +59,11 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public int LockedVaults { get; set; }
 
+    /// <summary>What the caller is to each vault (<see cref="INoteReader.VaultInfoAsync"/>); a vault not here says nothing.</summary>
+    public Dictionary<string, VaultInfo> Infos { get; } = new(StringComparer.Ordinal);
+
+    public Task<VaultInfo?> VaultInfoAsync(string vault, CancellationToken ct) => Task.FromResult(Infos.GetValueOrDefault(vault));
+
     public Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) => Task.FromResult(Damaged.Contains(path));
 
     public Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct) =>

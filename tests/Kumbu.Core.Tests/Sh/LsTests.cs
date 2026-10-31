@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Core.Notes;
 using Kumbu.Core.Sh;
 using Kumbu.Core.Sh.Commands;
 using Kumbu.Core.Tests.Fakes;
@@ -69,4 +70,16 @@ public class LsTests
     [Fact]
     public async Task TooManyArguments() =>
         Assert.Equal(ShellResult.Error("ls: too many arguments"), await Run("/Work", "/Ideas"));
+
+    [Fact]
+    public async Task A_shared_vault_shows_its_owner_and_the_callers_level()
+    {
+        var store = SharedVaults.SharedGarten(asMember: true);
+        store.Infos["Garten"] = new VaultInfo("\"Alice\"", AccessLevel.Read, true);
+        store.AddVault("Work");
+
+        var result = await TestShell.Of(store).RunAsync("ls", CancellationToken.None);
+
+        Assert.Equal("Garten/ (shared by \"Alice\", read)\nWork/", result.Output);
+    }
 }

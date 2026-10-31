@@ -20,9 +20,12 @@ namespace Kumbu.Server.Api;
 
 /// <summary><c>embeddings</c>: the name of the embedding provider the vault's notes and searches go to: the one its
 /// owner chose, or the server's default (<c>internal</c>, the model on this server, unless the admin set another). <c>pending</c>: the vault is being
-/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>canWrite</c>:
-/// whether the caller may write to it (an API key or connection with only <c>read</c> may not).</summary>
-public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite);
+/// re-encrypted; until that is done it answers 503 and its notes aren't counted (<c>notes</c> is 0). <c>level</c>: what
+/// the caller may do in it, <c>read</c>, <c>write</c>, <c>maintain</c> (also its structure: the board's columns,
+/// checkpoints) or <c>owner</c>; for a member, at most her role. <c>canWrite</c>: <c>level</c> is <c>write</c> or above
+/// (kept for older clients). <c>owner</c>: for a vault shared with the caller, its owner's display name, sanitised and
+/// quoted; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).</summary>
+public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
 /// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
@@ -195,7 +198,7 @@ public static class NoteApi
         {
             // A vault being re-encrypted has no notes to count yet; it is listed all the same.
             var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
-            views.Add(new VaultView(name, notes, vaults[name].EmbeddingProvider, vaults[name].Pending, caller.CanWrite(name)));
+            views.Add(await ViewAsync(store, name, notes, vaults[name], caller, ct));
         }
 
         return TypedResults.Ok(views.ToArray());
@@ -233,7 +236,16 @@ public static class NoteApi
             index.CatchUp(unlocked);
         }
 
-        return TypedResults.Ok(new VaultView(access.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending, caller.CanWrite(access.Name)));
+        return TypedResults.Ok(await ViewAsync(store, access.Name, unlocked.Notes.Count, unlocked, caller, ct));
+    }
+
+    /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
+    /// requests act at, and <c>canWrite</c> derived from it.</summary>
+    private static async Task<VaultView> ViewAsync(EncryptedNoteStore store, string name, int notes, UnlockedVault vault, RequestCaller caller, CancellationToken ct)
+    {
+        var info = await store.VaultInfoAsync(name, ct);
+        var level = info?.Level ?? caller.Level(name) ?? AccessLevel.Read;
+        return new VaultView(name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false);
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)

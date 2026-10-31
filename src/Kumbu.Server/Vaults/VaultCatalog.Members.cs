@@ -248,6 +248,10 @@ public sealed partial class VaultCatalog
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
 
+    /// <summary>The display name of user <paramref name="userId"/> as typed, or null: for a member's view of her vault's owner.</summary>
+    internal Task<string?> DisplayNameAsync(string userId, CancellationToken ct) =>
+        Users.Find(u => u.Id == userId).Project(u => (string?)u.Display).FirstOrDefaultAsync(ct);
+
     /// <summary>Whether <paramref name="memberId"/> holds an active membership of <paramref name="vaultId"/>.</summary>
     internal Task<bool> HasActiveMembershipAsync(string vaultId, string memberId, CancellationToken ct) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName)

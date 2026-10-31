@@ -41,10 +41,11 @@ public sealed class Shell
         _now = () => writer.Now;
         _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans(), labels: labels);
         var files = writer.ForAttachments();
+        var marks = new WriterMarks(notes, labels ?? PlainWriterLabels.Instance);
         ICommand[] commands =
         [
-            .. ReadingCommands(notes, _now, pixels),
-            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels),
+            .. ReadingCommands(notes, _now, pixels, marks: marks),
+            new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels, marks),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
             new History(notes, () => writer.Now, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
             new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
@@ -63,9 +64,9 @@ public sealed class Shell
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
-    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels, bool live = true) =>
+    private static ICommand[] ReadingCommands(INoteReader notes, Func<DateTime> now, IAttachmentPixels? pixels, bool live = true, WriterMarks? marks = null) =>
     [
-        new Ls(notes), new Cat(notes, pixels), new OutlineCommand(notes), new Rg(notes, live ? pixels : null),
+        new Ls(notes), new Cat(notes, pixels, marks), new OutlineCommand(notes), new Rg(notes, live ? pixels : null, marks),
         new LinksCommand(notes), new Backlinks(notes), new TagsCommand(notes), new BoardCommand(notes, now),
         new Head(notes), new Tail(notes), new Wc(notes), new Sort(notes),
     ];
@@ -88,6 +89,7 @@ public sealed class Shell
 
         string? input = null;
         NoteVersion? version = null;
+        var notices = new List<string>();
         var result = ShellResult.Ok("");
         foreach (var stage in stages)
         {
@@ -125,12 +127,19 @@ public sealed class Shell
 
             // Like 'set -o pipefail': the first failing stage is the answer, not an empty count after it.
             if (result.IsError) break;
+            if (result.Notice is { } notice && !notices.Contains(notice)) notices.Add(notice);
             input = result.Output;
             // The note a pipeline started from keeps its token, so 'cat x | head' can still lead to an edit.
             version ??= result.Version;
         }
 
         if (result is { IsError: false, Output.Length: 0, NoMatchHint: { } noMatch } && stages.Count == 1) result = ShellResult.Ok(noMatch);
+        // Above the output, so a cut-off answer keeps it; never part of what a pipe passed on.
+        if (!result.IsError && notices.Count > 0 && result.Parts is null)
+        {
+            result = result with { Output = string.Join('\n', notices) + (result.Output.Length > 0 ? "\n" + result.Output : "") };
+        }
+
         return OutputLimit.Apply(result.IsError ? result : result with { Version = version });
     }
 
