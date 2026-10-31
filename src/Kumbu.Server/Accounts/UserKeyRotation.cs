@@ -20,6 +20,10 @@ public sealed record SlotRewrap(ObjectId Id, byte[] OldWrapped, byte[] NewWrappe
     public byte[]? NewAliasKey { get; init; }
 }
 
+/// <summary>The user's private key sealed again under the new user key (collab design §5.1), written only if it is still
+/// <c>OldPrivateKey</c>; null <c>OldPrivateKey</c>: the user has no keypair, and must still have none.</summary>
+public sealed record KeypairReseal(byte[]? OldPrivateKey, byte[]? NewPrivateKey);
+
 /// <summary>An API key's or connection's meta sealed again under the new user key, with its name id. One that didn't
 /// open has its old values as the new ones: it is left as it is, but still counted among the user's.</summary>
 public sealed record MetaReseal(string Id, byte[] OldMeta, byte[]? OldNameId, byte[] NewMeta, byte[]? NewNameId);
@@ -38,7 +42,11 @@ public sealed record PreparedRotation(
     IReadOnlyList<SlotRewrap> VaultSlots, IReadOnlyList<ObjectId> SkippedSlotIds, IReadOnlyList<ObjectId> OrphanSlotIds,
     IReadOnlyList<MetaReseal> ApiKeys, IReadOnlyList<MetaReseal> Connections,
     IReadOnlyList<string> VaultIds,
-    byte[]? PasswordUsed);
+    byte[]? PasswordUsed)
+{
+    /// <summary>The private key sealed again; the same keypair (task 2.5 makes a new one on every rotation).</summary>
+    public KeypairReseal Keypair { get; init; } = new(null, null);
+}
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
 public sealed class RotationConflictException() : Exception("Something changed while re-encrypting; try again.");
@@ -96,6 +104,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         var connections = await Accounts.Connections.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
         var kept = keepSessionSecret is null ? null : await Sessions.PrepareKeepAsync(db, userId, keepSessionSecret, newUserKey, now, ct);
         var passwordUsed = (await UserSlots.Find(s => s.User == userId && s.Kind == UserSlotDocument.Password).FirstOrDefaultAsync(ct))?.Wrapped;
+        var keypair = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
 
         var recoveryKey = RecoveryKey.New();
         return new PreparedRotation(
@@ -115,7 +124,28 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             keys,
             connections,
             vaults.VaultIds,
-            passwordUsed);
+            passwordUsed)
+        {
+            Keypair = keypair,
+        };
+    }
+
+    /// <summary>The user's private key opened with the old user key and sealed under the new one, for the same public
+    /// key. One that doesn't open is left as it is and logged: it opened nothing before either.</summary>
+    private async Task<KeypairReseal> PrepareKeypairAsync(string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
+    {
+        var doc = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        if (doc?.PrivateKey is not { } sealedKey) return new(null, null);
+        try
+        {
+            using var key = Sharing.MemberKeys.OpenPrivate(doc, oldUserKey);
+            return new(sealedKey, Sharing.MemberKeys.SealPrivate(userId, newUserKey, key));
+        }
+        catch (CryptographicException)
+        {
+            log.LogWarning("The private key of user {UserId} does not open; it is left as it is", userId);
+            return new(sealedKey, sealedKey);
+        }
     }
 
     /// <summary>
@@ -139,6 +169,18 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             Builders<UserDocument>.Update.Set(u => u.KeyId, rotation.UserKeyId).Set(u => u.CredentialsChangedAt, stamp).AddToSetEach(u => u.RekeyPending, rotation.VaultIds),
             cancellationToken: ct);
         if (user.MatchedCount == 0) throw new CredentialsChangedException();
+        // The keypair as prepared: a keypair created meanwhile, under the old key, would be lost.
+        var keypair = rotation.Keypair;
+        var users = Builders<UserDocument>.Filter;
+        if (keypair.OldPrivateKey is { } oldPrivate)
+        {
+            Require(await Users.UpdateOneAsync(
+                session, users.Eq(u => u.Id, userId) & users.Eq(u => u.PrivateKey, oldPrivate), Builders<UserDocument>.Update.Set(u => u.PrivateKey, keypair.NewPrivateKey), cancellationToken: ct));
+        }
+        else if (await Users.Find(session, users.Eq(u => u.Id, userId) & users.Exists(u => u.PrivateKey)).AnyAsync(ct))
+        {
+            throw new RotationConflictException();
+        }
 
         await ApplyUserSlotsAsync(session, rotation, stamp, ct);
         await ApplyVaultSlotsAsync(session, rotation, ct);

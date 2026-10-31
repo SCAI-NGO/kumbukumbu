@@ -13,15 +13,15 @@ public sealed partial class VaultCatalog
     private const string AliasLabel = "kumbu/v1/alias";
 
     /// <summary>
-    /// A member's slot on a shared vault, not stored here. Until members have keypairs (phase 2) it wraps the vault key
-    /// as a user slot does, under the member's user key with the AAD of its own kind, so a rotation of her user key
-    /// wraps it again unchanged. Under her own lookup, with the alias's hash under her own name key: the index on
-    /// <c>(lookup, nameId)</c> keeps aliases and own vault names apart in both directions. The alias itself is sealed
-    /// under a random alias key, bound to the vault and the membership, and the alias key under a key from her user
-    /// key; the owner can read neither. Her keys and connections on the vault get the alias key, so a renamed alias
-    /// reaches them too (<see cref="RenameAliasAsync"/>).
+    /// A member's slot on a shared vault, not stored here. It wraps the vault key to <paramref name="memberPublic"/>
+    /// (collab design §5.2), bound to the vault and the membership; the caller derives that key from the member's
+    /// private key, never from her user document (§5.4). Under her own lookup, with the alias's hash under her own
+    /// name key: the index on <c>(lookup, nameId)</c> keeps aliases and own vault names apart in both directions. The
+    /// alias itself is sealed under a random alias key, bound to the vault and the membership, and the alias key under
+    /// a key from her user key; the owner can read neither. Her keys and connections on the vault get the alias key,
+    /// so a renamed alias reaches them too (<see cref="RenameAliasAsync"/>).
     /// </summary>
-    internal SlotDocument MemberSlot(string vaultId, string membershipId, string memberId, byte[] memberKey, byte[] vaultKey, string alias)
+    internal SlotDocument MemberSlot(string vaultId, string membershipId, string memberId, byte[] memberKey, byte[] memberPublic, byte[] vaultKey, string alias)
     {
         var aliasKey = VaultCrypto.NewKey();
         return new()
@@ -33,9 +33,37 @@ public sealed partial class VaultCatalog
             AliasKey = SealAliasKey(memberKey, vaultId, membershipId, aliasKey),
             Alias = SealAlias(aliasKey, vaultId, membershipId, alias),
             Membership = membershipId,
-            Wrapped = VaultCrypto.Seal(UserKek(memberKey, vaultId), vaultKey, SlotContext(vaultId, SlotDocument.Member)),
+            Wrapped = MemberSlotCrypto.Wrap(memberPublic, vaultKey, MemberSlotContext(vaultId, membershipId)),
             CreatedAt = Now,
         };
+    }
+
+    /// <summary>The AAD of a member slot's wrapped vault key.</summary>
+    internal static string MemberSlotContext(string vaultId, string membershipId) => $"slot:{vaultId}:{SlotDocument.Member}:{membershipId}";
+
+    /// <summary>The vault key a member slot wraps, opened with the member's private key; <see cref="CryptographicException"/>
+    /// if it doesn't open (another key, another vault or membership, or not of this format).</summary>
+    internal static byte[] OpenMemberSlot(ECDiffieHellman memberPrivate, SlotDocument slot) =>
+        MemberSlotCrypto.Unwrap(memberPrivate, slot.Wrapped, MemberSlotContext(slot.Vault, slot.Membership ?? ""));
+
+    /// <summary>
+    /// The private key of <paramref name="userId"/>, opened with <paramref name="userKey"/>, for her member slots: read
+    /// once per request that meets one. Null, logged, if she has none or it doesn't open; her member slots then open
+    /// nothing.
+    /// </summary>
+    internal async Task<ECDiffieHellman?> MemberPrivateKeyAsync(IClientSessionHandle? session, string userId, byte[] userKey, CancellationToken ct)
+    {
+        var user = await (session is null ? Users.Find(u => u.Id == userId) : Users.Find(session, u => u.Id == userId)).FirstOrDefaultAsync(ct);
+        if (user is null) return null;
+        try
+        {
+            return MemberKeys.OpenPrivate(user, userKey);
+        }
+        catch (CryptographicException)
+        {
+            log.LogWarning("The private key of user {UserId} did not open; their member slots open nothing", userId);
+            return null;
+        }
     }
 
     /// <summary>The alias a member slot holds, opened with the member's user key.</summary>

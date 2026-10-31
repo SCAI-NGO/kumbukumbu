@@ -104,11 +104,12 @@ public sealed class MembershipCheckTests(KumbuAppFactory app)
 
         // Inserted by someone with access to the database, wrapped properly for Bob: one without any membership, one
         // pointing at Carol's active membership, one at Carol's membership but on another vault of Alice's.
+        var bob = await Share.PublicKeyAsync(_world.Db, Bob);
         await catalog.Slots.InsertManyAsync(
             [
-                catalog.MemberSlot(garden.Id, "no-such-membership", Bob.Id, Bob.Key, vaultKey, "Garten"),
-                catalog.MemberSlot(garden.Id, carols, Bob.Id, Bob.Key, vaultKey, "Garten 2"),
-                catalog.MemberSlot(work.Id, carols, Bob.Id, Bob.Key, workKey, "Work"),
+                catalog.MemberSlot(garden.Id, "no-such-membership", Bob.Id, Bob.Key, bob, vaultKey, "Garten"),
+                catalog.MemberSlot(garden.Id, carols, Bob.Id, Bob.Key, bob, vaultKey, "Garten 2"),
+                catalog.MemberSlot(work.Id, carols, Bob.Id, Bob.Key, bob, workKey, "Work"),
             ],
             cancellationToken: Ct);
 
@@ -119,7 +120,7 @@ public sealed class MembershipCheckTests(KumbuAppFactory app)
 
         // Bob's own membership opens the vault it is of, and no other.
         var bobs = await Share.GrantAsync(catalog, _world.Memberships(catalog), Alice, garden.Id, Bob, "Mein Garten", MemberRole.Write);
-        await catalog.Slots.InsertOneAsync(catalog.MemberSlot(work.Id, bobs, Bob.Id, Bob.Key, workKey, "Work 2"), cancellationToken: Ct);
+        await catalog.Slots.InsertOneAsync(catalog.MemberSlot(work.Id, bobs, Bob.Id, Bob.Key, bob, workKey, "Work 2"), cancellationToken: Ct);
         Assert.Equal([garden.Id], await OpenedAsync(catalog, Bob));
         Assert.Equal([garden.Id], await OpenedAsync(_world.Catalog(), Bob));
     }

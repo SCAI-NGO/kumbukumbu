@@ -208,6 +208,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var members = slots.Where(s => s.Kind == SlotDocument.Member).ToList();
         // Owners without shared vaults pay nothing.
         var active = members.Count == 0 ? null : await ActiveMembershipsAsync(members.Select(s => s.Membership ?? ""), ct);
+        // The private key once per request, and only for a member slot whose membership is active (collab design §5.3).
+        using var memberPrivate = members.Any(s => IsActiveMembership(active, s, userId)) ? await MemberPrivateKeyAsync(null, userId, userKey, ct) : null;
 
         var result = new List<VaultAccess>();
         foreach (var slot in slots)
@@ -245,11 +247,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         {
             try
             {
-                return VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                if (slot.Kind != SlotDocument.Member) return VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                if (memberPrivate is null) return null;
+                return OpenMemberSlot(memberPrivate, slot);
             }
             catch (CryptographicException)
             {
-                log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
+                log.LogWarning("A {Kind} slot of vault {VaultId} matched the user key but did not open", slot.Kind, slot.Vault);
                 return null;
             }
         }
@@ -396,6 +400,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             & f.Eq(s => s.Lookup, UserLookup(userKey, userId)) & f.In(s => s.Vault, ids)).ToListAsync(ct);
         var members = userSlots.Where(s => s.Kind == SlotDocument.Member).ToList();
         var active = members.Count == 0 ? null : await ActiveMembershipsAsync(members.Select(s => s.Membership ?? ""), ct);
+        using var memberPrivate = members.Any(s => IsActiveMembership(active, s, userId)) ? await MemberPrivateKeyAsync(null, userId, userKey, ct) : null;
         var existing = (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).Project(v => new { v.Id, v.RekeyStartedAt }).ToListAsync(ct))
             .ToDictionary(v => v.Id, v => v.RekeyStartedAt is not null, StringComparer.Ordinal);
 
@@ -406,11 +411,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // The user's own slot first: an owner's credential is never derived through a membership.
             foreach (var slot in userSlots.Where(s => s.Vault == vaultId).OrderBy(s => s.Kind == SlotDocument.User ? 0 : 1))
             {
-                if (slot.Kind == SlotDocument.Member && !IsActiveMembership(active, slot, userId)) continue;
+                if (slot.Kind == SlotDocument.Member && (!IsActiveMembership(active, slot, userId) || memberPrivate is null)) continue;
                 try
                 {
-                    var key = VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind));
-                    grant = slot.Kind == SlotDocument.Member ? new VaultKeyGrant(key, slot.Membership) { AliasKey = OpenAliasKey(userKey, slot) } : new VaultKeyGrant(key, null);
+                    grant = slot.Kind == SlotDocument.Member
+                        ? new VaultKeyGrant(OpenMemberSlot(memberPrivate!, slot), slot.Membership) { AliasKey = OpenAliasKey(userKey, slot) }
+                        : new VaultKeyGrant(VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind)), null);
                     break;
                 }
                 catch (CryptographicException)
@@ -1430,8 +1436,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
     /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
     /// under the new key, from the name in the vault's meta, and a <c>member</c> slot the alias's hash, from the alias
-    /// opened with the old key, and its alias key sealed under the new one (collab design §2.3; until phase 2 its
-    /// <c>Wrapped</c> is under the user key, planner's decision 5, so it is wrapped again too). Writes nothing. A slot that doesn't open is skipped and
+    /// opened with the old key, and its alias key sealed under the new one (collab design §2.3); its <c>Wrapped</c> is
+    /// wrapped to the member's public key and stays (the private key is sealed again with the user document). Writes nothing. A slot that doesn't open is skipped and
     /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
     /// logged; one without a vault document is an orphan of a creation that failed half way, to be deleted if older
     /// than <see cref="OrphanGrace"/>, else <see cref="Accounts.RotationConflictException"/>: it may belong to a
@@ -1448,10 +1454,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var (rewraps, skipped, orphans, vaultIds) = (new List<Accounts.SlotRewrap>(), new List<MongoDB.Bson.ObjectId>(), new List<MongoDB.Bson.ObjectId>(), new List<string>());
         foreach (var slot in slots)
         {
-            byte[] vaultKey;
+            // A member slot is wrapped to the member's public key, not under the user key: its Wrapped stays.
+            byte[]? vaultKey = null;
             try
             {
-                vaultKey = VaultCrypto.Open(UserKek(oldUserKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                if (slot.Kind != SlotDocument.Member) vaultKey = VaultCrypto.Open(UserKek(oldUserKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
             }
             catch (CryptographicException)
             {
@@ -1493,7 +1500,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 vaultIds.Add(slot.Vault);
                 try
                 {
-                    var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), vault.Meta, $"vault:{vault.Id}"))!;
+                    var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey!, "kumbu/v1/content", []), vault.Meta, $"vault:{vault.Id}"))!;
                     nameId = VaultCrypto.Mac(nameKey, NormaliseVaultName(meta.Name));
                 }
                 catch (Exception e) when (e is CryptographicException or JsonException)
@@ -1502,7 +1509,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 }
             }
 
-            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind)), nameId)
+            var wrapped = vaultKey is null ? slot.Wrapped : VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind));
+            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, wrapped, nameId)
             {
                 OldAlias = slot.Kind == SlotDocument.Member ? slot.Alias : null,
                 NewAliasKey = aliasKey,

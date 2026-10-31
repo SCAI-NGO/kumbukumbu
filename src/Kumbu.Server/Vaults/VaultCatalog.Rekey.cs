@@ -160,11 +160,26 @@ public sealed partial class VaultCatalog
         var f = Builders<SlotDocument>.Filter;
         // A member's credential carries the key of her member slot (UserVaultKeysAsync).
         var slots = await Slots.Find(session, f.In(sl => sl.Kind, [SlotDocument.User, SlotDocument.Member]) & f.Eq(sl => sl.Lookup, UserLookup(userKey, userId)) & f.In(sl => sl.Vault, ids)).ToListAsync(ct);
+        using var memberPrivate = slots.Any(sl => sl.Kind == SlotDocument.Member) ? await MemberPrivateKeyAsync(session, userId, userKey, ct) : null;
         foreach (var (vaultId, key) in wrapped)
         {
-            if (!slots.Any(sl => sl.Vault == vaultId && OpenUserSlot(userKey, sl) is { } current && CryptographicOperations.FixedTimeEquals(current, key)))
+            if (!slots.Any(sl => sl.Vault == vaultId && OpenAnySlot(sl) is { } current && CryptographicOperations.FixedTimeEquals(current, key)))
             {
                 throw VaultBusyException.Just();
+            }
+        }
+
+        byte[]? OpenAnySlot(SlotDocument slot)
+        {
+            if (slot.Kind != SlotDocument.Member) return OpenUserSlot(userKey, slot);
+            if (memberPrivate is null) return null;
+            try
+            {
+                return OpenMemberSlot(memberPrivate, slot);
+            }
+            catch (CryptographicException)
+            {
+                return null;
             }
         }
     }

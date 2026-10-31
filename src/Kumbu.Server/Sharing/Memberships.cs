@@ -20,6 +20,8 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
 
     private volatile bool _ready;
 
+    private readonly MemberKeys _memberKeys = new(db);
+
     internal IMongoCollection<MembershipDocument> Docs { get; } = db.GetCollection<MembershipDocument>(CollectionName);
 
     internal const string LabelPurpose = "kumbu/v1/membership-label";
@@ -53,6 +55,7 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
         if (string.Equals(ownerId, memberId, StringComparison.Ordinal)) throw new NotPermittedException("You can't be a member of your own vault.");
         await EnsureReadyAsync(ct);
         var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
+        var memberPublic = await MemberPublicKeyAsync(memberId, memberKey, ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var now = Now;
         var doc = new MembershipDocument
@@ -71,7 +74,7 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             AcceptedAt = now,
             Revision = 0,
         };
-        var slot = catalog.MemberSlot(vaultId, id, memberId, memberKey, vaultKey, alias);
+        var slot = catalog.MemberSlot(vaultId, id, memberId, memberKey, memberPublic, vaultKey, alias);
 
         using var session = await catalog.StartSessionAsync(ct);
         // Retried on a write conflict: another grant on the vault, or a re-keying's start or finish.
@@ -84,6 +87,27 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             cancellationToken: ct);
         log.LogInformation("Vault {VaultId} is shared with user {UserId} as membership {MembershipId}", vaultId, memberId, id);
         return id;
+    }
+
+    /// <summary>
+    /// The public key a member slot for <paramref name="memberId"/> is wrapped to (collab design §5.4): derived from
+    /// her private key, opened with her user key, never read from her user document, where a database-level attacker
+    /// could have put his own. She gets a keypair here if she has none yet. <see cref="CryptographicException"/> if
+    /// her private key doesn't open: then no slot is made.
+    /// </summary>
+    private async Task<byte[]> MemberPublicKeyAsync(string memberId, byte[] memberKey, CancellationToken ct)
+    {
+        var user = await _memberKeys.EnsureAsync(memberId, memberKey, ct) ?? throw new ArgumentException("There is no such user.", nameof(memberId));
+        try
+        {
+            using var privateKey = MemberKeys.OpenPrivate(user, memberKey);
+            return MemberKeys.PublicFromPrivate(privateKey);
+        }
+        catch (CryptographicException)
+        {
+            log.LogWarning("The private key of user {UserId} does not open; nothing is shared with them", memberId);
+            throw;
+        }
     }
 
     /// <summary>The grant's writes, inside the caller's transaction.</summary>

@@ -51,11 +51,16 @@ public sealed class MemberKeys(IMongoDatabase db)
     internal static (byte[] PublicKey, byte[] SealedPrivateKey) NewKeyPair(string userId, byte[] userKey)
     {
         using var key = MemberSlotCrypto.NewKeyPair();
-        var publicKey = MemberSlotCrypto.PublicOf(key);
+        return (MemberSlotCrypto.PublicOf(key), SealPrivate(userId, userKey, key));
+    }
+
+    /// <summary><paramref name="key"/>'s private key sealed under <paramref name="userKey"/>, bound to the user and its public key.</summary>
+    internal static byte[] SealPrivate(string userId, byte[] userKey, ECDiffieHellman key)
+    {
         var pkcs8 = key.ExportPkcs8PrivateKey();
         try
         {
-            return (publicKey, VaultCrypto.Seal(Kek(userKey), pkcs8, PrivateKeyContext(userId, publicKey)));
+            return VaultCrypto.Seal(Kek(userKey), pkcs8, PrivateKeyContext(userId, MemberSlotCrypto.PublicOf(key)));
         }
         finally
         {

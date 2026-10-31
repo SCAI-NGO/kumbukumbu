@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Vaults;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
@@ -13,10 +15,47 @@ public static class Share
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     /// <summary>Shares the owner's vault with the member as an accepted invitation would; the membership's id.</summary>
-    public static Task<string> GrantAsync(
+    public static async Task<string> GrantAsync(
         VaultCatalog catalog, Memberships memberships, (string Id, byte[] Key) owner, string vaultId, (string Id, byte[] Key) member, string alias, MemberRole role,
-        string label = "Bob") =>
-        memberships.GrantAsync(owner.Id, owner.Key, vaultId, member.Id, member.Key, alias, label, role, Ct);
+        string label = "Bob")
+    {
+        await AsUserAsync(memberships.Docs.Database, member);
+        return await memberships.GrantAsync(owner.Id, owner.Key, vaultId, member.Id, member.Key, alias, label, role, Ct);
+    }
+
+    /// <summary>
+    /// The member's public key, derived from her private key, for member slots a test writes itself: she is made a
+    /// user whose user key is <paramref name="member"/>'s key first (<see cref="AsUserAsync"/>), and gets a keypair.
+    /// </summary>
+    public static async Task<byte[]> PublicKeyAsync(IMongoDatabase db, (string Id, byte[] Key) member)
+    {
+        await AsUserAsync(db, member);
+        var doc = await new MemberKeys(db).EnsureAsync(member.Id, member.Key, Ct);
+        using var key = MemberKeys.OpenPrivate(doc!, member.Key);
+        return MemberKeys.PublicFromPrivate(key);
+    }
+
+    /// <summary>
+    /// Makes the member a user whose user key is <paramref name="member"/>'s key, as the <see cref="VaultWorld"/> tests
+    /// name members (an id and a random key): a user document is inserted if there is none, and one with another key
+    /// id (a VaultWorld user, which has none) gets this key's, without a keypair, so a grant creates hers.
+    /// </summary>
+    public static async Task AsUserAsync(IMongoDatabase db, (string Id, byte[] Key) member)
+    {
+        var users = db.GetCollection<UserDocument>("users");
+        var keyId = UserCatalog.KeyId(member.Key, member.Id);
+        var doc = await users.Find(u => u.Id == member.Id).FirstOrDefaultAsync(Ct);
+        if (doc is null)
+        {
+            await users.InsertOneAsync(
+                new UserDocument { Id = member.Id, Username = "member-" + member.Id, Display = member.Id, Role = Roles.User, Active = true, KeyId = keyId }, cancellationToken: Ct);
+        }
+        else if (!doc.KeyId.AsSpan().SequenceEqual(keyId))
+        {
+            await users.UpdateOneAsync(
+                u => u.Id == member.Id, Builders<UserDocument>.Update.Set(u => u.KeyId, keyId).Unset(u => u.PublicKey).Unset(u => u.PrivateKey), cancellationToken: Ct);
+        }
+    }
 
     /// <summary>Shares this client's vault with <paramref name="member"/>, through the server's own services.</summary>
     public static async Task<string> ShareWithAsync(this RestClient owner, RestClient member, string alias, MemberRole role = MemberRole.Write, string? label = null) =>

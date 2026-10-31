@@ -4,6 +4,7 @@ using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Vaults;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -22,9 +23,17 @@ public sealed class KeypairTests(MongoFixture fixture)
 
     private readonly IMongoDatabase _db = fixture.NewDatabase();
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 31, 9, 0, 0, TimeSpan.Zero));
+    private readonly CapturedLog _log = new();
     private VaultCatalog? _catalog;
 
-    private VaultCatalog Catalog() => _catalog ??= new(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
+    /// <summary>One catalog, as one server process has it.</summary>
+    private VaultCatalog Catalog() => _catalog ??= NewProcess();
+
+    /// <summary>A catalog as a second server process has it: nothing in memory.</summary>
+    private VaultCatalog NewProcess() => new(_db, Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<VaultCatalog>());
+
+    private Memberships Memberships() =>
+        new(_db, Catalog(), Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Memberships>());
 
     private UserCatalog Users() =>
         new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)),
@@ -172,4 +181,93 @@ public sealed class KeypairTests(MongoFixture fixture)
             }
         }
     }
+
+    /// <summary>Alice with a vault "Gartenarbeit", and Bob, both signed in: ids and user keys, and the vault's id.</summary>
+    private async Task<((string Id, byte[] Key) Alice, (string Id, byte[] Key) Bob, string VaultId)> SharedWorldAsync()
+    {
+        var (alice, _) = await Users().CreateAsync("alice", Password, Roles.User, Ct);
+        var (bob, _) = await Users().CreateAsync("bob", Password, Roles.User, Ct);
+        var aliceKey = await SignInAsync("alice");
+        var vault = await Catalog().CreateForUserAsync("Gartenarbeit", alice.Id, aliceKey, Ct);
+        return ((alice.Id, aliceKey), (bob.Id, await SignInAsync("bob")), vault.Id);
+    }
+
+    private IMongoCollection<SlotDocument> Slots => _db.GetCollection<SlotDocument>("slots");
+
+    private Task<SlotDocument> MemberSlotAsync(string membershipId) => Slots.Find(s => s.Kind == SlotDocument.Member && s.Membership == membershipId).SingleAsync(Ct);
+
+    private async Task<IReadOnlyList<string>> SharedWithAsync(VaultCatalog catalog, (string Id, byte[] Key) user) =>
+        [.. (await catalog.OpenForUserAsync(user.Id, user.Key, Ct)).Where(a => !a.IsOwner).Select(a => a.Name)];
+
+    [Fact]
+    public async Task A_member_slot_is_wrapped_to_the_members_public_key()
+    {
+        var (alice, bob, vaultId) = await SharedWorldAsync();
+        var membershipId = await Memberships().GrantAsync(alice.Id, alice.Key, vaultId, bob.Id, bob.Key, "Garten", "Bob", MemberRole.Write, Ct);
+        var vaultKey = await Catalog().OwnerVaultKeyAsync(alice.Id, alice.Key, vaultId, Ct);
+        var slot = await MemberSlotAsync(membershipId);
+
+        Assert.Equal(MemberSlotCrypto.P256, slot.Wrapped[0]);
+        using (var bobs = MemberKeys.OpenPrivate(await UserAsync(bob.Id), bob.Key))
+        {
+            Assert.Equal(vaultKey, MemberSlotCrypto.Unwrap(bobs, slot.Wrapped, $"slot:{vaultId}:member:{membershipId}"));
+        }
+
+        // Not the phase-1 stand-in: the user key opens nothing of it.
+        Assert.ThrowsAny<CryptographicException>(() => VaultCrypto.Open(StandInKek(bob.Key, vaultId), slot.Wrapped, $"slot:{vaultId}:member"));
+        Assert.Equal(["Garten"], await SharedWithAsync(NewProcess(), bob));
+
+        // A public key swapped into Carol's user document is never what a grant wraps to: the grant fails and writes nothing.
+        var (carol, _) = await Users().CreateAsync("carol", Password, Roles.User, Ct);
+        var carolKey = await SignInAsync("carol");
+        using var attacker = MemberSlotCrypto.NewKeyPair();
+        await UserDocs.UpdateOneAsync(u => u.Id == carol.Id, Builders<UserDocument>.Update.Set(u => u.PublicKey, MemberSlotCrypto.PublicOf(attacker)), cancellationToken: Ct);
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => Memberships().GrantAsync(alice.Id, alice.Key, vaultId, carol.Id, carolKey, "Garten", "Carol", MemberRole.Write, Ct));
+        Assert.False(await _db.GetCollection<MembershipDocument>("memberships").Find(m => m.Member == carol.Id).AnyAsync(Ct));
+        Assert.Equal(1, await Slots.CountDocumentsAsync(s => s.Kind == SlotDocument.Member, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task A_stand_in_member_slot_opens_nothing()
+    {
+        var (alice, bob, vaultId) = await SharedWorldAsync();
+        var membershipId = await Memberships().GrantAsync(alice.Id, alice.Key, vaultId, bob.Id, bob.Key, "Garten", "Bob", MemberRole.Write, Ct);
+        var vaultKey = await Catalog().OwnerVaultKeyAsync(alice.Id, alice.Key, vaultId, Ct);
+        Assert.Equal(["Garten"], await SharedWithAsync(Catalog(), bob));
+
+        // The slot as phase 1 wrapped it: under Bob's user key, with the AAD of its kind. The membership stays active.
+        await Slots.UpdateOneAsync(
+            s => s.Membership == membershipId && s.Kind == SlotDocument.Member,
+            Builders<SlotDocument>.Update.Set(s => s.Wrapped, VaultCrypto.Seal(StandInKek(bob.Key, vaultId), vaultKey, $"slot:{vaultId}:member")),
+            cancellationToken: Ct);
+
+        Assert.Empty(await SharedWithAsync(NewProcess(), bob));
+        // Nor with the vault in memory, opened by its owner and by Bob a moment ago.
+        Assert.Empty(await SharedWithAsync(Catalog(), bob));
+        Assert.Contains(_log.Lines, l => l.StartsWith("Warning", StringComparison.Ordinal) && l.Contains($"member slot of vault {vaultId}", StringComparison.Ordinal) && l.Contains("did not open", StringComparison.Ordinal));
+        // Nor does it give a key or a connection the vault.
+        await Assert.ThrowsAsync<ArgumentException>(() => Catalog().UserVaultKeysAsync(bob.Id, bob.Key, [vaultId], "An API key", Ct));
+        Assert.Single(await Catalog().OpenForUserAsync(alice.Id, alice.Key, Ct));
+    }
+
+    [Fact]
+    public async Task A_member_slot_survives_the_members_sign_out()
+    {
+        var (alice, bob, vaultId) = await SharedWorldAsync();
+        await Memberships().GrantAsync(alice.Id, alice.Key, vaultId, bob.Id, bob.Key, "Garten", "Bob", MemberRole.Write, Ct);
+        var sessions = new Kumbu.Server.Accounts.Sessions(_db, _time);
+        var signIn = (await Users().TrySignInAsync("bob", Password, Ct))!.Value;
+        var secret = await sessions.StartAsync(signIn.User, signIn.UserKey, signIn.CredentialReadAt, Ct);
+        await sessions.EndAsync(secret, Ct);
+        Assert.Null(await sessions.ResolveAsync(secret, Ct));
+
+        // A new session after a new sign-in, in a new process: the user key comes from the password slot again.
+        var again = (await Users().TrySignInAsync("bob", Password, Ct))!.Value;
+        var resolved = (await sessions.ResolveAsync(await sessions.StartAsync(again.User, again.UserKey, again.CredentialReadAt, Ct), Ct))!.Value;
+        Assert.Equal(["Garten"], await SharedWithAsync(NewProcess(), (bob.Id, resolved.UserKey)));
+        Assert.Equal(["Garten"], await SharedWithAsync(Catalog(), (bob.Id, resolved.UserKey)));
+    }
+
+    /// <summary>The key a phase-1 stand-in member slot was wrapped under: the user slot's.</summary>
+    private static byte[] StandInKek(byte[] userKey, string vaultId) => VaultCrypto.Derive(userKey, "kumbu/v1/user-slot-kek", System.Text.Encoding.UTF8.GetBytes(vaultId));
 }
