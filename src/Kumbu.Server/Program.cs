@@ -15,6 +15,7 @@ using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -64,6 +65,7 @@ builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
+builder.Services.AddSingleton<Memberships>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 // The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address

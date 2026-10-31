@@ -38,5 +38,13 @@ public sealed class VaultWorld
         time ?? TimeProvider.System,
         NullLogger<VaultCatalog>.Instance);
 
+    /// <summary>The memberships of the process <paramref name="catalog"/> belongs to.</summary>
+    public Kumbu.Server.Sharing.Memberships Memberships(VaultCatalog catalog, TimeProvider? time = null) => new(
+        Db,
+        catalog,
+        Options.Create(new KumbuOptions()),
+        time ?? TimeProvider.System,
+        NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
+
     public static EncryptedNoteStore Store(VaultCatalog catalog, string token = Token) => new(catalog, new FixedCredential(token));
 }
