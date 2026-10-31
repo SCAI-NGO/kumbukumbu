@@ -401,7 +401,7 @@ public sealed class ConnectionTests(MongoFixture fixture)
         Assert.All(slots, s => Assert.Equal(2, LegacySlot.OpenConnection(token, s.Vault, created.Id, tokenId, s.Wrapped).V));
         // Notes as a slot sealed before 0.3.0 (no version); Diary as one sealed now.
         var legacy = slots.Single(s => s.Vault == vaults["Notes"]);
-        legacy.Wrapped = LegacySlot.SealConnection(token, legacy.Vault, created.Id, tokenId, vaultKeys[legacy.Vault], "write");
+        legacy.Wrapped = LegacySlot.SealConnection(token, legacy.Vault, created.Id, tokenId, vaultKeys[legacy.Vault].Key, "write");
         await _db.GetCollection<SlotDocument>("slots").InsertManyAsync(slots, cancellationToken: Ct);
 
         var opened = await Catalog().OpenConnectionSlotsAsync(created.Id, tokenId, token, Ct);

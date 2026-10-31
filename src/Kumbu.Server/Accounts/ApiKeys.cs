@@ -113,11 +113,13 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// user's credentials changed at or after <paramref name="credentialReadAt"/> (when the session's password was
     /// read) or the user is inactive. With <paramref name="expiresInDays"/> (one of <see cref="ExpiryDays"/>, else
     /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one. The
-    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards.
+    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards. On a vault shared with the
+    /// user, the key is derived through her membership, which records <paramref name="writerName"/> (the device's part
+    /// of a device key's name; the name itself if null) as the key's display name.
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent)
+        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent, string? writerName = null)
     {
         var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
@@ -178,7 +180,14 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                         // A re-keying of a vault that started or finished since its key was opened: the slot would
                         // carry the old key. Its start and finish write the user document (a rise of vaultsRekeyed),
                         // which conflicts with the rise of keysCreated above, so a retry reads them.
-                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys, token);
+                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys.ToDictionary(v => v.Key, v => v.Value.Key), token);
+                        // A vault shared with the user: its membership must still be active, and records the key's name.
+                        foreach (var (vaultId, grant) in vaultKeys)
+                        {
+                            if (grant.Membership is { } membership)
+                                await Sharing.Memberships.RecordCredentialAsync(db, s, membership, vaultId, id, writerName ?? clean, grant.Key, "An API key", token);
+                        }
+
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);

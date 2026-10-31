@@ -115,6 +115,58 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     }
 
     /// <summary>
+    /// Inside the transaction that stores a member's new credential slot derived through <paramref name="membershipId"/>
+    /// (collab design §3.4): the membership, if it is still active and on <paramref name="vaultId"/>, gets the
+    /// credential's display name in its sealed <c>writers</c> and a fresh writer id for it in <c>writerIds</c>, with
+    /// <c>revision</c> raised; the update's filter on <c>status == active</c> is the check, so a revocation that
+    /// committed first refuses the credential (<see cref="ArgumentException"/>, starting with <paramref name="noun"/>),
+    /// and one that commits later conflicts with this write. The vault document is written too, so a deletion of the
+    /// vault under way conflicts as well. <paramref name="displayName"/> is only the agent's or device's part of the
+    /// name ("Claude", "Laptop"), never a device key's full name, which holds the member's alias.
+    /// </summary>
+    internal static async Task RecordCredentialAsync(
+        IMongoDatabase db, IClientSessionHandle s, string membershipId, string vaultId, string credentialId, string displayName, byte[] vaultKey, string noun,
+        CancellationToken ct)
+    {
+        var docs = db.GetCollection<MembershipDocument>(CollectionName);
+        var f = Builders<MembershipDocument>.Filter;
+        var refused = new ArgumentException($"{noun} can only be given vaults of your own or shared with you.", "vaults");
+        // Read whatever its status: the update below decides.
+        var doc = await docs.Find(s, f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Vault, vaultId)).FirstOrDefaultAsync(ct) ?? throw refused;
+        var writers = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            VaultCatalog.OpenForVault(vaultKey, vaultId, WritersPurpose, doc.Writers, $"membership-writers:{vaultId}:{membershipId}"))!;
+        var writerIds = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            VaultCatalog.OpenForVault(vaultKey, vaultId, WriterIdsPurpose, doc.WriterIds, $"membership-writer-ids:{vaultId}:{membershipId}"))!;
+        writers[credentialId] = displayName;
+        // One writer id per credential: a connection consented to again keeps its own.
+        if (!writerIds.ContainsValue(credentialId)) writerIds[Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))] = credentialId;
+
+        var updated = await docs.UpdateOneAsync(
+            s,
+            f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Status, MembershipStatus.Active) & f.Eq(m => m.Revision, doc.Revision),
+            Builders<MembershipDocument>.Update
+                .Set(m => m.Writers, VaultCatalog.SealForVault(vaultKey, vaultId, WritersPurpose, JsonSerializer.SerializeToUtf8Bytes(writers), $"membership-writers:{vaultId}:{membershipId}"))
+                .Set(m => m.WriterIds, VaultCatalog.SealForVault(vaultKey, vaultId, WriterIdsPurpose, JsonSerializer.SerializeToUtf8Bytes(writerIds), $"membership-writer-ids:{vaultId}:{membershipId}"))
+                .Inc(m => m.Revision, 1),
+            cancellationToken: ct);
+        if (updated.MatchedCount == 0) throw refused;
+
+        var vault = await db.GetCollection<VaultDocument>("vaults").UpdateOneAsync(
+            s, v => v.Id == vaultId, Builders<VaultDocument>.Update.Inc(v => v.MembershipsChanged, 1), cancellationToken: ct);
+        if (vault.MatchedCount == 0) throw refused;
+    }
+
+    /// <summary>The writers a membership's sealed <c>writers</c> holds (credential id → display name), opened with the vault key.</summary>
+    internal static IReadOnlyDictionary<string, string> OpenWriters(MembershipDocument doc, byte[] vaultKey) =>
+        JsonSerializer.Deserialize<Dictionary<string, string>>(
+            VaultCatalog.OpenForVault(vaultKey, doc.Vault, WritersPurpose, doc.Writers, $"membership-writers:{doc.Vault}:{doc.Id}"))!;
+
+    /// <summary>The writer ids a membership's sealed <c>writerIds</c> holds (writer id → credential id).</summary>
+    internal static IReadOnlyDictionary<string, string> OpenWriterIds(MembershipDocument doc, byte[] vaultKey) =>
+        JsonSerializer.Deserialize<Dictionary<string, string>>(
+            VaultCatalog.OpenForVault(vaultKey, doc.Vault, WriterIdsPurpose, doc.WriterIds, $"membership-writer-ids:{doc.Vault}:{doc.Id}"))!;
+
+    /// <summary>
     /// The filter that moves a membership from <paramref name="from"/> to <paramref name="to"/>, or null if statuses
     /// can't move that way: only <c>pending → active → revoked | left</c> and <c>pending → revoked</c>. A tombstone
     /// never comes back.

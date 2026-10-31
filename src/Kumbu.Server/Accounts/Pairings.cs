@@ -137,7 +137,7 @@ public sealed class Pairings : IDisposable
                     // Maintain: a device is the person themself in Obsidian, so it may change the vault's structure too.
                     var (key, info) = await keys.CreateAsync(
                         record.User, record.UserKey, record.CredentialReadAt, name, new Dictionary<string, KeyRight> { [record.VaultId] = KeyRight.Maintain }, ct,
-                        record.ExpiresInDays, ApiKeyKind.Device);
+                        record.ExpiresInDays, ApiKeyKind.Device, writerName: clean);
                     log.LogInformation("User {UserId} paired a device as API key {KeyId}", record.User.Id, info.Id);
                     return new RedeemedKey(key, record.VaultName, info.Name);
                 }

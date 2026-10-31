@@ -50,8 +50,13 @@ public sealed partial class VaultCatalog
 
     /// <summary>The key of a vault <paramref name="ownerId"/> owns, from her user slot: <see cref="ArgumentException"/> if
     /// it isn't hers, <see cref="VaultBusyException"/> while it is re-keyed.</summary>
-    internal async Task<byte[]> OwnerVaultKeyAsync(string ownerId, byte[] ownerKey, string vaultId, CancellationToken ct) =>
-        (await UserVaultKeysAsync(ownerId, ownerKey, [vaultId], "A share", ct))[vaultId];
+    internal async Task<byte[]> OwnerVaultKeyAsync(string ownerId, byte[] ownerKey, string vaultId, CancellationToken ct)
+    {
+        var grant = (await UserVaultKeysAsync(ownerId, ownerKey, [vaultId], "A share", ct))[vaultId];
+        // Opened through a member slot: shared with her, not hers to share.
+        if (grant.Membership is not null) throw new ArgumentException("A share can only be given vaults of your own.", nameof(vaultId));
+        return grant.Key;
+    }
 
     /// <summary>
     /// Of the memberships <paramref name="ids"/>, those active now, by id: one indexed query, read afresh on every call
