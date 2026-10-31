@@ -151,5 +151,12 @@ public sealed class VaultBusyException : VaultUnavailableException
 /// so isn't, or is no longer, that user's to re-key with it), or whose two-key period's slot doesn't open with it.</summary>
 public sealed class VaultNotRekeyableException() : VaultUnavailableException("This vault can't be re-encrypted with this key.");
 
+/// <summary>A re-keying was asked for a vault with a membership or an invitation that is neither revoked nor left: it
+/// is refused before anything changes, until re-keying wraps the new key to members (collab design §12, phase 4).</summary>
+public sealed class VaultSharedException() : Exception(Sentence)
+{
+    public const string Sentence = "Re-encrypting a shared vault comes with a later step; nothing was changed.";
+}
+
 /// <summary>A write reached a vault that was deleted while the request was under way; nothing was written.</summary>
 public sealed class VaultDeletedException() : Exception("This vault has just been deleted; nothing was written.");

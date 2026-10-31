@@ -19,7 +19,8 @@ namespace Kumbu.Server.Vaults;
 /// </list>
 /// An entry ends, and its key is dropped, when its run succeeds, when the vault is gone, and when the key held isn't
 /// one the vault's owner slots open with (<see cref="VaultNotRekeyableException"/>): the vault then stays pending for
-/// the next trigger with the right key. An attempt that takes longer than <see cref="AttemptTimeout"/> counts as a
+/// the next trigger with the right key. A shared vault (<see cref="VaultSharedException"/>) ends its entry too, and
+/// stays pending. An attempt that takes longer than <see cref="AttemptTimeout"/> counts as a
 /// failure, so that one hung run doesn't hold up the queue. A restart loses the queue, not the state: the vault stays
 /// pending in MongoDB.
 /// </summary>
@@ -173,6 +174,14 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
         {
             // Refused for the key this attempt took, while a newer one came: not the end, the next attempt has it.
             Fail(entry, e, stopping);
+        }
+        catch (VaultSharedException e)
+        {
+            // Nothing changed, and nothing will until the vault is no longer shared: the vault stays in the owner's
+            // rekeyPending, and the next trigger tries again.
+            log.LogInformation("Re-keying vault {VaultId} is left pending: {Reason}", entry.VaultId, e.Message);
+            End(entry);
+            entry.Next.TrySetException(e);
         }
         catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException)
         {

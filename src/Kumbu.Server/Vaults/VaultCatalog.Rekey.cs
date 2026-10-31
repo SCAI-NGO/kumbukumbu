@@ -74,8 +74,8 @@ public sealed partial class VaultCatalog
     /// the runner resumes it.</summary>
     public event Action<string, string, byte[]>? RekeyPendingFound;
 
-    /// <summary>For tests: awaited at <c>"after-start"</c>, <c>"after-batch"</c>, <c>"inside-finish"</c> and
-    /// <c>"after-finish"</c>; a throw there is a crash at that point.</summary>
+    /// <summary>For tests: awaited at <c>"inside-start"</c>, <c>"after-start"</c>, <c>"after-batch"</c>, <c>"inside-finish"</c>
+    /// and <c>"after-finish"</c>; a throw there is a crash at that point.</summary>
     internal Func<string, Task>? RekeyFaultAt { get; set; }
 
     /// <summary>For tests: called after each batch of a run commits, with the vault id, its documents and sealed bytes.</summary>
@@ -221,7 +221,8 @@ public sealed partial class VaultCatalog
     /// <summary>
     /// Re-keys the vault, or resumes a run that stopped in its two-key period (rekeying design §3). Only with a user slot
     /// of <paramref name="userId"/> on the vault that opens with <paramref name="userKey"/>, the user key in force, else
-    /// <see cref="VaultNotRekeyableException"/>. <see cref="VaultDeletedException"/> for a vault deleted, or being deleted
+    /// <see cref="VaultNotRekeyableException"/>; <see cref="VaultSharedException"/> for a shared vault, with nothing changed.
+    /// <see cref="VaultDeletedException"/> for a vault deleted, or being deleted
     /// (a deletion wins within one batch); <see cref="VaultBusyException"/> while another run holds it, or when the finish
     /// finds something changed: the vault then stays in its two-key period, for the next run to resume.
     /// </summary>
@@ -275,7 +276,7 @@ public sealed partial class VaultCatalog
             {
                 start = await session.WithTransactionAsync((s, token) => StartRekeyAsync(s, id, userId, userKey, token), cancellationToken: ct);
             }
-            catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or MongoWriteException)
+            catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or VaultSharedException or MongoWriteException)
             {
                 // Refused inside the transaction, which was aborted: this start began nothing. A resume refused (a key
                 // a rotation replaced, say) leaves the vault in its period, and the mark of the run that began it.
@@ -339,6 +340,18 @@ public sealed partial class VaultCatalog
         var userSlot = await Slots.Find(s, f.Eq(sl => sl.Vault, id) & f.Eq(sl => sl.Kind, SlotDocument.User) & f.Eq(sl => sl.Lookup, lookup)).FirstOrDefaultAsync(ct)
             ?? throw new VaultNotRekeyableException();
         var oldKey = OpenUserSlot(userKey, userSlot) ?? throw new VaultNotRekeyableException();
+
+        // Until re-keying wraps the new key to members (collab design §7.1), a shared vault is left as it is: the
+        // deletion of other slots below would take its members' slots. Inside the transaction, so that a grant
+        // committing meanwhile conflicts with the vault document's write below, and the retry sees it.
+        var m = Builders<Sharing.MembershipDocument>.Filter;
+        if (await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+                .Find(s, m.Eq(x => x.Vault, id) & m.Nin(x => x.Status, [Sharing.MembershipStatus.Revoked, Sharing.MembershipStatus.Left])).AnyAsync(ct))
+        {
+            throw new VaultSharedException();
+        }
+
+        await FaultAsync("inside-start");
 
         // A real write to the owner's document, and only with the user key in force: a rotation of it or a creation
         // at the same time conflicts, and a key a rotation replaced can't start a run.
