@@ -152,7 +152,8 @@ Existing accounts get a keypair at their next sign-in (the user key is available
 | `write`, `edit`, `replace`, `mv`, `rm`, `restore <path>`, `restore --checkpoint`; `board` add/move/update (cards); uploads | | ✓ | ✓ | ✓ |
 | **Structure:** writing `/Board/Board.md` by any route, `board create`, `rename_column`, `mkcp`, `rmcp`; later the OKF bundles' manifests (v4) | | | ✓ | ✓ |
 | create own API keys / connections for the vault (up to own level) | ✓ | ✓ | ✓ | ✓ |
-| share, revoke members, choose embedding provider, re-encrypt, export, delete vault | | | | ✓ |
+| export (with password; the owner sees an event) | ✓ | ✓ | ✓ | ✓ |
+| share, revoke members, choose embedding provider, re-encrypt, delete vault | | | | ✓ |
 
 - **No sham rules** (Chris): a right that one route enforces and another doesn't is worse than none. So a *structural file* is protected on every route: the tools, the REST API and web app (opened read-only for those below `maintain`), and the Obsidian sync (a local change to it is refused and listed as not synced, with the reason; the server's version stays).
 - **The server knows which files are structural** (today `/Board/Board.md`; the OKF manifests with v4). Users don't flag files themselves; that would be a feature of its own.
@@ -190,7 +191,7 @@ The owner can raise or lower a member's role at any time. It is one write to the
 - **Member leaves:** same as revocation, initiated by the member (`status: left`). Offer re-encryption to the owner.
 - **Member deletes account / privacy deletion** (decided by Chris, 2026-10-28): memberships and all slots go with the account. What the member wrote into someone else's vault **stays** as part of that vault, as a former employee's code and documents stay; the member's identity goes: in history, activity and writer labels, the member and their devices and agents become "a former member". The deletion receipt says so: "Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history." Anything more would be destructive.
 - **Owner deletes account** (decided by Chris, 2026-10-28): the account and all its credentials go at once. For each shared vault, the deletion dialog lets the owner choose:
-  - **"Give members 7 days"** (default): the vault stays for 7 days, read-only for everyone; members see a banner and an activity entry ("Alice has deleted her account. This vault will be deleted on 4 November. Export a copy to keep its notes."), their agents get the same line in tool results, and members may **export** it during the period (otherwise owner-only). Then it is deleted.
+  - **"Give members 7 days"** (default): the vault stays for 7 days, read-only for everyone; members see a banner and an activity entry ("Alice has deleted her account. This vault will be deleted on 4 November. Export a copy to keep its notes."), their agents get the same line in tool results, and members may **export** it during the period (as at any time, §14.10). Then it is deleted.
   - **"Delete it for everyone now":** the owner is still the owner. Members then see "Alice has deleted the vault *Gartenarbeit*".
 
   The privacy deletion through an admin offers the same choice, set from the request. 7 days stays well within the GDPR's month; the receipt names the shared vaults and their deletion date.
@@ -254,4 +255,6 @@ Attachments part 1 is merged (#81, #84), part 2 (`img`, `pdf`, the PDF sidecar) 
 7. **Attachments (§13):** follow the rules for notes; members with `write` may also delete the owner's notes and attachments, recoverable from trash and history (§9).
 8. **Live updates and presence** in the web app; live co-typing is an anti-goal (§9a).
 9. **Owner deactivated by an admin:** her shared vaults become read-only for members, export allowed, until she is reactivated (design §7.4).
-10. The design (`docs/superpowers/specs/2026-10-31-collab-design.md`) settles the rest; where it and this concept differ, the design wins.
+10. **Export by members** (after the security review): allowed, with the password and an event for the owner; an owner-only export would be a sham rule, since readers can get every note anyway (§7).
+11. **A member's searches and a changed embedding provider** (after the security review): the shared vault stays out of the member's searches until they acknowledge the new provider; the owner's choice decides where her notes go, not where the member's queries go (design §8.5).
+12. The design (`docs/superpowers/specs/2026-10-31-collab-design.md`) settles the rest; where it and this concept differ, the design wins.
