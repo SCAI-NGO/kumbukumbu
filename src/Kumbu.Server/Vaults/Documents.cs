@@ -25,6 +25,11 @@ public sealed class VaultDocument
     /// the member limits hold (collab design §13 M8).</summary>
     [BsonElement("membershipsChanged"), BsonIgnoreIfDefault]
     public long MembershipsChanged { get; set; }
+
+    /// <summary>Set when the owner deleted her account and gave the members time (collab design §7.3, a later step):
+    /// the vault then takes no new member.</summary>
+    [BsonElement("closingAt"), BsonIgnoreIfNull]
+    public DateTime? ClosingAt { get; set; }
 }
 
 /// <summary>A key slot: the vault key, wrapped with a key derived from one credential.</summary>

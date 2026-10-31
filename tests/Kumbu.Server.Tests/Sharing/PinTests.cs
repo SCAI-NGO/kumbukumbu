@@ -35,7 +35,7 @@ public sealed class PinTests(MongoFixture fixture)
         _catalog ??= new(_db, Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<VaultCatalog>());
 
     private Memberships Memberships() =>
-        new(_db, Catalog(), Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Memberships>());
+        new(_db, Catalog(), new ServerSecret(_db), Options.Create(new KumbuOptions()), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Memberships>());
 
     private UserCatalog Users() =>
         new(_db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)),

@@ -67,9 +67,14 @@ public static class ApiErrors
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
         catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or PrimaryAdminExistsException or VaultNameTakenException
-            or RotationConflictException or RecoveryConflictException or PasswordConflictException or Kumbu.Server.Vaults.VaultSharedException)
+            or RotationConflictException or RecoveryConflictException or PasswordConflictException or Kumbu.Server.Vaults.VaultSharedException
+            or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException)
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
+        }
+        catch (Sharing.SharingRefusedException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status409Conflict);
         }
         catch (InvitationUnusableException e)
         {

@@ -16,7 +16,8 @@ namespace Kumbu.Server.Sharing;
 /// The memberships of shared vaults (collab design §2): who may reach which vault of whom, with which role. Plain
 /// fields, read on every request that touches a shared vault (<see cref="VaultCatalog.OpenForUserAsync"/>).
 /// </summary>
-public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOptions<KumbuOptions> options, TimeProvider time, ILogger<Memberships> log)
+public sealed partial class Memberships(
+    IMongoDatabase db, VaultCatalog catalog, ServerSecret secret, IOptions<KumbuOptions> options, TimeProvider time, ILogger<Memberships> log)
 {
     internal const string CollectionName = "memberships";
 
@@ -39,6 +40,9 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     /// <summary>What the member's sessions are in <c>writerIds</c>, in place of a credential id: all her sessions on the
     /// vault write under one writer id of the membership (collab design §8.1).</summary>
     internal const string SessionWriter = "session";
+
+    /// <summary>At most this many pending memberships per vault (concept §10.6), redeemed but unconfirmed ones included.</summary>
+    public const int PendingLimit = 10;
 
     /// <summary>The statuses that count towards the member limit: tombstones don't.</summary>
     private static readonly string[] Live = [MembershipStatus.Pending, MembershipStatus.Active];
@@ -209,15 +213,10 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     private async Task GrantInAsync(
         IClientSessionHandle s, string ownerId, byte[] ownerKey, byte[] vaultKey, MembershipDocument doc, SlotDocument slot, string alias, CancellationToken ct)
     {
-        var vault = await catalog.Vaults.UpdateOneAsync(
-            s, v => v.Id == doc.Vault, Builders<VaultDocument>.Update.Inc(v => v.MembershipsChanged, 1), cancellationToken: ct);
-        if (vault.MatchedCount == 0) throw new VaultDeletedException();
+        await MembershipsChangedAsync(s, doc.Vault, ct);
         // The key the slot wraps is still the vault's: no re-keying started or finished since it was opened.
         await catalog.RequireSameVaultKeysAsync(s, ownerId, ownerKey, new Dictionary<string, byte[]> { [doc.Vault] = vaultKey }, ct);
-
-        var f = Builders<MembershipDocument>.Filter;
-        var live = await Docs.CountDocumentsAsync(s, f.Eq(m => m.Vault, doc.Vault) & f.In(m => m.Status, Live), cancellationToken: ct);
-        if (live >= MemberLimit) throw new MemberLimitException(MemberLimit);
+        await RequireUnderLimitsAsync(s, doc.Vault, pending: false, ct);
 
         try
         {
@@ -228,6 +227,38 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             throw new AlreadyMemberException();
         }
 
+        await InsertMemberSlotAsync(s, slot, alias, ct);
+    }
+
+    /// <summary>The write to the vault document of every transaction that creates or activates a membership (collab
+    /// design §13 M8): two at once conflict, so the limits counted after it hold. <see cref="VaultDeletedException"/>
+    /// if the vault is gone.</summary>
+    private async Task MembershipsChangedAsync(IClientSessionHandle s, string vaultId, CancellationToken ct)
+    {
+        var vault = await catalog.Vaults.UpdateOneAsync(
+            s, v => v.Id == vaultId, Builders<VaultDocument>.Update.Inc(v => v.MembershipsChanged, 1), cancellationToken: ct);
+        if (vault.MatchedCount == 0) throw new VaultDeletedException();
+    }
+
+    /// <summary>
+    /// Inside the transaction, after <see cref="MembershipsChangedAsync"/>: room for one more membership of the vault
+    /// (<see cref="MemberLimit"/> pending and active ones), and with <paramref name="pending"/> for one more pending one
+    /// (<see cref="PendingLimit"/>, redeemed but unconfirmed ones included).
+    /// </summary>
+    private async Task RequireUnderLimitsAsync(IClientSessionHandle s, string vaultId, bool pending, CancellationToken ct)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var live = await Docs.CountDocumentsAsync(s, f.Eq(m => m.Vault, vaultId) & f.In(m => m.Status, Live), cancellationToken: ct);
+        if (live >= MemberLimit) throw new MemberLimitException(MemberLimit);
+        if (!pending) return;
+        var open = await Docs.CountDocumentsAsync(s, f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Pending), cancellationToken: ct);
+        if (open >= PendingLimit) throw new PendingLimitException(PendingLimit);
+    }
+
+    /// <summary>The member slot, inside the transaction: the name index refuses an alias the member already has as a
+    /// vault name or another alias (<see cref="VaultNameTakenException"/>), which aborts the whole transaction.</summary>
+    private async Task InsertMemberSlotAsync(IClientSessionHandle s, SlotDocument slot, string alias, CancellationToken ct)
+    {
         try
         {
             await catalog.Slots.InsertOneAsync(s, slot, cancellationToken: ct);
@@ -425,6 +456,9 @@ internal sealed record MembershipPin(
 
 /// <summary>The vault is shared with as many people as it may be.</summary>
 public sealed class MemberLimitException(int limit) : Exception($"A vault can be shared with at most {limit} people.");
+
+/// <summary>The vault has as many pending invitations as it may.</summary>
+public sealed class PendingLimitException(int limit) : Exception($"A vault can have at most {limit} open invitations; withdraw one first.");
 
 /// <summary>The person already has a membership of the vault.</summary>
 public sealed class AlreadyMemberException() : Exception("This person is already a member of the vault.");

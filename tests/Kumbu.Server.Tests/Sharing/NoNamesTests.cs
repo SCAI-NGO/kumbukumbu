@@ -47,7 +47,7 @@ public sealed class NoNamesTests(MongoFixture fixture)
     private UserCatalog Users =>
         new(_db, _kdf, Keys, new Connections(_db, Catalog, TimeProvider.System, NullLogger<Connections>.Instance), TimeProvider.System, NullLogger<UserCatalog>.Instance);
 
-    private Memberships Memberships => new(_db, Catalog, Options.Create(new KumbuOptions()), TimeProvider.System, NullLogger<Memberships>.Instance);
+    private Memberships Memberships => new(_db, Catalog, new Kumbu.Server.Accounts.ServerSecret(_db), Options.Create(new KumbuOptions()), TimeProvider.System, NullLogger<Memberships>.Instance);
 
     private sealed record Account(User User, byte[] Key, DateTime ReadAt);
 

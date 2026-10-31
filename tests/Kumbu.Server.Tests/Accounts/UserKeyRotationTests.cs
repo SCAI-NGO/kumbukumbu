@@ -549,7 +549,7 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     private Kumbu.Server.Sharing.Memberships Memberships() =>
-        new(_db, Catalog(), Options.Create(new KumbuOptions()), _time, NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
+        new(_db, Catalog(), new ServerSecret(_db), Options.Create(new KumbuOptions()), _time, NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
 
     /// <summary>Alice's "Gartenarbeit", shared with Bob (who has his own "Work") under his alias "garten".</summary>
     private async Task<(Account Bob, string VaultId, string MembershipId)> SharedAsync()

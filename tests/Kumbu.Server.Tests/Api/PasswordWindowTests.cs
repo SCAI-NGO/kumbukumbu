@@ -111,6 +111,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "POST /api/connections/",
         "POST /api/keys",
         "POST /api/vaults/{vault}/pairing",
+        "POST /api/vaults/{vault}/invitations",
         "PUT /api/connections/{id}/vaults",
     ];
 
@@ -189,7 +190,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     public static TheoryData<string, bool> GuardedRequests()
     {
         var data = new TheoryData<string, bool>();
-        foreach (var request in new[] { "keys", "connections", "connection-vaults", "decision", "pairing", "invitation", "activation", "vault-export", "export", "checkpoint-export" })
+        foreach (var request in new[] { "keys", "connections", "connection-vaults", "decision", "pairing", "invitation", "vault-invitation", "activation", "vault-export", "export", "checkpoint-export" })
         {
             data.Add(request, false);
             data.Add(request, true);
@@ -243,6 +244,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "decision" => await flow!.DecideAsync(allow: true),
             "pairing" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/pairing", new { }),
             "invitation" => await user.SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = Roles.User }),
+            // Its password in the body doesn't stand in for the window (collab design §4.1).
+            "vault-invitation" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/invitations", new { password = RestClient.Password, label = "Bob", role = "write" }),
             "activation" => await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{deactivated!.Value.Id}", new { active = true }),
             _ => await user.GetAsync(url!),
         };
@@ -268,6 +271,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
                     // Other tests' admins share the list.
                     Assert.DoesNotContain(await ListAsync(user, "/api/admin/invitations"), i => i!["createdBy"]!.GetValue<string>() == user.User.Id);
                     break;
+                case "vault-invitation":
+                    Assert.Equal(0, await app.Database.GetCollection<Kumbu.Server.Sharing.MembershipDocument>("memberships").CountDocumentsAsync(m => m.Owner == user.User.Id, cancellationToken: Ct));
+                    break;
                 case "activation":
                     var listed = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == deactivated!.Value.Id)!;
                     Assert.False(listed["active"]!.GetValue<bool>());
@@ -279,7 +285,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
 
         switch (request)
         {
-            case "keys" or "connections" or "pairing" or "invitation":
+            case "keys" or "connections" or "pairing" or "invitation" or "vault-invitation":
                 Assert.Equal(HttpStatusCode.Created, response.StatusCode);
                 break;
             case "connection-vaults":

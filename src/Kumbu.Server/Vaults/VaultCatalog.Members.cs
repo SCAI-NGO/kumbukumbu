@@ -11,6 +11,7 @@ namespace Kumbu.Server.Vaults;
 public sealed partial class VaultCatalog
 {
     private const string AliasLabel = "kumbu/v1/alias";
+    private const string InviteSlotLabel = "kumbu/v1/invite-slot";
 
     /// <summary>
     /// A member's slot on a shared vault, not stored here. It wraps the vault key to <paramref name="memberPublic"/>
@@ -37,6 +38,30 @@ public sealed partial class VaultCatalog
             CreatedAt = Now,
         };
     }
+
+    /// <summary>
+    /// A pending invitation's slot, not stored here (collab design §2.2): the vault key wrapped under
+    /// <c>HKDF(invite secret, "kumbu/v1/invite-slot", salt = vault id)</c>, bound to the vault and the membership. It
+    /// carries <paramref name="expiresAt"/> for the TTL index; the secret itself is in the link alone.
+    /// </summary>
+    internal SlotDocument InviteSlot(string vaultId, string membershipId, byte[] secret, byte[] vaultKey, DateTime expiresAt) => new()
+    {
+        Vault = vaultId,
+        Kind = SlotDocument.Invite,
+        Membership = membershipId,
+        ExpiresAt = expiresAt,
+        Wrapped = VaultCrypto.Seal(InviteKek(secret, vaultId), vaultKey, InviteSlotContext(vaultId, membershipId)),
+        CreatedAt = Now,
+    };
+
+    /// <summary>The vault key an invite slot wraps, opened with the invite secret; <see cref="CryptographicException"/>
+    /// if it doesn't open (another secret, vault or membership).</summary>
+    internal static byte[] OpenInviteSlot(byte[] secret, SlotDocument slot) =>
+        VaultCrypto.Open(InviteKek(secret, slot.Vault), slot.Wrapped, InviteSlotContext(slot.Vault, slot.Membership ?? ""));
+
+    private static byte[] InviteKek(byte[] secret, string vaultId) => VaultCrypto.Derive(secret, InviteSlotLabel, Encoding.UTF8.GetBytes(vaultId));
+
+    private static string InviteSlotContext(string vaultId, string membershipId) => $"slot:{vaultId}:{SlotDocument.Invite}:{membershipId}";
 
     /// <summary>The AAD of a member slot's wrapped vault key.</summary>
     internal static string MemberSlotContext(string vaultId, string membershipId) => $"slot:{vaultId}:{SlotDocument.Member}:{membershipId}";
