@@ -427,12 +427,17 @@ public sealed partial class Memberships(
                 var derived = sl.Eq(x => x.GrantedVia, membershipId);
                 var keyIds = await (await catalog.Slots.DistinctAsync(s, x => x.KeyId, derived & sl.Eq(x => x.Kind, SlotDocument.ApiKey) & sl.Exists(x => x.KeyId), cancellationToken: token))
                     .ToListAsync(token);
+                // Only the connections this membership granted the vault: the same person may hold a later membership
+                // of it, whose connections a retried cleanup of this one must leave alone.
+                var connectionIds = await (await catalog.Slots.DistinctAsync(
+                    s, x => x.ConnectionId, derived & sl.Eq(x => x.Kind, SlotDocument.Connection) & sl.Exists(x => x.ConnectionId), cancellationToken: token)).ToListAsync(token);
                 await catalog.Slots.DeleteManyAsync(s, (sl.Eq(x => x.Kind, SlotDocument.Member) & sl.Eq(x => x.Membership, membershipId)) | derived, cancellationToken: token);
                 // A withdrawn invitation has no member, and no credential of anyone's to touch.
                 if (doc.Member is { } member)
                 {
                     keys = await catalog.RevokeKeysWithoutVaultsAsync(s, keyIds, token);
-                    connections = await ConnectionRevocation.RemoveVaultsAsync(db, s, [doc.Vault], Now, token, user: member, reason: ConnectionReasons.SharingEnded);
+                    connections = await ConnectionRevocation.RemoveVaultsAsync(
+                        db, s, [doc.Vault], Now, token, user: member, reason: ConnectionReasons.SharingEnded, only: [.. connectionIds.OfType<string>()]);
                 }
 
                 await Docs.UpdateOneAsync(s, ended, Builders<MembershipDocument>.Update.Set(m => m.CleanedAt, Now).Unset(m => m.Pin), cancellationToken: token);

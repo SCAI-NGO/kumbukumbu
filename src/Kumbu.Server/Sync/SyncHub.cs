@@ -107,11 +107,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
     /// (collab design §6.1, §6.3), before it answers: unless the membership is still active, the vault goes from every
     /// socket of <paramref name="memberId"/>'s keys at once, not at the next check, and a socket left with no vault is
     /// closed with <see cref="KeyInactive"/>. A member's key reaches the vault only through the membership, so every
-    /// such socket of hers holds it through that. Web sessions on the socket come later (§9.1).
+    /// such socket of hers holds it through that. Web sessions on the socket come later (§9.1). The sweep tells it too,
+    /// after a cleanup it finished, in case the request that ended the membership never got here. Nothing is dropped
+    /// while she holds another active membership of the vault (invited again since).
     /// </summary>
     public async Task MembershipChangedAsync(string vaultId, string memberId, string membershipId, CancellationToken ct)
     {
         if ((await catalog.ActiveMembershipsAsync([membershipId], ct)).ContainsKey(membershipId)) return;
+        if (await catalog.HasActiveMembershipAsync(vaultId, memberId, ct)) return;
         var having = _connections.Keys.Where(c => c.Has(vaultId)).ToList();
         if (having.Count == 0) return;
         var members = await keys.OfUserAsync(memberId, having.Select(c => c.Grant.KeyId), ct);

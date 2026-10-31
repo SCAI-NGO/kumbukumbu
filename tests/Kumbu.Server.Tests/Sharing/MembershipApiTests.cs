@@ -255,10 +255,13 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
     private static string Revoke(RestClient owner, string membershipId) => Url(owner, membershipId, "revoke");
 
     /// <summary>A connection of <paramref name="user"/> on <paramref name="vaultIds"/>, authorised, and its access token.</summary>
-    private static async Task<(string Id, string Access)> ConnectionAsync(WebApplicationFactory<Program> api, RestClient user, params string[] vaultIds)
+    private static Task<(string Id, string Access)> ConnectionAsync(WebApplicationFactory<Program> api, RestClient user, params string[] vaultIds) =>
+        NamedConnectionAsync(api, user, "claude", vaultIds);
+
+    private static async Task<(string Id, string Access)> NamedConnectionAsync(WebApplicationFactory<Program> api, RestClient user, string name, params string[] vaultIds)
     {
         var connection = await api.Services.GetRequiredService<Connections>().CreateAsync(
-            user.User, user.UserKey, DateTime.UtcNow, "claude", vaultIds.ToDictionary(v => v, _ => KeyRight.Write), Ct);
+            user.User, user.UserKey, DateTime.UtcNow, name, vaultIds.ToDictionary(v => v, _ => KeyRight.Write), Ct);
         var flow = await OAuthFlow.StartAsync(api, user, connection.Id, await OAuthFlow.RegisterAsync(api, Callback), Callback);
         await flow.AllowAsync();
         using var exchanged = await flow.TokenAsync();
@@ -457,6 +460,63 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         using var view = await alice.GetAsync(Url(alice, membershipId));
         var json = await RestClient.JsonAsync(view);
         Assert.Equal(("Bob", "revoked"), (json["label"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_retried_cleanup_leaves_the_connections_of_a_later_membership_alone()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (old, _) = await ConnectionAsync(api, bob, vaultId);
+        var memberships = api.Services.GetRequiredService<Memberships>();
+        memberships.FaultAt = point => point == "inside-cleanup" ? throw new InvalidOperationException("crash") : Task.CompletedTask;
+        try
+        {
+            using var revoked = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+            Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        }
+        finally
+        {
+            memberships.FaultAt = null;
+        }
+
+        // Invited again before the sweep finished the old cleanup; the old member slot still holds "Garten".
+        var again = await alice.ShareWithAsync(bob, "Garten2", MemberRole.Write, label: "Bob");
+        var (fresh, access) = await NamedConnectionAsync(api, bob, "claude 2", vaultId);
+        Assert.Equal(again, (await Slots.Find(s => s.ConnectionId == fresh && s.Vault == vaultId).FirstAsync(Ct)).GrantedVia);
+        var (key, _) = await KeyAsync(api, bob, "Laptop", vaultId);
+        using var socket = await SocketAsync(api, bob, key);
+
+        await api.Services.GetRequiredService<MembershipSweeper>().SweepAsync(Ct);
+
+        // The hub, told of the old membership, keeps the vault for the sockets of the live one.
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromMilliseconds(500)));
+
+        Assert.NotNull((await Share.MembershipAsync(app.Database, membershipId)).CleanedAt);
+        // The old membership's connection loses the vault; the new one's keeps it and works.
+        Assert.Equal(ConnectionReasons.SharingEnded, (await ConnectionDocAsync(old)).RevokedReason);
+        var kept = await ConnectionDocAsync(fresh);
+        Assert.Null(kept.RevokedAt);
+        Assert.Contains(vaultId, kept.Vaults);
+        using var works = await InitializeAsync(api, fresh, access);
+        Assert.Equal(HttpStatusCode.OK, works.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_sweep_tells_the_hub_of_an_ended_membership_it_cleans_up()
+    {
+        var api = app.PublicApi;
+        var (_, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (key, _) = await KeyAsync(api, bob, "Laptop", vaultId);
+        using var socket = await SocketAsync(api, bob, key);
+
+        // Ended without the request's part (as if it was aborted after the commit): only the sweep is left to tell the hub.
+        await Share.SetStatusAsync(app.Database, membershipId, MembershipStatus.Revoked);
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromMilliseconds(300)));
+
+        await api.Services.GetRequiredService<MembershipSweeper>().SweepAsync(Ct);
+
+        Assert.Equal($"close {(int)SyncHub.KeyInactive}", await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
     }
 
     private static Task<HttpResponseMessage> RoleAsync(RestClient owner, string membershipId, string role) =>

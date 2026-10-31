@@ -248,6 +248,11 @@ public sealed partial class VaultCatalog
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
 
+    /// <summary>Whether <paramref name="memberId"/> holds an active membership of <paramref name="vaultId"/>.</summary>
+    internal Task<bool> HasActiveMembershipAsync(string vaultId, string memberId, CancellationToken ct) =>
+        db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .Find(m => m.Vault == vaultId && m.Member == memberId && m.Status == MembershipStatus.Active).AnyAsync(ct);
+
     /// <summary>
     /// The memberships the derived slots among <paramref name="slots"/> (<c>grantedVia</c>) name, those active now; null,
     /// without a query, when none is derived: owners' keys and connections pay nothing.

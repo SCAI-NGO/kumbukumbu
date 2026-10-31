@@ -153,7 +153,7 @@ public static class SharingApi
     private static async Task<NoContent> RevokeAsync(
         string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
-        await EndedAsync(await memberships.RevokeAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct), memberships, hub, ct);
+        await EndedAsync(await memberships.RevokeAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct), memberships, hub);
         return TypedResults.NoContent();
     }
 
@@ -169,7 +169,8 @@ public static class SharingApi
         var changed = await memberships.ChangeRoleAsync(caller.User!.Id, caller.UserKey!, vaultId, id, role, () => Security.RequirePasswordWindow(caller), ct);
         try
         {
-            await hub.MembershipChangedAsync(vaultId, changed.MemberId!, id, ct);
+            // Past the commit: an aborted request must not skip it.
+            await hub.MembershipChangedAsync(vaultId, changed.MemberId!, id, CancellationToken.None);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -182,17 +183,18 @@ public static class SharingApi
     /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>
     private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
-        await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub, ct);
+        await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub);
         return TypedResults.NoContent();
     }
 
     /// <summary>After the atomic step, which has committed: the hub, then the cleanup. Neither undoes the step, so the
-    /// request answers success either way; what fails is logged, and the sweep retries the cleanup.</summary>
-    private static async Task EndedAsync(EndedMembership ended, Memberships memberships, SyncHub hub, CancellationToken ct)
+    /// request answers success either way; what fails is logged, and the sweep retries the cleanup and tells the hub
+    /// again. Both run whatever happens to the request: a client gone after the commit must not keep them from running.</summary>
+    private static async Task EndedAsync(EndedMembership ended, Memberships memberships, SyncHub hub)
     {
         try
         {
-            await hub.MembershipChangedAsync(ended.Vault, ended.Member, ended.Id, ct);
+            await hub.MembershipChangedAsync(ended.Vault, ended.Member, ended.Id, CancellationToken.None);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -201,7 +203,7 @@ public static class SharingApi
 
         try
         {
-            await memberships.CleanupAsync(ended.Id, ct);
+            await memberships.CleanupAsync(ended.Id, CancellationToken.None);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {

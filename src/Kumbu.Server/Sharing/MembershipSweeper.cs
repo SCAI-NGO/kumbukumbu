@@ -6,9 +6,9 @@ namespace Kumbu.Server.Sharing;
 /// <summary>
 /// Tidies the memberships at start and then once a minute (collab design §2.1, §2.4, §6.2): expired invitations and
 /// redemptions not confirmed within a week become <c>revoked</c>, with their slots; stray invite slots go; and the
-/// cleanups of revoked and left memberships that didn't commit are finished. Idempotent: a second run finds nothing to do.
+/// cleanups of revoked and left memberships that didn't commit are finished, and the sync hub told of them. Idempotent: a second run finds nothing to do.
 /// </summary>
-public sealed class MembershipSweeper(Memberships memberships, TimeProvider time, ILogger<MembershipSweeper> log) : BackgroundService
+public sealed class MembershipSweeper(Memberships memberships, Sync.SyncHub hub, TimeProvider time, ILogger<MembershipSweeper> log) : BackgroundService
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
@@ -37,12 +37,15 @@ public sealed class MembershipSweeper(Memberships memberships, TimeProvider time
         var f = Builders<MembershipDocument>.Filter;
         var unfinished = await memberships.Docs
             .Find(f.In(m => m.Status, [MembershipStatus.Revoked, MembershipStatus.Left]) & f.Eq(m => m.CleanedAt, null))
-            .Project(m => m.Id).ToListAsync(ct);
-        foreach (var id in unfinished)
+            .Project(m => new { m.Id, m.Vault, m.Member }).ToListAsync(ct);
+        foreach (var (id, vault, member) in unfinished.Select(m => (m.Id, m.Vault, m.Member)))
         {
             try
             {
                 await memberships.CleanupAsync(id, ct);
+                // The request that ended it may not have reached the hub (collab design §6.1): told again, which drops
+                // nothing that is already gone.
+                if (member is not null) await hub.MembershipChangedAsync(vault, member, id, ct);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
