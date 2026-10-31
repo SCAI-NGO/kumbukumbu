@@ -34,6 +34,9 @@ public sealed class RestClient
         Vault = vault;
     }
 
+    /// <summary>The server this client talks to.</summary>
+    public WebApplicationFactory<Program> Api => _api;
+
     public string Username { get; }
 
     public string Session { get; }

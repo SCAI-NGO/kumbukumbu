@@ -84,6 +84,7 @@ services:
       # clients could send their own X-Forwarded-For and pick the IP that rate limits count against.
       Kumbu__Proxy__Trusted: ${KUMBU_TRUSTED_PROXY:-false}
       Kumbu__Vaults__CheckpointLimit: ${KUMBU_CHECKPOINT_LIMIT:-10}
+      Kumbu__Vaults__MemberLimit: ${KUMBU_VAULT_MEMBER_LIMIT:-20}
       Kumbu__OAuth__AccessTokenMinutes: ${KUMBU_OAUTH_ACCESS_TOKEN_MINUTES:-60}
       # Optional: the privacy contact the reply to a deletion request is signed with (Admin → Users).
       Kumbu__Privacy__Contact: ${KUMBU_PRIVACY_CONTACT:-}

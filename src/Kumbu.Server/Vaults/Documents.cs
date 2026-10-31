@@ -20,6 +20,11 @@ public sealed class VaultDocument
     /// to the finish. Meanwhile the vault loads only as a placeholder and nothing writes to it.</summary>
     [BsonElement("rekeyStartedAt"), BsonIgnoreIfNull]
     public DateTime? RekeyStartedAt { get; set; }
+
+    /// <summary>Written by every transaction that creates or activates a membership, so that two at once conflict and
+    /// the member limits hold (collab design §13 M8).</summary>
+    [BsonElement("membershipsChanged"), BsonIgnoreIfDefault]
+    public long MembershipsChanged { get; set; }
 }
 
 /// <summary>A key slot: the vault key, wrapped with a key derived from one credential.</summary>

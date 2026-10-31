@@ -39,10 +39,10 @@ public sealed class VaultWorld
         NullLogger<VaultCatalog>.Instance);
 
     /// <summary>The memberships of the process <paramref name="catalog"/> belongs to.</summary>
-    public Kumbu.Server.Sharing.Memberships Memberships(VaultCatalog catalog, TimeProvider? time = null) => new(
+    public Kumbu.Server.Sharing.Memberships Memberships(VaultCatalog catalog, int memberLimit = 20, TimeProvider? time = null) => new(
         Db,
         catalog,
-        Options.Create(new KumbuOptions()),
+        Options.Create(new KumbuOptions { Vaults = new VaultOptions { MemberLimit = memberLimit } }),
         time ?? TimeProvider.System,
         NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
 
