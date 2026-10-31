@@ -546,4 +546,89 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
         Assert.Equal(account.Vaults.Values.Order(), pending.Order());
         Assert.Equal(account.Vaults.Values.ToHashSet(), await OpenIdsAsync(account, recovered.UserKey));
     }
+
+    private Kumbu.Server.Sharing.Memberships Memberships() =>
+        new(_db, Catalog(), Options.Create(new KumbuOptions()), _time, NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
+
+    /// <summary>Alice's "Gartenarbeit", shared with Bob (who has his own "Work") under his alias "garten".</summary>
+    private async Task<(Account Bob, string VaultId, string MembershipId)> SharedAsync()
+    {
+        var alice = await AccountAsync("Gartenarbeit");
+        var bob = await AccountAsync("Work");
+        var vaultId = alice.Vaults["Gartenarbeit"];
+        var membershipId = await Memberships().GrantAsync(
+            alice.User.Id, alice.Key, vaultId, bob.User.Id, bob.Key, "garten", "Bob", Kumbu.Server.Sharing.MemberRole.Write, Ct);
+        return (bob, vaultId, membershipId);
+    }
+
+    private async Task<Dictionary<string, string>> NamesAsync(Account account, byte[] key) =>
+        (await Catalog().OpenForUserAsync(account.User.Id, key, Ct)).ToDictionary(v => v.Id, v => v.Name);
+
+    [Fact]
+    public async Task A_members_password_change_keeps_the_shared_vault_under_its_alias()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+        var (key, info) = await Keys().CreateAsync(bob.User, bob.Key, bob.ReadAt, "claude", Grant(vaultId), Ct);
+
+        Assert.True(await Users().ChangePasswordAsync(bob.User, bob.Key, Password, NewPassword, revokeApiKeys: false, Ct));
+        // And "Re-encrypt my vaults", which gives him a new user key.
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, NewPassword, null, Ct))!;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        var (_, signedIn, _) = (await Users().TrySignInAsync(bob.User.Username, NewPassword, Ct))!.Value;
+        Assert.Equal(rotation.NewUserKey, signedIn);
+        Assert.Equal("garten", (await NamesAsync(bob, signedIn))[vaultId]);
+        Assert.Equal("Work", (await NamesAsync(bob, signedIn))[bob.Vaults["Work"]]);
+        Assert.Empty(await Catalog().OpenForUserAsync(bob.User.Id, bob.Key, Ct));
+        // The member slot moved to the new lookup, its alias key with it; his key still reads the alias.
+        var slot = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        Assert.Equal(VaultCatalog.UserSlotLookup(signedIn, bob.User.Id), slot.Lookup);
+        Assert.Equal("garten", VaultCatalog.OpenAlias(signedIn, slot));
+        Assert.Equal("garten", Assert.Single(await Catalog().OpenForApiKeyAsync(info.Id, key, Ct)).Name);
+    }
+
+    [Fact]
+    public async Task A_members_recovery_keeps_the_shared_vault()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+
+        var recovered = (await Users().RecoverWithKeyAsync(bob.User.Username, bob.RecoveryKey, NewPassword, Ct))!.Value;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.NotEqual(bob.Key, recovered.UserKey);
+        var names = await NamesAsync(bob, recovered.UserKey);
+        Assert.Equal("garten", names[vaultId]);
+        Assert.Equal(2, names.Count);
+        // The shared vault is the owner's to re-key, not his.
+        var pending = (await UserDocs.Find(new BsonDocument("_id", bob.User.Id)).FirstAsync(Ct))["rekeyPending"].AsBsonArray.Select(v => v.AsString);
+        Assert.Equal([bob.Vaults["Work"]], pending);
+    }
+
+    [Fact]
+    public async Task After_a_members_rotation_the_alias_still_blocks_an_own_vault_of_that_name()
+    {
+        var (bob, vaultId, membershipId) = await SharedAsync();
+
+        var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().CreateForUserAsync("GARTEN", bob.User.Id, key, Ct, Now));
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().RenameAliasAsync(bob.User.Id, key, membershipId, "work", Ct));
+        // Renamed under the new key, the old name is free and the new one taken.
+        await Catalog().RenameAliasAsync(bob.User.Id, key, membershipId, "Beet", Ct);
+        Assert.Equal("Beet", (await NamesAsync(bob, key))[vaultId]);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().CreateForUserAsync("beet", bob.User.Id, key, Ct, Now));
+        await Catalog().CreateForUserAsync("garten", bob.User.Id, key, Ct, Now);
+    }
+
+    [Fact]
+    public async Task A_rename_between_prepare_and_apply_makes_apply_fail()
+    {
+        var (bob, _, membershipId) = await SharedAsync();
+        var prepared = await Rotation().PrepareAsync(bob.User, bob.Key, Password, null, null, Ct);
+
+        await Catalog().RenameAliasAsync(bob.User.Id, bob.Key, membershipId, "Beet", Ct);
+
+        await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
+    }
 }

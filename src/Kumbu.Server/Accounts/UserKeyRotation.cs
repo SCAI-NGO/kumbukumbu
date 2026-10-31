@@ -10,8 +10,15 @@ namespace Kumbu.Server.Accounts;
 /// <summary>The current session's slot, sealed again under its cookie secret with the new user key.</summary>
 public sealed record KeptSession(ObjectId SlotId, byte[] OldWrapped, byte[] NewWrapped);
 
-/// <summary>A vault slot wrapped again under the new user key; <c>NewNameId</c> null: unset.</summary>
-public sealed record SlotRewrap(ObjectId Id, byte[] OldWrapped, byte[] NewWrapped, byte[]? NewNameId);
+/// <summary>A vault slot wrapped again under the new user key; <c>NewNameId</c> null: unset. A member slot also has its
+/// alias key sealed under the new user key (<c>NewAliasKey</c>), and is written only if its alias is still
+/// <c>OldAlias</c>, the one its new name hash was computed from: a rename in between makes the rotation conflict.</summary>
+public sealed record SlotRewrap(ObjectId Id, byte[] OldWrapped, byte[] NewWrapped, byte[]? NewNameId)
+{
+    public byte[]? OldAlias { get; init; }
+
+    public byte[]? NewAliasKey { get; init; }
+}
 
 /// <summary>An API key's or connection's meta sealed again under the new user key, with its name id. One that didn't
 /// open has its old values as the new ones: it is left as it is, but still counted among the user's.</summary>
@@ -248,8 +255,10 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         {
             var update = u.Set(s => s.Lookup, rotation.NewLookup).Set(s => s.Wrapped, slot.NewWrapped);
             update = slot.NewNameId is { } nameId ? update.Set(s => s.NameId, nameId) : update.Unset(s => s.NameId);
-            Require(await Slots.UpdateOneAsync(
-                session, f.Eq(s => s.Id, slot.Id) & f.Eq(s => s.Lookup, rotation.OldLookup) & f.Eq(s => s.Wrapped, slot.OldWrapped), update, cancellationToken: ct));
+            if (slot.NewAliasKey is { } aliasKey) update = update.Set(s => s.AliasKey, aliasKey);
+            var filter = f.Eq(s => s.Id, slot.Id) & f.Eq(s => s.Lookup, rotation.OldLookup) & f.Eq(s => s.Wrapped, slot.OldWrapped);
+            if (slot.OldAlias is { } alias) filter &= f.Eq(s => s.Alias, alias);
+            Require(await Slots.UpdateOneAsync(session, filter, update, cancellationToken: ct));
         }
 
         foreach (var orphan in rotation.OrphanSlotIds)

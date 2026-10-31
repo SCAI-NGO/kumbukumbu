@@ -1429,7 +1429,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
     /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
-    /// under the new key, from the name in the vault's meta. Writes nothing. A slot that doesn't open is skipped and
+    /// under the new key, from the name in the vault's meta, and a <c>member</c> slot the alias's hash, from the alias
+    /// opened with the old key, and its alias key sealed under the new one (collab design §2.3; until phase 2 its
+    /// <c>Wrapped</c> is under the user key, planner's decision 5, so it is wrapped again too). Writes nothing. A slot that doesn't open is skipped and
     /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
     /// logged; one without a vault document is an orphan of a creation that failed half way, to be deleted if older
     /// than <see cref="OrphanGrace"/>, else <see cref="Accounts.RotationConflictException"/>: it may belong to a
@@ -1466,7 +1468,23 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             byte[]? nameId = null;
-            if (slot.Kind == SlotDocument.User)
+            byte[]? aliasKey = null;
+            if (slot.Kind == SlotDocument.Member)
+            {
+                // The alias (collab design §2.3): its hash and its key under the new user key; the alias itself stays
+                // sealed under its alias key, which the member's keys and connections hold too.
+                try
+                {
+                    var key = OpenAliasKey(oldUserKey, slot);
+                    nameId = AliasNameId(newUserKey, OpenAliasWith(key, slot));
+                    aliasKey = SealAliasKey(newUserKey, slot.Vault, slot.Membership ?? "", key);
+                }
+                catch (CryptographicException)
+                {
+                    log.LogWarning("The alias of a member slot of vault {VaultId} of user {UserId} does not open; the slot is wrapped again without it", slot.Vault, userId);
+                }
+            }
+            else if (slot.Kind == SlotDocument.User)
             {
                 vaultIds.Add(slot.Vault);
                 try
@@ -1480,7 +1498,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 }
             }
 
-            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind)), nameId));
+            rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, VaultCrypto.Seal(UserKek(newUserKey, slot.Vault), vaultKey, SlotContext(slot.Vault, slot.Kind)), nameId)
+            {
+                OldAlias = slot.Kind == SlotDocument.Member ? slot.Alias : null,
+                NewAliasKey = aliasKey,
+            });
         }
 
         return new PreparedUserSlots(rewraps, skipped, orphans, [.. vaultIds.Distinct()]);
