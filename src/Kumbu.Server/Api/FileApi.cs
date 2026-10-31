@@ -139,6 +139,7 @@ public static class FileApi
         await NoteApi.RequireVaultAsync(store, filePath, ct);
         // Before the body is read: a key that may only read buffers and stores nothing.
         NoteApi.Refuse(caller, "upload", filePath);
+        if (FolderMarker.Is(filePath) && filePath.Segments.Count == 2) throw ApiErrors.BadRequest($"{FolderMarker.InVaultRoot}.");
         var files = Files(store);
         var writer = notes.ForAttachments() ?? throw ApiErrors.NotFound("This server keeps no attachments.");
         var declared = request.ContentLength;

@@ -149,6 +149,25 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_rotation_keeps_a_remembered_session_idle_for_an_hour_and_its_flag()
+    {
+        var account = await AccountAsync("Arbeit");
+        var kept = await Sessions().StartAsync(account.User, account.Key, account.ReadAt, Ct, remember: true);
+        var userSlots = _db.GetCollection<UserSlotDocument>("user_slots");
+        var before = await userSlots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+        _time.Advance(TimeSpan.FromHours(1));
+
+        var rotation = (await Rotation().RotateAsync(account.User, account.Key, Password, kept, Ct))!;
+
+        Assert.NotNull(rotation.KeptSession);
+        Assert.Equal(rotation.NewUserKey, (await Sessions().ResolveAsync(kept, Ct))!.Value.UserKey);
+        var after = await userSlots.Find(s => s.Kind == UserSlotDocument.Session).SingleAsync(Ct);
+        Assert.True(after.Remembered);
+        Assert.Equal(before.ExpiresAt, after.ExpiresAt);
+        Assert.Equal(before.ConfirmedAt, after.ConfirmedAt);
+    }
+
+    [Fact]
     public async Task A_session_refused_since_is_not_brought_back()
     {
         var account = await AccountAsync("Arbeit");

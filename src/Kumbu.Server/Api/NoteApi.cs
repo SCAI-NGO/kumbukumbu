@@ -56,9 +56,10 @@ public sealed record TreeView(TreeFolder Root, int Damaged);
 public sealed record TreeFolder(string Name, string Path, IReadOnlyList<TreeFolder> Folders, IReadOnlyList<TreeNote> Notes);
 
 /// <summary>A note or attachment; <c>size</c> in bytes (a note's UTF-8). <c>kind</c>: <c>note</c>, <c>image</c> or
-/// <c>pdf</c>; <c>mediaType</c> <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment
-/// also has its <c>version</c> and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows);
-/// a note has neither, its entry is as before.</summary>
+/// <c>pdf</c> (never <c>folder</c>: a folder marker keeps its folder in the tree and is no entry of it); <c>mediaType</c>
+/// <c>text/markdown</c> for a note, an attachment's from its checked format. An attachment also has its <c>version</c>
+/// and <c>writtenAt</c> (the gallery orders by date, and trashes at the version it shows); a note has neither, its entry
+/// is as before.</summary>
 public sealed record TreeNote(
     string Name,
     string Path,
@@ -230,13 +231,15 @@ public static class NoteApi
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>
     private static async Task<NoContent> DeleteVaultAsync(
-        string vault, DeleteVaultRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, CancellationToken ct)
+        string vault, DeleteVaultRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits,
+        CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        return await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct) is not null
-            ? TypedResults.NoContent()
-            : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // A wrong password throws; null is a right one and no such vault.
+        var deleted = await deletion.DeleteVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, body.Confirm, ct);
+        await AccountApi.PasswordGivenAsync(http, sessions, ct);
+        return deleted is not null ? TypedResults.NoContent() : throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
     }
 
     /// <summary>What re-encrypting the vault would take access from, for the owner to see before deciding.</summary>
@@ -250,12 +253,15 @@ public static class NoteApi
     /// <summary>The vault under a new vault key; the answer waits for it. API keys with the vault are revoked and apps
     /// that list it disconnected: they can't be given the new key without their owner.</summary>
     private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
-        string vault, RekeyVaultRequest body, RequestCaller caller, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+        string vault, RekeyVaultRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits,
+        CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct)
-            ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+        // A wrong password throws; null is a right one and no such vault.
+        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+        await AccountApi.PasswordGivenAsync(http, sessions, ct);
+        if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));
     }
 
@@ -285,7 +291,9 @@ public static class NoteApi
             .OrderBy(g => g.Key, TextOrder.Default)
             .Select(g => TreeOf(dir.Child(g.Key), g))
             .ToList();
+        // A folder marker keeps its folder in the tree (it reached here through it) but is never one of its files.
         var files = groups.GetValueOrDefault(false, [])
+            .Where(n => !FolderMarker.Is(n.Path))
             .OrderBy(n => n.Path.Name, TextOrder.Default)
             .Select(n => n.File)
             .ToList();

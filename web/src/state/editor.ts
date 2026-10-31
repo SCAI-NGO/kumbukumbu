@@ -26,6 +26,10 @@ interface EditorState {
   overlay: Overlay;
   /** Folder paths (`/Work/projects`) that are open in the drawer. */
   expandedFolders: Record<string, boolean>;
+  /** The folder the drawer marks (`/Work/projects`): one just made, or found by its name; until a note is opened. */
+  selectedFolder: string | null;
+  /** Set by `revealFolder`: the marked folder's entry takes the focus once, when it is next shown (`folderRevealed`). */
+  revealing: boolean;
   activeVault: string | null;
   searchQuery: string;
   searchMode: SearchMode;
@@ -62,6 +66,9 @@ interface EditorState {
   /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */
   openUpload(folder: string, dropped?: Picked[]): void;
   toggleFolder(path: string): void;
+  /** Shows a folder (`/Work/projects`) in the drawer: it and every folder above it open, and it is the one marked. */
+  revealFolder(path: string): void;
+  folderRevealed(): void;
   setActiveVault(vault: string): void;
   setSearchQuery(query: string): void;
   setSearchMode(mode: SearchMode): void;
@@ -85,6 +92,8 @@ const initial = {
   mode: "read" as Mode,
   overlay: "none" as Overlay,
   expandedFolders: {},
+  selectedFolder: null as string | null,
+  revealing: false,
   activeVault: null,
   searchQuery: "",
   searchMode: "hybrid" as SearchMode,
@@ -110,6 +119,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   openNote: (path, mode = "read") =>
     set((s) => ({
       currentPath: path,
+      selectedFolder: null,
+      revealing: false,
       mode: s.draft?.path === path ? "write" : mode,
       overlay: "none",
       noteTool: s.currentPath === path ? s.noteTool : null,
@@ -129,6 +140,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setOverlay: (overlay) => set({ overlay }),
   openUpload: (folder, dropped) => set({ overlay: "upload", upload: { folder, dropped: dropped ?? null } }),
   toggleFolder: (path) => set((s) => ({ expandedFolders: { ...s.expandedFolders, [path]: !s.expandedFolders[path] } })),
+  revealFolder: (path) =>
+    set((s) => ({ selectedFolder: path, revealing: true, expandedFolders: { ...s.expandedFolders, ...Object.fromEntries(chain(path).map((f) => [f, true])) } })),
+  folderRevealed: () => set({ revealing: false }),
   setActiveVault: (activeVault) => set({ activeVault }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   setSearchMode: (searchMode) => set({ searchMode }),

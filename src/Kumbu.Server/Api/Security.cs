@@ -10,6 +10,13 @@ public sealed class SessionOnlyMetadata
     public static readonly SessionOnlyMetadata Instance = new();
 }
 
+/// <summary>Marks an endpoint that creates a credential, widens what one reaches, or takes vault data out in bulk: a
+/// remembered session needs its normal window open (keep-me-signed-in design).</summary>
+public sealed class PasswordWindowMetadata
+{
+    public static readonly PasswordWindowMetadata Instance = new();
+}
+
 /// <summary>Marks an anonymous endpoint that carries its own secret and no ambient credential (pairing's redeem):
 /// the Origin check, which guards cookies against forged requests, doesn't apply to it.</summary>
 public sealed class OriginExemptMetadata
@@ -33,7 +40,8 @@ public sealed class FileContentMetadata
     public static readonly FileContentMetadata Instance = new();
 }
 
-/// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints.</summary>
+/// <summary>The HTTP-level protections of the server: security headers, the Origin check, session-only endpoints and
+/// the password window.</summary>
 public static class Security
 {
     /// <summary>
@@ -116,6 +124,11 @@ public static class Security
     /// Without a <c>PublicUrl</c> (development, tests) the request's own scheme and host stand in for it, so
     /// only same-origin pages pass; behind a proxy that terminates TLS that would refuse everything, which is
     /// one more reason a public instance sets <c>KUMBU_PUBLIC_URL</c>.</item>
+    /// <item>after both, an endpoint marked <see cref="PasswordWindowMetadata"/> refuses a session whose normal window
+    /// is closed, and every caller that isn't a session, with a 401 of type <see cref="ApiErrors.PasswordRequired"/>
+    /// (<see cref="RequirePasswordWindow"/>): a remembered session reads and writes for 30 days, but makes no new way in
+    /// and takes nothing out in bulk without the password lately given. After the Origin check, so a forged request
+    /// stays a 403 and can't learn whether the window is open.</item>
     /// </list>
     /// </summary>
     public static IApplicationBuilder UseCallerRules(this IApplicationBuilder app, string? publicUrl)
@@ -148,8 +161,29 @@ public static class Security
                 }
             }
 
+            if (context.GetEndpoint()?.Metadata.GetMetadata<PasswordWindowMetadata>() is not null && !WindowOpen(caller))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(new ApiError(PasswordRequiredSentence, ApiErrors.PasswordRequired));
+                return;
+            }
+
             await next(context);
         });
+    }
+
+    private const string PasswordRequiredSentence = "This needs your password again: confirm it with POST /api/session/confirm.";
+
+    private static bool WindowOpen(RequestCaller? caller) => caller is { Kind: CallerKind.Session, PasswordWindowOpen: true };
+
+    /// <summary>
+    /// The check of <see cref="PasswordWindowMetadata"/>, inline, for an endpoint of which only one half grants
+    /// something: the consent decision's Allow, the admin's activation or role change, an invitation. Throws the same
+    /// 401 <see cref="ApiErrors.PasswordRequired"/> unless the caller is a session with its normal window open.
+    /// </summary>
+    public static void RequirePasswordWindow(RequestCaller caller)
+    {
+        if (!WindowOpen(caller)) throw new ApiException(StatusCodes.Status401Unauthorized, PasswordRequiredSentence, type: ApiErrors.PasswordRequired);
     }
 
     private static bool IsSafe(string method) => HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method);

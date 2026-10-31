@@ -172,4 +172,13 @@ public class NoteMoverTests
 
         Assert.Equal("write: /W/pics.md: Is a directory", result.Output);
     }
+
+    [Fact]
+    public async Task A_marker_is_not_moved_into_a_vault_itself()
+    {
+        _store.AddAttachment("/W/D/.vaultkeep");
+
+        Assert.Equal(ShellResult.Error("mv: /W/: A vault exists on its own; it needs no .vaultkeep"), await Move("/W/D/.vaultkeep", "/W/.vaultkeep"));
+        Assert.NotNull(await _store.GetAttachmentAsync(P("/W/D/.vaultkeep"), Ct));
+    }
 }

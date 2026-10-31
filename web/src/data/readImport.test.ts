@@ -273,6 +273,36 @@ describe("readImport", () => {
   it("something that isn't a ZIP is refused", async () => {
     await expect(readImport(strToU8("not a zip"), "x.zip")).rejects.toThrow();
   });
+
+  it("an exported ZIP with an empty folder imports the folder", async () => {
+    const vaults = await readImport(zip({ "Work/Drafts/.vaultkeep": new Uint8Array(), "Work/a.md": "A" }), "export.zip");
+    expect(vaults[0].folders).toEqual(["Drafts/.vaultkeep"]);
+    expect(vaults[0].skipped).toEqual([]);
+    expect(vaults[0].notes.map((n) => n.path)).toEqual(["a.md"]);
+  });
+
+  it("a macOS re-zip keeps the folder and ignores its resource fork", async () => {
+    const vaults = await readImport(
+      zip({ "Work/Drafts/.vaultkeep": new Uint8Array(), "Work/a.md": "A", "__MACOSX/Work/Drafts/._.vaultkeep": new Uint8Array([0, 5, 22]) }),
+      "export.zip",
+    );
+    expect(vaults.map((v) => v.name)).toEqual(["Work"]);
+    expect(vaults[0].folders).toEqual(["Drafts/.vaultkeep"]);
+    expect(vaults[0].skipped).toEqual([]);
+  });
+
+  it("a marker that is in the ZIP twice still keeps its folder", async () => {
+    const archive = rename(zip({ "Work/Drafts/.vaultkeep": new Uint8Array(), "Work/Draftx/.vaultkeep": new Uint8Array(), "Work/a.md": "A" }), "Work/Draftx/", "Work/Drafts/");
+    const vaults = await readImport(archive, "export.zip");
+    expect(vaults[0].folders).toEqual(["Drafts/.vaultkeep"]);
+    expect(vaults[0].skipped).toEqual([]);
+  });
+
+  it("other dotfiles stay skipped and a vault-root marker is ignored", async () => {
+    const vaults = await readImport(zip({ "Work/.gitkeep": "", "Work/.vaultkeep": "", "Work/.git/x/.vaultkeep": "", "Work/a.md": "A" }), "export.zip");
+    expect(vaults[0].folders).toEqual([]);
+    expect(vaults[0].skipped.map((s) => s.path)).toEqual([".gitkeep", ".git/x/.vaultkeep"]);
+  });
 });
 
 describe("versionOfBytes", () => {

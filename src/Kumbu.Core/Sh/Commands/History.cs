@@ -126,7 +126,9 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             {
                 if (since is { } from && at < from) continue;
                 var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
-                rows.Add((at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}"));
+                rows.Add(FolderMarker.Is(file.Path)
+                    ? (at, writer, FolderMarker.Shown(file.Path), $"folder{cs}")
+                    : (at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}"));
             }
         }
 
@@ -144,7 +146,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
                 var list = folderMove.ToList();
                 if (list.Count == 1)
                 {
-                    rows.Add((group.Key.MovedAt, writer, $"{list[0].From.Value} → {list[0].To.Value}", ""));
+                    rows.Add((group.Key.MovedAt, writer, $"{FolderMarker.Shown(list[0].From)} → {FolderMarker.Shown(list[0].To)}", ""));
                     continue;
                 }
 
@@ -155,7 +157,9 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
                 while (below.All(b => depth < b.Count && b[depth] == below[0][depth])) depth++;
                 var sub = string.Concat(below[0].Take(depth).Select(s => s + "/"));
                 var (from, to) = folderMove.Key;
-                rows.Add((group.Key.MovedAt, writer, $"{from}{sub} → {to}{sub}", $"{list.Count} notes"));
+                // Kept folders' markers move with their folder but are not counted.
+                var counted = list.Count(m => !FolderMarker.Is(m.From));
+                rows.Add((group.Key.MovedAt, writer, $"{from}{sub} → {to}{sub}", counted switch { 0 => "", 1 => "1 note", _ => $"{counted} notes" }));
             }
         }
 
@@ -170,7 +174,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             foreach (var trashed in await store.ListAttachmentTrashAsync(dir.IsRoot ? null : dir, ct))
             {
                 if (since is { } s && trashed.DeletedAt < s) continue;
-                rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{trashed.Attachment.Path.Value} → trash", ""));
+                rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{FolderMarker.Shown(trashed.Attachment.Path)} → trash", ""));
             }
         }
 

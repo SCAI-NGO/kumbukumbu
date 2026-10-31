@@ -25,6 +25,48 @@ async function signIn() {
   await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
 }
 
+describe("keeping the user signed in", () => {
+  const warning = /Comfortable, but less safe/;
+
+  it("offers to keep the user signed in, unticked, and warns only when ticked", async () => {
+    fakeApi({ "GET /api/session": () => json(401, { error: "Sign in first." }) });
+    renderApp("/signin");
+    const box = await screen.findByRole("checkbox", { name: "Keep me signed in on this device" });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+
+    await userEvent.click(box);
+    expect(screen.getByRole("note")).toHaveClass("bg-red-700", "text-white");
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Comfortable, but less safe: anyone who gets into this device or browser gets into your notes until you sign out or 30 days are up. Use it only on a device of your own, with a screen lock.",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await userEvent.click(box);
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+  });
+
+  it("sends remember: true when the box is ticked", async () => {
+    let signedIn = false;
+    const fetch = fakeApi({
+      "GET /api/session": () => (signedIn ? json(200, { user, previousSignInAt: null }) : json(401, { error: "Sign in first." })),
+      "POST /api/session": () => {
+        signedIn = true;
+        return json(200, { user, previousSignInAt: null });
+      },
+      "GET /api/vaults": () => json(200, []),
+    });
+    renderApp("/signin");
+    await screen.findByRole("checkbox", { name: "Keep me signed in on this device" });
+    await userEvent.click(screen.getByRole("checkbox", { name: "Keep me signed in on this device" }));
+    await signIn();
+
+    await waitFor(() => expect(fetch.mock.calls.some(([r]) => r.method === "POST")).toBe(true));
+    const body = await fetch.mock.calls.find(([r]) => r.method === "POST")![0].json();
+    expect(body).toEqual({ username: "ada", password: "correct horse battery", remember: true });
+  });
+});
+
 describe("a session that ends mid-use", () => {
   it("lands on sign-in with ?next= and a short message, and returns there after signing in", async () => {
     useSession.getState().signedIn({ user, previousSignInAt: null });
@@ -48,7 +90,7 @@ describe("a session that ends mid-use", () => {
     await waitFor(() => expect(path(router)).toBe("/notes/Arbeit/plan.md?line=4"));
     expect(await screen.findByRole("heading", { name: "plan" })).toBeInTheDocument();
     const body = await fetch.mock.calls.find(([r]) => r.method === "POST")![0].json();
-    expect(body).toEqual({ username: "ada", password: "correct horse battery" });
+    expect(body).toEqual({ username: "ada", password: "correct horse battery", remember: false });
   });
 
   it("doesn't take someone else signing in to the previous user's note", async () => {

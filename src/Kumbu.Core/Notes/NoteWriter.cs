@@ -435,9 +435,11 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         return false;
     }
 
-    /// <summary>The refusal of a text tool for an attachment's path: its bytes aren't text to write or edit.</summary>
+    /// <summary>The refusal of a text tool for an attachment's path: its bytes aren't text to write or edit. A folder's
+    /// marker is never described, so its path is no such file, as everywhere in the shell.</summary>
     public static ShellResult? NotText(string tool, VaultPath path) =>
-        path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
+        FolderMarker.Is(path) ? ShellResult.Error($"{tool}: {path.Value}: No such file or directory")
+        : path.IsAttachment ? ShellResult.Error($"{tool}: {path.Name} is an attachment; text tools can't change it") : null;
 
     private static ShellResult? TooLarge(string tool, string content)
     {

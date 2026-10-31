@@ -14,10 +14,18 @@ public sealed record UserView(string Id, string Username, string Display, string
     public static UserView From(User user) => new(user.Id, user.Username, user.Display, user.Role);
 }
 
-/// <summary>The signed-in user; <c>previousSignInAt</c> is where the agent banner starts counting changes.</summary>
-public sealed record SessionView(UserView User, DateTime? PreviousSignInAt);
+/// <summary>The signed-in user. <c>previousSignInAt</c> is the previous visit, where the agent banner starts counting
+/// changes: a sign-in or, for a remembered session, the first request after 30 minutes without one.
+/// <c>passwordWindowOpen</c>: whether the actions that need the password lately given go ahead without asking for it
+/// (a remembered session's normal window; always true for a normal session, and in the sign-in's answer).</summary>
+public sealed record SessionView(UserView User, DateTime? PreviousSignInAt, bool PasswordWindowOpen);
 
-public sealed record SignInRequest(string Username, string Password);
+/// <summary><c>remember</c>: "Keep me signed in on this device", a session of 30 days (7 idle) with the normal limits
+/// for the actions that need the password; false when left out.</summary>
+public sealed record SignInRequest(string Username, string Password, bool Remember = false);
+
+/// <summary>The current password, to open a remembered session's normal window again.</summary>
+public sealed record ConfirmPasswordRequest(string Password);
 
 /// <summary>What the join page may know of an invitation: nothing of who made it or for whom. <c>reason</c>
 /// (<c>used</c>, <c>expired</c> or <c>revoked</c>) only when it isn't valid; optional, hence the default.</summary>
@@ -64,9 +72,10 @@ public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string
 /// <summary><c>key</c> is shown here once and never again.</summary>
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 
-/// <summary>A user in the admin's list: metadata only. <c>lastSignInAt</c> is the last sign-in, not the last request.</summary>
+/// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
+/// session, the latest visit (its first request after 30 minutes without one); not the last request.</summary>
 public sealed record AdminUserView(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastSignInAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
 
 /// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
 /// acting admin's own.</summary>
@@ -136,6 +145,7 @@ public static class AccountApi
         var account = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).WithMetadata(SessionOnlyMetadata.Instance);
         account.MapGet("/session", Session).Errors(401, 403);
         account.MapDelete("/session", SignOutAsync).Errors(401, 403);
+        account.MapPost("/session/confirm", ConfirmPasswordAsync).Errors(400, 401, 403, 429);
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
@@ -143,7 +153,7 @@ public static class AccountApi
         account.MapPost("/account/reencrypt", ReencryptAsync).Errors(400, 401, 403, 409, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
-        account.MapPost("/keys", CreateKeyAsync).Errors(400, 401, 403, 409, 503);
+        account.MapPost("/keys", CreateKeyAsync).WithMetadata(PasswordWindowMetadata.Instance).Errors(400, 401, 403, 409, 503);
         account.MapDelete("/keys/{id}", RevokeKeyAsync).Errors(401, 403, 404);
 
         account.MapGet("/admin/users", ListUsersAsync).Errors(401, 403);
@@ -159,7 +169,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
-        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, CancellationToken ct)
+        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, ILoggerFactory logs,
+        CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -173,12 +184,13 @@ public static class AccountApi
 
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
         if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
-        SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct));
+        SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct, body.Remember), body.Remember);
         KumbuMetrics.SignedIn(KumbuMetrics.Outcome.Success);
+        if (body.Remember) Log(logs).LogInformation("User {UserId} signed in and is kept signed in on this device", user.Id);
         // Vaults a recovery or "Re-encrypt my vaults" left pending (a restart lost the runner): after the session
         // started, and never waited for, so that sign-in is never held up by a re-keying.
         rekeying.ResumePending(user, userKey);
-        return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt));
+        return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true));
     }
 
     private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(PeekInvitationRequest body, Invitations invitations, CancellationToken ct)
@@ -200,7 +212,7 @@ public static class AccountApi
         if (await users.TrySignInAsync(body.Username, body.Password, CancellationToken.None) is var (signedIn, userKey, readAt)
             && await TryStartSessionAsync(sessions, signedIn, userKey, readAt) is { } secret)
         {
-            SetSessionCookie(http, secret);
+            SetSessionCookie(http, secret, remember: false);
             // Never fails the join, and not cancellable, like the rest of the join after the claim.
             await welcome.CreateAsync(signedIn, userKey, readAt, CancellationToken.None);
         }
@@ -236,7 +248,33 @@ public static class AccountApi
     }
 
     private static Ok<SessionView> Session(RequestCaller caller) =>
-        TypedResults.Ok(new SessionView(UserView.From(caller.User!), caller.User!.PreviousSignInAt));
+        TypedResults.Ok(new SessionView(UserView.From(caller.User!), caller.User!.PreviousSignInAt, caller.PasswordWindowOpen));
+
+    /// <summary>
+    /// The password again, inside a session: a remembered session's normal window opens (keep-me-signed-in design). No
+    /// new session and no new cookie. Checked and limited as every password check behind a session, against the user
+    /// key in force; a wrong one is a 400, not a 401, which would sign the web app out.
+    /// </summary>
+    private static async Task<NoContent> ConfirmPasswordAsync(
+        ConfirmPasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits, ILoggerFactory logs,
+        CancellationToken ct)
+    {
+        var user = caller.User!;
+        if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+        await PasswordGivenAsync(http, sessions, ct);
+        Log(logs).LogInformation("User {UserId} confirmed their password", user.Id);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>After a successful check of the session user's password: their session's normal window opens again, as
+    /// the password was just given. For session-only endpoints.</summary>
+    internal static async Task PasswordGivenAsync(HttpContext http, Sessions sessions, CancellationToken ct)
+    {
+        if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var secret)) await sessions.OpenWindowAsync(secret, ct);
+    }
+
+    private static ILogger Log(ILoggerFactory logs) => logs.CreateLogger(typeof(AccountApi).FullName!);
 
     private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
     {
@@ -253,7 +291,7 @@ public static class AccountApi
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         if (!await users.ChangePasswordAsync(user, caller.UserKey!, body.OldPassword, body.NewPassword, body.RevokeApiKeys, ct))
         {
-            throw ApiErrors.BadRequest("The current password is wrong.");
+            throw new WrongPasswordException("The current password is wrong.");
         }
 
         pairings.DropAll(user.Id);
@@ -262,13 +300,14 @@ public static class AccountApi
     }
 
     private static async Task<Ok<RecoveryKeyView>> RegenerateRecoveryKeyAsync(
-        RegenerateRecoveryKeyRequest body, RequestCaller caller, UserCatalog users, AccountLimits limits, CancellationToken ct)
+        RegenerateRecoveryKeyRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
     {
         var user = caller.User!;
         // The same limit as the password change: both are a password check behind a session.
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var recoveryKey = await users.RegenerateRecoveryKeyAsync(user.Id, caller.UserKey!, body.CurrentPassword, ct)
-            ?? throw ApiErrors.BadRequest("The current password is wrong.");
+            ?? throw new WrongPasswordException("The current password is wrong.");
+        await PasswordGivenAsync(http, sessions, ct);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -277,12 +316,14 @@ public static class AccountApi
     /// a new recovery key, shown here once. This session stays signed in; every other one ends.
     /// </summary>
     private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
-        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, AccountLimits limits, Pairings pairings, CancellationToken ct)
+        ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits, Pairings pairings,
+        CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var recoveryKey = await rekeying.ReencryptAccountAsync(user, caller.UserKey!, body.Password, http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct)
-            ?? throw ApiErrors.BadRequest("The password is wrong.");
+            ?? throw new WrongPasswordException("The password is wrong.");
+        await PasswordGivenAsync(http, sessions, ct);
         pairings.DropAll(user.Id);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
@@ -293,7 +334,7 @@ public static class AccountApi
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw ApiErrors.BadRequest("The password is wrong.");
+        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw new WrongPasswordException("The password is wrong.");
         pairings.DropAll(user.Id);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
@@ -327,14 +368,18 @@ public static class AccountApi
 
     private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, u.Vaults, u.BytesStored))
+            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored))
             .ToArray());
 
     private static async Task<NoContent> UpdateUserAsync(
-        string id, UpdateUserRequest body, RequestCaller caller, Admin admin, Pairings pairings, UserCatalog users, AccountLimits limits, CancellationToken ct)
+        string id, UpdateUserRequest body, HttpContext http, RequestCaller caller, Admin admin, Pairings pairings, UserCatalog users, Sessions sessions,
+        AccountLimits limits, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
-        if (body.Role == Roles.Admin) await RequirePasswordAsync(caller, body.Password, "Making someone an admin needs your password.", users, limits, ct);
+        // Only granting needs the window: activating; making an admin brings the password itself, which opens it.
+        // Deactivating and demoting are cleaning up and need neither.
+        if (body.Role == Roles.Admin) await RequirePasswordAsync(http, caller, body.Password, "Making someone an admin needs your password.", users, sessions, limits, ct);
+        else if (body.Active is true) Security.RequirePasswordWindow(caller);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
         // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
@@ -349,12 +394,14 @@ public static class AccountApi
 
     /// <summary>An admin deletes another user, active or not, in one step, and gets the receipt for their records.</summary>
     private static async Task<Ok<DeletionReceiptView>> DeleteUserAsync(
-        string id, DeleteUserRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index,
+        string id, DeleteUserRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits, SearchIndex index,
         IOptions<KumbuOptions> options, Pairings pairings, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct)
-            ?? throw ApiErrors.NotFound("There is no such user.");
+        // A wrong password throws; null is a right one and no such user.
+        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct);
+        await PasswordGivenAsync(http, sessions, ct);
+        if (deleted is null) throw ApiErrors.NotFound("There is no such user.");
         pairings.DropAll(deleted.Id);
         return TypedResults.Ok(ReceiptView(deleted, index, options.Value));
     }
@@ -365,11 +412,12 @@ public static class AccountApi
 
     /// <summary>After a restore: every user it brought back is deleted again, one receipt each.</summary>
     private static async Task<Ok<DeletionReceiptView[]>> RepeatDeletionsAsync(
-        RepeatDeletionsRequest body, RequestCaller caller, Deletion deletion, AccountLimits limits, SearchIndex index, IOptions<KumbuOptions> options,
-        Pairings pairings, CancellationToken ct)
+        RepeatDeletionsRequest body, HttpContext http, RequestCaller caller, Deletion deletion, Sessions sessions, AccountLimits limits, SearchIndex index,
+        IOptions<KumbuOptions> options, Pairings pairings, CancellationToken ct)
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var deleted = await deletion.RepeatAsync(caller.User!, caller.UserKey!, body.Password, ct);
+        await PasswordGivenAsync(http, sessions, ct);
         foreach (var user in deleted) pairings.DropAll(user.Id);
         return TypedResults.Ok(deleted.Select(d => ReceiptView(d, index, options.Value)).ToArray());
     }
@@ -383,13 +431,15 @@ public static class AccountApi
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());
 
     private static async Task<Created<CreatedInvitationView>> CreateInvitationAsync(
-        CreateInvitationRequest body, RequestCaller caller, Invitations invitations, UserCatalog users, AccountLimits limits, IOptions<KumbuOptions> options,
-        CancellationToken ct)
+        CreateInvitationRequest body, HttpContext http, RequestCaller caller, Invitations invitations, UserCatalog users, Sessions sessions, AccountLimits limits,
+        IOptions<KumbuOptions> options, CancellationToken ct)
     {
         var expiry = body.ExpiresInDays is { } days
             ? days > 0 && days <= Invitations.MaxExpiry.TotalDays ? TimeSpan.FromDays(days) : throw ApiErrors.BadRequest($"An invitation is valid for 1 to {Invitations.MaxExpiry.TotalDays} days.")
             : (TimeSpan?)null;
-        if (body.Role == Roles.Admin) await RequirePasswordAsync(caller, body.Password, "Inviting an admin needs your password.", users, limits, ct);
+        // An admin invitation brings the password, which opens the window; any other needs the window open.
+        if (body.Role == Roles.Admin) await RequirePasswordAsync(http, caller, body.Password, "Inviting an admin needs your password.", users, sessions, limits, ct);
+        else Security.RequirePasswordWindow(caller);
         var (code, info) = await invitations.CreateAsync(caller.User!, body.Role, body.Note, expiry, ct);
         var link = Invitations.Link(options.Value.PublicUrl, code);
         return TypedResults.Created($"/api/admin/invitations/{info.Id}", new CreatedInvitationView(code, link, InvitationView(info)));
@@ -399,13 +449,15 @@ public static class AccountApi
     /// Making an admin, by invitation or by role, needs the acting admin's password, checked and limited as a password
     /// change checks it: a stolen admin session alone must not make an admin account that outlives it. Both ways,
     /// since an invitation for a user and a promotion would otherwise make one too. A user invitation needs none: the
-    /// account it makes opens nothing but its own vaults.
+    /// account it makes opens nothing but its own vaults. The right password opens the session's normal window.
     /// </summary>
-    private static async Task RequirePasswordAsync(RequestCaller caller, string? password, string missing, UserCatalog users, AccountLimits limits, CancellationToken ct)
+    private static async Task RequirePasswordAsync(
+        HttpContext http, RequestCaller caller, string? password, string missing, UserCatalog users, Sessions sessions, AccountLimits limits, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(password)) throw ApiErrors.BadRequest(missing);
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, password, ct)) throw ApiErrors.BadRequest("Your password is wrong.");
+        if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, password, ct)) throw new WrongPasswordException("Your password is wrong.");
+        await PasswordGivenAsync(http, sessions, ct);
     }
 
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>
@@ -456,11 +508,11 @@ public static class AccountApi
         IsEssential = true,
     };
 
-    private static void SetSessionCookie(HttpContext http, string secret)
+    private static void SetSessionCookie(HttpContext http, string secret, bool remember)
     {
         var options = SessionCookieOptions();
         // The browser drops it when the session would end anyway; the server checks both limits regardless.
-        options.MaxAge = Sessions.AbsoluteTimeout;
+        options.MaxAge = remember ? Sessions.RememberedAbsoluteTimeout : Sessions.AbsoluteTimeout;
         http.Response.Cookies.Append(CallerMiddleware.SessionCookie, secret, options);
     }
 
@@ -470,7 +522,8 @@ public static class AccountApi
         TypedResults.Ok(new PreferencesView(await users.AsksPasswordForDownloadsAsync(caller.User!.Id, ct)));
 
     private static async Task<Ok<PreferencesView>> SetPreferencesAsync(
-        PreferencesRequest body, RequestCaller caller, UserCatalog users, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
+        PreferencesRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits, ILoggerFactory logs,
+        CancellationToken ct)
     {
         var user = caller.User!;
         if (!body.AskPasswordForDownloads && await users.AsksPasswordForDownloadsAsync(user.Id, ct))
@@ -478,12 +531,25 @@ public static class AccountApi
             if (string.IsNullOrEmpty(body.Password)) throw ApiErrors.BadRequest("Turning off the password for downloads of several files needs your password.");
             // The same limit as the export's ticket: both are a password check behind a session.
             if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw ApiErrors.BadRequest("The password is wrong.");
-            logs.CreateLogger(typeof(AccountApi).FullName!).LogInformation("User {UserId} turned off the password for downloads of several files", user.Id);
+            if (!await users.CheckPasswordAsync(user.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+            await PasswordGivenAsync(http, sessions, ct);
+            Log(logs).LogInformation("User {UserId} turned off the password for downloads of several files", user.Id);
         }
 
         await users.SetAsksPasswordForDownloadsAsync(user.Id, body.AskPasswordForDownloads, ct);
         return TypedResults.Ok(new PreferencesView(body.AskPasswordForDownloads));
+    }
+
+    /// <summary>The counterpart of <see cref="PasswordGivenAsync"/>: a wrong one counts against the session, which
+    /// ends if it is remembered and this is the fifth in a row. Called by <see cref="ApiErrors.Filter"/> for every
+    /// <see cref="WrongPasswordException"/>, so a check only has to throw that.</summary>
+    internal static async Task PasswordWrongAsync(HttpContext http, CancellationToken ct)
+    {
+        if (!http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var secret)) return;
+        if (await http.RequestServices.GetRequiredService<Sessions>().PasswordWrongAsync(secret, ct) is { } userId)
+        {
+            Log(http.RequestServices.GetRequiredService<ILoggerFactory>()).LogInformation("Ended a remembered session of user {UserId} after 5 wrong passwords", userId);
+        }
     }
 }
 

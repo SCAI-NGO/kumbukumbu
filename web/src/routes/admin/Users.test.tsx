@@ -13,7 +13,7 @@ const row = (u: typeof root, extra = {}) => ({
   ...u,
   active: true,
   createdAt: "2026-10-01T09:00:00Z",
-  lastSignInAt: "2026-10-20T09:00:00Z",
+  lastActiveAt: "2026-10-20T09:00:00Z",
   vaults: 2,
   bytesStored: 1536,
   ...extra,
@@ -24,7 +24,7 @@ function api(who = admin, extra: Parameters<typeof fakeApi>[0] = {}) {
     "GET /api/session": () => json(200, { user: who, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, []),
     "GET /api/admin/users": () =>
-      json(200, [row(root), row(admin), row(plain, { lastSignInAt: null, bytesStored: 5 * 1024 * 1024 + 300000, vaults: 0 })]),
+      json(200, [row(root), row(admin), row(plain, { lastActiveAt: null, bytesStored: 5 * 1024 * 1024 + 300000, vaults: 0 })]),
     "GET /api/admin/deletions": () => json(200, { configured: true, restored: [] }),
     ...extra,
   });
@@ -53,7 +53,7 @@ describe("Admin users", () => {
     expect(bob.getByText("5.3 MB")).toBeInTheDocument();
     const ada = within(card("Ada"));
     expect(ada.getByText("Admin")).toBeInTheDocument();
-    expect(ada.getByText(/Last sign-in 20 Oct 2026/)).toBeInTheDocument();
+    expect(ada.getByText(/Last active 20 Oct 2026/)).toBeInTheDocument();
     expect(ada.getByText("2 vaults")).toBeInTheDocument();
     expect(ada.getByText("1.5 KB")).toBeInTheDocument();
     expect(within(card("Root")).getByText("Primary admin")).toBeInTheDocument();

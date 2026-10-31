@@ -3,6 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { timeText } from "../components/Sheet";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
@@ -96,6 +97,31 @@ describe("Connections", () => {
     expect(create).toBeEnabled();
   });
 
+  it("sorts the connections by least recent use on request, the revoked and expired ones within their own group", async () => {
+    api([
+      { ...base, id: "a", name: "Alpha", lastUsedAt: "2026-10-20T09:00:00Z" },
+      { ...base, id: "b", name: "Bravo", state: "revoked", reason: "revoked", lastUsedAt: "2026-10-15T09:00:00Z" },
+      { ...base, id: "c", name: "Charlie", lastUsedAt: null, state: "waiting", client: null },
+      { ...base, id: "d", name: "Delta", lastUsedAt: "2026-10-03T09:00:00Z" },
+      { ...base, id: "e", name: "Echo", state: "expired", lastUsedAt: null, expiresAt: "2026-10-02T09:00:00Z" },
+      { ...base, id: "f", name: "Foxtrot", lastUsedAt: null },
+    ]);
+    renderApp("/keys");
+    await screen.findByText("Alpha");
+    const region = screen.getByRole("region", { name: "Connections" });
+    const live = () => [...region.querySelectorAll(":scope > ul > li h3")].map((h) => h.textContent);
+    const over = () => [...region.querySelectorAll("details li h3")].map((h) => h.textContent);
+    const sort = within(region).getByRole("group", { name: "Sort connections" });
+
+    expect(within(sort).getByRole("button", { name: "By creation" })).toHaveAttribute("aria-pressed", "true");
+    expect(live()).toEqual(["Alpha", "Charlie", "Delta", "Foxtrot"]);
+    expect(over()).toEqual(["Bravo", "Echo"]);
+
+    await userEvent.click(within(sort).getByRole("button", { name: "Least recently used first" }));
+    expect(live()).toEqual(["Charlie", "Foxtrot", "Delta", "Alpha"]);
+    expect(over()).toEqual(["Echo", "Bravo"]);
+  });
+
   it("lists states with their reasons", async () => {
     api([
       { ...base, id: "a", name: "Waiting one", state: "waiting", client: null },
@@ -119,7 +145,7 @@ describe("Connections", () => {
     expect(live).toHaveTextContent("Claude · claude.ai");
     expect(live).not.toHaveTextContent("self-registered");
     expect(live).toHaveTextContent("Arbeit: read and write");
-    expect(live).toHaveTextContent("Created 1 Oct 2026 · Last used 5 Oct 2026 · Expires 31 Jan 2099");
+    expect(live).toHaveTextContent(`Created 1 Oct 2026 · Last used ${timeText("2026-10-05T09:00:00Z")} · Expires 31 Jan 2099`);
 
     const stale = await item("Stale one");
     expect(stale).toHaveTextContent("Claude · claude.ai · self-registered");

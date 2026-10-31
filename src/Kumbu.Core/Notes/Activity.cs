@@ -16,7 +16,7 @@ public enum ActivityFileKind { Added, Changed, Renamed, Deleted }
 /// <param name="Before">The state before it: null when there was none (added) or it is no longer kept.</param>
 /// <param name="BeforeLost">The state before it existed but the history no longer keeps it.</param>
 /// <param name="Trashed">The note is in the trash now.</param>
-/// <param name="FileKind">What the file is: "note", "image" or "pdf" (<see cref="AttachmentFormat.KindOf"/>).</param>
+/// <param name="FileKind">What the file is: "note", "image", "pdf" or "folder" (a folder's marker, whose <c>Path</c> is the marker's) (<see cref="AttachmentFormat.KindOf"/>).</param>
 public sealed record ActivityFile(
     string Path, ActivityFileKind Kind, string? From, string? Version, string? Before, bool BeforeLost, bool Trashed, string? To = null,
     string FileKind = "note");

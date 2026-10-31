@@ -338,14 +338,15 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public void Polling_the_version_does_not_count_as_the_sessions_activity()
+    public void Polling_the_version_and_the_board_does_not_count_as_the_sessions_activity()
     {
         var endpoints = Api.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>().Endpoints
             .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>()
             .Where(e => e.Metadata.GetMetadata<Kumbu.Server.Auth.BackgroundMetadata>() is not null)
-            .Select(e => e.RoutePattern.RawText);
+            .Select(e => e.RoutePattern.RawText)
+            .Order(StringComparer.Ordinal);
 
-        Assert.Equal(["/api/version/{vault}/{**path}"], endpoints);
+        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}"], endpoints);
     }
 
     [Fact]

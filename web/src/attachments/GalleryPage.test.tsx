@@ -62,7 +62,7 @@ const png = () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), { heade
 
 function api(extra: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({
-    "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+    "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: true }),
     "GET /api/vaults/W/tree": () => json(200, tree),
     "GET /api/files/*": png,
     "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
@@ -276,6 +276,45 @@ describe("Gallery", () => {
     expect(await screen.findByRole("alertdialog", { name: "Download 2 files?" })).toBeInTheDocument();
     expect(forms).toHaveLength(1);
     expect(preferences).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks for the password for a ZIP when the window is closed, though the setting is off", async () => {
+    const ticket = vi.fn(async () => json(200, { ticket: "t1" }));
+    api({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null, passwordWindowOpen: false }),
+      "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }),
+      "POST /api/export/ticket": ticket,
+    });
+    const { forms } = downloads();
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await longPress("whiteboard.png");
+    await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Download 2 files?" });
+    expect(dialog).toHaveTextContent("They come as one ZIP. It's a while since you last gave your password on this device, so it confirms the download.");
+    expect(forms).toHaveLength(0);
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "secret");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Download" }));
+
+    await waitFor(() => expect(forms).toHaveLength(1));
+    expect(ticket).toHaveBeenCalledTimes(1);
+    expect(forms[0].fields.find(([name]) => name === "ticket")?.[1]).toBe("t1");
+  });
+
+  it("downloads a ZIP without asking when the setting is off and the window open", async () => {
+    api({ "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: false }) });
+    const { forms } = downloads();
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await longPress("whiteboard.png");
+    await userEvent.click(screen.getByRole("button", { name: "banner.png" }));
+    await userEvent.click(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Download" }));
+
+    await waitFor(() => expect(forms).toHaveLength(1));
+    expect(forms[0].fields.some(([name]) => name === "ticket")).toBe(false);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("the download button waits for the setting, so a double tap starts one ZIP", async () => {

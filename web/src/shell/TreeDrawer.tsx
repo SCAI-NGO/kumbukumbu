@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
-import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
-import { api } from "../api/client";
+import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { findFolder, useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
-import { boardUrl, folderOf, galleryUrl, noteUrl, titleOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
 import { LeaveDialog } from "../components/shownOnce";
-import { useDialog } from "../hooks/useDialog";
+import { topDialog, useDialog } from "../hooks/useDialog";
 import { sidebarStep, useSidebarWidth } from "../hooks/useSidebarWidth";
 import { useTruncated } from "../hooks/useTruncated";
 import { exportUrl } from "../data/exportUrl";
@@ -50,12 +50,27 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
-/** The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). */
-function FolderMenu({ folder, onNewNote, onMove, extra = [] }: { folder: TreeFolder; onNewNote(folder: string): void; onMove(subject: MoveSubject): void; extra?: MenuItem[] }) {
+type FolderActions = {
+  onNewNote(folder: string): void;
+  onNewFolder(parent: string): void;
+  onMove(subject: MoveSubject): void;
+  onRemove(folder: string): void;
+  removing: boolean;
+};
+
+/**
+ * The menu of a folder (the vault's root too, which can't be moved, with the vault's own entries in `extra`). An
+ * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
+ * keeps it.
+ */
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+  const inner = folder.path.split("/").length > 2;
   const items: MenuItem[] = [
     { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
+    { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
     { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
-    ...(folder.path.split("/").length > 2 ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
+    ...(inner ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
+    ...(inner && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     ...extra,
   ];
   return (
@@ -65,10 +80,31 @@ function FolderMenu({ folder, onNewNote, onMove, extra = [] }: { folder: TreeFol
   );
 }
 
-function FolderButton({ folder, count, open, onToggle }: { folder: TreeFolder; count: number; open: boolean; onToggle(): void }) {
+/**
+ * A folder's entry; the selected one (just made, or found by its name) is marked, and the first time it is shown
+ * after that, scrolled to and focused: once only, not again each time it is shown anew (its parent opened again).
+ */
+function FolderButton({ folder, count, open, selected, onToggle }: { folder: TreeFolder; count: number; open: boolean; selected: boolean; onToggle(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!selected || !useEditor.getState().revealing) return;
+    useEditor.getState().folderRevealed();
+    button.current?.scrollIntoView?.({ block: "nearest" });
+    // Not out of a dialog over the tree (New folder, still open on a name that exists): it keeps the focus.
+    const top = topDialog();
+    if (!top || top.contains(button.current)) button.current?.focus();
+  }, [selected]);
   return (
-    <button type="button" aria-expanded={open} onClick={onToggle} {...truncated} className={`${rowClass} pl-1.5 font-medium text-text-body`}>
+    <button
+      ref={button}
+      type="button"
+      aria-expanded={open}
+      aria-current={selected ? "true" : undefined}
+      onClick={onToggle}
+      {...truncated}
+      className={`${rowClass} pl-1.5 font-medium ${selected ? "bg-accent/15 text-accent-text" : "text-text-body"}`}
+    >
       <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />
       <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
@@ -246,12 +282,13 @@ export default function TreeDrawer(props: {
   /** Docked only: collapsed, yet kept in the page, so the top bar's button has something to control. */
   hidden?: boolean;
   onNewNote(folder: string): void;
+  onNewFolder(parent: string): void;
   onNewVault(): void;
   onMove(subject: MoveSubject): void;
   onVaultSheet(sheet: { kind: "trash" | "activity" | "checkpoints"; vault: string }): void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewVault, onMove, onVaultSheet } = props;
-  const { activeVault, currentPath, expandedFolders, toggleFolder, setOverlay } = useEditor();
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onVaultSheet } = props;
+  const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
   const vaults = useVaults();
@@ -263,6 +300,17 @@ export default function TreeDrawer(props: {
   const [resizing, setResizing] = useState(false);
   const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
   const createBoard = useBoardAction(activeVault ?? "");
+  const queryClient = useQueryClient();
+  // A 404: removed meanwhile, which is what was asked.
+  const removeFolder = useMutation({
+    mutationFn: async (folder: string) => {
+      const vault = vaultOf(folder);
+      const result = await api.DELETE("/api/files/{vault}/{path}", { params: { path: { vault, path: markerOf(folder) } } });
+      if (result.response.status !== 404) await call(Promise.resolve(result));
+    },
+    onSuccess: (_, folder) => queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(folder)] }),
+  });
+  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder), removing: removeFolder.isPending };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
   const openBoard = (vault: string) => {
@@ -309,11 +357,16 @@ export default function TreeDrawer(props: {
           <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
           <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
-        {tree.data && <FolderMenu folder={tree.data.root} onNewNote={onNewNote} onMove={onMove} extra={vaultItems} />}
+        {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
       </div>
       {createBoard.isError && (
         <div className="flex-none px-[18px] pb-2.5">
           <FormError>{errorText(createBoard.error)}</FormError>
+        </div>
+      )}
+      {removeFolder.isError && (
+        <div className="flex-none px-[18px] pb-2.5">
+          <FormError>{errorText(removeFolder.error)}</FormError>
         </div>
       )}
 
@@ -325,8 +378,14 @@ export default function TreeDrawer(props: {
               <li key={row.kind === "folder" ? row.folder.path : row.path} className="flex items-center" style={{ paddingLeft: row.depth * 18 }}>
                 {row.kind === "folder" ? (
                   <>
-                    <FolderButton folder={row.folder} count={row.count} open={row.open} onToggle={() => toggleFolder(row.folder.path)} />
-                    <FolderMenu folder={row.folder} onNewNote={onNewNote} onMove={onMove} />
+                    <FolderButton
+                      folder={row.folder}
+                      count={row.count}
+                      open={row.open}
+                      selected={row.folder.path === selectedFolder}
+                      onToggle={() => toggleFolder(row.folder.path)}
+                    />
+                    <FolderMenu folder={row.folder} {...folderActions} />
                   </>
                 ) : (
                   <>
