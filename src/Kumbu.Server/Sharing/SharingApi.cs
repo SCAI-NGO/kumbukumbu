@@ -2,6 +2,7 @@
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
@@ -56,6 +57,8 @@ public static class SharingApi
             .WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(401, 403, 404, 409, 503);
         api.MapPost("/vaults/{vault}/memberships/{id}/decline", DeclineAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapDelete("/vaults/{vault}/memberships/{id}", WithdrawAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPost("/vaults/{vault}/memberships/{id}/revoke", RevokeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
 
@@ -136,6 +139,48 @@ public static class SharingApi
     {
         await memberships.DeclineAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct);
         return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// The owner revokes a member (collab design §6.1, §6.2), without the password window: reducing access is always
+    /// open. The atomic step ends every access of the member's at once; the sync hub drops the vault from her sockets
+    /// before the answer; then the cleanup, which the sweep finishes if it fails here.
+    /// </summary>
+    private static async Task<NoContent> RevokeAsync(
+        string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, SyncHub hub, CancellationToken ct)
+    {
+        await EndedAsync(await memberships.RevokeAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct), memberships, hub, ct);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>
+    private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
+    {
+        await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub, ct);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>After the atomic step, which has committed: the hub, then the cleanup. Neither undoes the step, so the
+    /// request answers success either way; what fails is logged, and the sweep retries the cleanup.</summary>
+    private static async Task EndedAsync(EndedMembership ended, Memberships memberships, SyncHub hub, CancellationToken ct)
+    {
+        try
+        {
+            await hub.MembershipChangedAsync(ended.Vault, ended.Member, ended.Id, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            memberships.Log.LogWarning(e, "Telling the sync hub that membership {MembershipId} ended failed; her sockets get hints for the vault until they reconnect", ended.Id);
+        }
+
+        try
+        {
+            await memberships.CleanupAsync(ended.Id, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            memberships.Log.LogWarning(e, "The cleanup of membership {MembershipId} failed; the sweep finishes it", ended.Id);
+        }
     }
 
     /// <summary>Withdrawing an open invitation needs no password window either.</summary>

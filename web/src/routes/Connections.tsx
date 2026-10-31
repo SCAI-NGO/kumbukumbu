@@ -24,6 +24,7 @@ const date = (iso: string) => day.format(new Date(iso));
 const reasons: Record<string, string> = {
   revoked: "you revoked it",
   vault_deleted: "its vaults were deleted",
+  sharing_ended: "the vaults shared with you are no longer shared",
   password_changed: "your password was changed",
   recovery: "your account was recovered",
   deactivated: "your account was deactivated",

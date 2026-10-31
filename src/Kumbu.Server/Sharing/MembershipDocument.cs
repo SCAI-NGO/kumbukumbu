@@ -96,6 +96,11 @@ public sealed class MembershipDocument
     [BsonElement("roleChangedAt"), BsonIgnoreIfNull]
     public DateTime? RoleChangedAt { get; set; }
 
+    /// <summary>When a revoked or left membership's ways in were cleaned up (collab design §6.2); until then the sweep
+    /// retries it.</summary>
+    [BsonElement("cleanedAt"), BsonIgnoreIfNull]
+    public DateTime? CleanedAt { get; set; }
+
     /// <summary>The member's public key as pinned at acceptance, sealed under the vault key (design §5.4).</summary>
     [BsonElement("pin"), BsonIgnoreIfNull]
     public byte[]? Pin { get; set; }

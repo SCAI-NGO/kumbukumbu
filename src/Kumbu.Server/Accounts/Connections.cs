@@ -30,6 +30,9 @@ public static class ConnectionReasons
 {
     public const string Revoked = "revoked";
     public const string VaultDeleted = "vault_deleted";
+
+    /// <summary>Its only vaults were shared with the user, and the sharing ended (revoked, or the user left).</summary>
+    public const string SharingEnded = "sharing_ended";
     public const string PasswordChanged = "password_changed";
     public const string Recovery = "recovery";
     public const string Deactivated = "deactivated";
@@ -526,13 +529,18 @@ internal static class ConnectionRevocation
     /// retried, wraps no slot for a deleted vault (<c>OAuthTokens</c>). A connection left with no vault is revoked for
     /// good, as by its owner (Ruling 2): <see cref="ConnectionReasons.VaultDeleted"/>, name freed, its tokens revoked.
     /// Its slots on the deleted vaults are deleted by the caller, with every slot on them. Returns the revoked ones' ids.
+    /// With <paramref name="user"/>, only that user's connections (a membership's cleanup, collab design §6.2: the
+    /// member's, never the owner's), revoked for <paramref name="reason"/>.
     /// </summary>
     internal static async Task<IReadOnlyList<string>> RemoveVaultsAsync(
-        IMongoDatabase db, IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct)
+        IMongoDatabase db, IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct,
+        string? user = null, string reason = ConnectionReasons.VaultDeleted)
     {
         var connections = db.GetCollection<ConnectionDocument>(Connections.CollectionName);
         var f = Builders<ConnectionDocument>.Filter;
-        var having = await connections.Find(session, f.AnyIn(c => c.Vaults, vaultIds)).Project(c => c.Id).ToListAsync(ct);
+        var which = f.AnyIn(c => c.Vaults, vaultIds);
+        if (user is not null) which &= f.Eq(c => c.User, user);
+        var having = await connections.Find(session, which).Project(c => c.Id).ToListAsync(ct);
         if (having.Count == 0) return [];
         await connections.UpdateManyAsync(session, f.In(c => c.Id, having), Builders<ConnectionDocument>.Update.PullAll(c => c.Vaults, vaultIds), cancellationToken: ct);
         var left = await connections.Find(session, f.In(c => c.Id, having) & f.Size(c => c.Vaults, 0) & f.Eq(c => c.RevokedAt, null)).Project(c => c.Id).ToListAsync(ct);
@@ -540,9 +548,9 @@ internal static class ConnectionRevocation
         await connections.UpdateManyAsync(
             session,
             f.In(c => c.Id, left),
-            Builders<ConnectionDocument>.Update.Set(c => c.RevokedAt, now).Set(c => c.RevokedReason, ConnectionReasons.VaultDeleted).Unset(c => c.NameId),
+            Builders<ConnectionDocument>.Update.Set(c => c.RevokedAt, now).Set(c => c.RevokedReason, reason).Unset(c => c.NameId),
             cancellationToken: ct);
-        await RevokeTokensAsync(db, session, f.In(c => c.Id, left), ConnectionReasons.VaultDeleted, now, ct);
+        await RevokeTokensAsync(db, session, f.In(c => c.Id, left), reason, now, ct);
         return left;
     }
 

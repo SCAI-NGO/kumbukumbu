@@ -102,6 +102,30 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
         }
     }
 
+    /// <summary>
+    /// Told by the request that changed membership <paramref name="membershipId"/> of <paramref name="vaultId"/>
+    /// (collab design §6.1, §6.3), before it answers: unless the membership is still active, the vault goes from every
+    /// socket of <paramref name="memberId"/>'s keys at once, not at the next check, and a socket left with no vault is
+    /// closed with <see cref="KeyInactive"/>. A member's key reaches the vault only through the membership, so every
+    /// such socket of hers holds it through that. Web sessions on the socket come later (§9.1).
+    /// </summary>
+    public async Task MembershipChangedAsync(string vaultId, string memberId, string membershipId, CancellationToken ct)
+    {
+        if ((await catalog.ActiveMembershipsAsync([membershipId], ct)).ContainsKey(membershipId)) return;
+        var having = _connections.Keys.Where(c => c.Has(vaultId)).ToList();
+        if (having.Count == 0) return;
+        var members = await keys.OfUserAsync(memberId, having.Select(c => c.Grant.KeyId), ct);
+        var closing = new List<Task>();
+        foreach (var connection in having.Where(c => members.Contains(c.Grant.KeyId)))
+        {
+            connection.DropVaults(v => v == vaultId);
+            if (connection.IsEmpty) closing.Add(connection.CloseAsync(KeyInactive, "no vault left"));
+        }
+
+        await Task.WhenAll(closing);
+        if (closing.Count > 0) log.LogInformation("Closed {Count} sync connections of user {UserId}: membership {MembershipId} ended", closing.Count, memberId, membershipId);
+    }
+
     /// <summary>For tests: how many connections are held.</summary>
     internal int Count => _connections.Count;
 
@@ -185,6 +209,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, ILogger<SyncHub>
                 },
                 TaskScheduler.Default);
         }
+
+        public bool Has(string vaultId) => _vaults.ContainsKey(vaultId);
+
+        public bool IsEmpty => _vaults.Count == 0;
 
         public void DropVaults(Func<string, bool> gone) =>
             _vaults = _vaults.Where(v => !gone(v.Key)).ToDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);

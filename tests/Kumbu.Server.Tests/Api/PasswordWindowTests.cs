@@ -141,6 +141,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/vaults/{vault}/memberships/{id}"] = Reading,
         ["POST /api/vaults/{vault}/memberships/{id}/decline"] = "declining and withdrawing reduce access: never guarded",
         ["DELETE /api/vaults/{vault}/memberships/{id}"] = "declining and withdrawing reduce access: never guarded",
+        ["POST /api/vaults/{vault}/memberships/{id}/revoke"] = "revoking and leaving reduce access: never guarded",
+        ["POST /api/memberships/{id}/leave"] = "revoking and leaving reduce access: never guarded",
         ["POST /api/vault-invitations/accept"] = "the owner's secret is the grant: it gives the caller's credentials nothing",
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,

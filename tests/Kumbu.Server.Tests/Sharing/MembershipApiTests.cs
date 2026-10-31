@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Net.Http.Headers;
+using System.Net.WebSockets;
+using System.Text;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
@@ -12,7 +18,7 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Sharing;
 
-/// <summary>The owner's side of a membership over REST (collab design §4.2, §4.3): confirming, declining, withdrawing.</summary>
+/// <summary>A membership over REST (collab design §4.2, §4.3, §6): confirming, declining, withdrawing, revoking, leaving.</summary>
 [Collection("app")]
 public sealed class MembershipApiTests(KumbuAppFactory app)
 {
@@ -224,5 +230,231 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.Equal(MembershipStatus.Revoked, (await Share.MembershipAsync(app.Database, declined.MembershipId)).Status);
         var third = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Bob", MemberRole.Read, TimeSpan.FromDays(7), confirm: false, Ct);
         await Assert.ThrowsAsync<AlreadyMemberException>(() => memberships.AcceptAsync(bob.User.Id, bob.UserKey, third.Secret, "Garten2", Ct));
+    }
+
+    private const string Callback = "https://claude.test/cb";
+
+    private const string Initialize =
+        """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"raw","version":"0"}}}""";
+
+    /// <summary>Alice's "Gartenarbeit" (with plan.md), shared with Bob (who has his own "Work") as "Garten", active.</summary>
+    private async Task<(RestClient Alice, RestClient Bob, string VaultId, string MembershipId)> SharedAsync(WebApplicationFactory<Program> api, MemberRole role = MemberRole.Write)
+    {
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        var bob = await RestClient.NewAsync(api, vault: "Work", remember: true);
+        var membership = await alice.ShareWithAsync(bob, "Garten", role, label: "Bob");
+        return (alice, bob, await alice.VaultIdAsync(), membership);
+    }
+
+    private static async Task<(string Key, ApiKeyInfo Info)> KeyAsync(WebApplicationFactory<Program> api, RestClient user, string name, params string[] vaultIds) =>
+        await api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user.User, user.UserKey, DateTime.UtcNow, name, vaultIds.ToDictionary(v => v, _ => KeyRight.Write), Ct);
+
+    private static string Revoke(RestClient owner, string membershipId) => Url(owner, membershipId, "revoke");
+
+    /// <summary>A connection of <paramref name="user"/> on <paramref name="vaultIds"/>, authorised, and its access token.</summary>
+    private static async Task<(string Id, string Access)> ConnectionAsync(WebApplicationFactory<Program> api, RestClient user, params string[] vaultIds)
+    {
+        var connection = await api.Services.GetRequiredService<Connections>().CreateAsync(
+            user.User, user.UserKey, DateTime.UtcNow, "claude", vaultIds.ToDictionary(v => v, _ => KeyRight.Write), Ct);
+        var flow = await OAuthFlow.StartAsync(api, user, connection.Id, await OAuthFlow.RegisterAsync(api, Callback), Callback);
+        await flow.AllowAsync();
+        using var exchanged = await flow.TokenAsync();
+        Assert.Equal(HttpStatusCode.OK, exchanged.StatusCode);
+        return (connection.Id, (await RestClient.JsonAsync(exchanged))["access_token"]!.GetValue<string>());
+    }
+
+    private static async Task<HttpResponseMessage> InitializeAsync(WebApplicationFactory<Program> api, string connectionId, string bearer)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/mcp/c/{connectionId}") { Content = new StringContent(Initialize, Encoding.UTF8, "application/json") };
+        request.Headers.Accept.ParseAdd("application/json, text/event-stream");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Forwarded-For", $"198.26.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}");
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri(KumbuAppFactory.PublicUrl) });
+        return await client.SendAsync(request, Ct);
+    }
+
+    /// <summary>A sync socket of <paramref name="key"/>.</summary>
+    private static async Task<WebSocket> SocketAsync(WebApplicationFactory<Program> api, RestClient user, string key)
+    {
+        using var response = await user.SendAsync(HttpMethod.Post, "/api/ws-ticket", bearer: key);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var ticket = (await RestClient.JsonAsync(response))["ticket"]!.GetValue<string>();
+        return await api.Server.CreateWebSocketClient().ConnectAsync(new Uri($"wss://kumbu.test/api/ws?ticket={Uri.EscapeDataString(ticket)}"), Ct);
+    }
+
+    /// <summary>The next message on the socket, "close N" for a close, or null if none comes within <paramref name="wait"/>.</summary>
+    private static async Task<string?> ReceiveAsync(WebSocket socket, TimeSpan wait)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        timeout.CancelAfter(wait);
+        var buffer = new byte[4096];
+        try
+        {
+            var result = await socket.ReceiveAsync(buffer, timeout.Token);
+            return result.MessageType == WebSocketMessageType.Close ? $"close {(int?)result.CloseStatus}" : Encoding.UTF8.GetString(buffer, 0, result.Count);
+        }
+        catch (OperationCanceledException) when (!Ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private Task<ApiKeyDocument> KeyDocAsync(string keyId) =>
+        app.Database.GetCollection<ApiKeyDocument>(ApiKeys.CollectionName).Find(k => k.Id == keyId).SingleAsync(Ct);
+
+    private Task<ConnectionDocument> ConnectionDocAsync(string id) =>
+        app.Database.GetCollection<ConnectionDocument>(Connections.CollectionName).Find(c => c.Id == id).SingleAsync(Ct);
+
+    [Fact]
+    public async Task Revoking_ends_every_access_at_once()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (key, _) = await KeyAsync(api, bob, "Laptop", vaultId);
+        var (connection, access) = await ConnectionAsync(api, bob, vaultId);
+        using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.OK, note.StatusCode);
+        using (var before = await InitializeAsync(api, connection, access)) Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        using var socket = await SocketAsync(api, bob, key);
+        var revision = (await Share.MembershipAsync(app.Database, membershipId)).Revision;
+
+        using var revoked = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        // The socket closes with the request, not at the hub's 30-second check.
+        Assert.Equal($"close {(int)SyncHub.KeyInactive}", await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
+        using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.NotFound, note.StatusCode);
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        // The key had no other vault: revoked by the cleanup.
+        using (var byKey = await bob.GetAsync("/api/vaults", key)) Assert.Equal(HttpStatusCode.Unauthorized, byKey.StatusCode);
+        using (var after = await InitializeAsync(api, connection, access)) Assert.Equal(HttpStatusCode.Unauthorized, after.StatusCode);
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal((MembershipStatus.Revoked, revision + 1), (doc.Status, doc.Revision));
+        Assert.NotNull(doc.RevokedAt);
+        Assert.Null(doc.Pin);
+        Assert.NotNull(doc.CleanedAt);
+        Assert.False(await Slots.Find(s => s.Vault == vaultId && (s.Membership == membershipId || s.GrantedVia == membershipId)).AnyAsync(Ct));
+        Assert.Equal(ConnectionReasons.SharingEnded, (await ConnectionDocAsync(connection)).RevokedReason);
+        // Once: a tombstone isn't revoked again.
+        using var again = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+        Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task Revoking_revokes_Bobs_keys_left_with_no_vault_and_keeps_the_others()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var carol = await RestClient.NewAsync(api, vault: "Notizen");
+        await carol.ShareWithAsync(bob, "Notizen");
+        var carols = await carol.VaultIdAsync();
+        var own = await bob.VaultIdAsync();
+        var (_, only) = await KeyAsync(api, bob, "only", vaultId);
+        var (_, withOwn) = await KeyAsync(api, bob, "with-own", vaultId, own);
+        var (_, withCarols) = await KeyAsync(api, bob, "with-carols", vaultId, carols);
+        var (bobsConnection, _) = await ConnectionAsync(api, bob, vaultId, own);
+        var (_, alicesKey) = await KeyAsync(api, alice, "Alice's", vaultId);
+        var (alicesConnection, _) = await ConnectionAsync(api, alice, vaultId);
+
+        using var revoked = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.NotNull((await KeyDocAsync(only.Id)).RevokedAt);
+        // A slot on another shared vault is a vault as much as one on his own.
+        Assert.Null((await KeyDocAsync(withOwn.Id)).RevokedAt);
+        Assert.Null((await KeyDocAsync(withCarols.Id)).RevokedAt);
+        Assert.Equal([own], (await Slots.Find(s => s.KeyId == withOwn.Id).ToListAsync(Ct)).Select(s => s.Vault));
+        Assert.Equal([carols], (await Slots.Find(s => s.KeyId == withCarols.Id).ToListAsync(Ct)).Select(s => s.Vault));
+        var bobs = await ConnectionDocAsync(bobsConnection);
+        Assert.Equal([own], bobs.Vaults);
+        Assert.Null(bobs.RevokedAt);
+        // The owner's own credentials on the vault are hers, untouched.
+        Assert.Null((await KeyDocAsync(alicesKey.Id)).RevokedAt);
+        Assert.True(await Slots.Find(s => s.KeyId == alicesKey.Id && s.Vault == vaultId).AnyAsync(Ct));
+        var alices = await ConnectionDocAsync(alicesConnection);
+        Assert.Equal([vaultId], alices.Vaults);
+        Assert.Null(alices.RevokedAt);
+    }
+
+    [Fact]
+    public async Task Leaving_is_revoking_by_the_member()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (_, only) = await KeyAsync(api, bob, "Laptop", vaultId);
+        var revision = (await Share.MembershipAsync(app.Database, membershipId)).Revision;
+
+        // Not through the owner's routes: her vault isn't his.
+        using (var asOwner = await bob.SendAsync(HttpMethod.Post, $"/api/vaults/Garten/memberships/{membershipId}/revoke")) Assert.Equal(HttpStatusCode.NotFound, asOwner.StatusCode);
+        using var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/leave");
+
+        Assert.Equal(HttpStatusCode.NoContent, left.StatusCode);
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal((MembershipStatus.Left, revision + 1), (doc.Status, doc.Revision));
+        Assert.NotNull(doc.RevokedAt);
+        Assert.Null(doc.Pin);
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.NotNull((await KeyDocAsync(only.Id)).RevokedAt);
+        Assert.False(await Slots.Find(s => s.Membership == membershipId || s.GrantedVia == membershipId).AnyAsync(Ct));
+        // Alice can't leave for him, nor he twice.
+        using (var again = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/leave")) Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+        using (var notTheOwners = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId))) Assert.Equal(HttpStatusCode.NotFound, notTheOwners.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_failed_cleanup_is_finished_by_the_sweep()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (_, only) = await KeyAsync(api, bob, "Laptop", vaultId);
+        var memberships = api.Services.GetRequiredService<Memberships>();
+        memberships.FaultAt = point => point == "inside-cleanup" ? throw new InvalidOperationException("crash") : Task.CompletedTask;
+        try
+        {
+            using var revoked = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+            Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        }
+        finally
+        {
+            memberships.FaultAt = null;
+        }
+
+        // The atomic step stands, the cleanup didn't commit: the slots are there, and open nothing.
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal((MembershipStatus.Revoked, null), (doc.Status, doc.CleanedAt));
+        // The pin goes with the atomic step itself: a tombstone flipped back to active has no key to wrap to.
+        Assert.Null(doc.Pin);
+        Assert.Equal(1, await SlotsAsync(SlotDocument.Member, membershipId));
+        Assert.Null((await KeyDocAsync(only.Id)).RevokedAt);
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+
+        await api.Services.GetRequiredService<MembershipSweeper>().SweepAsync(Ct);
+
+        Assert.NotNull((await Share.MembershipAsync(app.Database, membershipId)).CleanedAt);
+        Assert.Equal(0, await SlotsAsync(SlotDocument.Member, membershipId));
+        Assert.False(await Slots.Find(s => s.GrantedVia == membershipId).AnyAsync(Ct));
+        Assert.NotNull((await KeyDocAsync(only.Id)).RevokedAt);
+    }
+
+    [Fact]
+    public async Task The_tombstone_keeps_the_owners_view_of_Bob()
+    {
+        var api = app.PublicApi;
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (key, info) = await KeyAsync(api, bob, "Claude", vaultId);
+        using (var written = await bob.SendAsync(HttpMethod.Put, "/api/notes/Garten/k.md", new { content = "Kohl\n" }, bearer: key)) Assert.Equal(HttpStatusCode.Created, written.StatusCode);
+
+        using var revoked = await alice.SendAsync(HttpMethod.Post, Revoke(alice, membershipId));
+
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        var vaultKey = await alice.VaultKeyAsync();
+        Assert.Equal(new Dictionary<string, string> { [info.Id] = "Claude" }, Memberships.OpenWriters(doc, vaultKey));
+        using var note = await alice.GetAsync("/api/notes/Gartenarbeit/k.md");
+        Assert.Equal("Bob (removed) · Claude", (await RestClient.JsonAsync(note))["lastWriter"]!.GetValue<string>());
+        using var view = await alice.GetAsync(Url(alice, membershipId));
+        var json = await RestClient.JsonAsync(view);
+        Assert.Equal(("Bob", "revoked"), (json["label"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
     }
 }

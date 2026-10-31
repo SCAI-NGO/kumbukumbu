@@ -285,6 +285,8 @@ public sealed partial class Memberships
                     Builders<MembershipDocument>.Update
                         .Set(m => m.Status, MembershipStatus.Revoked).Set(m => m.RevokedAt, Now)
                         .Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Unset(m => m.Pin)
+                        // Its only way in goes in this transaction: nothing is left for the cleanup.
+                        .Set(m => m.CleanedAt, Now)
                         .Inc(m => m.Revision, 1),
                     cancellationToken: token);
                 if (ended.MatchedCount == 0) throw new MembershipNotFoundException();

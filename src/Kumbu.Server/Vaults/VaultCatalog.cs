@@ -809,10 +809,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>
-    /// Inside a deletion: of the API keys that had slots on the deleted vaults, those left with none (they can open
-    /// nothing any more) are revoked, as <see cref="Accounts.ApiKeys.RevokeAsync"/> would, name freed. Returns their ids.
+    /// Inside a vault's deletion or a membership's cleanup (collab design §6.2), after the slots that went: of the API
+    /// keys <paramref name="keyIds"/>, those left with no slot (they can open nothing any more) are revoked, as
+    /// <see cref="Accounts.ApiKeys.RevokeAsync"/> would, name freed. Every slot counts as a vault, a member's derived
+    /// one (<c>grantedVia</c>) on another shared vault as much as one on her own. Returns their ids.
     /// </summary>
-    private async Task<IReadOnlyList<string>> RevokeKeysWithoutVaultsAsync(IClientSessionHandle session, IReadOnlyList<string?> keyIds, CancellationToken ct)
+    internal async Task<IReadOnlyList<string>> RevokeKeysWithoutVaultsAsync(IClientSessionHandle session, IReadOnlyList<string?> keyIds, CancellationToken ct)
     {
         if (keyIds.Count == 0) return [];
         var slot = Builders<SlotDocument>.Filter;

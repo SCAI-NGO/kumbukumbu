@@ -23,6 +23,8 @@ public sealed partial class Memberships(
 
     private volatile bool _ready;
 
+    internal ILogger Log => log;
+
     /// <summary>The users' keypairs; internal, for the tests' hooks.</summary>
     internal MemberKeys Keys { get; } = new(db);
 
@@ -337,6 +339,79 @@ public sealed partial class Memberships(
         return ids.Count;
     }
 
+    /// <summary>
+    /// The owner revokes an active membership of <paramref name="vaultId"/> (collab design §6.1): the atomic step, one
+    /// update to <c>revoked</c> with <c>revokedAt</c> and <c>revision</c> raised, and the pin destroyed, so a tombstone
+    /// flipped back to active in the database gets no slot wrapped to it at a later re-key. From its commit every opening
+    /// method skips the vault for the member and each of her credentials. <see cref="MembershipNotFoundException"/>
+    /// unless it is an active membership of that vault. The caller then tells the sync hub and runs <see cref="CleanupAsync"/>.
+    /// </summary>
+    public Task<EndedMembership> RevokeAsync(string vaultId, string membershipId, CancellationToken ct) =>
+        EndAsync(Builders<MembershipDocument>.Filter.Eq(m => m.Vault, vaultId), membershipId, MembershipStatus.Revoked, ct);
+
+    /// <summary>The member leaves (collab design §6.1): as <see cref="RevokeAsync"/>, bound to her as the member instead
+    /// of to the vault, to <c>left</c>.</summary>
+    public Task<EndedMembership> LeaveAsync(string memberId, string membershipId, CancellationToken ct) =>
+        EndAsync(Builders<MembershipDocument>.Filter.Eq(m => m.Member, memberId), membershipId, MembershipStatus.Left, ct);
+
+    private async Task<EndedMembership> EndAsync(FilterDefinition<MembershipDocument> bound, string membershipId, string to, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<MembershipDocument>.Filter;
+        var ended = await Docs.FindOneAndUpdateAsync(
+            f.Eq(m => m.Id, membershipId) & bound & TransitionFilter(MembershipStatus.Active, to)!,
+            Builders<MembershipDocument>.Update.Set(m => m.Status, to).Set(m => m.RevokedAt, Now).Unset(m => m.Pin).Inc(m => m.Revision, 1),
+            new FindOneAndUpdateOptions<MembershipDocument> { ReturnDocument = ReturnDocument.After },
+            ct) ?? throw new MembershipNotFoundException();
+        log.LogInformation("Membership {MembershipId} of vault {VaultId} is {Status}", ended.Id, ended.Vault, to);
+        return new EndedMembership(ended.Id, ended.Vault, ended.Member!);
+    }
+
+    /// <summary>
+    /// The cleanup after a revocation or departure (collab design §6.2), one transaction, idempotent, retried by the
+    /// sweep until it commits: the member slot and every slot derived through the membership (<c>grantedVia</c>) go,
+    /// the member's API keys left with no vault are revoked, and her connections lose the vault (revoked if it was
+    /// their last). The tombstone stays, with its label and writers, for the owner's history ("Bob (left) · Claude");
+    /// it is marked <c>cleanedAt</c>. Nothing for a membership that isn't a tombstone, or was cleaned up already.
+    /// </summary>
+    internal async Task CleanupAsync(string membershipId, CancellationToken ct)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var ended = f.Eq(m => m.Id, membershipId) & f.In(m => m.Status, Ended) & f.Eq(m => m.CleanedAt, null);
+        IReadOnlyList<string> keys = [];
+        IReadOnlyList<string> connections = [];
+        using var session = await catalog.StartSessionAsync(ct);
+        var done = await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                var doc = await Docs.Find(s, ended).FirstOrDefaultAsync(token);
+                if (doc is null) return false;
+                var sl = Builders<SlotDocument>.Filter;
+                var derived = sl.Eq(x => x.GrantedVia, membershipId);
+                var keyIds = await (await catalog.Slots.DistinctAsync(s, x => x.KeyId, derived & sl.Eq(x => x.Kind, SlotDocument.ApiKey) & sl.Exists(x => x.KeyId), cancellationToken: token))
+                    .ToListAsync(token);
+                await catalog.Slots.DeleteManyAsync(s, (sl.Eq(x => x.Kind, SlotDocument.Member) & sl.Eq(x => x.Membership, membershipId)) | derived, cancellationToken: token);
+                // A withdrawn invitation has no member, and no credential of anyone's to touch.
+                if (doc.Member is { } member)
+                {
+                    keys = await catalog.RevokeKeysWithoutVaultsAsync(s, keyIds, token);
+                    connections = await ConnectionRevocation.RemoveVaultsAsync(db, s, [doc.Vault], Now, token, user: member, reason: ConnectionReasons.SharingEnded);
+                }
+
+                await Docs.UpdateOneAsync(s, ended, Builders<MembershipDocument>.Update.Set(m => m.CleanedAt, Now).Unset(m => m.Pin), cancellationToken: token);
+                if (FaultAt is { } fault) await fault("inside-cleanup");
+                return true;
+            },
+            cancellationToken: ct);
+        if (!done) return;
+        foreach (var keyId in keys) log.LogInformation("API key {KeyId} has no vault left and is revoked", keyId);
+        foreach (var connectionId in connections) log.LogInformation("Connection {ConnectionId} has no vault left and is revoked", connectionId);
+        log.LogInformation("Membership {MembershipId} was cleaned up", membershipId);
+    }
+
+    /// <summary>The tombstones' statuses.</summary>
+    private static readonly string[] Ended = [MembershipStatus.Revoked, MembershipStatus.Left];
+
     /// <summary>The writers a membership's sealed <c>writers</c> holds (credential id → display name), opened with the vault key.</summary>
     internal static IReadOnlyDictionary<string, string> OpenWriters(MembershipDocument doc, byte[] vaultKey) =>
         JsonSerializer.Deserialize<Dictionary<string, string>>(
@@ -451,6 +526,8 @@ public sealed partial class Memberships(
                 // A member's vaults, and a vault's members, each by status.
                 new CreateIndexModel<MembershipDocument>(keys.Ascending(m => m.Member).Ascending(m => m.Status)),
                 new CreateIndexModel<MembershipDocument>(keys.Ascending(m => m.Vault).Ascending(m => m.Status)),
+                // The sweep's unfinished cleanups.
+                new CreateIndexModel<MembershipDocument>(keys.Ascending(m => m.Status).Ascending(m => m.CleanedAt)),
                 // An invite secret finds its membership; redemption unsets it.
                 new CreateIndexModel<MembershipDocument>(
                     keys.Ascending(m => m.InviteLookup),
@@ -480,6 +557,9 @@ internal sealed record MembershipPin(
     [property: JsonPropertyName("member")] string Member,
     [property: JsonPropertyName("alg")] byte Alg,
     [property: JsonPropertyName("publicKey")] byte[] PublicKey);
+
+/// <summary>A membership just revoked or left: its vault and its member, for the sync hub and the cleanup.</summary>
+public sealed record EndedMembership(string Id, string Vault, string Member);
 
 /// <summary>The vault is shared with as many people as it may be.</summary>
 public sealed class MemberLimitException(int limit) : Exception($"A vault can be shared with at most {limit} people.");

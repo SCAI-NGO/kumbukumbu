@@ -397,6 +397,11 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         return await Users.Find(u => u.Id == doc.User && u.Active).AnyAsync(ct);
     }
 
+    /// <summary>Of the keys <paramref name="keyIds"/>, those of <paramref name="userId"/>: one query, for the sync hub.</summary>
+    internal async Task<IReadOnlySet<string>> OfUserAsync(string userId, IEnumerable<string> keyIds, CancellationToken ct) =>
+        (await Keys.Find(Builders<ApiKeyDocument>.Filter.In(k => k.Id, keyIds.Distinct(StringComparer.Ordinal)) & Builders<ApiKeyDocument>.Filter.Eq(k => k.User, userId))
+            .Project(k => k.Id).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+
     /// <summary>
     /// Inside a connection's creation: whether a key of the user that is neither revoked nor expired has the name
     /// with <paramref name="nameId"/>. An expired key's name is free even before it is retired.
