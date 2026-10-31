@@ -3,7 +3,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "../src/pool.js";
-import { createSidecar } from "../src/server.js";
+import { MAX_BODY, createSidecar } from "../src/server.js";
 import { chartPage, encryptedPdf, threePages } from "./fixtures.js";
 
 // The built worker (vitest's global setup builds it).
@@ -116,21 +116,16 @@ describe("server", () => {
   });
 
   it("refuses a chunked body over 16 MiB with 413", async () => {
+    // Exactly one byte over, and then nothing more until the answer: the server has read all that was
+    // sent when it closes. With bytes still unread, closing resets the connection (an RST), and the
+    // client may lose the answer it was sent (#103).
     const status = await new Promise<number>((resolve, reject) => {
       const req = request(base + "/analyse", { method: "POST" }, (res) => {
         res.resume();
         resolve(res.statusCode!);
       });
-      // Writes may fail once the server has answered and closed; the answer is what counts.
-      req.on("error", () => {});
-      const piece = new Uint8Array(1024 * 1024);
-      let sent = 0;
-      const write = () => {
-        while (sent < 20 && req.write(piece)) sent++;
-        if (sent < 20) req.once("drain", () => (sent++, write()));
-        else req.end();
-      };
-      write();
+      req.on("error", reject);
+      req.write(new Uint8Array(MAX_BODY + 1));
       setTimeout(() => reject(new Error("no answer")), 10_000);
     });
     expect(status).toBe(413);
