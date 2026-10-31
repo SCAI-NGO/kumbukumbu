@@ -173,7 +173,7 @@ public static class FileApi
                 {
                     Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => Conflict(written, version),
                     Kumbu.Core.Sh.ShellErrorKind.NotFound => throw await NoteApi.MissingAsync(store, filePath, ct),
-                    Kumbu.Core.Sh.ShellErrorKind.Refused => throw new ApiException(StatusCodes.Status403Forbidden, result.Output),
+                    Kumbu.Core.Sh.ShellErrorKind.Refused => throw NoteApi.Refused(result),
                     Kumbu.Core.Sh.ShellErrorKind.Conflict => throw ConflictWithoutState(result.Output),
                     _ => throw ApiErrors.BadRequest(result.Output),
                 };

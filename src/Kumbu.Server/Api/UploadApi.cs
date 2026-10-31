@@ -75,6 +75,8 @@ public static class UploadApi
                 continue;
             }
 
+            // Each note on its own as well: a folder may be open to the caller while a file in it (Board.md) is not.
+            NoteApi.Refuse(caller, "upload", target);
             var content = file.Content.Replace("\r\n", "\n", StringComparison.Ordinal);
             if (await ProblemAsync(store, target, content, creates.Keys.Concat(existing.Keys), ct) is { } problem)
             {

@@ -6522,6 +6522,7 @@ export interface components {
         ApiError: {
             error: string;
             type?: null | string;
+            code?: null | string;
         };
         ApiKeyView: {
             id: string;

@@ -428,6 +428,8 @@ public static class NoteApi
             : await mover.MoveAsync(source, target, !body.KeepLinks, ct);
         // The source exists and the request is well-formed, so what's left is the vault's state in the way: a
         // target that exists, a folder into itself, a note where a folder is needed, a change meanwhile.
+        // A refusal the move found on its way (its target, a path in a folder) is the caller's, not the vault's.
+        if (result.Code is not null) throw Refused(result);
         if (result.IsError) throw new ApiException(StatusCodes.Status409Conflict, result.Output);
         return TypedResults.Ok(new MovedView(result.Output, result.Version?.Path, result.Version?.Token));
     }
@@ -664,10 +666,11 @@ public static class NoteApi
         if (!(await store.ListVaultsAsync(ct)).Contains(path.Segments[0])) throw ApiErrors.NotFound($"There is no vault '{path.Segments[0]}'.");
     }
 
-    /// <summary>The refusal of a write to a vault the caller may only read: the same sentence the tools give.</summary>
+    /// <summary>The refusal of a write the caller may not make (a vault it may only read, a structural file below
+    /// maintain): the same sentence the tools give, with its code.</summary>
     internal static void Refuse(ICaller caller, string command, VaultPath path)
     {
-        if (caller.Refuse(command, path) is { } refused) throw new ApiException(StatusCodes.Status403Forbidden, refused.Output);
+        if (caller.Refuse(command, path) is { } refused) throw Refused(refused);
     }
 
     /// <summary>The 403 of a refusal a command answered with (<see cref="ShellResult.Code"/> set), with its code.</summary>
