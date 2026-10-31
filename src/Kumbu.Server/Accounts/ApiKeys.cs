@@ -10,21 +10,38 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
+/// <summary>A credential's right on a vault, sealed into its slot; ordered, so that a higher right includes the lower.</summary>
 public enum KeyRight
 {
     Read,
     Write,
+    Maintain,
 }
 
 public static class KeyRights
 {
-    public static string ToText(KeyRight right) => right == KeyRight.Write ? "write" : "read";
+    public static string ToText(KeyRight right) => right switch
+    {
+        KeyRight.Read => "read",
+        KeyRight.Write => "write",
+        KeyRight.Maintain => "maintain",
+        _ => throw new ArgumentOutOfRangeException(nameof(right)),
+    };
 
     public static KeyRight? Parse(string text) => text switch
     {
         "read" => KeyRight.Read,
         "write" => KeyRight.Write,
+        "maintain" => KeyRight.Maintain,
         _ => null,
+    };
+
+    public static Kumbu.Core.Notes.AccessLevel ToLevel(KeyRight right) => right switch
+    {
+        KeyRight.Read => Kumbu.Core.Notes.AccessLevel.Read,
+        KeyRight.Write => Kumbu.Core.Notes.AccessLevel.Write,
+        KeyRight.Maintain => Kumbu.Core.Notes.AccessLevel.Maintain,
+        _ => throw new ArgumentOutOfRangeException(nameof(right)),
     };
 }
 

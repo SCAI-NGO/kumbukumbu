@@ -463,7 +463,7 @@ public static class AccountApi
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         await invitations.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such open invitation.");
 
-    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>) by vault id; 400 for a vault the caller
+    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>/<c>maintain</c>) by vault id; 400 for a vault the caller
     /// has no such name for or another right.</summary>
     internal static Dictionary<string, KeyRight> RightsByVaultId(IReadOnlyDictionary<string, string> requested, Dictionary<string, string> names)
     {
@@ -472,7 +472,7 @@ public static class AccountApi
         foreach (var (name, rightText) in requested)
         {
             var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
-            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
+            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read', 'write' or 'maintain', not '{rightText}'.");
         }
 
         return vaults;
