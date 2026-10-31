@@ -53,6 +53,31 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         return await client.SendAsync(request, Ct);
     }
 
+    private static Task<HttpResponseMessage> AcceptAsync(RestClient user, string secret, string alias) =>
+        user.SendAsync(HttpMethod.Post, "/api/vault-invitations/accept", new { secret, alias });
+
+    /// <summary>The names of the vaults the user's session sees.</summary>
+    private static async Task<string[]> VaultNamesAsync(RestClient user)
+    {
+        using var response = await user.GetAsync("/api/vaults");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return [.. (await RestClient.JsonAsync(response)).AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>Whether the invitation is open as it was made: pending, nobody's, its lookup and its invite slot in place.</summary>
+    private async Task AssertStillOpenAsync(CreatedInvite invite)
+    {
+        var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
+        Assert.Equal(MembershipStatus.Pending, doc.Status);
+        Assert.Null(doc.Member);
+        Assert.Null(doc.RedeemedAt);
+        Assert.NotNull(doc.InviteLookup);
+        Assert.Equal(invite.ExpiresAt, doc.ExpiresAt);
+        Assert.Equal(0, doc.Revision);
+        Assert.Equal(1, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Kind == SlotDocument.Invite && s.Membership == invite.MembershipId, cancellationToken: Ct));
+        Assert.Equal(0, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Kind == SlotDocument.Member && s.Membership == invite.MembershipId, cancellationToken: Ct));
+    }
+
     /// <summary>A secret of the right shape that is nobody's invitation.</summary>
     private static string WrongSecret() => System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 
@@ -327,5 +352,203 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         await vaults.UpdateOneAsync(v => v.Id == vaultId, Builders<VaultDocument>.Update.Unset(v => v.ClosingAt), cancellationToken: Ct);
         using var open = await PeekAsync(bob, invite.Secret);
         Assert.Equal(HttpStatusCode.OK, open.StatusCode);
+    }
+
+    [Fact]
+    public async Task Accepting_makes_Bob_a_member_under_his_alias()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var invite = await InviteDirectAsync(alice);
+        var vaultId = await alice.VaultIdAsync();
+        var vaults = app.Database.GetCollection<VaultDocument>("vaults");
+        var changed = (await vaults.Find(v => v.Id == vaultId).SingleAsync(Ct)).MembershipsChanged;
+
+        using var accepted = await AcceptAsync(bob, invite.Secret, "Garten");
+
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var json = await RestClient.JsonAsync(accepted);
+        Assert.Equal((invite.MembershipId, "Garten", "write", "active"), (json["id"]!.GetValue<string>(), json["vault"]!.GetValue<string>(), json["role"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
+        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        using (var note = await bob.GetAsync("/api/notes/Garten/plan.md")) Assert.Equal(HttpStatusCode.OK, note.StatusCode);
+
+        var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
+        Assert.Equal((MembershipStatus.Active, bob.User.Id), (doc.Status, doc.Member));
+        Assert.NotNull(doc.AcceptedAt);
+        Assert.NotNull(doc.RedeemedAt);
+        Assert.Null(doc.InviteLookup);
+        Assert.Null(doc.ExpiresAt);
+        Assert.Equal(Api.Services.GetRequiredService<VaultCatalog>().DefaultEmbeddingProvider, doc.ProviderSeen);
+        // The pin names the key his private key is the key of.
+        var user = await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == bob.User.Id).SingleAsync(Ct);
+        Assert.Equal(user.PublicKey, Memberships.PinnedKey(doc, await alice.VaultKeyAsync()));
+        Assert.Equal(1, user.MembershipsAccepted);
+        Assert.Equal(changed + 1, (await vaults.Find(v => v.Id == vaultId).SingleAsync(Ct)).MembershipsChanged);
+        var slots = app.Database.GetCollection<SlotDocument>("slots");
+        Assert.Equal(0, await slots.CountDocumentsAsync(s => s.Kind == SlotDocument.Invite && s.Membership == invite.MembershipId, cancellationToken: Ct));
+        Assert.Equal(1, await slots.CountDocumentsAsync(s => s.Kind == SlotDocument.Member && s.Membership == invite.MembershipId, cancellationToken: Ct));
+
+        // Used up: a second acceptance finds nothing.
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        using var again = await AcceptAsync(carol, invite.Secret, "Garten");
+        Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_taken_alias_keeps_the_link_usable()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var invite = await InviteDirectAsync(alice);
+
+        using var taken = await AcceptAsync(bob, invite.Secret, "work");
+
+        Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
+        await AssertStillOpenAsync(invite);
+        Assert.Equal(0, (await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == bob.User.Id).SingleAsync(Ct)).MembershipsAccepted);
+        using var other = await AcceptAsync(bob, invite.Secret, "Garten");
+        Assert.Equal(HttpStatusCode.OK, other.StatusCode);
+        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+    }
+
+    [Fact]
+    public async Task Two_concurrent_accepts_admit_one()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var takers = new List<RestClient>();
+        for (var i = 0; i < 4; i++) takers.Add(await RestClient.NewAsync(Api, vault: "Work"));
+        var invite = await InviteDirectAsync(alice);
+
+        var results = await Task.WhenAll(takers.Select(async t =>
+        {
+            try
+            {
+                await Memberships.AcceptAsync(t.User.Id, t.UserKey, invite.Secret, "Garten", Ct);
+                return true;
+            }
+            catch (InvitationNotFoundException)
+            {
+                return false;
+            }
+        }));
+
+        Assert.Single(results, r => r);
+        var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
+        Assert.Equal(takers[Array.IndexOf(results, true)].User.Id, doc.Member);
+        Assert.Equal(1, await Docs.CountDocumentsAsync(m => m.Vault == doc.Vault && m.Member != null, cancellationToken: Ct));
+        Assert.Equal(1, await app.Database.GetCollection<SlotDocument>("slots").CountDocumentsAsync(s => s.Kind == SlotDocument.Member && s.Membership == invite.MembershipId, cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task Alice_cannot_accept_her_own_invitation()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var invite = await InviteDirectAsync(alice);
+
+        using var own = await AcceptAsync(alice, invite.Secret, "Garten");
+
+        Assert.Equal(HttpStatusCode.Forbidden, own.StatusCode);
+        await AssertStillOpenAsync(invite);
+    }
+
+    [Fact]
+    public async Task Bob_cannot_hold_two_memberships_of_one_vault()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "Garten");
+        var invite = await InviteDirectAsync(alice);
+
+        using var second = await AcceptAsync(bob, invite.Secret, "Beete");
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal("This person is already a member of the vault.", await RestClient.ErrorAsync(second));
+        await AssertStillOpenAsync(invite);
+        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+    }
+
+    [Fact]
+    public async Task An_expired_invitation_is_refused_even_before_the_TTL_monitor()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(api, vault: "Work");
+        var invite = await api.Services.GetRequiredService<Memberships>().InviteAsync(
+            alice.User.Id, alice.UserKey, await alice.VaultIdAsync(), "Bob", MemberRole.Write, TimeSpan.FromDays(1), confirm: false, Ct);
+
+        time.Advance(TimeSpan.FromDays(1));
+        bob = await bob.SignInAgainAsync();
+        using var expired = await AcceptAsync(bob, invite.Secret, "Garten");
+
+        Assert.Equal(HttpStatusCode.NotFound, expired.StatusCode);
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        Assert.Null((await Share.MembershipAsync(app.Database, invite.MembershipId)).Member);
+
+        // The membership's own expiry decides, whatever its invite slot says.
+        var later = await api.Services.GetRequiredService<Memberships>().InviteAsync(
+            alice.User.Id, alice.UserKey, await alice.VaultIdAsync(), "Bob", MemberRole.Write, TimeSpan.FromDays(1), confirm: false, Ct);
+        await Docs.UpdateOneAsync(m => m.Id == later.MembershipId, Builders<MembershipDocument>.Update.Set(m => m.ExpiresAt, time.GetUtcNow().UtcDateTime), cancellationToken: Ct);
+        using var lapsed = await AcceptAsync(bob, later.Secret, "Garten");
+        Assert.Equal(HttpStatusCode.NotFound, lapsed.StatusCode);
+        Assert.Null((await Share.MembershipAsync(app.Database, later.MembershipId)).Member);
+    }
+
+    [Fact]
+    public async Task With_confirm_the_membership_waits_for_the_owner()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var invite = await InviteDirectAsync(alice, confirm: true);
+
+        using var accepted = await AcceptAsync(bob, invite.Secret, "Garten");
+
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal("pending", (await RestClient.JsonAsync(accepted))["status"]!.GetValue<string>());
+        var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
+        Assert.Equal((MembershipStatus.Pending, bob.User.Id), (doc.Status, doc.Member));
+        Assert.NotNull(doc.RedeemedAt);
+        Assert.Null(doc.AcceptedAt);
+        Assert.Null(doc.InviteLookup);
+        Assert.NotNull(doc.Pin);
+        // Nothing opens until the owner confirms.
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        // It counts towards the ten pending invitations.
+        for (var i = 0; i < Memberships.PendingLimit - 1; i++) await InviteDirectAsync(alice);
+        await Assert.ThrowsAsync<PendingLimitException>(() => InviteDirectAsync(alice));
+    }
+
+    [Fact]
+    public async Task Accept_racing_Bobs_account_deletion_conflicts()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var invite = await InviteDirectAsync(alice);
+        var memberships = Memberships;
+        var deleted = false;
+        memberships.FaultAt = async point =>
+        {
+            if (point != "accept-before-user" || deleted) return;
+            deleted = true;
+            // Bob's account goes while the acceptance is under way, in a transaction of its own.
+            Assert.True(await Api.Services.GetRequiredService<Deletion>().DeleteOwnAccountAsync(bob.User, bob.UserKey, RestClient.Password, bob.Username, Ct));
+        };
+        try
+        {
+            await Assert.ThrowsAsync<CredentialsChangedException>(() => memberships.AcceptAsync(bob.User.Id, bob.UserKey, invite.Secret, "Garten", Ct));
+        }
+        finally
+        {
+            memberships.FaultAt = null;
+        }
+
+        Assert.True(deleted);
+        Assert.Equal(0, await Docs.CountDocumentsAsync(m => m.Member == bob.User.Id, cancellationToken: Ct));
+        await AssertStillOpenAsync(invite);
     }
 }

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text;
+using Kumbu.Core.Notes;
+using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
@@ -25,6 +28,14 @@ public sealed record PeekInvitationRequest(string Secret, string? Alias = null);
 public sealed record InvitationPeekView(
     string Vault, string Owner, string OwnerUsername, string Role, string EmbeddingProvider, string Alias, bool AliasFree, bool Confirm, DateTime ExpiresAt);
 
+/// <summary><c>secret</c>: what follows <c>#</c> in the link; <c>alias</c>: the caller's name for the vault, a vault
+/// name of hers that she doesn't have yet.</summary>
+public sealed record AcceptInvitationRequest(string Secret, string Alias);
+
+/// <summary>The membership, the vault's name for the caller (the alias), the role, and <c>status</c>: <c>active</c>, or
+/// <c>pending</c> while the owner hasn't confirmed.</summary>
+public sealed record AcceptedInvitationView(string Id, string Vault, string Role, string Status);
+
 /// <summary>Sharing a vault (collab design §4): invitations and memberships.</summary>
 public static class SharingApi
 {
@@ -33,6 +44,7 @@ public static class SharingApi
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         // Not /api/invitations/…, as the design writes it: that is the account invitations' (the join page's).
         api.MapPost("/vault-invitations/peek", PeekAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 403, 404, 409, 429);
+        api.MapPost("/vault-invitations/accept", AcceptAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
 
@@ -76,4 +88,29 @@ public static class SharingApi
             peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, peek.AliasFree,
             peek.Confirm, peek.ExpiresAt));
     }
+
+    /// <summary>
+    /// The caller accepts an invitation under her alias for the vault. A refusal leaves the link as it was, so she can
+    /// try another alias; limited as peek is.
+    /// </summary>
+    private static async Task<Ok<AcceptedInvitationView>> AcceptAsync(
+        AcceptInvitationRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
+    {
+        if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var alias = AliasOf(body.Alias);
+        var accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct);
+        return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
+    }
+
+    /// <summary>An alias follows the rules of a vault name: it is one, to the member.</summary>
+    private static string AliasOf(string? requested)
+    {
+        var alias = (requested ?? "").Normalize(NormalizationForm.FormC).Trim();
+        if (alias.Length is 0 or > MaxAlias) throw ApiErrors.BadRequest($"A vault name has 1 to {MaxAlias} characters.");
+        if (alias.Contains('/')) throw ApiErrors.BadRequest("A vault name can't contain '/'.");
+        if (NoteNames.Problem(VaultPath.Root.Child(alias).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
+        return alias;
+    }
+
+    private const int MaxAlias = 64;
 }

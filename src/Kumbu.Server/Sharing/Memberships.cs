@@ -26,8 +26,9 @@ public sealed partial class Memberships(
     /// <summary>The users' keypairs; internal, for the tests' hooks.</summary>
     internal MemberKeys Keys { get; } = new(db);
 
-    /// <summary>For tests: called with <c>"inside-grant"</c> once the grant's writes are done, before the commit; an
-    /// exception thrown there is a crash at that point.</summary>
+    /// <summary>For tests: called with <c>"inside-grant"</c> once the grant's writes are done, before the commit, and in
+    /// an acceptance with <c>"accept-before-user"</c> before the user document is written and <c>"inside-accept"</c>
+    /// before the commit; an exception thrown there is a crash at that point.</summary>
     internal Func<string, Task>? FaultAt { get; set; }
 
     internal IMongoCollection<MembershipDocument> Docs { get; } = db.GetCollection<MembershipDocument>(CollectionName);

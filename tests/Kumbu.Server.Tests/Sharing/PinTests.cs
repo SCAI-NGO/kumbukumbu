@@ -306,9 +306,10 @@ public sealed class PinTests(MongoFixture fixture)
             }
         }
 
-        // The grant's slot (VaultCatalog.MemberSlot, which only GrantAsync calls) and the pinned rewrap: nothing else.
+        // The grant's slot (VaultCatalog.MemberSlot, which only a grant and an acceptance call, each with the key derived
+        // from the member's private key) and the pinned rewrap: nothing else.
         Assert.Equal(["MemberSlot", "WrapToPinAsync"], wraps.Order(StringComparer.Ordinal));
-        Assert.Equal(["GrantAsync"], memberSlots);
+        Assert.Equal(["AcceptAsync", "GrantAsync"], memberSlots.Order(StringComparer.Ordinal));
     }
 
     /// <summary>Grants Carol the vault again after taking her membership <paramref name="old"/> away, as an account

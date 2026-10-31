@@ -95,6 +95,12 @@ public sealed class UserDocument
     [BsonElement("vaultsDeleted")]
     public long VaultsDeleted { get; set; }
 
+    /// <summary>How many times the user was made a member of a vault; incremented in each acceptance's transaction,
+    /// conditioned on the user key's id, so that a concurrent deletion of the account or a rotation of the user key
+    /// conflicts with it (collab design §13 M8).</summary>
+    [BsonElement("membershipsAccepted")]
+    public long MembershipsAccepted { get; set; }
+
     /// <summary>How many sessions the user has started; incremented in each session's transaction, likewise.</summary>
     [BsonElement("sessionsStarted")]
     public long SessionsStarted { get; set; }

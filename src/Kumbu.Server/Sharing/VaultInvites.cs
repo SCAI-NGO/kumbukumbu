@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
+using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
 
@@ -18,6 +19,10 @@ public sealed record CreatedInvite(string Secret, string MembershipId, DateTime 
 /// provider, the alias asked about and whether it is free for the caller.</summary>
 public sealed record InvitePeek(
     string Vault, string OwnerDisplay, string OwnerUsername, MemberRole Role, string EmbeddingProvider, string Alias, bool AliasFree, bool Confirm, DateTime ExpiresAt);
+
+/// <summary>An accepted invitation: the membership, the alias the vault has for the member, the role, and the status
+/// (<c>active</c>, or <c>pending</c> until the owner confirms).</summary>
+public sealed record AcceptedInvite(string MembershipId, string Alias, MemberRole Role, string Status);
 
 /// <summary>
 /// Vault invitations (collab design §4): a pending membership with a single-use link <c>/share#{secret}</c>. MongoDB
@@ -60,7 +65,9 @@ public sealed partial class Memberships
         var secretBytes = RandomNumberGenerator.GetBytes(SecretBytes);
         var inviteSecret = Base64Url.EncodeToString(secretBytes);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        // Whole milliseconds, as MongoDB keeps them: the expiry the owner is shown is the one stored.
         var now = Now;
+        now = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMillisecond));
         var expiresAt = now + validFor;
         var doc = new MembershipDocument
         {
@@ -124,6 +131,105 @@ public sealed partial class Memberships
         return new InvitePeek(
             meta.Name, owner.Display, owner.Username, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, meta.EmbeddingProvider, asked,
             await catalog.NameFreeAsync(userId, userKey, asked, ct), doc.Confirm, doc.ExpiresAt!.Value);
+    }
+
+    /// <summary>
+    /// <paramref name="userId"/> accepts the invitation <paramref name="inviteSecret"/> is the secret of, under
+    /// <paramref name="alias"/> (collab design §4.2). One transaction: the membership is claimed (pending, unexpired,
+    /// redeemed by nobody: of two acceptances one wins), the vault key opened from the invite slot, the member's
+    /// keypair made if she has none, the member slot written under her alias, the invite slot deleted, and the pin,
+    /// <c>providerSeen</c> and, unless the owner confirms, <c>active</c> set. The vault document and the user document
+    /// are written too (§13 M8): a concurrent acceptance, grant or the limits' count, and a concurrent deletion of her
+    /// account or rotation of her user key, conflict with it. Any refusal aborts the whole transaction, the claim with
+    /// it, so the link stays usable: a taken alias (<see cref="VaultNameTakenException"/>), her own vault
+    /// (<see cref="NotPermittedException"/>), a second membership (<see cref="AlreadyMemberException"/>), an inactive
+    /// owner or a closing vault (<see cref="SharingRefusedException"/>). <see cref="InvitationNotFoundException"/> as peek's.
+    /// </summary>
+    public async Task<AcceptedInvite> AcceptAsync(string userId, byte[] userKey, string inviteSecret, string alias, CancellationToken ct)
+    {
+        if (DecodeSecret(inviteSecret) is not { } bytes) throw new InvitationNotFoundException();
+        await EnsureReadyAsync(ct);
+        var lookup = await InviteLookupAsync(inviteSecret, ct);
+        AcceptedInvite? accepted = null;
+        using var session = await catalog.StartSessionAsync(ct);
+        try
+        {
+            await session.WithTransactionAsync(
+                async (s, token) =>
+                {
+                    var now = Now;
+                    var claimed = await ClaimAsync(s, lookup, userId, now, token) ?? throw new InvitationNotFoundException();
+                    if (claimed.Owner == userId) throw new NotPermittedException("This is your own vault; you can't accept an invitation to it.");
+                    if (!await Users.Find(s, u => u.Id == claimed.Owner && u.Active).AnyAsync(token)) throw SharingRefusedException.OwnerInactive();
+                    var vaultKey = await OpenInviteSlotAsync(s, claimed, bytes, now, token) ?? throw new InvitationNotFoundException();
+                    await MembershipsChangedAsync(s, claimed.Vault, token);
+                    // The key the invite slot holds is still the vault's: its meta opens with it, outside a re-keying.
+                    var meta = await catalog.InviteMetaAsync(s, claimed.Vault, vaultKey, token) ?? throw new InvitationNotFoundException();
+                    if (meta.Closing) throw SharingRefusedException.Closing();
+                    if (FaultAt is { } fault) await fault("accept-before-user");
+                    await CountAcceptedAsync(s, userId, userKey, token);
+
+                    var memberPublic = await MemberPublicKeyAsync(s, userId, userKey, token);
+                    await InsertMemberSlotAsync(s, catalog.MemberSlot(claimed.Vault, claimed.Id, userId, userKey, memberPublic, vaultKey, alias), alias, token);
+                    await catalog.Slots.DeleteManyAsync(s, sl => sl.Kind == SlotDocument.Invite && sl.Membership == claimed.Id, cancellationToken: token);
+                    var update = Builders<MembershipDocument>.Update
+                        .Set(m => m.Pin, SealPin(vaultKey, claimed.Vault, claimed.Id, userId, memberPublic))
+                        .Set(m => m.ProviderSeen, meta.EmbeddingProvider);
+                    // With confirm it stays pending, redeemed, until the owner confirms or declines.
+                    if (!claimed.Confirm) update = update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, now);
+                    await Docs.UpdateOneAsync(s, m => m.Id == claimed.Id, update, cancellationToken: token);
+                    if (FaultAt is { } inside) await inside("inside-accept");
+                    accepted = new AcceptedInvite(
+                        claimed.Id, alias, MemberRoles.Parse(claimed.Role) ?? MemberRole.Read, claimed.Confirm ? MembershipStatus.Pending : MembershipStatus.Active);
+                    return true;
+                },
+                cancellationToken: ct);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+        }
+
+        log.LogInformation("User {UserId} accepted the invitation of membership {MembershipId} ({Status})", userId, accepted!.MembershipId, accepted.Status);
+        return accepted;
+    }
+
+    /// <summary>
+    /// The claim of an acceptance, inside its transaction: the open invitation with <paramref name="lookup"/> gets its
+    /// member and <c>redeemedAt</c>, and loses <c>inviteLookup</c> and <c>expiresAt</c>, in one conditional update; null
+    /// if there is none. <see cref="AlreadyMemberException"/> if the user has a membership of the vault already (the
+    /// unique index on vault and member).
+    /// </summary>
+    private async Task<MembershipDocument?> ClaimAsync(IClientSessionHandle s, byte[] lookup, string userId, DateTime now, CancellationToken ct)
+    {
+        try
+        {
+            return await Docs.FindOneAndUpdateAsync(
+                s,
+                OpenInvite(lookup, now),
+                Builders<MembershipDocument>.Update
+                    .Set(m => m.Member, userId).Set(m => m.RedeemedAt, now).Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Inc(m => m.Revision, 1),
+                new FindOneAndUpdateOptions<MembershipDocument> { ReturnDocument = ReturnDocument.Before },
+                ct);
+        }
+        catch (MongoCommandException e) when (e.Code == 11000)
+        {
+            throw new AlreadyMemberException();
+        }
+    }
+
+    /// <summary>
+    /// The write to the new member's user document inside the transaction that makes her a member (collab design §13
+    /// M8): counted only while she is active and <paramref name="userKey"/> is still her user key, so a deletion of her
+    /// account or a rotation of her user key, before or at the same time, refuses or conflicts with it.
+    /// <see cref="CredentialsChangedException"/> if not.
+    /// </summary>
+    private async Task CountAcceptedAsync(IClientSessionHandle s, string userId, byte[] userKey, CancellationToken ct)
+    {
+        var keyId = UserCatalog.KeyId(userKey, userId);
+        var counted = await Users.UpdateOneAsync(
+            s, u => u.Id == userId && u.Active && u.KeyId == keyId, Builders<UserDocument>.Update.Inc(u => u.MembershipsAccepted, 1), cancellationToken: ct);
+        if (counted.MatchedCount == 0) throw new CredentialsChangedException();
     }
 
     /// <summary>
