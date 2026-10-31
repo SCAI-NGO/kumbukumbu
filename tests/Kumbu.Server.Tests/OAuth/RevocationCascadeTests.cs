@@ -348,7 +348,7 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
 
         // It finishes with what it was checked with ...
-        Assert.True(inFlight.CanWrite("Arbeit"));
+        Assert.True(inFlight.Level("Arbeit") >= Kumbu.Core.Notes.AccessLevel.Write);
         Assert.Single(await inFlight.OpenWithRightsAsync(Service<VaultCatalog>(), Ct));
         // ... and the next request checks again.
         var next = await Service<OAuthTokens>().ResolveAccessAsync(pair.Access, flow.ConnectionId, flow.Resource, Ct);

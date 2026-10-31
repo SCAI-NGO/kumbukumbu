@@ -499,8 +499,8 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
 
         await credential.OpenWithRightsAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
 
-        Assert.True(credential.CanWrite("Work"));
-        Assert.False(credential.CanWrite("Diary"));
+        Assert.True(credential.Level("Work") >= Kumbu.Core.Notes.AccessLevel.Write);
+        Assert.False(credential.Level("Diary") >= Kumbu.Core.Notes.AccessLevel.Write);
     }
 
     [Fact]

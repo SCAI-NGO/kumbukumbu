@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
@@ -118,6 +119,77 @@ public sealed class CallerTests(KumbuAppFactory app)
         Assert.Equal(CallerKind.Session, caller.Kind);
         Assert.Equal(user.Username, caller.Writer);
         Assert.Equal(["Journal"], (await caller.OpenVaultsAsync(Ct)).Select(v => v.Name));
+    }
+
+    [Fact]
+    public async Task A_session_is_owner_of_its_vaults()
+    {
+        var (user, _) = await SignedInWithVaultAsync("Journal");
+        var users = new UserCatalog(
+            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), app.Services.GetRequiredService<ApiKeys>(), app.Services.GetRequiredService<Connections>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
+        var (_, key, readAt) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
+        var caller = RequestCaller.ForSession(user, key, readAt, windowOpen: true, app.Services.GetRequiredService<VaultCatalog>());
+
+        Assert.Equal(AccessLevel.Owner, caller.Level("Journal"));
+        Assert.True(caller.CanWrite("Journal"));
+    }
+
+    [Theory]
+    [InlineData(KeyRight.Read, AccessLevel.Read)]
+    [InlineData(KeyRight.Write, AccessLevel.Write)]
+    [InlineData(KeyRight.Maintain, AccessLevel.Maintain)]
+    public async Task A_key_has_the_level_of_its_slot(KeyRight right, AccessLevel level)
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Mine", "Elsewhere");
+        var (key, info) = await app.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user, userKey, DateTime.UtcNow, "agent", new Dictionary<string, KeyRight> { [vaults["Mine"]] = right }, Ct);
+
+        var caller = await RequestCaller.ForApiKeyAsync(new ResolvedApiKey(user, info.Id, info.Name), key, app.Services.GetRequiredService<VaultCatalog>(), Ct);
+
+        Assert.Equal(level, caller.Level("Mine"));
+        Assert.Equal(right >= KeyRight.Write, caller.CanWrite("Mine"));
+        Assert.Null(caller.Level("Elsewhere"));
+        Assert.False(caller.CanWrite("Elsewhere"));
+    }
+
+    [Fact]
+    public async Task A_key_has_no_level_before_its_vaults_are_opened()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Mine");
+        var (key, info) = await app.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user, userKey, DateTime.UtcNow, "agent", new Dictionary<string, KeyRight> { [vaults["Mine"]] = KeyRight.Maintain }, Ct);
+        var credential = new ApiKeyCredential(info.Id, key);
+
+        Assert.Null(credential.Level("Mine"));
+        Assert.False(credential.Level("Mine") >= AccessLevel.Write);
+        await credential.OpenWithRightsAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
+        Assert.Equal(AccessLevel.Maintain, credential.Level("Mine"));
+    }
+
+    // Names are unique per user, but the rule must not depend on it: of two vaults the store would name alike, the
+    // lower right counts.
+    [Fact]
+    public void A_key_with_two_vaults_of_one_name_has_the_lower_level()
+    {
+        IReadOnlyList<(string Name, KeyRight Right)> opened = [("Mine", KeyRight.Maintain), ("Mine", KeyRight.Read), ("Other", KeyRight.Write)];
+
+        Assert.Equal(AccessLevel.Read, RightsCredentials.LevelOf(opened, "Mine"));
+        Assert.Equal(AccessLevel.Write, RightsCredentials.LevelOf(opened, "Other"));
+        Assert.Null(RightsCredentials.LevelOf(opened, "mine"));
+        Assert.Null(RightsCredentials.LevelOf(null, "Mine"));
+    }
+
+    /// <summary>A new user, signed in, with a vault of their own for each name: the user, their user key and the vault ids by name.</summary>
+    private async Task<(User User, byte[] UserKey, Dictionary<string, string> Vaults)> UserWithVaultsAsync(params string[] vaults)
+    {
+        var users = new UserCatalog(
+            app.Database, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), app.Services.GetRequiredService<ApiKeys>(), app.Services.GetRequiredService<Connections>(), TimeProvider.System, NullLogger<UserCatalog>.Instance);
+        var username = "u" + Guid.NewGuid().ToString("N")[..12];
+        await users.CreateAsync(username, Password, Roles.User, Ct);
+        var (user, key, _) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
+        var ids = new Dictionary<string, string>();
+        foreach (var name in vaults) ids[name] = (await app.Services.GetRequiredService<VaultCatalog>().CreateForUserAsync(name, user.Id, key, Ct)).Id;
+        return (user, key, ids);
     }
 
     // The web app will add MapFallbackToFile("index.html").AllowAnonymous(): it matches unmapped /api and /mcp

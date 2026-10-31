@@ -31,16 +31,26 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 }
 
-/// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): it may write
-/// only where a slot says so. Every other credential writes wherever it opens.</summary>
+/// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): its level on a
+/// vault is the one its slot seals. Every other credential is owner of whatever it opens.</summary>
 public interface IRightsCredential
 {
-    bool CanWrite(string vault);
+    /// <summary>The level sealed into the slot of <paramref name="vault"/> (named as the store names vaults, ordinally).
+    /// Fails closed: null before the vaults were opened, and for a vault this credential doesn't have.</summary>
+    Kumbu.Core.Notes.AccessLevel? Level(string vault);
+}
+
+internal static class RightsCredentials
+{
+    /// <summary>The level on <paramref name="vault"/> among the vaults a credential opened: the lowest right of all the
+    /// vaults of that name, so that no second vault of the same name lends it more; null without any, or unopened.</summary>
+    internal static Kumbu.Core.Notes.AccessLevel? LevelOf(IEnumerable<(string Name, Accounts.KeyRight Right)>? opened, string vault) =>
+        opened?.Where(v => v.Name == vault).Select(v => v.Right).ToList() is { Count: > 0 } rights ? Accounts.KeyRights.ToLevel(rights.Min()) : null;
 }
 
 /// <summary>
 /// An API key: opens the vaults it has slots for, each with the right sealed into the slot. Opened once per
-/// request, so the rights <see cref="CanWrite"/> answers from are those of exactly the vaults the store sees.
+/// request, so the rights <see cref="Level"/> answers from are those of exactly the vaults the store sees.
 /// </summary>
 public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential, IRightsCredential
 {
@@ -58,10 +68,7 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential,
     // As for a session: the other vaults belong to someone else or weren't given to this key.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
-    /// <summary>Only for a vault opened with the right to write (named as the store names vaults, ordinally).
-    /// Fails closed: false before the vaults were opened, and for a vault this key doesn't have.</summary>
-    public bool CanWrite(string vault) =>
-        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right >= Accounts.KeyRight.Write);
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Select(v => (v.Vault.Name, v.Right)), vault);
 }
 
 /// <summary>
@@ -80,9 +87,7 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
 
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
-    /// <summary>As <see cref="ApiKeyCredential.CanWrite"/>: fails closed before the vaults were opened and for a vault it doesn't have.</summary>
-    public bool CanWrite(string vault) =>
-        _opened?.Where(v => v.Vault.Name == vault).ToList() is { Count: > 0 } named && named.All(v => v.Right >= Accounts.KeyRight.Write);
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Select(v => (v.Vault.Name, v.Right)), vault);
 }
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>

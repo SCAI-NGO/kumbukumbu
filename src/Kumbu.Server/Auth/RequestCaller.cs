@@ -62,9 +62,11 @@ public sealed class RequestCaller : ICaller
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
-    /// <summary>Sessions and the dev token may write to every vault they open; an API key or a connection only where
-    /// its slot says so. Fails closed: every credential with rights is asked.</summary>
-    public bool CanWrite(string vault) => Credential is not IRightsCredential rights || rights.CanWrite(vault);
+    /// <summary>Sessions and the dev token are owner of every vault they open; an API key or a connection has the level
+    /// its slot seals. Fails closed: every credential with rights is asked.</summary>
+    public AccessLevel? Level(string vault) => Credential is IRightsCredential rights ? rights.Level(vault) : AccessLevel.Owner;
+
+    public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
     public Task<IReadOnlyList<UnlockedVault>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
 
@@ -74,7 +76,7 @@ public sealed class RequestCaller : ICaller
     internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog) =>
         new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey, credentialReadAt, passwordWindowOpen: windowOpen);
 
-    /// <summary>An API key, its vaults already opened: <see cref="CanWrite"/> is asked before the store opens anything.</summary>
+    /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
     {
         var credential = new ApiKeyCredential(key.Id, apiKey);

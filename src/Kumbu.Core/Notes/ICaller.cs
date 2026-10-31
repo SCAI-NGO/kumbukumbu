@@ -4,7 +4,7 @@ using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Notes;
 
-/// <summary>Who is asking: the label their writes carry, and the vaults they may write to.</summary>
+/// <summary>Who is asking: the label their writes carry, and what they may do in each vault.</summary>
 public interface ICaller
 {
     string Writer { get; }
@@ -13,7 +13,11 @@ public interface ICaller
     /// two for a person, whose editor saves every few seconds.</summary>
     TimeSpan ChangesetIdle => Changeset.Idle;
 
-    bool CanWrite(string vault);
+    /// <summary>The caller's level on <paramref name="vault"/> (named as the store names it), or null if it has none
+    /// there: fails closed.</summary>
+    AccessLevel? Level(string vault);
+
+    bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
     /// <summary>The refusal for a write by <paramref name="command"/> to <paramref name="path"/>, or null if allowed.
     /// Asked once per entry point, before the store is touched.</summary>
@@ -23,11 +27,15 @@ public interface ICaller
             : null;
 }
 
-/// <summary>A caller with a fixed label; may write everywhere unless <paramref name="CanWriteVault"/> says otherwise.
-/// <paramref name="Human"/>: a person rather than an agent, for <see cref="ICaller.ChangesetIdle"/>.</summary>
-public sealed record FixedCaller(string Writer, Func<string, bool>? CanWriteVault = null, bool Human = false) : ICaller
+/// <summary>A caller with a fixed label; owner of every vault unless <paramref name="LevelOf"/> says otherwise, or
+/// <paramref name="CanWriteVault"/> (write where it says so, else read). <paramref name="Human"/>: a person rather
+/// than an agent, for <see cref="ICaller.ChangesetIdle"/>.</summary>
+public sealed record FixedCaller(string Writer, Func<string, bool>? CanWriteVault = null, bool Human = false, Func<string, AccessLevel?>? LevelOf = null) : ICaller
 {
-    public bool CanWrite(string vault) => CanWriteVault?.Invoke(vault) ?? true;
+    public AccessLevel? Level(string vault) =>
+        LevelOf is not null ? LevelOf(vault)
+        : CanWriteVault is not null ? (CanWriteVault(vault) ? AccessLevel.Write : AccessLevel.Read)
+        : AccessLevel.Owner;
 
     public TimeSpan ChangesetIdle => Human ? Changeset.HumanIdle : Changeset.Idle;
 }
