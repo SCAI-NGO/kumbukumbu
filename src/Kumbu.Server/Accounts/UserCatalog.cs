@@ -18,6 +18,9 @@ public sealed class UserCatalog(
     /// without one; the server registers it.</summary>
     private readonly UserKeyRotation _rotation = rotation ?? new UserKeyRotation(db, kdf, time, Microsoft.Extensions.Logging.Abstractions.NullLogger<UserKeyRotation>.Instance);
 
+    /// <summary>The users' keypairs; internal for the tests' hooks.</summary>
+    internal Sharing.MemberKeys MemberKeys { get; } = new(db);
+
     private const string KeyIdLabel = "kumbu/v1/user-key-id";
     private const string RecoveryKekLabel = "kumbu/v1/user-recovery-kek";
     private const int MaxUsernameLength = 64;
@@ -73,6 +76,7 @@ public sealed class UserCatalog(
             KeyId = KeyId(userKey, id),
             CreatedAt = Now,
         };
+        (user.PublicKey, user.PrivateKey) = Sharing.MemberKeys.NewKeyPair(id, userKey);
         try
         {
             await Users.InsertOneAsync(user, cancellationToken: ct);
@@ -115,6 +119,8 @@ public sealed class UserCatalog(
             u => u.Id == user.Id,
             Builders<UserDocument>.Update.Set(u => u.LastSignInAt, now).Set(u => u.PreviousSignInAt, user.PreviousSignInAt),
             cancellationToken: ct);
+        // Accounts from before keypairs get theirs here (collab design §5.1).
+        await MemberKeys.EnsureAsync(user.Id, userKey, ct);
         return (user.ToUser(), userKey, readAt);
     }
 

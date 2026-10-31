@@ -42,6 +42,16 @@ public sealed class UserDocument
     [BsonElement("keyId")]
     public byte[] KeyId { get; set; } = [];
 
+    /// <summary>The public key of the user's keypair (collab design §5.1), an uncompressed P-256 point; null until it is
+    /// created. Never what a member slot is wrapped to: that comes from the private key, or a membership's pin.</summary>
+    [BsonElement("publicKey"), BsonIgnoreIfNull]
+    public byte[]? PublicKey { get; set; }
+
+    /// <summary>The private key, sealed under a key from the user key, bound to the user and <see cref="PublicKey"/>
+    /// (<see cref="Sharing.MemberKeys"/>).</summary>
+    [BsonElement("privateKey"), BsonIgnoreIfNull]
+    public byte[]? PrivateKey { get; set; }
+
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; }
 
