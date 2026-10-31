@@ -2,6 +2,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Options;
@@ -27,6 +29,7 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     internal const string LabelPurpose = "kumbu/v1/membership-label";
     internal const string WritersPurpose = "kumbu/v1/membership-writers";
     internal const string WriterIdsPurpose = "kumbu/v1/membership-writer-ids";
+    internal const string PinPurpose = "kumbu/v1/membership-pin";
 
     /// <summary>What the member's sessions are in <c>writerIds</c>, in place of a credential id: all her sessions on the
     /// vault write under one writer id of the membership (collab design §8.1).</summary>
@@ -70,6 +73,8 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             Writers = VaultCatalog.SealForVault(vaultKey, vaultId, WritersPurpose, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>()), $"membership-writers:{vaultId}:{id}"),
             WriterIds = VaultCatalog.SealForVault(
                 vaultKey, vaultId, WriterIdsPurpose, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string> { [NewWriterId()] = SessionWriter }), $"membership-writer-ids:{vaultId}:{id}"),
+            // The key the slot is wrapped to, pinned under the vault key: the only key a re-key or a rotation wraps to (§5.4).
+            Pin = SealPin(vaultKey, vaultId, id, memberId, memberPublic),
             CreatedAt = now,
             AcceptedAt = now,
             Revision = 0,
@@ -108,6 +113,69 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             log.LogWarning("The private key of user {UserId} does not open; nothing is shared with them", memberId);
             throw;
         }
+    }
+
+    /// <summary>
+    /// A membership's <c>pin</c> (collab design §2.1, §5.4): the member's public key with what it is the key of, sealed
+    /// under <paramref name="vaultKey"/>, bound to the vault and the membership. Written at acceptance from the keypair
+    /// the member's session just unwrapped, never from her user document.
+    /// </summary>
+    internal static byte[] SealPin(byte[] vaultKey, string vaultId, string membershipId, string memberId, byte[] publicKey) =>
+        VaultCatalog.SealForVault(
+            vaultKey, vaultId, PinPurpose, JsonSerializer.SerializeToUtf8Bytes(new MembershipPin(membershipId, vaultId, memberId, MemberSlotCrypto.P256, publicKey)),
+            PinContext(vaultId, membershipId));
+
+    private static string PinContext(string vaultId, string membershipId) => $"membership-pin:{vaultId}:{membershipId}";
+
+    /// <summary>
+    /// The public key pinned in <paramref name="membership"/>: the only source of a key to wrap a member slot to after
+    /// the grant (HARD RULE 3, collab design §5.4). Null unless the pin opens under <paramref name="vaultKey"/> and names
+    /// this membership, its vault and its member, with a known algorithm and a key on the curve; never a key the
+    /// database names in plain (the user document's <c>publicKey</c>).
+    /// </summary>
+    internal static byte[]? PinnedKey(MembershipDocument membership, byte[] vaultKey)
+    {
+        if (membership.Pin is not { } sealedPin || membership.Member is not { } member) return null;
+        try
+        {
+            var pin = JsonSerializer.Deserialize<MembershipPin>(VaultCatalog.OpenForVault(vaultKey, membership.Vault, PinPurpose, sealedPin, PinContext(membership.Vault, membership.Id)));
+            if (pin is null || pin.MembershipId != membership.Id || pin.Vault != membership.Vault || pin.Member != member || pin.Alg != MemberSlotCrypto.P256) return null;
+            MemberSlotCrypto.RequireOnCurve(pin.PublicKey);
+            return pin.PublicKey;
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Wraps the vault key again to the key pinned in <paramref name="membership"/> (<see cref="PinnedKey"/>, opened
+    /// under <paramref name="vaultKey"/>), inside <paramref name="session"/>'s transaction: <paramref name="newVaultKey"/>
+    /// for a re-key's finish, else <paramref name="vaultKey"/>. The shared seam of the member's rotation and the re-key
+    /// finish; nothing else wraps a member slot after the grant. Only the membership's existing member slot is
+    /// rewritten, never one created. Without a valid pin, the membership's member slots are deleted and logged as
+    /// damaged. Returns the pinned key, or null if there was none (or no member slot to rewrap).
+    /// </summary>
+    internal async Task<byte[]?> WrapToPinAsync(IClientSessionHandle session, MembershipDocument membership, byte[] vaultKey, byte[]? newVaultKey, CancellationToken ct)
+    {
+        var f = Builders<SlotDocument>.Filter;
+        var slots = f.Eq(s => s.Kind, SlotDocument.Member) & f.Eq(s => s.Membership, membership.Id);
+        if (PinnedKey(membership, vaultKey) is not { } pinned)
+        {
+            var deleted = await catalog.Slots.DeleteManyAsync(session, slots, cancellationToken: ct);
+            log.LogWarning(
+                "Membership {MembershipId} of vault {VaultId} has no valid pin: damaged; its {Count} member slots were deleted", membership.Id, membership.Vault, deleted.DeletedCount);
+            return null;
+        }
+
+        // Every member slot of the membership on its vault: a second one written to the database gets the pinned key too.
+        var updated = await catalog.Slots.UpdateManyAsync(
+            session,
+            slots & f.Eq(s => s.Vault, membership.Vault),
+            Builders<SlotDocument>.Update.Set(s => s.Wrapped, MemberSlotCrypto.Wrap(pinned, newVaultKey ?? vaultKey, VaultCatalog.MemberSlotContext(membership.Vault, membership.Id))),
+            cancellationToken: ct);
+        return updated.MatchedCount > 0 ? pinned : null;
     }
 
     /// <summary>The grant's writes, inside the caller's transaction.</summary>
@@ -311,6 +379,14 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
         _ready = true;
     }
 }
+
+/// <summary>What a membership's <c>pin</c> holds, sealed under the vault key (collab design §2.1).</summary>
+internal sealed record MembershipPin(
+    [property: JsonPropertyName("membershipId")] string MembershipId,
+    [property: JsonPropertyName("vault")] string Vault,
+    [property: JsonPropertyName("member")] string Member,
+    [property: JsonPropertyName("alg")] byte Alg,
+    [property: JsonPropertyName("publicKey")] byte[] PublicKey);
 
 /// <summary>The vault is shared with as many people as it may be.</summary>
 public sealed class MemberLimitException(int limit) : Exception($"A vault can be shared with at most {limit} people.");
