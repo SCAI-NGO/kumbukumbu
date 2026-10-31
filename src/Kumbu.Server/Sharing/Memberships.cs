@@ -22,7 +22,12 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
 
     private volatile bool _ready;
 
-    private readonly MemberKeys _memberKeys = new(db);
+    /// <summary>The users' keypairs; internal, for the tests' hooks.</summary>
+    internal MemberKeys Keys { get; } = new(db);
+
+    /// <summary>For tests: called with <c>"inside-grant"</c> once the grant's writes are done, before the commit; an
+    /// exception thrown there is a crash at that point.</summary>
+    internal Func<string, Task>? FaultAt { get; set; }
 
     internal IMongoCollection<MembershipDocument> Docs { get; } = db.GetCollection<MembershipDocument>(CollectionName);
 
@@ -45,9 +50,9 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     /// <summary>
     /// Makes <paramref name="memberId"/> an active member of <paramref name="vaultId"/>, which <paramref name="ownerId"/>
     /// owns, under <paramref name="alias"/> (the member's name for it) and <paramref name="label"/> (the owner's for
-    /// the member). One transaction: the membership, with its label and its empty writers sealed under the vault key,
-    /// the member slot (<see cref="VaultCatalog.MemberSlot"/>) and a write to the vault document, which makes two
-    /// grants at once conflict, so the member limit, counted inside, holds. The core of an acceptance; returns the
+    /// the member). One transaction: the member's keypair if she has none yet, the membership, with its label and its
+    /// empty writers sealed under the vault key, the member slot (<see cref="VaultCatalog.MemberSlot"/>) and a write to
+    /// the vault document, which makes two grants at once conflict, so the member limit, counted inside, holds. The core of an acceptance; returns the
     /// membership's id. <see cref="NotPermittedException"/> for the owner as member, <see cref="MemberLimitException"/>
     /// at the limit, <see cref="AlreadyMemberException"/>, <see cref="VaultNameTakenException"/> if the member has a
     /// vault or an alias of that name; nothing is written then.
@@ -58,10 +63,31 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
         if (string.Equals(ownerId, memberId, StringComparison.Ordinal)) throw new NotPermittedException("You can't be a member of your own vault.");
         await EnsureReadyAsync(ct);
         var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
-        var memberPublic = await MemberPublicKeyAsync(memberId, memberKey, ct);
         var id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        using var session = await catalog.StartSessionAsync(ct);
+        // Retried on a write conflict: another grant on the vault, or a re-keying's start or finish.
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                // Her keypair, if she has none, in this transaction (collab design §5.1): an invitation never waits for one,
+                // and a crash leaves neither a keypair without the grant nor a slot without a keypair.
+                var memberPublic = await MemberPublicKeyAsync(s, memberId, memberKey, token);
+                var doc = NewMembership(vaultId, ownerId, memberId, memberPublic, vaultKey, id, label, role);
+                var slot = catalog.MemberSlot(vaultId, id, memberId, memberKey, memberPublic, vaultKey, alias);
+                await GrantInAsync(s, ownerId, ownerKey, vaultKey, doc, slot, alias, token);
+                if (FaultAt is { } fault) await fault("inside-grant");
+                return true;
+            },
+            cancellationToken: ct);
+        log.LogInformation("Vault {VaultId} is shared with user {UserId} as membership {MembershipId}", vaultId, memberId, id);
+        return id;
+    }
+
+    /// <summary>A grant's membership, not stored here.</summary>
+    private MembershipDocument NewMembership(string vaultId, string ownerId, string memberId, byte[] memberPublic, byte[] vaultKey, string id, string label, MemberRole role)
+    {
         var now = Now;
-        var doc = new MembershipDocument
+        return new MembershipDocument
         {
             Id = id,
             Vault = vaultId,
@@ -79,30 +105,17 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             AcceptedAt = now,
             Revision = 0,
         };
-        var slot = catalog.MemberSlot(vaultId, id, memberId, memberKey, memberPublic, vaultKey, alias);
-
-        using var session = await catalog.StartSessionAsync(ct);
-        // Retried on a write conflict: another grant on the vault, or a re-keying's start or finish.
-        await session.WithTransactionAsync(
-            async (s, token) =>
-            {
-                await GrantInAsync(s, ownerId, ownerKey, vaultKey, doc, slot, alias, token);
-                return true;
-            },
-            cancellationToken: ct);
-        log.LogInformation("Vault {VaultId} is shared with user {UserId} as membership {MembershipId}", vaultId, memberId, id);
-        return id;
     }
 
     /// <summary>
     /// The public key a member slot for <paramref name="memberId"/> is wrapped to (collab design §5.4): derived from
     /// her private key, opened with her user key, never read from her user document, where a database-level attacker
     /// could have put his own. She gets a keypair here if she has none yet. <see cref="CryptographicException"/> if
-    /// her private key doesn't open: then no slot is made.
+    /// her private key doesn't open: then no slot is made. Inside <paramref name="session"/>'s transaction.
     /// </summary>
-    private async Task<byte[]> MemberPublicKeyAsync(string memberId, byte[] memberKey, CancellationToken ct)
+    private async Task<byte[]> MemberPublicKeyAsync(IClientSessionHandle session, string memberId, byte[] memberKey, CancellationToken ct)
     {
-        var user = await _memberKeys.EnsureAsync(memberId, memberKey, ct) ?? throw new ArgumentException("There is no such user.", nameof(memberId));
+        var user = await Keys.EnsureAsync(session, memberId, memberKey, ct) ?? throw new ArgumentException("There is no such user.", nameof(memberId));
         try
         {
             using var privateKey = MemberKeys.OpenPrivate(user, memberKey);

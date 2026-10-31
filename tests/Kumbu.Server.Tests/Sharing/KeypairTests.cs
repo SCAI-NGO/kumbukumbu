@@ -200,6 +200,36 @@ public sealed class KeypairTests(MongoFixture fixture)
         [.. (await catalog.OpenForUserAsync(user.Id, user.Key, Ct)).Where(a => !a.IsOwner).Select(a => a.Name)];
 
     [Fact]
+    public async Task Granting_to_a_user_without_a_keypair_creates_one()
+    {
+        var (alice, bob, vaultId) = await SharedWorldAsync();
+        await UserDocs.UpdateOneAsync(u => u.Id == bob.Id, Builders<UserDocument>.Update.Unset(u => u.PublicKey).Unset(u => u.PrivateKey), cancellationToken: Ct);
+
+        // A crash inside the grant's transaction: the keypair is part of it, and goes with it.
+        var memberships = Memberships();
+        memberships.FaultAt = at => at == "inside-grant" ? throw new IOException("crash at " + at) : Task.CompletedTask;
+        await Assert.ThrowsAsync<IOException>(() => memberships.GrantAsync(alice.Id, alice.Key, vaultId, bob.Id, bob.Key, "Garten", "Bob", MemberRole.Write, Ct));
+        var crashed = await UserAsync(bob.Id);
+        Assert.Null(crashed.PublicKey);
+        Assert.Null(crashed.PrivateKey);
+        Assert.False(await _db.GetCollection<MembershipDocument>("memberships").Find(m => m.Member == bob.Id).AnyAsync(Ct));
+        Assert.False(await Slots.Find(s => s.Kind == SlotDocument.Member).AnyAsync(Ct));
+
+        memberships.FaultAt = null;
+        var created = new List<string>();
+        memberships.Keys.Created = created.Add;
+        var membershipId = await memberships.GrantAsync(alice.Id, alice.Key, vaultId, bob.Id, bob.Key, "Garten", "Bob", MemberRole.Write, Ct);
+
+        Assert.Equal([bob.Id], created);
+        var doc = await UserAsync(bob.Id);
+        using var bobs = MemberKeys.OpenPrivate(doc, bob.Key);
+        var vaultKey = await Catalog().OwnerVaultKeyAsync(alice.Id, alice.Key, vaultId, Ct);
+        Assert.Equal(vaultKey, VaultCatalog.OpenMemberSlot(bobs, await MemberSlotAsync(membershipId)));
+        Assert.Equal(doc.PublicKey, Kumbu.Server.Sharing.Memberships.PinnedKey(await _db.GetCollection<MembershipDocument>("memberships").Find(m => m.Id == membershipId).SingleAsync(Ct), vaultKey));
+        Assert.Equal(["Garten"], await SharedWithAsync(NewProcess(), bob));
+    }
+
+    [Fact]
     public async Task A_member_slot_is_wrapped_to_the_members_public_key()
     {
         var (alice, bob, vaultId) = await SharedWorldAsync();

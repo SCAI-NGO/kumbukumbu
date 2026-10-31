@@ -30,22 +30,30 @@ public sealed class MemberKeys(IMongoDatabase db)
     /// rotation of the user key in between makes it write nothing. Null if the user is gone; a document without a
     /// keypair if the user key isn't current (nothing is sealed under a key that no longer opens anything).
     /// </summary>
-    public async Task<UserDocument?> EnsureAsync(string userId, byte[] userKey, CancellationToken ct)
+    public Task<UserDocument?> EnsureAsync(string userId, byte[] userKey, CancellationToken ct) => EnsureAsync(null, userId, userKey, ct);
+
+    /// <summary>As <see cref="EnsureAsync(string, byte[], CancellationToken)"/>, inside <paramref name="session"/>'s
+    /// transaction if given: a grant's keypair commits with the grant, or not at all.</summary>
+    public async Task<UserDocument?> EnsureAsync(IClientSessionHandle? session, string userId, byte[] userKey, CancellationToken ct)
     {
-        var user = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        var user = await FindAsync(session, userId, ct);
         if (user is null || user.PublicKey is not null) return user;
         if (BeforeCreate is { } hook) await hook();
 
         var keyId = UserCatalog.KeyId(userKey, userId);
         var (publicKey, privateKey) = NewKeyPair(userId, userKey);
         var f = Builders<UserDocument>.Filter;
-        var created = await Users.UpdateOneAsync(
-            f.Eq(u => u.Id, userId) & f.Eq(u => u.KeyId, keyId) & f.Exists(u => u.PublicKey, false),
-            Builders<UserDocument>.Update.Set(u => u.PublicKey, publicKey).Set(u => u.PrivateKey, privateKey),
-            cancellationToken: ct);
+        var filter = f.Eq(u => u.Id, userId) & f.Eq(u => u.KeyId, keyId) & f.Exists(u => u.PublicKey, false);
+        var update = Builders<UserDocument>.Update.Set(u => u.PublicKey, publicKey).Set(u => u.PrivateKey, privateKey);
+        var created = session is null
+            ? await Users.UpdateOneAsync(filter, update, cancellationToken: ct)
+            : await Users.UpdateOneAsync(session, filter, update, cancellationToken: ct);
         if (created.ModifiedCount == 1) Created?.Invoke(userId);
-        return await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
+        return await FindAsync(session, userId, ct);
     }
+
+    private Task<UserDocument?> FindAsync(IClientSessionHandle? session, string userId, CancellationToken ct) =>
+        (session is null ? Users.Find(u => u.Id == userId) : Users.Find(session, u => u.Id == userId)).FirstOrDefaultAsync(ct)!;
 
     /// <summary>A new keypair for <paramref name="userId"/>: the public key, and the private key sealed under <paramref name="userKey"/>.</summary>
     internal static (byte[] PublicKey, byte[] SealedPrivateKey) NewKeyPair(string userId, byte[] userKey)
