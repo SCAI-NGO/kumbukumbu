@@ -4,8 +4,9 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Sharing;
 
 /// <summary>
-/// Tidies the memberships at start and then once a minute (collab design §2.4, §6.2): finishes the cleanups of revoked
-/// and left memberships that didn't commit. Idempotent: a second run finds nothing to do.
+/// Tidies the memberships at start and then once a minute (collab design §2.1, §2.4, §6.2): expired invitations and
+/// redemptions not confirmed within a week become <c>revoked</c>, with their slots; stray invite slots go; and the
+/// cleanups of revoked and left memberships that didn't commit are finished. Idempotent: a second run finds nothing to do.
 /// </summary>
 public sealed class MembershipSweeper(Memberships memberships, TimeProvider time, ILogger<MembershipSweeper> log) : BackgroundService
 {
@@ -32,7 +33,7 @@ public sealed class MembershipSweeper(Memberships memberships, TimeProvider time
     /// <summary>One round; the loop runs it, tests call it directly.</summary>
     public async Task SweepAsync(CancellationToken ct)
     {
-        await memberships.EnsureReadyAsync(ct);
+        await memberships.SweepInvitationsAsync(ct);
         var f = Builders<MembershipDocument>.Filter;
         var unfinished = await memberships.Docs
             .Find(f.In(m => m.Status, [MembershipStatus.Revoked, MembershipStatus.Left]) & f.Eq(m => m.CleanedAt, null))

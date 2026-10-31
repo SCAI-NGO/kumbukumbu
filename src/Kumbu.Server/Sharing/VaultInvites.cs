@@ -247,7 +247,9 @@ public sealed partial class Memberships
                 await RequireNotClosingAsync(s, vaultId, token);
                 var confirmed = await Docs.UpdateOneAsync(
                     s,
-                    BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Pending, MembershipStatus.Active) & f.Ne(m => m.Member, null),
+                    BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Pending, MembershipStatus.Active) & f.Ne(m => m.Member, null)
+                    // Within the week after the redemption, even before the sweep lets it lapse (collab design §2.1).
+                    & f.Gt(m => m.RedeemedAt, Now - ConfirmWindow),
                     Builders<MembershipDocument>.Update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, Now).Inc(m => m.Revision, 1),
                     cancellationToken: token);
                 if (confirmed.MatchedCount == 0) throw new MembershipNotFoundException();
@@ -300,6 +302,76 @@ public sealed partial class Memberships
             },
             cancellationToken: ct);
         log.LogInformation("Membership {MembershipId} of vault {VaultId} was {Ended}", membershipId, vaultId, redeemed ? "declined" : "withdrawn");
+    }
+
+    /// <summary>
+    /// The sweep's part for invitations (collab design §2.1, §2.4): an invitation nobody redeemed before its expiry, and
+    /// a redemption the owner neither confirmed nor declined within <see cref="ConfirmWindow"/> of <c>redeemedAt</c>,
+    /// become <c>revoked</c>, without lookup, expiry and pin, each in one transaction with its way in: the invite slot,
+    /// the member slot. Then invite slots left without an open invitation go. Every update re-checks its condition, so
+    /// a second run, or one at the same time, changes nothing. Returns how many memberships it revoked.
+    /// </summary>
+    internal async Task<int> SweepInvitationsAsync(CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<MembershipDocument>.Filter;
+        var now = Now;
+        var expired = f.Eq(m => m.Status, MembershipStatus.Pending) & f.Eq(m => m.Member, null) & f.Lte(m => m.ExpiresAt, now);
+        // From redeemedAt, not from the invitation's creation: the owner has the whole week after the redemption.
+        var lapsed = f.Eq(m => m.Status, MembershipStatus.Pending) & f.Ne(m => m.Member, null) & f.Lte(m => m.RedeemedAt, now - ConfirmWindow);
+        var revoked = 0;
+        foreach (var (which, kind) in new[] { (expired, SlotDocument.Invite), (lapsed, SlotDocument.Member) })
+        {
+            foreach (var id in await Docs.Find(which).Project(m => m.Id).ToListAsync(ct))
+            {
+                if (await LapseAsync(id, which, kind, now, ct)) revoked++;
+            }
+        }
+
+        await RemoveStrayInviteSlotsAsync(now, ct);
+        return revoked;
+    }
+
+    /// <summary>The owner has this long from a redemption to confirm or decline it (collab design §2.1).</summary>
+    public static readonly TimeSpan ConfirmWindow = TimeSpan.FromDays(7);
+
+    private async Task<bool> LapseAsync(string membershipId, FilterDefinition<MembershipDocument> which, string slotKind, DateTime now, CancellationToken ct)
+    {
+        using var session = await catalog.StartSessionAsync(ct);
+        var lapsed = await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                var ended = await Docs.UpdateOneAsync(
+                    s,
+                    Builders<MembershipDocument>.Filter.Eq(m => m.Id, membershipId) & which,
+                    Builders<MembershipDocument>.Update
+                        .Set(m => m.Status, MembershipStatus.Revoked).Set(m => m.RevokedAt, now)
+                        .Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Unset(m => m.Pin)
+                        .Set(m => m.CleanedAt, now)
+                        .Inc(m => m.Revision, 1),
+                    cancellationToken: token);
+                if (ended.MatchedCount == 0) return false;
+                await catalog.Slots.DeleteManyAsync(s, sl => sl.Kind == slotKind && sl.Membership == membershipId, cancellationToken: token);
+                return true;
+            },
+            cancellationToken: ct);
+        if (lapsed) log.LogInformation("Membership {MembershipId} lapsed: {Why}", membershipId, slotKind == SlotDocument.Invite ? "its invitation expired" : "the owner didn't confirm it in time");
+        return lapsed;
+    }
+
+    /// <summary>Invite slots that are expired, or whose membership is no open invitation (any more): the TTL monitor
+    /// takes expired ones too, at its own pace.</summary>
+    private async Task RemoveStrayInviteSlotsAsync(DateTime now, CancellationToken ct)
+    {
+        var slots = await catalog.Slots.Find(sl => sl.Kind == SlotDocument.Invite).Project(sl => new { sl.Id, sl.Membership, sl.Vault, sl.ExpiresAt }).ToListAsync(ct);
+        if (slots.Count == 0) return;
+        var f = Builders<MembershipDocument>.Filter;
+        var open = (await Docs.Find(f.In(m => m.Id, slots.Select(sl => sl.Membership)) & f.Eq(m => m.Status, MembershipStatus.Pending) & f.Eq(m => m.Member, null))
+            .Project(m => new { m.Id, m.Vault }).ToListAsync(ct)).ToHashSet();
+        var stray = slots.Where(sl => sl.ExpiresAt is not { } at || at <= now || sl.Membership is null || !open.Contains(new { Id = sl.Membership, sl.Vault })).Select(sl => sl.Id).ToList();
+        if (stray.Count == 0) return;
+        var deleted = await catalog.Slots.DeleteManyAsync(Builders<SlotDocument>.Filter.In(sl => sl.Id, stray) & Builders<SlotDocument>.Filter.Eq(sl => sl.Kind, SlotDocument.Invite), ct);
+        log.LogInformation("Removed {Count} invite slots without an open invitation", deleted.DeletedCount);
     }
 
     /// <summary>
