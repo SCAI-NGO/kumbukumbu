@@ -10,6 +10,7 @@ using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Sharing;
 
@@ -35,10 +36,12 @@ public sealed class AliasTests(KumbuAppFactory app)
         return (alice, bob, await alice.VaultIdAsync());
     }
 
-    private async Task<string> KeyAsync(RestClient user, params string[] vaultIds)
+    private Task<string> KeyAsync(RestClient user, params string[] vaultIds) => NamedKeyAsync(user, "Claude", vaultIds);
+
+    private async Task<string> NamedKeyAsync(RestClient user, string name, params string[] vaultIds)
     {
         var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
-            user.User, user.UserKey, DateTime.UtcNow, "Claude", vaultIds.ToDictionary(v => v, _ => KeyRight.Maintain), Ct);
+            user.User, user.UserKey, DateTime.UtcNow, name, vaultIds.ToDictionary(v => v, _ => KeyRight.Maintain), Ct);
         return key;
     }
 
@@ -179,6 +182,126 @@ public sealed class AliasTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, export.StatusCode);
         using var zip = new System.IO.Compression.ZipArchive(await export.Content.ReadAsStreamAsync(Ct));
         Assert.Equal(["garten/a.md"], zip.Entries.Where(e => e.Name.Length > 0).Select(e => e.FullName));
+    }
+
+    private VaultCatalog Catalog => Api.Services.GetRequiredService<VaultCatalog>();
+
+    private IMongoCollection<SlotDocument> Slots => app.Database.GetCollection<SlotDocument>("slots");
+
+    [Fact]
+    public async Task Creating_an_own_vault_named_like_an_alias_is_refused()
+    {
+        var (_, bob, vaultId) = await SharedAsync();
+
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.CreateForUserAsync("GARTEN", bob.User.Id, bob.UserKey, Ct));
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.CreateForUserAsync(" garten ", bob.User.Id, bob.UserKey, Ct));
+
+        // A member slot is never an orphan to replace, not even one that looks like it: old, its vault gone.
+        var slot = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        await Slots.UpdateOneAsync(
+            s => s.Id == slot.Id, Builders<SlotDocument>.Update.Set(s => s.Vault, "0000000000000000000000000000dead").Set(s => s.CreatedAt, DateTime.UtcNow.AddHours(-1)),
+            cancellationToken: Ct);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.CreateForUserAsync("garten", bob.User.Id, bob.UserKey, Ct));
+        Assert.True(await Slots.Find(s => s.Id == slot.Id).AnyAsync(Ct));
+    }
+
+    [Fact]
+    public async Task Granting_with_an_alias_named_like_an_own_vault_is_refused()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => alice.ShareWithAsync(bob, "WORK"));
+
+        // Nothing of the grant is left: no membership, no member slot; his own vault is as it was.
+        var vaultId = await alice.VaultIdAsync();
+        Assert.False(await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Vault == vaultId).AnyAsync(Ct));
+        Assert.False(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).AnyAsync(Ct));
+        Assert.Equal(["Work"], await VaultNamesAsync(bob));
+        // An alias of another share is taken the same way.
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await carol.ShareWithAsync(bob, "notizen");
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => alice.ShareWithAsync(bob, "Notizen"));
+    }
+
+    [Fact]
+    public async Task Renaming_an_alias_to_a_taken_name_is_refused_and_keeps_the_old_one()
+    {
+        var (_, bob, _) = await SharedAsync();
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await carol.ShareWithAsync(bob, "notizen");
+        var membershipId = (await Share.MembershipOfAsync(app.Database, bob, await bob.VaultIdOfSharedAsync("garten")));
+        var slot = await Slots.Find(s => s.Membership == membershipId).SingleAsync(Ct);
+
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.RenameAliasAsync(bob.User.Id, bob.UserKey, membershipId, "work", Ct));
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.RenameAliasAsync(bob.User.Id, bob.UserKey, membershipId, "NOTIZEN", Ct));
+
+        var after = await Slots.Find(s => s.Membership == membershipId).SingleAsync(Ct);
+        Assert.Equal(slot.NameId, after.NameId);
+        Assert.Equal(slot.Alias, after.Alias);
+        Assert.Equal(["Work", "garten", "notizen"], await VaultNamesAsync(bob));
+        // Only the member herself renames her alias.
+        await Assert.ThrowsAsync<ArgumentException>(() => Catalog.RenameAliasAsync(carol.User.Id, carol.UserKey, membershipId, "Beet", Ct));
+        Assert.Equal(["Work", "garten", "notizen"], await VaultNamesAsync(bob));
+    }
+
+    [Fact]
+    public async Task Renaming_an_alias_moves_the_vault_in_the_members_namespace()
+    {
+        var (alice, bob, vaultId) = await SharedAsync();
+        var key = await KeyAsync(bob, await bob.VaultIdAsync(), vaultId);
+        var membershipId = await Share.MembershipOfAsync(app.Database, bob, vaultId);
+
+        await Catalog.RenameAliasAsync(bob.User.Id, bob.UserKey, membershipId, "Beet", Ct);
+
+        Assert.Equal(["Beet", "Work"], await VaultNamesAsync(bob));
+        using (var read = await bob.GetAsync("/api/notes/Beet/a.md")) Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        using (var old = await bob.GetAsync("/api/notes/garten/a.md")) Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+        Assert.Equal(["Gartenarbeit"], await VaultNamesAsync(alice));
+
+        // His key, made before the rename, follows it: it reads the alias the member slot holds now.
+        var (_, root) = await bob.ShAsync("ls /", key);
+        Assert.Contains("Beet", root, StringComparison.Ordinal);
+        Assert.DoesNotContain("garten", root, StringComparison.Ordinal);
+        Assert.Contains("Kompost", (await bob.ShAsync("cat /Beet/a.md", key)).Text, StringComparison.Ordinal);
+
+        // The old name is free for an own vault, and no credential of his still holds it: a key over both works.
+        var own = await Catalog.CreateForUserAsync("garten", bob.User.Id, bob.UserKey, Ct);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog.CreateForUserAsync("beet", bob.User.Id, bob.UserKey, Ct));
+        var both = await NamedKeyAsync(bob, "Codex", own.Id, vaultId);
+        var (failed, listing) = await bob.ShAsync("ls /", both);
+        Assert.False(failed, listing);
+        Assert.Contains("Beet", listing, StringComparison.Ordinal);
+        Assert.Contains("garten", listing, StringComparison.Ordinal);
+        (failed, listing) = await bob.ShAsync("ls /", key);
+        Assert.False(failed, listing);
+        Assert.Equal(["Beet", "Work", "garten"], await VaultNamesAsync(bob));
+    }
+
+    [Fact]
+    public async Task A_members_connection_follows_a_renamed_alias()
+    {
+        var (_, bob, vaultId) = await SharedAsync();
+        var connection = await Api.Services.GetRequiredService<Connections>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct);
+        var flow = await Kumbu.Server.Tests.OAuth.OAuthFlow.StartAsync(Api, bob, connection.Id, await Kumbu.Server.Tests.OAuth.OAuthFlow.RegisterAsync(Api, "https://claude.test/cb"), "https://claude.test/cb");
+        await flow.AllowAsync();
+        using var exchanged = await flow.TokenAsync();
+        var access = (await RestClient.JsonAsync(exchanged))["access_token"]!.GetValue<string>();
+        Assert.Equal(["garten"], await ConnectionNamesAsync(connection.Id, access));
+
+        await Catalog.RenameAliasAsync(bob.User.Id, bob.UserKey, await Share.MembershipOfAsync(app.Database, bob, vaultId), "Beet", Ct);
+
+        Assert.Equal(["Beet"], await ConnectionNamesAsync(connection.Id, access));
+    }
+
+    /// <summary>The names a connection's access token sees its vaults under, as a request opens them.</summary>
+    private async Task<IReadOnlyList<string>> ConnectionNamesAsync(string connectionId, string access)
+    {
+        var tokens = await Slots.Find(s => s.ConnectionId == connectionId).Project(s => s.TokenId).ToListAsync(Ct);
+        var names = new List<string>();
+        foreach (var tokenId in tokens.Distinct()) names.AddRange((await Catalog.OpenForConnectionAsync(connectionId, tokenId!, access, Ct)).Select(a => a.Name));
+        return names;
     }
 
     private static async Task<string> TicketAsync(RestClient user, string key)

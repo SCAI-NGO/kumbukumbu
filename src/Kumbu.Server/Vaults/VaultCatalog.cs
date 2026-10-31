@@ -410,7 +410,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 try
                 {
                     var key = VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind));
-                    grant = slot.Kind == SlotDocument.Member ? new VaultKeyGrant(key, slot.Membership) { Alias = OpenAlias(userKey, slot) } : new VaultKeyGrant(key, null);
+                    grant = slot.Kind == SlotDocument.Member ? new VaultKeyGrant(key, slot.Membership) { AliasKey = OpenAliasKey(userKey, slot) } : new VaultKeyGrant(key, null);
                     break;
                 }
                 catch (CryptographicException)
@@ -426,11 +426,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         return result;
     }
 
-    /// <summary>A vault key opened for a new credential; <c>Membership</c> and the member's <c>Alias</c> are set when it came
-    /// through a member slot. The credential's slot seals both: it has no user key to open the alias with.</summary>
+    /// <summary>A vault key opened for a new credential; <c>Membership</c> and the member slot's <c>AliasKey</c> are set when
+    /// it came through a member slot. The credential's slot seals both: it has no user key to open the alias with, and
+    /// reads the alias from the member slot with the alias key on every opening, so it follows a rename.</summary>
     internal sealed record VaultKeyGrant(byte[] Key, string? Membership)
     {
-        public string? Alias { get; init; }
+        public byte[]? AliasKey { get; init; }
     }
 
     /// <summary>
@@ -452,7 +453,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = vaultKeys[v.Key].Membership,
             Wrapped = VaultCrypto.Seal(
                 ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(
-                    new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].Alias)),
+                    new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].AliasKey)),
                 ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
@@ -476,7 +477,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
         var slots = WrapConnectionSlots(
-            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value) { GrantedVia = vaultKeys[v.Key].Membership, Alias = vaultKeys[v.Key].Alias })],
+            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value) { GrantedVia = vaultKeys[v.Key].Membership, AliasKey = vaultKeys[v.Key].AliasKey })],
             connectionId, tokenId, token, expiresAt);
         await IssueFaultAsync("after-wrap");
         return (slots, vaultKeys);
@@ -489,7 +490,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         public string? GrantedVia { get; init; }
 
-        /// <summary>The member's alias for the vault, sealed with the key (derived slots only).</summary>
+        /// <summary>The member slot's alias key, sealed with the key (derived slots only).</summary>
+        public byte[]? AliasKey { get; init; }
+
+        /// <summary>The member's alias as her member slot holds it now, opened with <see cref="AliasKey"/>; null if it
+        /// didn't open (the vault then opens nothing for the credential).</summary>
         public string? Alias { get; init; }
 
         public Sharing.MembershipDocument? Membership { get; init; }
@@ -526,19 +531,22 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
 
         var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
+        var aliases = await MemberAliasesAsync(active, ct);
         var result = new List<ConnectionVaultKey>();
         var used = new List<SlotDocument>();
         foreach (var (slot, payload, right) in opened)
         {
             MembershipDocument? membership = null;
+            string? alias = null;
             if (slot.GrantedVia is not null)
             {
                 // Skipped as if absent: its membership isn't active (any more).
                 if ((membership = ActiveGrant(active, slot)) is null) continue;
+                alias = AliasOf(aliases, slot, payload.AliasKey);
                 used.Add(slot);
             }
 
-            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, Alias = payload.Name, Membership = membership });
+            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, AliasKey = payload.AliasKey, Alias = alias, Membership = membership });
         }
 
         TouchUsed(used);
@@ -560,7 +568,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = k.GrantedVia,
             Wrapped = VaultCrypto.Seal(
                 ConnectionKek(token, k.Vault),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia, k.Alias)),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia, k.AliasKey)),
                 ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
@@ -617,19 +625,22 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
 
         var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
+        var aliases = await MemberAliasesAsync(active, ct);
         var result = new List<VaultAccess>();
         var used = new List<SlotDocument>();
         foreach (var (slot, payload, right) in opened)
         {
             MembershipDocument? membership = null;
+            string? alias = null;
             if (slot.GrantedVia is not null)
             {
-                // Skipped as if absent, before the vault is loaded: its membership isn't active (any more).
-                if ((membership = ActiveGrant(active, slot)) is null || payload.Name is null) continue;
+                // Skipped as if absent, before the vault is loaded: its membership isn't active (any more), or the
+                // alias its member slot holds now doesn't open.
+                if ((membership = ActiveGrant(active, slot)) is null || (alias = AliasOf(aliases, slot, payload.AliasKey)) is null) continue;
                 used.Add(slot);
             }
 
-            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, right, membership, payload.Name));
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, right, membership, alias));
         }
 
         TouchUsed(used);
@@ -1256,8 +1267,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null,
         [property: System.Text.Json.Serialization.JsonPropertyName("via"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
         string? Via = null,
-        [property: System.Text.Json.Serialization.JsonPropertyName("name"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-        string? Name = null);
+        [property: System.Text.Json.Serialization.JsonPropertyName("aliasKey"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        byte[]? AliasKey = null);
 
     /// <summary>The slot's <c>grantedVia</c> is the membership sealed into it: one changed, added or removed in the
     /// database (to dodge the membership check, or to borrow another's) makes the slot not open.</summary>

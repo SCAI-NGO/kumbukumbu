@@ -110,9 +110,14 @@ public sealed class SlotDocument
     [BsonElement("grantedVia"), BsonIgnoreIfNull]
     public string? GrantedVia { get; set; }
 
-    /// <summary>Member slots: the member's name for the vault, sealed under a key from her user key.</summary>
+    /// <summary>Member slots: the member's name for the vault, sealed under <see cref="AliasKey"/>.</summary>
     [BsonElement("alias"), BsonIgnoreIfNull]
     public byte[]? Alias { get; set; }
+
+    /// <summary>Member slots: the random key the alias is sealed under, itself sealed under a key from the member's
+    /// user key. Her keys and connections on the vault seal a copy of it, so they read the alias she has now.</summary>
+    [BsonElement("aliasKey"), BsonIgnoreIfNull]
+    public byte[]? AliasKey { get; set; }
 
     /// <summary>Slots with <see cref="GrantedVia"/>: when they last opened the vault, to the minute.</summary>
     [BsonElement("usedAt"), BsonIgnoreIfNull]

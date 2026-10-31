@@ -32,6 +32,14 @@ public static class Share
     public static async Task<byte[]> VaultKeyAsync(this RestClient owner) =>
         await owner.Api.Services.GetRequiredService<VaultCatalog>().OwnerVaultKeyAsync(owner.User.Id, owner.UserKey, await owner.VaultIdAsync(), Ct);
 
+    /// <summary>The id of the membership <paramref name="member"/> has of <paramref name="vaultId"/>.</summary>
+    public static async Task<string> MembershipOfAsync(IMongoDatabase db, RestClient member, string vaultId) =>
+        (await db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Vault == vaultId && m.Member == member.User.Id).SingleAsync(Ct)).Id;
+
+    /// <summary>The id of the vault shared with this member under <paramref name="alias"/>.</summary>
+    public static async Task<string> VaultIdOfSharedAsync(this RestClient member, string alias) =>
+        (await member.Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(member.User.Id, member.UserKey, Ct)).Single(a => a.Name == alias).Id;
+
     /// <summary>A membership as MongoDB holds it.</summary>
     public static Task<MembershipDocument> MembershipAsync(IMongoDatabase db, string membershipId) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Id == membershipId).SingleAsync(Ct);
