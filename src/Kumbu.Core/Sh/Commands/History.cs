@@ -8,8 +8,11 @@ using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICommand
+/// <param name="labels">How writers are shown to the caller (collab design §8.2); the labels as they are by default.</param>
+public sealed partial class History(INoteStore notes, Func<DateTime> now, IWriterLabels? labels = null) : ICommand
 {
+    private readonly IWriterLabels _labels = labels ?? PlainWriterLabels.Instance;
+
     public string Name => "history";
 
     public string Usage => "history [--since T] <path>";
@@ -67,8 +70,12 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
 
         if (await StoreAttachments.GetAsync(notes, path, ct) is { } attachment)
         {
-            var versions = NoteHistory.Versions(attachment).Where(v => since is not { } s || v.WrittenAt >= s).Select(v =>
-                $"{v.Version}  {Time(v.WrittenAt)}  {v.Writer}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}").ToList();
+            var versions = new List<string>();
+            foreach (var v in NoteHistory.Versions(attachment).Where(v => since is not { } s || v.WrittenAt >= s))
+            {
+                versions.Add($"{v.Version}  {Time(v.WrittenAt)}  {await ShownAsync(v.Writer, v.Ref, ct)}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}");
+            }
+
             return ShellResult.Ok(versions.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(versions));
         }
 
@@ -85,8 +92,12 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             return await CommandArgs.ReadNoteAsync(Name, notes, path, ct);
         }
 
-        var lines = NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s)
-            .Select(v => Line(v.Content, v.Writer, v.WrittenAt) + (v.Current ? "  (current)" : "")).ToList();
+        var lines = new List<string>();
+        foreach (var v in NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s))
+        {
+            lines.Add(Line(v.Content, await ShownAsync(v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? "  (current)" : ""));
+        }
+
         return ShellResult.Ok(lines.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
 
@@ -106,26 +117,33 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         foreach (var path in await notes.ListNotesUnderAsync(dir, ct))
         {
             if (await notes.GetAsync(path, ct) is not { } note) continue;
-            var states = new List<(string Content, string Writer, DateTime At, Changeset? Changeset)> { (note.Content, note.LastWriter, note.LastWriteAt, note.Changeset) };
-            states.AddRange(note.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt, h.Changeset)));
+            var states = new List<(string Content, string Writer, WriterRef? Ref, DateTime At, Changeset? Changeset)>
+            {
+                (note.Content, note.LastWriter, note.Ref, note.LastWriteAt, note.Changeset),
+            };
+            states.AddRange(note.History.Select(h => (h.Content, h.WrittenBy, h.Ref, h.WrittenAt, h.Changeset)));
             for (var i = 0; i < states.Count; i++)
             {
-                var (content, writer, at, changeset) = states[i];
+                var (content, writer, reference, at, changeset) = states[i];
                 if (since is { } from && at < from) continue;
                 var (added, removed) = TextDiff.Count(i + 1 < states.Count ? states[i + 1].Content : "", content);
                 var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
-                rows.Add((at, writer, path.Value, $"{VersionToken.Of(content)}  +{added} -{removed}{cs}"));
+                rows.Add((at, await ShownAsync(writer, reference, ct), path.Value, $"{VersionToken.Of(content)}  +{added} -{removed}{cs}"));
             }
         }
 
         foreach (var file in await StoreAttachments.UnderAsync(notes, dir, ct))
         {
-            var states = new List<(AttachmentState State, string Writer, DateTime At, Changeset? Changeset)> { (file.Current, file.LastWriter, file.LastWriteAt, file.Changeset) };
-            states.AddRange(file.History.Select(h => (h.State, h.WrittenBy, h.WrittenAt, h.Changeset)));
-            foreach (var (state, writer, at, changeset) in states)
+            var states = new List<(AttachmentState State, string Writer, WriterRef? Ref, DateTime At, Changeset? Changeset)>
+            {
+                (file.Current, file.LastWriter, file.Ref, file.LastWriteAt, file.Changeset),
+            };
+            states.AddRange(file.History.Select(h => (h.State, h.WrittenBy, h.Ref, h.WrittenAt, h.Changeset)));
+            foreach (var (state, label, reference, at, changeset) in states)
             {
                 if (since is { } from && at < from) continue;
                 var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
+                var writer = await ShownAsync(label, reference, ct);
                 rows.Add(FolderMarker.Is(file.Path)
                     ? (at, writer, FolderMarker.Shown(file.Path), $"folder{cs}")
                     : (at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}"));
@@ -133,10 +151,10 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         }
 
         var moves = (await notes.ListMovesAsync(dir, ct)).Where(m => since is not { } s || m.MovedAt >= s);
-        foreach (var group in moves.GroupBy(m => (m.MovedBy, m.MovedAt)))
+        foreach (var group in moves.GroupBy(m => (m.MovedBy, m.Ref, m.MovedAt)))
         {
             // "dev (restore)" already names the operation; a plain writer gets "(mv)".
-            var writer = group.Key.MovedBy.Contains(" (", StringComparison.Ordinal) ? group.Key.MovedBy : $"{group.Key.MovedBy} (mv)";
+            var writer = await ShownAsync(group.Key.MovedBy.Contains(" (", StringComparison.Ordinal) ? group.Key.MovedBy : $"{group.Key.MovedBy} (mv)", group.Key.Ref, ct);
 
             // A folder move keeps every path below the folder, so its records share the folders left
             // after stripping that common tail. Records that share nothing with another one stand alone;
@@ -166,7 +184,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
         foreach (var trashed in await notes.ListTrashAsync(dir, ct))
         {
             if (since is { } s && trashed.DeletedAt < s) continue;
-            rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{trashed.Note.Path.Value} → trash", ""));
+            rows.Add((trashed.DeletedAt, await ShownAsync(trashed.DeletedBy, trashed.Ref, ct), $"{trashed.Note.Path.Value} → trash", ""));
         }
 
         if (notes is IAttachmentStore store)
@@ -174,7 +192,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
             foreach (var trashed in await store.ListAttachmentTrashAsync(dir.IsRoot ? null : dir, ct))
             {
                 if (since is { } s && trashed.DeletedAt < s) continue;
-                rows.Add((trashed.DeletedAt, trashed.DeletedBy, $"{FolderMarker.Shown(trashed.Attachment.Path)} → trash", ""));
+                rows.Add((trashed.DeletedAt, await ShownAsync(trashed.DeletedBy, trashed.Ref, ct), $"{FolderMarker.Shown(trashed.Attachment.Path)} → trash", ""));
             }
         }
 
@@ -232,6 +250,8 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now) : ICom
 
     [GeneratedRegex(@"^(\d+)([mhd])$")]
     private static partial Regex RelativeRegex();
+
+    private async Task<string> ShownAsync(string label, WriterRef? reference, CancellationToken ct) => (await _labels.RenderAsync(label, reference, ct)).Display;
 
     private static string Line(string content, string writer, DateTime at) =>
         $"{VersionToken.Of(content)}  {Time(at)}  {writer}  {Lines.Count(content)}";

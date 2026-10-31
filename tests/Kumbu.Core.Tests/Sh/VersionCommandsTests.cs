@@ -315,4 +315,49 @@ public class VersionCommandsTests
     [Fact]
     public async Task HistoryOfAMissingDirectory() =>
         Assert.Equal(ShellResult.Error("history: /Demo/nope: No such file or directory"), await Run("history /Demo/nope"));
+
+    /// <summary>Shows every writer upper-cased, to see which output goes through it.</summary>
+    private sealed class ShoutingLabels : IWriterLabels
+    {
+        public ValueTask<(string Display, string? Kind)> RenderAsync(string label, WriterRef? reference, CancellationToken ct) =>
+            ValueTask.FromResult<(string, string?)>((label.ToUpperInvariant(), null));
+    }
+
+    [Fact]
+    public async Task History_renders_writers_through_the_labels_service()
+    {
+        var caller = new FixedCaller("claude");
+        var writer = new NoteWriter(_store, _time, caller);
+        var sh = new Shell(_store, writer, new NoteMover(_store, _time, caller), labels: new ShoutingLabels());
+        Assert.False((await writer.WriteAsync("/Demo/plan.md", V2, V(V1), CancellationToken.None)).IsError);
+        Assert.False((await sh.RunAsync("rm /Demo/old.md", CancellationToken.None)).IsError);
+        Assert.False((await sh.RunAsync("mkcp /Demo before", CancellationToken.None)).IsError);
+        Assert.False((await writer.WriteAsync("/Demo/plan.md", V2 + "more\n", V(V2), CancellationToken.None)).IsError);
+
+        var outputs = new[] { "history /Demo/plan.md", "history /Demo", "trash", "lscp /Demo", $"diff /Demo/plan.md {V(V1)}", "diff /Demo/plan.md --checkpoint before" };
+        foreach (var command in outputs)
+        {
+            var output = (await sh.RunAsync(command, CancellationToken.None)).Output;
+            Assert.True(output.Contains("CLAUDE", StringComparison.Ordinal) || output.Contains("SEED", StringComparison.Ordinal), $"{command}: {output}");
+            Assert.DoesNotContain("claude", output, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("SEED", (await sh.RunAsync("history /Demo/plan.md", CancellationToken.None)).Output, StringComparison.Ordinal);
+        Assert.Contains("(by CLAUDE)", (await sh.RunAsync("trash", CancellationToken.None)).Output, StringComparison.Ordinal);
+        Assert.Matches(@"before\s+/Demo/\s+\S+ \S+ UTC\s+CLAUDE", (await sh.RunAsync("lscp /Demo", CancellationToken.None)).Output);
+    }
+
+    [Fact]
+    public async Task An_entry_without_a_reference_shows_as_unknown_in_the_shell()
+    {
+        Assert.True(await _store.TryReplaceAsync(
+            (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : throw new ArgumentException(), CancellationToken.None))!,
+            NoteWriter.Next((await _store.GetAsync(p, CancellationToken.None))!, V2, "claude", WriterRef.Unknown, _time.GetUtcNow().UtcDateTime),
+            CancellationToken.None));
+
+        var history = (await Run("history /Demo/plan.md")).Output;
+
+        Assert.StartsWith($"{V(V2)}  2026-10-23 14:00 UTC  unknown  ", history, StringComparison.Ordinal);
+        Assert.DoesNotContain("claude", history, StringComparison.Ordinal);
+    }
 }

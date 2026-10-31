@@ -16,9 +16,10 @@ using static Kumbu.Server.Tests.Api.RestClient;
 
 namespace Kumbu.Server.Tests.Api;
 
-/// <summary>Writer kinds (spec §5a): the session's views tell the user's own writes, their devices', their agents' and the server's apart.</summary>
+/// <summary>Writers as the viewer is shown them (collab design §8.2) and their kinds (spec §5a): the session's views tell
+/// the user's own writes, their devices', their agents' and the server's apart.</summary>
 [Collection("app")]
-public sealed class WriterKindTests(KumbuAppFactory app)
+public sealed class WriterLabelTests(KumbuAppFactory app)
 {
     private const string Callback = "https://client.example/callback";
 
@@ -97,7 +98,7 @@ public sealed class WriterKindTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_users_own_write_is_user_and_seed_is_server()
+    public async Task The_viewers_own_writes_have_kind_self()
     {
         var user = await NewAsync(Api);
         await user.CreateAsync("mine.md", "mine\n");
@@ -105,7 +106,7 @@ public sealed class WriterKindTests(KumbuAppFactory app)
         var seeded = VaultPath.Root.Child(user.Vault).Child("seeded.md");
         Assert.True(await store.TryCreateAsync(new StoredNote(seeded, "seeded\n", 1, Writers.Seed, DateTime.UtcNow, [], Ref: WriterRef.Server), Ct));
 
-        Assert.Equal(("user", "user", "user"), await KindsAsync(user, "mine.md"));
+        Assert.Equal(("self", "self", "self"), await KindsAsync(user, "mine.md"));
         Assert.Equal(("server", "server", "server"), await KindsAsync(user, "seeded.md"));
     }
 
@@ -229,5 +230,68 @@ public sealed class WriterKindTests(KumbuAppFactory app)
         Assert.Equal("agent", change["writerKind"]!.GetValue<string>());
         Assert.Null(change["quietSince"]);
         Assert.Null(change["resumedAt"]);
+    }
+
+    /// <summary>A note written by <paramref name="user"/>'s name but sealed with <c>v: 2</c> and no reference, as a
+    /// write path that forgot one would have stored it, and the same for its removal: the server's own store, so the
+    /// working set holds it as MongoDB does.</summary>
+    private async Task<EncryptedNoteStore> UnreferencedAsync(RestClient user)
+    {
+        var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
+        var root = VaultPath.Root.Child(user.Vault);
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("orphan.md"), "orphan\n", 1, user.Username, DateTime.UtcNow, [], Ref: WriterRef.Unknown), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("gone.md"), "gone\n", 1, user.Username, DateTime.UtcNow, [], Ref: WriterRef.Unknown), Ct));
+        Assert.True(await store.TryTrashAsync((await store.GetAsync(root.Child("gone.md"), Ct))!, user.Username, WriterRef.Unknown, DateTime.UtcNow, Ct));
+        return store;
+    }
+
+    [Fact]
+    public async Task A_post_0_3_0_entry_without_reference_shows_as_unknown()
+    {
+        var user = await NewAsync(Api);
+        await UnreferencedAsync(user);
+
+        // As sealed: a payload version, no reference.
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        var sealedNote = (await Vaults.SealedPayloads.OpenAllAsync(app.Database, vault.Id, key, "notes", Ct)).Single();
+        Assert.Equal(2, (int)sealedNote["v"]!);
+        Assert.False(sealedNote.ContainsKey("ref"));
+
+        using var history = await user.GetAsync(user.Url("orphan.md", "history"));
+        var entry = (await JsonAsync(history)).AsArray().Single()!;
+        Assert.Equal("unknown", entry["writer"]!.GetValue<string>());
+        Assert.Null(entry["writerKind"]);
+        using var note = await user.GetAsync(user.Url("orphan.md"));
+        Assert.Equal("unknown", (await JsonAsync(note))["lastWriter"]!.GetValue<string>());
+        using var version = await user.GetAsync(user.Url("orphan.md", "version"));
+        Assert.Equal("unknown", (await JsonAsync(version))["lastWriter"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task History_and_activity_and_trash_render_through_one_service()
+    {
+        var user = await NewAsync(Api);
+        await UnreferencedAsync(user);
+        var agent = await user.KeyAsync("liz", KeyRight.Write);
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "agent.md", "x\n", agent));
+
+        using var history = await user.GetAsync(user.Url("orphan.md", "history"));
+        using var agentHistory = await user.GetAsync(user.Url("agent.md", "history"));
+        using var activity = await user.GetAsync($"/api/vaults/{Uri.EscapeDataString(user.Vault)}/activity");
+        using var trash = await user.GetAsync($"/api/vaults/{Uri.EscapeDataString(user.Vault)}/trash");
+        var rows = (await JsonAsync(activity))["rows"]!.AsArray();
+        string Row(string path, string field) =>
+            rows.Single(r => r!["files"]!.AsArray().Any(f => f!["path"]!.GetValue<string>() == path))![field]?.GetValue<string>() ?? "(none)";
+
+        // Not the owner's name anywhere: the same display, from the same service, in all three.
+        Assert.Equal("unknown", (await JsonAsync(history)).AsArray().Single()!["writer"]!.GetValue<string>());
+        Assert.Equal(("unknown", "(none)"), (Row($"/{user.Vault}/orphan.md", "writer"), Row($"/{user.Vault}/orphan.md", "writerKind")));
+        Assert.Equal("unknown", (await JsonAsync(trash))["notes"]!.AsArray().Single()!["deletedBy"]!.GetValue<string>());
+
+        // And an owner's writer the same way in history and activity.
+        var written = (await JsonAsync(agentHistory)).AsArray().Single()!;
+        Assert.Equal(("liz", "agent"), (written["writer"]!.GetValue<string>(), written["writerKind"]!.GetValue<string>()));
+        Assert.Equal(("liz", "agent"), (Row($"/{user.Vault}/agent.md", "writer"), Row($"/{user.Vault}/agent.md", "writerKind")));
     }
 }

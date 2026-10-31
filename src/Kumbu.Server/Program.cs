@@ -136,7 +136,8 @@ builder.Services.AddScoped(RequestCaller.Current);
 builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
 builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
-builder.Services.AddScoped<WriterKinds>();
+builder.Services.AddScoped<WriterLabels>();
+builder.Services.AddScoped<IWriterLabels>(sp => sp.GetRequiredService<WriterLabels>());
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
@@ -145,7 +146,7 @@ builder.Services.AddScoped<Replacer>();
 builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
-    sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
+    sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 

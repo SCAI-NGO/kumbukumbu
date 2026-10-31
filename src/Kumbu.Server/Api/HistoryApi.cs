@@ -161,16 +161,16 @@ public static class HistoryApi
     /// likewise, answered with its state (<c>FileStateView</c>) and, on a conflict, <c>FileConflictView</c>.
     /// </summary>
     private static async Task<Results<Ok<NoteView>, Ok<FileStateView>, Conflict<ConflictView>, Conflict<FileConflictView>>> RestoreAsync(
-        string vault, string? path, RestoreRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, WriterKinds kinds, CancellationToken ct)
+        string vault, string? path, RestoreRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, WriterLabels labels, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
         await NoteApi.RequireVaultAsync(store, notePath, ct);
         NoteApi.Refuse(caller, "restore", notePath);
-        if (notePath.IsAttachment) return await RestoreAttachmentAsync(notePath, body, store, writer, ct);
+        if (notePath.IsAttachment) return await RestoreAttachmentAsync(notePath, body, store, writer, labels, ct);
         var existing = await store.GetAsync(notePath, ct);
         if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return NoteApi.Conflict(existing, body.Expected);
         var result = await Gone(() => writer.RestoreAsync(notePath, body.Version, ct));
-        if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(await NoteView.FromAsync(now, kinds, ct));
+        if (!result.IsError && await store.GetAsync(notePath, ct) is { } now) return TypedResults.Ok(await NoteView.FromAsync(now, labels, ct));
 
         // What was asked for exists (in the history, or in the trash with a note at its path now), so it is the
         // state of the vault that stood in the way.
@@ -182,14 +182,14 @@ public static class HistoryApi
     }
 
     private static async Task<Results<Ok<NoteView>, Ok<FileStateView>, Conflict<ConflictView>, Conflict<FileConflictView>>> RestoreAttachmentAsync(
-        VaultPath path, RestoreRequest body, INoteStore store, NoteWriter writer, CancellationToken ct)
+        VaultPath path, RestoreRequest body, INoteStore store, NoteWriter writer, WriterLabels labels, CancellationToken ct)
     {
         var files = FileApi.Files(store);
         var attachments = writer.ForAttachments() ?? throw ApiErrors.NotFound("This server keeps no attachments.");
         var existing = await files.GetAttachmentAsync(path, ct);
-        if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return FileApi.Conflict(existing, body.Expected);
+        if (existing is not null && body.Expected is not null && existing.Version != body.Expected) return await FileApi.ConflictAsync(existing, body.Expected, labels, ct);
         var result = await Gone(() => attachments.RestoreAsync(path.Value, body.Version, ct));
-        if (!result.IsError && await files.GetAttachmentAsync(path, ct) is { } now) return TypedResults.Ok(FileStateView.Of(now));
+        if (!result.IsError && await files.GetAttachmentAsync(path, ct) is { } now) return TypedResults.Ok(await FileStateView.OfAsync(now, labels, ct));
 
         // As for a note: what was asked for exists, so it is the state of the vault that stood in the way.
         var inTrash = (await files.ListAttachmentTrashAsync(path, ct)).Any(t => t.Attachment.Path == path && (body.Version is null || t.Attachment.Version == body.Version));
@@ -203,32 +203,43 @@ public static class HistoryApi
     /// What the web app polls while a note is open and the page visible. It doesn't count as the session's use
     /// (<see cref="BackgroundMetadata"/>), but like any read it keeps the vault unlocked.
     /// </summary>
-    private static async Task<Ok<NoteVersionView>> VersionAsync(string vault, string? path, INoteStore store, WriterKinds kinds, CancellationToken ct)
+    private static async Task<Ok<NoteVersionView>> VersionAsync(string vault, string? path, INoteStore store, WriterLabels labels, CancellationToken ct)
     {
         var notePath = ApiPaths.Parse(vault, path, PathKind.NoteOrAttachment);
         if (notePath.IsAttachment)
         {
             var file = await StoreAttachments.GetAsync(store, notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
+            var (fileWriter, fileKind) = await labels.RenderAsync(file.LastWriter, file.Ref, ct);
             return TypedResults.Ok(new NoteVersionView(
-                notePath.Value, file.Version, file.LastWriter, file.LastWriteAt, await kinds.OfAsync(file.LastWriter, ct),
+                notePath.Value, file.Version, fileWriter, file.LastWriteAt, fileKind,
                 AttachmentFormat.KindOf(notePath.Name), file.Current.MediaType, file.Current.Size, file.Current.Width, file.Current.Height));
         }
 
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
-        return TypedResults.Ok(new NoteVersionView(
-            notePath.Value, note.Version, note.LastWriter, note.LastWriteAt, await kinds.OfAsync(note.LastWriter, ct), Size: Encoding.UTF8.GetByteCount(note.Content)));
+        var (writer, kind) = await labels.RenderAsync(note.LastWriter, note.Ref, ct);
+        return TypedResults.Ok(new NoteVersionView(notePath.Value, note.Version, writer, note.LastWriteAt, kind, Size: Encoding.UTF8.GetByteCount(note.Content)));
     }
 
-    private static async Task<Ok<TrashView>> TrashAsync(string vault, INoteStore store, CancellationToken ct)
+    private static async Task<Ok<TrashView>> TrashAsync(string vault, INoteStore store, WriterLabels labels, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
-        var notes = (await store.ListTrashAsync(root, ct)).Select(t => new TrashEntryView(
-            t.Note.Path.Value, t.Note.Version, t.DeletedAt, t.DeletedBy, t.DeletedAt + NoteWriter.TrashRetention,
-            Lines.Split(t.Note.Content).Count, Encoding.UTF8.GetByteCount(t.Note.Content)));
-        var files = (store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : []).Select(t => new TrashEntryView(
-            t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, t.DeletedBy, t.DeletedAt + NoteWriter.TrashRetention,
-            0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Name), t.Attachment.Current.MediaType));
+        var notes = new List<TrashEntryView>();
+        foreach (var t in await store.ListTrashAsync(root, ct))
+        {
+            notes.Add(new TrashEntryView(
+                t.Note.Path.Value, t.Note.Version, t.DeletedAt, (await labels.RenderAsync(t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
+                Lines.Split(t.Note.Content).Count, Encoding.UTF8.GetByteCount(t.Note.Content)));
+        }
+
+        var files = new List<TrashEntryView>();
+        foreach (var t in store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : [])
+        {
+            files.Add(new TrashEntryView(
+                t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, (await labels.RenderAsync(t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
+                0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Name), t.Attachment.Current.MediaType));
+        }
+
         // Stable: entries removed at one instant keep the order each list gives them.
         return TypedResults.Ok(new TrashView(NoteWriter.TrashRetention.Days, [.. notes.Concat(files).OrderByDescending(e => e.DeletedAt)]));
     }
@@ -243,7 +254,7 @@ public static class HistoryApi
     /// earlier versions (<see cref="AccountLimits.HistoryScansPerUser"/>): both read every note of the vault.
     /// </summary>
     private static async Task<Ok<ActivityView>> ActivityAsync(
-        string vault, string? before, string? key, int? limit, RequestCaller caller, AccountLimits limits, INoteStore store, WriterKinds kinds, CancellationToken ct)
+        string vault, string? before, string? key, int? limit, RequestCaller caller, AccountLimits limits, INoteStore store, WriterLabels labels, CancellationToken ct)
     {
         var max = limit ?? DefaultActivityRows;
         if (max is < 1 or > MaxActivityRows) throw ApiErrors.BadRequest($"limit is 1 to {MaxActivityRows}.");
@@ -272,28 +283,29 @@ public static class HistoryApi
             notes, await store.ListTrashAsync(root, ct), await store.ListMovesAsync(root, ct), until, max + 1, key,
             await StoreAttachments.UnderAsync(store, root, ct),
             store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : []);
-        var kindOf = new Dictionary<string, string?>(StringComparer.Ordinal);
         var views = new List<ActivityRowView>();
         foreach (var row in rows.Take(max))
         {
-            if (!kindOf.TryGetValue(row.Writer, out var kind)) kindOf[row.Writer] = kind = await kinds.OfAsync(row.Writer, ct);
-            views.Add(new ActivityRowView(row.Id, row.Writer, kind, row.From, row.To, [.. row.Files.Select(f => new ActivityFileView(
+            var (writer, kind) = await labels.RenderAsync(row.Writer, row.Ref, ct);
+            views.Add(new ActivityRowView(row.Id, writer, kind, row.From, row.To, [.. row.Files.Select(f => new ActivityFileView(
                 f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed, f.To, f.FileKind))], row.Key, row.Restore));
         }
 
         return TypedResults.Ok(new ActivityView(views, rows.Count > max));
     }
 
-    private static async Task<Ok<CheckpointsView>> ListCheckpointsAsync(string vault, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+    private static async Task<Ok<CheckpointsView>> ListCheckpointsAsync(string vault, INoteStore store, Checkpoints checkpoints, WriterLabels labels, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
-        return TypedResults.Ok(new CheckpointsView(checkpoints.Limit, [.. (await store.ListCheckpointsAsync(root, ct)).Select(View)]));
+        var views = new List<CheckpointEntryView>();
+        foreach (var c in await store.ListCheckpointsAsync(root, ct)) views.Add(await ViewAsync(c, labels, ct));
+        return TypedResults.Ok(new CheckpointsView(checkpoints.Limit, views));
     }
 
     /// <summary><c>mkcp /vault name</c>: the whole vault as it is now, under a name until it is removed.</summary>
     private static async Task<Created<CheckpointEntryView>> CreateCheckpointAsync(
-        string vault, CreateCheckpointRequest body, RequestCaller caller, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+        string vault, CreateCheckpointRequest body, RequestCaller caller, INoteStore store, Checkpoints checkpoints, WriterLabels labels, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         await NoteApi.RequireVaultAsync(store, root, ct);
@@ -305,17 +317,17 @@ public static class HistoryApi
         if (result.IsError) throw new ApiException(StatusCodes.Status409Conflict, result.Output);
         var made = await checkpoints.FindAsync(root.Segments[0], body.Name, ct)
             ?? throw new ApiException(StatusCodes.Status409Conflict, $"Checkpoint '{body.Name}' was removed again just now.");
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(root.Segments[0])}/checkpoints", View(made));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(root.Segments[0])}/checkpoints", await ViewAsync(made, labels, ct));
     }
 
     /// <summary>The checkpoint's notes and attachments as a tree, as <c>ls</c> shows them; reading needs no write right.</summary>
     private static async Task<Ok<CheckpointTreeView>> CheckpointTreeAsync(
-        string vault, string name, INoteStore store, Checkpoints checkpoints, CancellationToken ct)
+        string vault, string name, INoteStore store, Checkpoints checkpoints, WriterLabels labels, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         var view = await OpenCheckpointAsync(root, name, store, checkpoints, ct);
         return TypedResults.Ok(new CheckpointTreeView(
-            View(view.Checkpoint), NoteApi.TreeOf(root, await view.ReadNotesUnderAsync(root, ct), await view.ListAttachmentsUnderAsync(root, ct))));
+            await ViewAsync(view.Checkpoint, labels, ct), NoteApi.TreeOf(root, await view.ReadNotesUnderAsync(root, ct), await view.ListAttachmentsUnderAsync(root, ct))));
     }
 
     /// <summary>An attachment's bytes as the checkpoint held them (<c>download=1</c> as on <c>GET /api/files</c>), even
@@ -419,5 +431,6 @@ public static class HistoryApi
         return root;
     }
 
-    private static CheckpointEntryView View(Checkpoint c) => new(c.Name, c.Scope, c.CreatedBy, c.CreatedAt, c.Notes.Count, c.Attachments.Count(a => !FolderMarker.Is(a.Path)));
+    private static async Task<CheckpointEntryView> ViewAsync(Checkpoint c, IWriterLabels labels, CancellationToken ct) => new(
+        c.Name, c.Scope, (await labels.RenderAsync(c.CreatedBy, c.Ref, ct)).Display, c.CreatedAt, c.Notes.Count, c.Attachments.Count(a => !FolderMarker.Is(a.Path)));
 }

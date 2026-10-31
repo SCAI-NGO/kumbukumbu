@@ -53,8 +53,11 @@ public sealed record RestorePreview(
 /// <c>restore</c> do with one. Reading from a checkpoint (<c>--checkpoint</c>) goes through a
 /// <see cref="CheckpointView"/>.
 /// </summary>
-public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans, int limit = Checkpoints.DefaultLimit)
+/// <param name="labels">How a checkpoint's maker is shown to the caller (collab design §8.2); the labels as they are by default.</param>
+public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans, int limit = Checkpoints.DefaultLimit, IWriterLabels? labels = null)
 {
+    private readonly IWriterLabels _labels = labels ?? PlainWriterLabels.Instance;
+
     public const int DefaultLimit = 10;
 
     public int Limit => limit;
@@ -127,6 +130,9 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             + $"e.g. {(folder ? "ls" : "cat")} --checkpoint {name} {SectionLookup.Quote(path)}");
     }
 
+    /// <summary>Who made <paramref name="checkpoint"/>, as the caller is shown it.</summary>
+    private async Task<string> MakerAsync(Checkpoint checkpoint, CancellationToken ct) => (await _labels.RenderAsync(checkpoint.CreatedBy, checkpoint.Ref, ct)).Display;
+
     public async Task<ShellResult> ListAsync(VaultPath path, CancellationToken ct)
     {
         var all = await store.ListCheckpointsAsync(path.IsRoot ? VaultPath.Root : VaultPath.Root.Child(path.Segments[0]), ct);
@@ -137,9 +143,11 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         {
             var nameWidth = shown.Max(c => c.Name.Length);
             var scopeWidth = shown.Max(c => c.Scope.Length);
-            var byWidth = shown.Max(c => c.CreatedBy.Length);
-            lines.AddRange(shown.Select(c =>
-                $"{c.Name.PadRight(nameWidth)}  {c.Scope.PadRight(scopeWidth)}  {History.Time(c.CreatedAt)}  {c.CreatedBy.PadRight(byWidth)}  {Contents(c)}"));
+            var by = new List<string>();
+            foreach (var c in shown) by.Add(await MakerAsync(c, ct));
+            var byWidth = by.Max(b => b.Length);
+            lines.AddRange(shown.Select((c, i) =>
+                $"{c.Name.PadRight(nameWidth)}  {c.Scope.PadRight(scopeWidth)}  {History.Time(c.CreatedAt)}  {by[i].PadRight(byWidth)}  {Contents(c)}"));
         }
 
         if (!path.IsRoot) lines.Add($"{all.Count} of {limit} checkpoints in {path.Segments[0]}");
@@ -209,7 +217,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var where = Where(checkpoint, scope);
         if (rows.Count == 0) return ShellResult.Ok($"(no changes in {where} since checkpoint '{checkpoint.Name}')");
         return ShellResult.Ok(Lines.Join([
-            $"changes in {where} since checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {checkpoint.CreatedBy}):",
+            $"changes in {where} since checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {await MakerAsync(checkpoint, ct)}):",
             .. rows.OrderBy(r => r.Path, TextOrder.Default).Select(r => r.Row),
             $"diff <note> --checkpoint {checkpoint.Name} shows one note; restore --checkpoint {checkpoint.Name} <path> goes back",
         ]));
@@ -544,7 +552,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
         var lines = new List<string>
         {
-            $"restore {where} to checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {checkpoint.CreatedBy}):",
+            $"restore {where} to checkpoint '{checkpoint.Name}' ({History.Time(checkpoint.CreatedAt)}, {await MakerAsync(checkpoint, ct)}):",
         };
         lines.AddRange(preview.Changes.Select(c => c.Kind switch
         {

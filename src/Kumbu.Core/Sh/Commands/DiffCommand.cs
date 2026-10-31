@@ -6,8 +6,11 @@ using Kumbu.Core.Sections;
 
 namespace Kumbu.Core.Sh.Commands;
 
-public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICommand
+/// <param name="labels">How writers are shown to the caller; the labels as they are by default.</param>
+public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWriterLabels? labels = null) : ICommand
 {
+    private readonly IWriterLabels _labels = labels ?? PlainWriterLabels.Instance;
+
     private static readonly Option[] Spec = [new(null, "word"), new(null, "checkpoint", TakesValue: true)];
 
     public string Name => "diff";
@@ -38,7 +41,7 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICo
     public bool ReadsInput => false;
 
     /// <param name="Absent">What stands in for a note that isn't there on this side, e.g. "(removed since)".</param>
-    private sealed record Side(VaultPath Path, string Content, string Writer, DateTime At, string? Origin = null, string? Absent = null)
+    private sealed record Side(VaultPath Path, string Content, string Writer, DateTime At, string? Origin = null, string? Absent = null, WriterRef? Ref = null)
     {
         public string Header(char marker) => Absent is not null
             ? $"{new string(marker, 3)} {Path.Value}  {Absent}"
@@ -83,7 +86,7 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICo
         else
         {
             var states = new List<Side> { Current(note) };
-            states.AddRange(note.History.Select(h => new Side(path, h.Content, h.WrittenBy, h.WrittenAt)));
+            states.AddRange(note.History.Select(h => new Side(path, h.Content, h.WrittenBy, h.WrittenAt, Ref: h.Ref)));
             Side? Find(string version) => states.FirstOrDefault(s => VersionToken.Of(s.Content) == version);
 
             if (operands.Count == 1)
@@ -104,16 +107,19 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICo
             }
         }
 
-        return Compare(from, to, options.Has("word"));
+        return await CompareAsync(from, to, options.Has("word"), ct);
     }
 
-    private static ShellResult Compare(Side from, Side to, bool words)
+    private async Task<ShellResult> CompareAsync(Side older, Side newer, bool words, CancellationToken ct)
     {
-        var hunks = TextDiff.Hunks(from.Content, to.Content, words);
-        return hunks.Count == 0
-            ? ShellResult.Ok($"(no differences between {VersionToken.Of(from.Content)} and {VersionToken.Of(to.Content)})")
-            : ShellResult.Ok(Lines.Join([from.Header('-'), to.Header('+'), .. hunks]));
+        var hunks = TextDiff.Hunks(older.Content, newer.Content, words);
+        if (hunks.Count == 0) return ShellResult.Ok($"(no differences between {VersionToken.Of(older.Content)} and {VersionToken.Of(newer.Content)})");
+        return ShellResult.Ok(Lines.Join([(await ShownAsync(older, ct)).Header('-'), (await ShownAsync(newer, ct)).Header('+'), .. hunks]));
     }
+
+    /// <summary>The side with its writer as the caller is shown it; an absent side names none.</summary>
+    private async Task<Side> ShownAsync(Side side, CancellationToken ct) =>
+        side.Absent is null ? side with { Writer = (await _labels.RenderAsync(side.Writer, side.Ref, ct)).Display } : side;
 
     private async Task<ShellResult> AgainstCheckpointAsync(VaultPath path, string name, bool words, CancellationToken ct)
     {
@@ -138,11 +144,11 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints) : ICo
         var origin = $"checkpoint '{name}'  ";
         var from = then is null
             ? new Side(scope, "", "", default, Absent: $"(not in checkpoint '{name}')")
-            : new Side(scope, then, checkpoint.CreatedBy, checkpoint.CreatedAt, origin);
+            : new Side(scope, then, checkpoint.CreatedBy, checkpoint.CreatedAt, origin, Ref: checkpoint.Ref);
         var to = now is null ? new Side(scope, "", "", default, Absent: "(removed since)") : Current(now);
         if (then is not null && now is not null && then == now.Content) return ShellResult.Ok($"(no differences: {scope.Value} is as in checkpoint '{name}')");
-        return Compare(from, to, words);
+        return await CompareAsync(from, to, words, ct);
     }
 
-    private static Side Current(StoredNote note) => new(note.Path, note.Content, note.LastWriter, note.LastWriteAt);
+    private static Side Current(StoredNote note) => new(note.Path, note.Content, note.LastWriter, note.LastWriteAt, Ref: note.Ref);
 }

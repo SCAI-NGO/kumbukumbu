@@ -32,20 +32,22 @@ public sealed class Shell
     private readonly IShellObserver? _observer;
     private readonly IAttachmentPixels? _pixels;
 
-    public Shell(INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null, IAttachmentPixels? pixels = null, string version = "0.0.0-dev")
+    public Shell(
+        INoteStore notes, NoteWriter writer, NoteMover mover, Checkpoints? checkpoints = null, Search.ISearchIndex? search = null, IShellObserver? observer = null,
+        IAttachmentPixels? pixels = null, IWriterLabels? labels = null, string version = "0.0.0-dev")
     {
         _observer = observer;
         _pixels = pixels;
         _now = () => writer.Now;
-        _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans());
+        _checkpoints = checkpoints ?? new Checkpoints(notes, writer, new Plans(), labels: labels);
         var files = writer.ForAttachments();
         ICommand[] commands =
         [
             .. ReadingCommands(notes, _now, pixels),
             new Semsearch(notes, search ?? new Search.NoSearchIndex(), pixels),
             .. pixels is null ? Array.Empty<ICommand>() : [new Img(notes, pixels), new PdfCommand(notes, pixels)],
-            new History(notes, () => writer.Now), new DiffCommand(notes, _checkpoints), new Restore(writer, _checkpoints, files),
-            new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes),
+            new History(notes, () => writer.Now, labels), new DiffCommand(notes, _checkpoints, labels), new Restore(writer, _checkpoints, files),
+            new Mv(mover), .. files is null ? Array.Empty<ICommand>() : [new Mkdir(files)], new Rm(writer, files), new Trash(notes, labels),
             new Mkcp(_checkpoints), new Lscp(_checkpoints), new Rmcp(_checkpoints),
             new Uname(version), new Help(_commands),
         ];

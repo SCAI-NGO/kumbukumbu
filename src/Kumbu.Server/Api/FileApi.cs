@@ -19,8 +19,9 @@ namespace Kumbu.Server.Api;
 /// or delete sends back, and who wrote it when.</summary>
 public sealed record FileStateView(string Path, string MediaType, long Size, int? Width, int? Height, string Version, DateTime WrittenAt, string WrittenBy)
 {
-    internal static FileStateView Of(StoredAttachment a) =>
-        new(a.Path.Value, a.Current.MediaType, a.Current.Size, a.Current.Width, a.Current.Height, a.Version, a.LastWriteAt, a.LastWriter);
+    internal static async Task<FileStateView> OfAsync(StoredAttachment a, IWriterLabels labels, CancellationToken ct) => new(
+        a.Path.Value, a.Current.MediaType, a.Current.Size, a.Current.Width, a.Current.Height, a.Version, a.LastWriteAt,
+        (await labels.RenderAsync(a.LastWriter, a.Ref, ct)).Display);
 }
 
 /// <summary>A write or delete that lost against another one: the attachment as it is now, without its bytes.</summary>
@@ -133,7 +134,8 @@ public static class FileApi
     /// <c>Content-Type</c> is ignored. Nothing is stored before the whole body has arrived and passed the checks.
     /// </summary>
     private static async Task<Results<Created<FileStateView>, Ok<FileStateView>, Conflict<FileConflictView>>> WriteAsync(
-        string vault, string? path, string? version, HttpRequest request, RequestCaller caller, INoteStore store, NoteWriter notes, CancellationToken ct)
+        string vault, string? path, string? version, HttpRequest request, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels,
+        CancellationToken ct)
     {
         var filePath = ApiPaths.Parse(vault, path, PathKind.Attachment);
         await NoteApi.RequireVaultAsync(store, filePath, ct);
@@ -163,7 +165,7 @@ public static class FileApi
 
             // Asked first, so that a conflict answers with the file as it is; the writer checks again when it writes.
             var existing = await files.GetAttachmentAsync(filePath, ct);
-            if (existing is not null && existing.Version != version) return Conflict(existing, version);
+            if (existing is not null && existing.Version != version) return await ConflictAsync(existing, version, labels, ct);
             if (existing is null && version is not null) throw await NoteApi.MissingAsync(store, filePath, ct);
 
             var (result, written) = await writer.WriteAsync(filePath.Value, bytes, dimensions, version, ct);
@@ -171,7 +173,7 @@ public static class FileApi
             {
                 return result.Kind switch
                 {
-                    Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => Conflict(written, version),
+                    Kumbu.Core.Sh.ShellErrorKind.Conflict when written is not null => await ConflictAsync(written, version, labels, ct),
                     Kumbu.Core.Sh.ShellErrorKind.NotFound => throw await NoteApi.MissingAsync(store, filePath, ct),
                     Kumbu.Core.Sh.ShellErrorKind.Refused => throw NoteApi.Refused(result),
                     Kumbu.Core.Sh.ShellErrorKind.Conflict => throw ConflictWithoutState(result.Output),
@@ -179,7 +181,7 @@ public static class FileApi
                 };
             }
 
-            var view = FileStateView.Of(written!);
+            var view = await FileStateView.OfAsync(written!, labels, ct);
             return existing is null ? TypedResults.Created(ApiPaths.Url("files", filePath), view) : TypedResults.Ok(view);
         }
         finally
@@ -225,7 +227,7 @@ public static class FileApi
     /// <summary><c>version</c>: trash the file only if it is still at that version, else 409 with the file as it is now.
     /// Without it, whatever version it is at.</summary>
     private static async Task<Results<NoContent, Conflict<FileConflictView>>> DeleteAsync(
-        string vault, string? path, string? version, RequestCaller caller, INoteStore store, NoteWriter notes, CancellationToken ct)
+        string vault, string? path, string? version, RequestCaller caller, INoteStore store, NoteWriter notes, WriterLabels labels, CancellationToken ct)
     {
         var filePath = ApiPaths.Parse(vault, path, PathKind.Attachment);
         await NoteApi.RequireVaultAsync(store, filePath, ct);
@@ -233,12 +235,12 @@ public static class FileApi
         var files = Files(store);
         var writer = notes.ForAttachments() ?? throw ApiErrors.NotFound("This server keeps no attachments.");
         var existing = await files.GetAttachmentAsync(filePath, ct) ?? throw await NoteApi.MissingAsync(store, filePath, ct);
-        if (version is not null && existing.Version != version) return Conflict(existing, version);
+        if (version is not null && existing.Version != version) return await ConflictAsync(existing, version, labels, ct);
 
         var result = await writer.RemoveAsync(filePath.Value, ct, version);
         if (!result.IsError) return TypedResults.NoContent();
         var now = await files.GetAttachmentAsync(filePath, ct) ?? throw await NoteApi.MissingAsync(store, filePath, ct);
-        if (version is not null && now.Version != version) return Conflict(now, version);
+        if (version is not null && now.Version != version) return await ConflictAsync(now, version, labels, ct);
         throw ConflictWithoutState(result.Output);
     }
 
@@ -248,14 +250,14 @@ public static class FileApi
         return new ApiException(StatusCodes.Status409Conflict, message);
     }
 
-    internal static Conflict<FileConflictView> Conflict(StoredAttachment current, string? version)
+    internal static async Task<Conflict<FileConflictView>> ConflictAsync(StoredAttachment current, string? version, IWriterLabels labels, CancellationToken ct)
     {
         KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
         return TypedResults.Conflict(new FileConflictView(
             version is null
                 ? $"{current.Path.Value} exists already; to overwrite it, send its version."
                 : $"{current.Path.Value} has changed since version {version} (it is now {current.Version}).",
-            FileStateView.Of(current)));
+            await FileStateView.OfAsync(current, labels, ct)));
     }
 
     /// <summary>The attachments of the caller's store; every store of this server keeps them.</summary>
