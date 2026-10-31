@@ -29,6 +29,9 @@ public sealed class KumbuAppFactory : WebApplicationFactory<Program>, IAsyncLife
     /// <summary>The app's database, for tests that change it behind the server's back.</summary>
     public MongoDB.Driver.IMongoDatabase Database => new MongoDB.Driver.MongoClient(MongoConnectionString).GetDatabase(DatabaseName);
 
+    /// <summary>A fresh database on the app's MongoDB, beside the app's, for catalog-level tests in this collection.</summary>
+    public MongoDB.Driver.IMongoDatabase NewDatabase() => new MongoDB.Driver.MongoClient(MongoConnectionString).GetDatabase("t" + Guid.NewGuid().ToString("N"));
+
     public async ValueTask InitializeAsync()
     {
         if (_mongo is not null)

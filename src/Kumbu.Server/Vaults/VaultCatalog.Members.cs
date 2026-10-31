@@ -72,6 +72,59 @@ public sealed partial class VaultCatalog
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// The memberships the derived slots among <paramref name="slots"/> (<c>grantedVia</c>) name, those active now; null,
+    /// without a query, when none is derived: owners' keys and connections pay nothing.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, MembershipDocument>?> ActiveGrantsAsync(IEnumerable<SlotDocument> slots, CancellationToken ct)
+    {
+        var ids = slots.Select(s => s.GrantedVia).OfType<string>().ToList();
+        return ids.Count == 0 ? null : await ActiveMembershipsAsync(ids, ct);
+    }
+
+    /// <summary>The active membership a derived slot was granted through, if it is on the slot's vault; else null.</summary>
+    private static MembershipDocument? ActiveGrant(IReadOnlyDictionary<string, MembershipDocument>? active, SlotDocument slot) =>
+        slot.GrantedVia is { } id && active is not null && active.TryGetValue(id, out var m) && m.Vault == slot.Vault ? m : null;
+
+    /// <summary>A member's credential acts at most at her role (collab design §3.3): <c>min(role, sealed)</c>. A role
+    /// that doesn't parse reads as <c>read</c>.</summary>
+    internal static Accounts.KeyRight Capped(Accounts.KeyRight sealedRight, MembershipDocument membership)
+    {
+        var role = MemberRoles.Parse(membership.Role) switch
+        {
+            MemberRole.Maintain => Accounts.KeyRight.Maintain,
+            MemberRole.Write => Accounts.KeyRight.Write,
+            _ => Accounts.KeyRight.Read,
+        };
+        return sealedRight < role ? sealedRight : role;
+    }
+
+    /// <summary>
+    /// "Last use on this vault" of derived slots (planner's decision 9): <c>usedAt</c>, set at most once a minute per
+    /// slot, by one update that doesn't hold up the request; a failure is only logged.
+    /// </summary>
+    private void TouchUsed(IEnumerable<SlotDocument> slots)
+    {
+        var now = Now;
+        var stale = slots.Where(s => s.UsedAt is not { } at || now - at >= UsedGranularity).Select(s => s.Id).ToList();
+        if (stale.Count == 0) return;
+        var f = Builders<SlotDocument>.Filter;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Slots.UpdateManyAsync(
+                    f.In(s => s.Id, stale) & (f.Eq(s => s.UsedAt, null) | f.Lt(s => s.UsedAt, now - UsedGranularity)), Builders<SlotDocument>.Update.Set(s => s.UsedAt, now));
+            }
+            catch (Exception e)
+            {
+                log.LogWarning(e, "Recording the last use of {Count} slots failed", stale.Count);
+            }
+        });
+    }
+
+    private static readonly TimeSpan UsedGranularity = TimeSpan.FromMinutes(1);
+
     /// <summary>Whether <paramref name="slot"/>'s membership is among <paramref name="active"/>, and is the membership of
     /// <paramref name="userId"/> on the slot's vault: a slot pointed at someone else's membership opens nothing.</summary>
     private static bool IsActiveMembership(IReadOnlyDictionary<string, MembershipDocument>? active, SlotDocument slot, string userId) =>

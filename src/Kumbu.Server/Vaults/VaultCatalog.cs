@@ -9,6 +9,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
 using Kumbu.Server.Metrics;
 using Microsoft.Extensions.Options;
+using Kumbu.Server.Sharing;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Vaults;
@@ -430,7 +431,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             KeyId = keyId,
             GrantedVia = vaultKeys[v.Key].Membership,
             Wrapped = VaultCrypto.Seal(
-                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion)), ApiKeySlotContext(v.Key, keyId)),
+                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership)),
+                ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
         await IssueFaultAsync("after-wrap");
@@ -459,16 +461,21 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     }
 
     /// <summary>A vault key opened from a token's slot, with the right sealed into it, and the membership the slot was
-    /// derived through, if any: the tokens issued from it carry it on.</summary>
+    /// derived through, if any: the tokens issued from it carry it on. <c>Membership</c> is that membership as read on
+    /// this request (active), for the level; its role caps the right only when the vault is opened, never in a new slot.</summary>
     internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right)
     {
         public string? GrantedVia { get; init; }
+
+        public Sharing.MembershipDocument? Membership { get; init; }
     }
 
     /// <summary>
     /// The vault keys a connection's token has slots for, each with its right. Every slot is opened, and one past its
     /// <c>expiresAt</c> is refused here (MongoDB's TTL index only tidies up, once a minute); a slot that doesn't open
-    /// (changed or moved in the database) gives nothing.
+    /// (changed or moved in the database) gives nothing. A slot derived through a membership gives its key only while
+    /// the membership is active, read in one query on every call (collab design §3.1): what the exchange and the
+    /// refresh wrap again, and what a request opens, are both behind it.
     /// </summary>
     internal async Task<IReadOnlyList<ConnectionVaultKey>> OpenConnectionSlotsAsync(string connectionId, string tokenId, string token, CancellationToken ct)
     {
@@ -476,7 +483,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var f = Builders<SlotDocument>.Filter;
         var slots = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.Connection) & f.Eq(s => s.TokenId, tokenId) & f.Eq(s => s.ConnectionId, connectionId)).ToListAsync(ct);
         var now = Now;
-        var result = new List<ConnectionVaultKey>();
+        var opened = new List<(SlotDocument Slot, ApiKeySlotPayload Payload, Accounts.KeyRight Right)>();
         foreach (var slot in slots)
         {
             if (now >= slot.ExpiresAt) continue;
@@ -484,7 +491,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(
                     VaultCrypto.Open(ConnectionKek(token, slot.Vault), slot.Wrapped, ConnectionSlotContext(slot.Vault, connectionId, tokenId)))!;
-                result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, RightOf(payload)) { GrantedVia = slot.GrantedVia });
+                if (!SameGrant(slot, payload)) throw new JsonException("membership changed");
+                opened.Add((slot, payload, RightOf(payload)));
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
@@ -492,6 +500,23 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
         }
 
+        var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
+        var result = new List<ConnectionVaultKey>();
+        var used = new List<SlotDocument>();
+        foreach (var (slot, payload, right) in opened)
+        {
+            MembershipDocument? membership = null;
+            if (slot.GrantedVia is not null)
+            {
+                // Skipped as if absent: its membership isn't active (any more).
+                if ((membership = ActiveGrant(active, slot)) is null) continue;
+                used.Add(slot);
+            }
+
+            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, Membership = membership });
+        }
+
+        TouchUsed(used);
         return result;
     }
 
@@ -510,7 +535,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = k.GrantedVia,
             Wrapped = VaultCrypto.Seal(
                 ConnectionKek(token, k.Vault),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion)),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia)),
                 ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
@@ -524,9 +549,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         string connectionId, string tokenId, string token, CancellationToken ct)
     {
         var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        // Every key here passed the membership check of this call, before anything is loaded.
         foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
         {
-            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add((vault, key.Right));
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add((vault, key.Membership is { } m ? Capped(key.Right, m) : key.Right));
         }
 
         return result;
@@ -540,32 +566,48 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// The vaults an API key has slots for, unlocked, each with the right sealed into its slot. As in
     /// <see cref="OpenAsync"/>, every slot is opened, also for a vault in memory: a revoked key has no slots left,
-    /// and a slot that was changed in the database (its right, say) doesn't open and gives nothing.
+    /// and a slot that was changed in the database (its right, say) doesn't open and gives nothing. A slot derived
+    /// through a membership opens its vault only while the membership is active, read in one query on every call before
+    /// any vault is loaded or taken from memory (collab design §3.1), and its right is capped by the role.
     /// </summary>
     internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId)).ToListAsync(ct);
 
-        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        var opened = new List<(SlotDocument Slot, ApiKeySlotPayload Payload, Accounts.KeyRight Right)>();
         foreach (var slot in slots)
         {
-            ApiKeySlotPayload payload;
-            Accounts.KeyRight right;
             try
             {
-                payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(ApiKeyKek(apiKey, slot.Vault), slot.Wrapped, ApiKeySlotContext(slot.Vault, keyId)))!;
-                right = RightOf(payload);
+                var payload = JsonSerializer.Deserialize<ApiKeySlotPayload>(VaultCrypto.Open(ApiKeyKek(apiKey, slot.Vault), slot.Wrapped, ApiKeySlotContext(slot.Vault, keyId)))!;
+                if (!SameGrant(slot, payload)) throw new JsonException("membership changed");
+                opened.Add((slot, payload, RightOf(payload)));
             }
             catch (Exception e) when (e is CryptographicException or JsonException)
             {
                 log.LogWarning("A slot of API key {KeyId} on vault {VaultId} did not open", keyId, slot.Vault);
-                continue;
             }
-
-            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add((vault, right));
         }
 
+        var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
+        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        var used = new List<SlotDocument>();
+        foreach (var (slot, payload, right) in opened)
+        {
+            var level = right;
+            if (slot.GrantedVia is not null)
+            {
+                // Skipped as if absent, before the vault is loaded: its membership isn't active (any more).
+                if (ActiveGrant(active, slot) is not { } membership) continue;
+                level = Capped(right, membership);
+                used.Add(slot);
+            }
+
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add((vault, level));
+        }
+
+        TouchUsed(used);
         return result;
     }
 
@@ -1186,7 +1228,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     private sealed record ApiKeySlotPayload(
         [property: System.Text.Json.Serialization.JsonPropertyName("vaultKey")] byte[] VaultKey,
         [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
-        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null);
+        [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("via"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        string? Via = null);
+
+    /// <summary>The slot's <c>grantedVia</c> is the membership sealed into it: one changed, added or removed in the
+    /// database (to dodge the membership check, or to borrow another's) makes the slot not open.</summary>
+    private static bool SameGrant(SlotDocument slot, ApiKeySlotPayload payload) => string.Equals(slot.GrantedVia, payload.Via, StringComparison.Ordinal);
 
     /// <summary>The right a slot grants: a <c>write</c> sealed before 0.3.0 reads as <c>maintain</c> (<see cref="Accounts.KeyRights.ParseSealed"/>).</summary>
     private static Accounts.KeyRight RightOf(ApiKeySlotPayload payload) =>

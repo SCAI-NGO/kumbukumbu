@@ -141,4 +141,22 @@ public sealed class DerivedCredentialTests(KumbuAppFactory app)
         var writers = Memberships.OpenWriters(await Share.MembershipAsync(app.Database, membershipId), await alice.VaultKeyAsync());
         Assert.Equal(new Dictionary<string, string> { [connection.Id] = "claude" }, writers);
     }
+
+    [Fact]
+    public async Task A_derived_slot_records_its_last_use()
+    {
+        var (_, bob, vaultId, _) = await SharedAsync();
+        var own = await bob.VaultIdAsync();
+        var (key, info) = await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write, [own] = KeyRight.Write });
+
+        var (failed, text) = await bob.ShAsync("ls /", key);
+        Assert.False(failed, text);
+
+        // Written beside the request, not in it.
+        SlotDocument derived;
+        var waited = 0;
+        while ((derived = await Slots.Find(s => s.KeyId == info.Id && s.Vault == vaultId).SingleAsync(Ct)).UsedAt is null && waited++ < 50) await Task.Delay(100, Ct);
+        Assert.NotNull(derived.UsedAt);
+        Assert.Null((await Slots.Find(s => s.KeyId == info.Id && s.Vault == own).SingleAsync(Ct)).UsedAt);
+    }
 }
