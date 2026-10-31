@@ -147,7 +147,7 @@ public sealed partial class VaultCatalog
         var f = Builders<MembershipDocument>.Filter;
         var found = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
             .Find(f.In(m => m.Id, ids.Distinct(StringComparer.Ordinal)) & f.Eq(m => m.Status, MembershipStatus.Active))
-            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Member).Include(m => m.Role))
+            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds))
             .ToListAsync(ct);
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
@@ -211,16 +211,21 @@ public sealed partial class VaultCatalog
         return sealedRight < role ? sealedRight : role;
     }
 
-    /// <summary>A member's session on a shared vault: under her alias, at her role (collab design §3.3).</summary>
-    private static VaultAccess MemberAccess(UnlockedVault vault, string alias, MembershipDocument membership) =>
-        new(vault, alias, LevelOf(membership), membership, IsOwner: false);
+    /// <summary>A member's session on a shared vault: under her alias, at her role (collab design §3.3), writing under
+    /// her sessions' writer id.</summary>
+    private static VaultAccess MemberAccess(UnlockedVault vault, byte[] vaultKey, string alias, MembershipDocument membership) =>
+        new(vault, alias, LevelOf(membership), membership, IsOwner: false) { WriterId = Memberships.WriterIdOf(membership, vaultKey, Memberships.SessionWriter) };
 
     /// <summary>A key's or a connection's access: the owner's, under the vault's name at its sealed level; a member's,
-    /// under her alias sealed with it, at most at her role.</summary>
-    private static VaultAccess CredentialAccess(UnlockedVault vault, Accounts.KeyRight right, MembershipDocument? membership, string? alias) =>
+    /// under her alias, at most at her role, writing under the writer id recorded for <paramref name="credentialId"/>.</summary>
+    private static VaultAccess CredentialAccess(
+        UnlockedVault vault, byte[] vaultKey, Accounts.KeyRight right, MembershipDocument? membership, string? alias, string credentialId) =>
         membership is null
             ? new(vault, vault.Name, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
-            : new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false);
+            : new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false)
+            {
+                WriterId = Memberships.WriterIdOf(membership, vaultKey, credentialId),
+            };
 
     /// <summary>The level a membership's role gives; a role that doesn't parse reads as <c>read</c>.</summary>
     private static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch

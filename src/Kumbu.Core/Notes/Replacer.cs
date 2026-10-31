@@ -181,7 +181,8 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
     private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, CancellationToken ct)
     {
-        var writer = caller.Writer;
+        var writer = caller.WriterIn(path.Segments[0]);
+        var reference = caller.ReferenceIn(path.Segments[0]);
         var now = time.GetUtcNow().UtcDateTime;
         if (plans.Take<ReplacePlan>(token, now) is not { } plan) return ShellResult.Error(plans.Unavailable("replace", token, now));
 
@@ -197,7 +198,7 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
         }
 
         var batch = new NoteBatch();
-        var changeset = await Changeset.ForAsync(store, path.Segments[0], caller.Reference, writer, caller.ChangesetIdle, now, ct);
+        var changeset = await Changeset.ForAsync(store, path.Segments[0], reference, writer, caller.ChangesetIdle, now, ct);
         var changed = new List<string>();
         var total = 0;
         foreach (var (notePath, version) in plan.Notes)
@@ -220,12 +221,12 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             }
 
             // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", caller.Reference, now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset)));
         }
 
         if (changed.Count == 0)
         {
-            var conflicts = await store.TryCommitAsync(batch, writer, caller.Reference, now, ct);
+            var conflicts = await store.TryCommitAsync(batch, writer, reference, now, ct);
             changed.AddRange(conflicts.Select(c => c.Value));
         }
 

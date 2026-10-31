@@ -160,10 +160,11 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         var notes = await store.ReadNotesUnderAsync(vault, ct);
         var rewrites = rewriteLinks ? Rewrites(notes, map, await StoreAttachments.PathsUnderAsync(store, vault, ct)) : [];
         var now = time.GetUtcNow().UtcDateTime;
-        var writer = caller.Writer;
-        var marked = $"{writer} (mv)";
+        var writer = caller.WriterIn(vault.Segments[0]);
+        var reference = caller.ReferenceIn(vault.Segments[0]);
+        var marked = Writers.Marked(writer, "mv");
         // Link rewrites join the writer's changeset like any write.
-        var changeset = await Changeset.ForAsync(store, vault.Segments[0], caller.Reference, writer, caller.ChangesetIdle, now, ct);
+        var changeset = await Changeset.ForAsync(store, vault.Segments[0], reference, writer, caller.ChangesetIdle, now, ct);
         var batch = new NoteBatch { Changeset = changeset };
         var links = 0;
         var changed = new List<VaultPath>();
@@ -184,7 +185,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (rewrites.TryGetValue(to, out var own))
             {
                 if (Apply(current.Content, own) is not { } content) return Changed(from);
-                moved = NoteWriter.Next(current, content, marked, caller.Reference, now, changeset) with { Path = to };
+                moved = NoteWriter.Next(current, content, marked, reference, now, changeset) with { Path = to };
                 links += own.Count;
                 changed.Add(to);
             }
@@ -200,12 +201,12 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (!card && caller.Refuse("mv", path) is { } refused) return refused;
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, caller.Reference, now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, reference, now, changeset)));
             links += list.Count;
             changed.Add(path);
         }
 
-        var conflicts = await store.TryCommitAsync(batch, writer, caller.Reference, now, ct);
+        var conflicts = await store.TryCommitAsync(batch, writer, reference, now, ct);
         if (conflicts.Count > 0)
         {
             return ShellResult.Error(

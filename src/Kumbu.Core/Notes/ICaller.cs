@@ -12,6 +12,15 @@ public interface ICaller
     /// <summary>The reference sealed beside <see cref="Writer"/> in every entry the caller writes (collab design §8.1).</summary>
     WriterRef Reference { get; }
 
+    /// <summary>The label the caller's writes to <paramref name="vault"/> (named as the store names it) store: on her
+    /// own vaults <see cref="Writer"/>; a member's writes store none, <c>""</c> (collab design §8.1). Every write path
+    /// asks this, never <see cref="Writer"/>.</summary>
+    string WriterIn(string vault) => Writer;
+
+    /// <summary>The reference the caller's writes to <paramref name="vault"/> store: on her own vaults
+    /// <see cref="Reference"/>; a member's is her writer id on the vault and the kind, and nothing else.</summary>
+    WriterRef ReferenceIn(string vault) => Reference;
+
     /// <summary>How long the caller's changeset stays open without a write (concept §4): an agent's ten minutes, or
     /// two for a person, whose editor saves every few seconds.</summary>
     TimeSpan ChangesetIdle => Changeset.Idle;

@@ -50,6 +50,26 @@ public sealed class RequestCaller : ICaller
     /// connection (its id), the dev token (the server's).</summary>
     public WriterRef Reference { get; }
 
+    /// <summary>
+    /// The label the caller's writes to <paramref name="vault"/> store (collab design §8.1): on a vault shared with the
+    /// caller none, <c>""</c>, so nothing in the vault names her; else <see cref="Writer"/>.
+    /// </summary>
+    public string WriterIn(string vault) => MemberAccess(vault) is null ? Writer : "";
+
+    /// <summary>
+    /// The reference the caller's writes to <paramref name="vault"/> store: on a shared vault only her writer id there
+    /// (her sessions', or this credential's) and the kind, no user id and no credential id; a member without a writer
+    /// id writes nothing (fails closed). Else <see cref="Reference"/>.
+    /// </summary>
+    public WriterRef ReferenceIn(string vault) =>
+        MemberAccess(vault) is not { } access ? Reference
+        : access.WriterId is { } writerId ? WriterRef.ForMember(writerId, Reference.Kind)
+        : throw new InvalidOperationException("A member's write without a writer id");
+
+    /// <summary>The caller's access to <paramref name="vault"/> if it is a member's, as it was opened on this request.</summary>
+    private VaultAccess? MemberAccess(string vault) =>
+        Credential is IRightsCredential rights && rights.Access(vault) is { Membership: not null } access ? access : null;
+
     /// <summary>A person (the session, an Obsidian device key) gets the shorter changeset; agents, connections and the dev token the agent's.</summary>
     public TimeSpan ChangesetIdle => _human ? Changeset.HumanIdle : Changeset.Idle;
 

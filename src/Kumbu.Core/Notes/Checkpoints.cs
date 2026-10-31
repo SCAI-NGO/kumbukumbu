@@ -112,11 +112,11 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
         // An attachment is held by reference to its blob, which the vault keeps while the checkpoint exists.
         var checkpoint = new Checkpoint(
-            name, path, folder, writer.Caller.Writer, writer.Now,
+            name, path, folder, writer.Caller.WriterIn(path.Segments[0]), writer.Now,
             [.. notes.OrderBy(n => n.Path.Value, TextOrder.Default).Select(n => new CheckpointNote(n.Path, VersionToken.Of(n.Content)))])
         {
             Attachments = [.. attachments.OrderBy(a => a.Path.Value, TextOrder.Default).Select(a => new CheckpointAttachment(a.Path, a.Current))],
-            Ref = writer.Caller.Reference,
+            Ref = writer.Caller.ReferenceIn(path.Segments[0]),
         };
         if (!await store.TryAddCheckpointAsync(checkpoint, notes, ct))
         {
@@ -232,8 +232,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     {
         // Restoring Board.md itself answers as any restore that would change the board does.
         if (writer.Caller.Refuse("restore", path) is { } refused) return refused.Code == Refusals.Structural ? StructuralRefusal(path.Segments[0]) : refused;
-        var by = writer.Caller.Writer;
         if (path.IsRoot) return ShellResult.Error("restore: give a path in the checkpoint's vault, e.g. restore --checkpoint before-cleanup /Demo");
+        var by = writer.Caller.WriterIn(path.Segments[0]);
         var (view, error) = await OpenAsync("restore", path.Segments[0], name, ct);
         if (view is null) return error!;
         var checkpoint = view.Checkpoint;
@@ -312,11 +312,11 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
                 : ShellResult.Error($"restore: {path.Value} was not in checkpoint '{name}' (created since); rm it to match the checkpoint");
         }
 
-        var label = $"{by} (restore)";
+        var label = Writers.Marked(by, "restore");
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
-            var created = new StoredNote(path, then, 1, label, writer.Now, [], Ref: writer.Caller.Reference);
+            var created = new StoredNote(path, then, 1, label, writer.Now, [], Ref: writer.Caller.ReferenceIn(path.Segments[0]));
             return await store.TryCreateAsync(created, ct)
                 ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", created.Path, created.Version)
                 : ShellResult.Error($"restore: {path.Value} was created by someone else just now; try again");
@@ -325,7 +325,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         if (existing.Content == then) return Written($"{path.Value} is already as in checkpoint '{name}'", existing.Path, existing.Version);
 
         // In no changeset, like every restore: a checkpoint of its own, so it can be undone on its own.
-        var next = NoteWriter.Next(existing, then, label, writer.Caller.Reference, writer.Now, changeset: null, keepCurrent: true);
+        var next = NoteWriter.Next(existing, then, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to checkpoint '{name}'", next.Path, next.Version)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
@@ -342,20 +342,20 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             return ShellResult.Error($"restore: {path.Value} was not in checkpoint '{name}' (created since); rm it to match the checkpoint");
         }
 
-        var label = $"{by} (restore)";
+        var label = Writers.Marked(by, "restore");
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
-            var created = new StoredAttachment(path, then, 1, label, writer.Now, [], null, writer.Caller.Reference);
-            return (await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, label, writer.Caller.Reference, writer.Now, ct)).Count == 0
+            var created = new StoredAttachment(path, then, 1, label, writer.Now, [], null, writer.Caller.ReferenceIn(path.Segments[0]));
+            return (await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { created } }, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, ct)).Count == 0
                 ? Written($"restored {path.Value} from checkpoint '{name}' (it had been removed)", path, created.Version)
                 : ShellResult.Error($"restore: {path.Value} was created by someone else just now; try again");
         }
 
         if (existing.Version == then.Version) return Written($"{path.Value} is already as in checkpoint '{name}'", path, existing.Version);
 
-        var next = AttachmentWriter.Next(existing, then, label, writer.Caller.Reference, writer.Now, changeset: null, keepCurrent: true);
-        return (await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, label, writer.Caller.Reference, writer.Now, ct)).Count == 0
+        var next = AttachmentWriter.Next(existing, then, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, changeset: null, keepCurrent: true);
+        return (await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, ct)).Count == 0
             ? Written($"restored {path.Value} to checkpoint '{name}'", path, next.Version)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
     }
@@ -527,7 +527,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         var (view, error) = await OpenAsync("restore", vault, name, ct);
         if (view is null) return error!;
         if (await RefuseStructuralAsync(view, view.Checkpoint.Path, ct) is { } structural) return structural;
-        return await ApplyAsync(view, view.Checkpoint.Path, token, writer.Caller.Writer, ct);
+        return await ApplyAsync(view, view.Checkpoint.Path, token, writer.Caller.WriterIn(view.Checkpoint.Path.Segments[0]), ct);
     }
 
     /// <summary>The preview of a restore of <paramref name="scope"/>, and the versions its plan depends on.</summary>
@@ -633,40 +633,40 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
             .Select(p => p.Value).Distinct().Order(StringComparer.Ordinal).ToList();
         if (changed.Count > 0) return Failed(token, string.Join(", ", changed), at);
 
-        var label = $"{by} (restore)";
+        var label = Writers.Marked(by, "restore");
         var batch = new NoteBatch();
-        foreach (var (now1, then) in work.Changed.Values) batch.Replaces.Add((now1, NoteWriter.Next(now1, then, label, writer.Caller.Reference, at, changeset: null, keepCurrent: true)));
-        foreach (var (path, then) in work.Back) batch.Creates.Add(new StoredNote(path, then, 1, label, at, [], Ref: writer.Caller.Reference));
+        foreach (var (now1, then) in work.Changed.Values) batch.Replaces.Add((now1, NoteWriter.Next(now1, then, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, changeset: null, keepCurrent: true)));
+        foreach (var (path, then) in work.Back) batch.Creates.Add(new StoredNote(path, then, 1, label, at, [], Ref: writer.Caller.ReferenceIn(scope.Segments[0])));
         foreach (var (to, (moving, then)) in work.Moved)
         {
             var target = moving.Content == then
                 ? moving with { Path = to, Revision = moving.Revision + 1 }
-                : NoteWriter.Next(moving, then, label, writer.Caller.Reference, at, changeset: null, keepCurrent: true) with { Path = to };
+                : NoteWriter.Next(moving, then, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, changeset: null, keepCurrent: true) with { Path = to };
             batch.Moves.Add((moving, target));
         }
 
         foreach (var (path, list) in work.Rewrites)
         {
             if (await store.GetAsync(path, ct) is not { } linking || NoteMover.Apply(linking.Content, list) is not { } content) return Failed(token, path.Value, at);
-            batch.Replaces.Add((linking, NoteWriter.Next(linking, content, label, writer.Caller.Reference, at, changeset: null, keepCurrent: true)));
+            batch.Replaces.Add((linking, NoteWriter.Next(linking, content, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, changeset: null, keepCurrent: true)));
         }
 
         batch.Trashes.AddRange(work.Trash);
 
         // Attachments by the same rules; a state that comes back names the blob the checkpoint kept.
         var files = work.Attachments;
-        foreach (var (now1, then) in files.Changed.Values) batch.AttachmentReplaces.Add((now1, AttachmentWriter.Next(now1, then, label, writer.Caller.Reference, at, changeset: null, keepCurrent: true)));
-        foreach (var (path, then) in files.Back) batch.AttachmentCreates.Add(new StoredAttachment(path, then, 1, label, at, [], null, writer.Caller.Reference));
+        foreach (var (now1, then) in files.Changed.Values) batch.AttachmentReplaces.Add((now1, AttachmentWriter.Next(now1, then, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, changeset: null, keepCurrent: true)));
+        foreach (var (path, then) in files.Back) batch.AttachmentCreates.Add(new StoredAttachment(path, then, 1, label, at, [], null, writer.Caller.ReferenceIn(scope.Segments[0])));
         foreach (var (to, (moving, then)) in files.Moved)
         {
             var target = moving.Version == then.Version
                 ? moving with { Path = to, Revision = moving.Revision + 1 }
-                : AttachmentWriter.Next(moving, then, label, writer.Caller.Reference, at, changeset: null, keepCurrent: true) with { Path = to };
+                : AttachmentWriter.Next(moving, then, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, changeset: null, keepCurrent: true) with { Path = to };
             batch.AttachmentMoves.Add((moving, target));
         }
 
         batch.AttachmentTrashes.AddRange(files.Trash);
-        var conflicts = await store.TryCommitAsync(batch, label, writer.Caller.Reference, at, ct);
+        var conflicts = await store.TryCommitAsync(batch, label, writer.Caller.ReferenceIn(scope.Segments[0]), at, ct);
         if (conflicts.Count > 0) return Failed(token, string.Join(", ", conflicts.Select(c => c.Value)), at);
 
         var message = $"restored {Where(checkpoint, scope)} to checkpoint '{checkpoint.Name}': {work.ChangedCount} changed, "

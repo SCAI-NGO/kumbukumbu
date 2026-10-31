@@ -92,8 +92,11 @@ public sealed class DerivedCredentialTests(KumbuAppFactory app)
         var doc = await Share.MembershipAsync(app.Database, membershipId);
         var vaultKey = await alice.VaultKeyAsync();
         Assert.Equal(new Dictionary<string, string> { [info.Id] = "Claude" }, Memberships.OpenWriters(doc, vaultKey));
-        var writerId = Assert.Single(Memberships.OpenWriterIds(doc, vaultKey));
-        Assert.Equal(info.Id, writerId.Value);
+        // Beside the one her sessions write under, from the grant (task 1.11).
+        var writerIds = Memberships.OpenWriterIds(doc, vaultKey);
+        Assert.Equal(new HashSet<string> { Memberships.SessionWriter, info.Id }, writerIds.Values.ToHashSet());
+        var writerId = writerIds.Single(w => w.Value == info.Id);
+        Assert.NotEqual(writerIds.Single(w => w.Value == Memberships.SessionWriter).Key, writerId.Key);
         Assert.Matches("^[0-9a-f]{32}$", writerId.Key);
         // Only sealed: the raw document names neither the credential nor its writer id.
         var raw = (await app.Database.GetCollection<BsonDocument>(Memberships.CollectionName).Find(new BsonDocument("_id", membershipId)).SingleAsync(Ct)).ToJson();

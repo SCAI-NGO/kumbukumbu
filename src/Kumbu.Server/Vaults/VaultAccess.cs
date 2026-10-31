@@ -15,6 +15,11 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
 {
     public string Id => Vault.Id;
 
+    /// <summary>A member's writer id on the vault for this caller (her sessions', or this credential's), from the
+    /// membership's sealed <c>writerIds</c>: all her writes there carry, in place of a name (collab design §8.1). Null for
+    /// the owner, and for a member whose writer id didn't open, whose writes are then refused.</summary>
+    public string? WriterId { get; init; }
+
     /// <summary>The vault is seen under another name than its own: its paths are translated in both directions.</summary>
     public bool Renamed => !string.Equals(Name, Vault.Name, StringComparison.Ordinal);
 

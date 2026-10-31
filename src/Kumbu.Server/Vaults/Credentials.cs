@@ -36,6 +36,8 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential,
 
     public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
 
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
+
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
@@ -49,6 +51,9 @@ public interface IRightsCredential
     /// <summary>The level of <paramref name="vault"/> (named as the store names vaults, ordinally) as it was opened.
     /// Fails closed: null before the vaults were opened, and for a vault this credential doesn't have.</summary>
     Kumbu.Core.Notes.AccessLevel? Level(string vault);
+
+    /// <summary>The access record of <paramref name="vault"/> as it was opened (one vault id under that name), or null.</summary>
+    VaultAccess? Access(string vault);
 }
 
 internal static class RightsCredentials
@@ -62,6 +67,14 @@ internal static class RightsCredentials
         var ids = opened.Where(v => v.Name == vault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
         if (ids.Count != 1) return null;
         return opened.Where(v => v.Id == ids[0]).Min(v => v.Level);
+    }
+
+    /// <summary>The access record of <paramref name="vault"/>, resolved as <see cref="LevelOf"/> resolves it.</summary>
+    internal static VaultAccess? AccessOf(IReadOnlyList<VaultAccess>? opened, string vault)
+    {
+        if (opened is null) return null;
+        var found = opened.Where(v => v.Name == vault).ToList();
+        return found.Select(v => v.Id).Distinct(StringComparer.Ordinal).Count() == 1 ? found.MinBy(v => v.Level) : null;
     }
 }
 
@@ -83,6 +96,8 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential,
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
     public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
+
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
 }
 
 /// <summary>
@@ -99,6 +114,8 @@ public sealed class ConnectionCredential(string connectionId, string tokenId, st
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
     public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
+
+    public VaultAccess? Access(string vault) => RightsCredentials.AccessOf(_opened, vault);
 }
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>

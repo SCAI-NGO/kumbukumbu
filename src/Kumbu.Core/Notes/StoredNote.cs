@@ -12,6 +12,10 @@ public static class Writers
 
     /// <summary>Who wrote, without the tool: "dev (mv)" is "dev".</summary>
     public static string Identity(string label) => label.IndexOf(" (", StringComparison.Ordinal) is var i and >= 0 ? label[..i] : label;
+
+    /// <summary>The label marked with the tool that wrote: "Claude (mv)". A member's empty label stays empty: it names
+    /// no one, and a mark alone would be a label all the same.</summary>
+    public static string Marked(string label, string tool) => label.Length == 0 ? "" : $"{label} ({tool})";
 }
 
 /// <summary>

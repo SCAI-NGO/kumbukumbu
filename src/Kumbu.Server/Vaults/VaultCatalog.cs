@@ -229,11 +229,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 var again = await Slots.Find(f.Eq(s => s.Kind, slot.Kind) & f.Eq(s => s.Lookup, lookup) & f.Eq(s => s.Vault, slot.Vault)
                     & f.Eq(s => s.Membership, slot.Membership)).FirstOrDefaultAsync(ct);
                 if (again is null || OpenUserSlot(again) is not { } newKey) continue;
-                vault = await LoadAsync(slot.Vault, newKey, ct);
+                vault = await LoadAsync(slot.Vault, vaultKey = newKey, ct);
             }
 
             if (vault is null) continue;
-            result.Add(alias is null ? VaultAccess.Owned(vault) : MemberAccess(vault, alias, active![slot.Membership!]));
+            result.Add(alias is null ? VaultAccess.Owned(vault) : MemberAccess(vault, vaultKey, alias, active![slot.Membership!]));
             // Only a session meets a placeholder: the start of a run deleted every API key and connection slot. Only the
             // owner's resumes the run.
             if (vault.Pending && slot.Kind == SlotDocument.User) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
@@ -586,7 +586,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
         {
             if (key.Membership is not null && key.Alias is null) continue;
-            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, key.Right, key.Membership, key.Alias));
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId));
         }
 
         return result;
@@ -640,7 +640,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 used.Add(slot);
             }
 
-            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, right, membership, alias));
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId));
         }
 
         TouchUsed(used);

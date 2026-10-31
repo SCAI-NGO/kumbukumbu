@@ -80,9 +80,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             if (await notes.IsDamagedAsync(path, ct)) return Fail(ShellErrorKind.Conflict, Damage.Message(ToolOf(path), Shown(path)));
 
             var created = new StoredAttachment(
-                path, await StateAsync(path, format, bytes, image, ct), 1, caller.Writer, Now, [], await ChangesetAsync(path, ct), caller.Reference);
+                path, await StateAsync(path, format, bytes, image, ct), 1, caller.WriterIn(path.Segments[0]), Now, [], await ChangesetAsync(path, ct), caller.ReferenceIn(path.Segments[0]));
             var batch = new NoteBatch { AttachmentCreates = { created }, Changeset = created.Changeset };
-            if ((await notes.TryCommitAsync(batch, caller.Writer, caller.Reference, Now, ct)).Count > 0)
+            if ((await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0)
             {
                 return await store.GetAttachmentAsync(path, ct) is { } now
                     ? Fail(ShellErrorKind.Conflict, $"{ToolOf(path)}: {Shown(path)} was created by someone else just now; fetch it and try again", now)
@@ -96,9 +96,9 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         if (existing.Version != version) return Conflict(path, version, existing);
         if (existing.Version == VersionToken.Of(bytes.Span)) return Written($"{Shown(path)} is unchanged", existing);
 
-        var next = Next(existing, await StateAsync(path, format, bytes, image, ct), caller.Writer, caller.Reference, Now, await ChangesetAsync(path, ct));
+        var next = Next(existing, await StateAsync(path, format, bytes, image, ct), caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct));
         var replace = new NoteBatch { AttachmentReplaces = { (existing, next) }, Changeset = next.Changeset };
-        if ((await notes.TryCommitAsync(replace, caller.Writer, caller.Reference, Now, ct)).Count > 0)
+        if ((await notes.TryCommitAsync(replace, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0)
         {
             return await store.GetAttachmentAsync(path, ct) is { } now ? Conflict(path, version, now) : await MissingAsync(path, ct);
         }
@@ -130,7 +130,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
         // A batch, so the trash record joins the writer's changeset.
         var batch = new NoteBatch { AttachmentTrashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
-        if ((await notes.TryCommitAsync(batch, caller.Writer, caller.Reference, Now, ct)).Count > 0)
+        if ((await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0)
         {
             return ShellResult.Error($"{tool}: {Shown(path)} changed while removing it; try again");
         }
@@ -241,10 +241,10 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
 
             var restored = trashed.Attachment with
             {
-                Revision = trashed.Attachment.Revision + 1, LastWriter = caller.Writer, LastWriteAt = Now, Changeset = null, Ref = caller.Reference,
+                Revision = trashed.Attachment.Revision + 1, LastWriter = caller.WriterIn(path.Segments[0]), LastWriteAt = Now, Changeset = null, Ref = caller.ReferenceIn(path.Segments[0]),
             };
             var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
-            return (await notes.TryCommitAsync(batch, caller.Writer, caller.Reference, Now, ct)).Count > 0
+            return (await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
                 ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")
                 : Written($"restored {Shown(path)} from the trash", restored).Result;
         }
@@ -267,14 +267,14 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
         }
 
         // In no changeset, so the next write doesn't coalesce into it: a restore is a checkpoint.
-        var next = Next(existing, entry.State, $"{caller.Writer} (restore)", caller.Reference, Now, changeset: null, keepCurrent: true);
-        return (await notes.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, caller.Writer, caller.Reference, Now, ct)).Count > 0
+        var next = Next(existing, entry.State, Writers.Marked(caller.WriterIn(path.Segments[0]), "restore"), caller.ReferenceIn(path.Segments[0]), Now, changeset: null, keepCurrent: true);
+        return (await notes.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (existing, next) } }, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
             ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")
             : Written($"restored {Shown(path)} to version {version}", next).Result;
     }
 
     private Task<Changeset> ChangesetAsync(VaultPath path, CancellationToken ct) =>
-        Changeset.ForAsync(notes, path.Segments[0], caller.Reference, caller.Writer, caller.ChangesetIdle, Now, ct);
+        Changeset.ForAsync(notes, path.Segments[0], caller.ReferenceIn(path.Segments[0]), caller.WriterIn(path.Segments[0]), caller.ChangesetIdle, Now, ct);
 
     private async Task<AttachmentState> StateAsync(
         VaultPath path, AttachmentFormat format, ReadOnlyMemory<byte> bytes, (int W, int H)? image, CancellationToken ct) =>

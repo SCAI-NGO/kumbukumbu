@@ -22,9 +22,13 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
 
     internal IMongoCollection<MembershipDocument> Docs { get; } = db.GetCollection<MembershipDocument>(CollectionName);
 
-    private const string LabelPurpose = "kumbu/v1/membership-label";
-    private const string WritersPurpose = "kumbu/v1/membership-writers";
-    private const string WriterIdsPurpose = "kumbu/v1/membership-writer-ids";
+    internal const string LabelPurpose = "kumbu/v1/membership-label";
+    internal const string WritersPurpose = "kumbu/v1/membership-writers";
+    internal const string WriterIdsPurpose = "kumbu/v1/membership-writer-ids";
+
+    /// <summary>What the member's sessions are in <c>writerIds</c>, in place of a credential id: all her sessions on the
+    /// vault write under one writer id of the membership (collab design §8.1).</summary>
+    internal const string SessionWriter = "session";
 
     /// <summary>The statuses that count towards the member limit: tombstones don't.</summary>
     private static readonly string[] Live = [MembershipStatus.Pending, MembershipStatus.Active];
@@ -61,7 +65,8 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             Status = MembershipStatus.Active,
             Label = VaultCatalog.SealForVault(vaultKey, vaultId, LabelPurpose, Encoding.UTF8.GetBytes(label), $"membership-label:{vaultId}:{id}"),
             Writers = VaultCatalog.SealForVault(vaultKey, vaultId, WritersPurpose, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>()), $"membership-writers:{vaultId}:{id}"),
-            WriterIds = VaultCatalog.SealForVault(vaultKey, vaultId, WriterIdsPurpose, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>()), $"membership-writer-ids:{vaultId}:{id}"),
+            WriterIds = VaultCatalog.SealForVault(
+                vaultKey, vaultId, WriterIdsPurpose, JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string> { [NewWriterId()] = SessionWriter }), $"membership-writer-ids:{vaultId}:{id}"),
             CreatedAt = now,
             AcceptedAt = now,
             Revision = 0,
@@ -139,7 +144,7 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             VaultCatalog.OpenForVault(vaultKey, vaultId, WriterIdsPurpose, doc.WriterIds, $"membership-writer-ids:{vaultId}:{membershipId}"))!;
         writers[credentialId] = displayName;
         // One writer id per credential: a connection consented to again keeps its own.
-        if (!writerIds.ContainsValue(credentialId)) writerIds[Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))] = credentialId;
+        if (!writerIds.ContainsValue(credentialId)) writerIds[NewWriterId()] = credentialId;
 
         var updated = await docs.UpdateOneAsync(
             s,
@@ -160,6 +165,23 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     internal static IReadOnlyDictionary<string, string> OpenWriters(MembershipDocument doc, byte[] vaultKey) =>
         JsonSerializer.Deserialize<Dictionary<string, string>>(
             VaultCatalog.OpenForVault(vaultKey, doc.Vault, WritersPurpose, doc.Writers, $"membership-writers:{doc.Vault}:{doc.Id}"))!;
+
+    /// <summary>A writer id: random, of the membership alone, so it says nothing about the person or the credential.</summary>
+    private static string NewWriterId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+
+    /// <summary>The writer id of <paramref name="credentialId"/> (or <see cref="SessionWriter"/>) in the membership's
+    /// sealed <c>writerIds</c>; null if it has none, or they don't open.</summary>
+    internal static string? WriterIdOf(MembershipDocument doc, byte[] vaultKey, string credentialId)
+    {
+        try
+        {
+            return OpenWriterIds(doc, vaultKey).FirstOrDefault(w => w.Value == credentialId).Key;
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>The writer ids a membership's sealed <c>writerIds</c> holds (writer id → credential id).</summary>
     internal static IReadOnlyDictionary<string, string> OpenWriterIds(MembershipDocument doc, byte[] vaultKey) =>
