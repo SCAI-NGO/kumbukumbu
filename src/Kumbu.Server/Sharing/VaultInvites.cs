@@ -24,6 +24,12 @@ public sealed record InvitePeek(
 /// (<c>active</c>, or <c>pending</c> until the owner confirms).</summary>
 public sealed record AcceptedInvite(string MembershipId, string Alias, MemberRole Role, string Status);
 
+/// <summary>A membership as its owner sees it before confirming (collab design §4.2): her label for the person, and who
+/// redeemed it, from the redeemer's user document: the display name as typed (to be shown sanitised) and the username.
+/// The one place the owner sees a member's username.</summary>
+public sealed record OwnersMembership(
+    string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, string? RedeemerDisplay, string? RedeemerUsername);
+
 /// <summary>
 /// Vault invitations (collab design §4): a pending membership with a single-use link <c>/share#{secret}</c>. MongoDB
 /// holds only an HMAC of the secret under a key derived from the server secret, and an <c>invite</c> slot wrapping the
@@ -195,6 +201,110 @@ public sealed partial class Memberships
     }
 
     /// <summary>
+    /// The membership <paramref name="membershipId"/> of <paramref name="vaultId"/>, a vault <paramref name="ownerId"/>
+    /// owns, as she sees it before confirming; <see cref="MembershipNotFoundException"/> if the vault has none of that
+    /// id (collab design §6.0: an id of another vault's is none).
+    /// </summary>
+    public async Task<OwnersMembership> OwnersViewAsync(string ownerId, byte[] ownerKey, string vaultId, string membershipId, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
+        var doc = await Docs.Find(m => m.Id == membershipId && m.Vault == vaultId).FirstOrDefaultAsync(ct) ?? throw new MembershipNotFoundException();
+        return await OwnersViewAsync(doc, vaultKey, ct);
+    }
+
+    private async Task<OwnersMembership> OwnersViewAsync(MembershipDocument doc, byte[] vaultKey, CancellationToken ct)
+    {
+        var label = Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, doc.Vault, LabelPurpose, doc.Label, $"membership-label:{doc.Vault}:{doc.Id}"));
+        var redeemer = doc.Member is { } member ? await Users.Find(u => u.Id == member).FirstOrDefaultAsync(ct) : null;
+        return new OwnersMembership(
+            doc.Id, label, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, doc.Status, doc.Confirm, doc.ExpiresAt, doc.RedeemedAt, redeemer?.Display, redeemer?.Username);
+    }
+
+    /// <summary>
+    /// The owner confirms a redeemed invitation of her vault (collab design §4.2): the membership becomes active. One
+    /// transaction with the vault document's write (an activation, §13 M8), filtered on the membership's id, its vault
+    /// and its status (pending, redeemed); <see cref="MembershipNotFoundException"/> if nothing matches. Returns the
+    /// membership as the owner sees it, with who redeemed it.
+    /// </summary>
+    public async Task<OwnersMembership> ConfirmAsync(string ownerId, byte[] ownerKey, string vaultId, string membershipId, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var vaultKey = await catalog.OwnerVaultKeyAsync(ownerId, ownerKey, vaultId, ct);
+        var f = Builders<MembershipDocument>.Filter;
+        using var session = await catalog.StartSessionAsync(ct);
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                await MembershipsChangedAsync(s, vaultId, token);
+                await RequireNotClosingAsync(s, vaultId, token);
+                var confirmed = await Docs.UpdateOneAsync(
+                    s,
+                    Bound(membershipId, vaultId, MembershipStatus.Pending, MembershipStatus.Active) & f.Ne(m => m.Member, null),
+                    Builders<MembershipDocument>.Update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, Now).Inc(m => m.Revision, 1),
+                    cancellationToken: token);
+                if (confirmed.MatchedCount == 0) throw new MembershipNotFoundException();
+                return true;
+            },
+            cancellationToken: ct);
+        log.LogInformation("Membership {MembershipId} of vault {VaultId} was confirmed", membershipId, vaultId);
+        return await OwnersViewAsync(await Docs.Find(m => m.Id == membershipId).FirstAsync(ct), vaultKey, ct);
+    }
+
+    /// <summary>
+    /// The owner declines a redeemed invitation (collab design §4.2): the membership becomes <c>revoked</c>, without
+    /// its pin, and its member slot goes, in one transaction. Needs no password window: reducing access is always open.
+    /// <see cref="MembershipNotFoundException"/> unless it is a pending, redeemed membership of <paramref name="vaultId"/>.
+    /// </summary>
+    public Task DeclineAsync(string vaultId, string membershipId, CancellationToken ct) =>
+        EndPendingAsync(vaultId, membershipId, redeemed: true, ct);
+
+    /// <summary>
+    /// The owner withdraws an invitation nobody redeemed (collab design §4.3): the membership becomes <c>revoked</c>,
+    /// without its lookup and expiry, and its invite slot goes, in one transaction.
+    /// <see cref="MembershipNotFoundException"/> unless it is a pending membership of <paramref name="vaultId"/> without a member.
+    /// </summary>
+    public Task WithdrawAsync(string vaultId, string membershipId, CancellationToken ct) =>
+        EndPendingAsync(vaultId, membershipId, redeemed: false, ct);
+
+    private async Task EndPendingAsync(string vaultId, string membershipId, bool redeemed, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<MembershipDocument>.Filter;
+        using var session = await catalog.StartSessionAsync(ct);
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                var ended = await Docs.UpdateOneAsync(
+                    s,
+                    Bound(membershipId, vaultId, MembershipStatus.Pending, MembershipStatus.Revoked) & (redeemed ? f.Ne(m => m.Member, null) : f.Eq(m => m.Member, null)),
+                    Builders<MembershipDocument>.Update
+                        .Set(m => m.Status, MembershipStatus.Revoked).Set(m => m.RevokedAt, Now)
+                        .Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Unset(m => m.Pin)
+                        .Inc(m => m.Revision, 1),
+                    cancellationToken: token);
+                if (ended.MatchedCount == 0) throw new MembershipNotFoundException();
+                // Its way in: the invite slot of an open invitation, the member slot of a redeemed one.
+                var kind = redeemed ? SlotDocument.Member : SlotDocument.Invite;
+                await catalog.Slots.DeleteManyAsync(s, sl => sl.Kind == kind && sl.Membership == membershipId && sl.Vault == vaultId, cancellationToken: token);
+                return true;
+            },
+            cancellationToken: ct);
+        log.LogInformation("Membership {MembershipId} of vault {VaultId} was {Ended}", membershipId, vaultId, redeemed ? "declined" : "withdrawn");
+    }
+
+    /// <summary>
+    /// The filter of an owner's write to a membership (collab design §6.0): its id, the vault resolved from her own
+    /// slot, and the status it may move from towards <paramref name="to"/>; a membership of another vault matches nothing.
+    /// </summary>
+    private static FilterDefinition<MembershipDocument> Bound(string membershipId, string vaultId, string from, string to)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        return f.Eq(m => m.Id, membershipId) & f.Eq(m => m.Vault, vaultId)
+            & (TransitionFilter(from, to) ?? throw new InvalidOperationException($"A membership doesn't move from {from} to {to}."));
+    }
+
+    /// <summary>
     /// The claim of an acceptance, inside its transaction: the open invitation with <paramref name="lookup"/> gets its
     /// member and <c>redeemedAt</c>, and loses <c>inviteLookup</c> and <c>expiresAt</c>, in one conditional update; null
     /// if there is none. <see cref="AlreadyMemberException"/> if the user has a membership of the vault already (the
@@ -322,6 +432,9 @@ public sealed partial class Memberships
 
 /// <summary>An invitation secret that isn't one, or one used, expired or withdrawn: all alike, so nothing tells them apart.</summary>
 public sealed class InvitationNotFoundException() : Exception("This invitation link is not valid (any more).");
+
+/// <summary>No such membership of the vault, or not in a status the request may move it from.</summary>
+public sealed class MembershipNotFoundException() : Exception("This vault has no such membership waiting for that.");
 
 /// <summary>A vault that can't take a new member now, with the refusal's <see cref="Refusals"/> code.</summary>
 public sealed class SharingRefusedException(string code, string message) : Exception(message)

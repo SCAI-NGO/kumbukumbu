@@ -72,7 +72,7 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
         }
-        catch (Sharing.InvitationNotFoundException e)
+        catch (Exception e) when (e is Sharing.InvitationNotFoundException or Sharing.MembershipNotFoundException)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }

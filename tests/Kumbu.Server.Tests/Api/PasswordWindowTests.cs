@@ -112,6 +112,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "POST /api/keys",
         "POST /api/vaults/{vault}/pairing",
         "POST /api/vaults/{vault}/invitations",
+        "POST /api/vaults/{vault}/memberships/{id}/confirm",
         "PUT /api/connections/{id}/vaults",
     ];
 
@@ -137,6 +138,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/changes"] = Reading,
         ["GET /api/vaults/{vault}/activity"] = Reading,
         ["POST /api/vault-invitations/peek"] = Reading,
+        ["GET /api/vaults/{vault}/memberships/{id}"] = Reading,
+        ["POST /api/vaults/{vault}/memberships/{id}/decline"] = "declining and withdrawing reduce access: never guarded",
+        ["DELETE /api/vaults/{vault}/memberships/{id}"] = "declining and withdrawing reduce access: never guarded",
         ["POST /api/vault-invitations/accept"] = "the owner's secret is the grant: it gives the caller's credentials nothing",
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,

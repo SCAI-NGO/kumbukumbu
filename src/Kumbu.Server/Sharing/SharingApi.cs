@@ -36,6 +36,15 @@ public sealed record AcceptInvitationRequest(string Secret, string Alias);
 /// <c>pending</c> while the owner hasn't confirmed.</summary>
 public sealed record AcceptedInvitationView(string Id, string Vault, string Role, string Status);
 
+/// <summary>Who redeemed an invitation, from their user document: <c>name</c>, their display name sanitised and quoted,
+/// and <c>username</c> beside it.</summary>
+public sealed record RedeemerView(string Name, string Username);
+
+/// <summary>A membership of the owner's vault as she sees it: her <c>label</c> for the person, and with
+/// <c>redeemer</c> who redeemed it, for "Bob Example (username bob) accepted Bob's invitation — grant access?".</summary>
+public sealed record MembershipView(
+    string Id, string Label, string Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, RedeemerView? Redeemer);
+
 /// <summary>Sharing a vault (collab design §4): invitations and memberships.</summary>
 public static class SharingApi
 {
@@ -45,6 +54,11 @@ public static class SharingApi
         // Not /api/invitations/…, as the design writes it: that is the account invitations' (the join page's).
         api.MapPost("/vault-invitations/peek", PeekAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 403, 404, 409, 429);
         api.MapPost("/vault-invitations/accept", AcceptAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429);
+        api.MapGet("/vaults/{vault}/memberships/{id}", MembershipAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404, 503);
+        api.MapPost("/vaults/{vault}/memberships/{id}/confirm", ConfirmAsync)
+            .WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(401, 403, 404, 409, 503);
+        api.MapPost("/vaults/{vault}/memberships/{id}/decline", DeclineAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapDelete("/vaults/{vault}/memberships/{id}", WithdrawAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
 
@@ -100,6 +114,37 @@ public static class SharingApi
         var alias = AliasOf(body.Alias);
         var accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct);
         return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
+    }
+
+    /// <summary>The id of the caller's own vault named <paramref name="vault"/>, from her user slot: a member's alias, or
+    /// a vault of someone else's, answers 404 (collab design §6.0 binds every write to this id).</summary>
+    private static async Task<string> OwnVaultIdAsync(string vault, RequestCaller caller, VaultCatalog catalog, CancellationToken ct) =>
+        await catalog.FindForUserAsync(caller.User!.Id, caller.UserKey!, vault, ct) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
+
+    private static MembershipView View(OwnersMembership m) => new(
+        m.Id, m.Label, MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.ExpiresAt, m.RedeemedAt,
+        m.RedeemerUsername is { } username ? new RedeemerView(WriterLabels.Quoted(m.RedeemerDisplay ?? ""), username) : null);
+
+    private static async Task<Ok<MembershipView>> MembershipAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct) =>
+        TypedResults.Ok(View(await memberships.OwnersViewAsync(caller.User!.Id, caller.UserKey!, await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct)));
+
+    /// <summary>The owner grants a redeemer access: behind the password window, as it gives someone the vault (collab
+    /// design §4.2, §13 M7).</summary>
+    private static async Task<Ok<MembershipView>> ConfirmAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct) =>
+        TypedResults.Ok(View(await memberships.ConfirmAsync(caller.User!.Id, caller.UserKey!, await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct)));
+
+    /// <summary>Declining needs no password window: the owner can always reduce access at once.</summary>
+    private static async Task<NoContent> DeclineAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct)
+    {
+        await memberships.DeclineAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>Withdrawing an open invitation needs no password window either.</summary>
+    private static async Task<NoContent> WithdrawAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct)
+    {
+        await memberships.WithdrawAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct);
+        return TypedResults.NoContent();
     }
 
     /// <summary>An alias follows the rules of a vault name: it is one, to the member.</summary>
