@@ -488,10 +488,10 @@ $RECYCLE.BIN/
 .claude/worktrees/
 
 # Obsidian vault state (settings stay tracked)
-obisdian/.obsidian/workspace.json
-obisdian/.obsidian/workspace-mobile.json
-obisdian/.obsidian/cache
-obisdian/.trash/
+obsidian/.obsidian/workspace.json
+obsidian/.obsidian/workspace-mobile.json
+obsidian/.obsidian/cache
+obsidian/.trash/
 
 # Brainstorming companion and agent scratch
 .superpowers/
