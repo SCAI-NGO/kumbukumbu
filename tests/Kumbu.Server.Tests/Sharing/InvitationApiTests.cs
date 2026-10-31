@@ -551,4 +551,24 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Equal(0, await Docs.CountDocumentsAsync(m => m.Member == bob.User.Id, cancellationToken: Ct));
         await AssertStillOpenAsync(invite);
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("a/b")]
+    [InlineData("..")]
+    [InlineData("x12345678901234567890123456789012345678901234567890123456789012345")]
+    public async Task An_alias_follows_the_rule_of_a_vault_name(string name)
+    {
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+
+        using var vault = await bob.SendAsync(HttpMethod.Post, "/api/vaults", new { name });
+        using var alias = await AcceptAsync(bob, Base64UrlSecret(), name);
+
+        // One name index for both (collab design §2.3): one rule, one answer.
+        Assert.Equal(HttpStatusCode.BadRequest, vault.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, alias.StatusCode);
+        Assert.Equal(await RestClient.ErrorAsync(vault), await RestClient.ErrorAsync(alias));
+    }
+
+    private static string Base64UrlSecret() => System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 }

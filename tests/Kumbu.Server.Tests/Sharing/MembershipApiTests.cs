@@ -80,7 +80,10 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
 
         Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
         var view = await RestClient.JsonAsync(confirmed);
-        Assert.Equal(("active", bob.Username), (view["status"]!.GetValue<string>(), view["redeemer"]!["username"]!.GetValue<string>()));
+        Assert.Equal("active", view["status"]!.GetValue<string>());
+        // Once granted, who he is was the dialog's only.
+        Assert.Null(view["redeemer"]);
+        using (var after = await alice.GetAsync(Url(alice, invite.MembershipId))) Assert.Null((await RestClient.JsonAsync(after))["redeemer"]);
         var doc = await Share.MembershipAsync(app.Database, invite.MembershipId);
         Assert.Equal(MembershipStatus.Active, doc.Status);
         Assert.NotNull(doc.AcceptedAt);
@@ -187,5 +190,39 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         // Nor does a member's alias reach the owner's routes.
         using var asMember = await bob.SendAsync(HttpMethod.Delete, $"/api/vaults/Garten/memberships/{open.MembershipId}");
         Assert.Equal(HttpStatusCode.NotFound, asMember.StatusCode);
+    }
+
+    [Fact]
+    public async Task Without_confirm_the_owner_never_sees_who_redeemed()
+    {
+        await using var api = Timed();
+        var (alice, _, invite) = await InvitedAsync(api, confirm: false);
+
+        using var response = await alice.GetAsync(Url(alice, invite.MembershipId));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await RestClient.JsonAsync(response);
+        Assert.Equal(("Bob", "active"), (json["label"]!.GetValue<string>(), json["status"]!.GetValue<string>()));
+        Assert.Null(json["redeemer"]);
+    }
+
+    [Fact]
+    public async Task A_declined_person_can_be_invited_again_but_holds_one_live_membership()
+    {
+        await using var api = Timed();
+        var (alice, bob, declined) = await InvitedAsync(api);
+        using (var response = await alice.SendAsync(HttpMethod.Post, Url(alice, declined.MembershipId, "decline"))) Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var memberships = api.Services.GetRequiredService<Memberships>();
+        var vaultId = await alice.VaultIdAsync();
+
+        var again = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Bob", MemberRole.Read, TimeSpan.FromDays(7), confirm: false, Ct);
+        var accepted = await memberships.AcceptAsync(bob.User.Id, bob.UserKey, again.Secret, "Garten", Ct);
+
+        Assert.Equal(MembershipStatus.Active, accepted.Status);
+        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        // The tombstone stays beside it; a second live one doesn't.
+        Assert.Equal(MembershipStatus.Revoked, (await Share.MembershipAsync(app.Database, declined.MembershipId)).Status);
+        var third = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Bob", MemberRole.Read, TimeSpan.FromDays(7), confirm: false, Ct);
+        await Assert.ThrowsAsync<AlreadyMemberException>(() => memberships.AcceptAsync(bob.User.Id, bob.UserKey, third.Secret, "Garten2", Ct));
     }
 }

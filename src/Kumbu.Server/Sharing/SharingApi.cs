@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Text;
-using Kumbu.Core.Notes;
-using Kumbu.Core.Paths;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
 using Kumbu.Server.Auth;
@@ -111,7 +108,8 @@ public static class SharingApi
         AcceptInvitationRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
     {
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        var alias = AliasOf(body.Alias);
+        // An alias follows the rules of a vault name: it is one, to the member.
+        var alias = VaultNames.Check(body.Alias);
         var accepted = await memberships.AcceptAsync(caller.User!.Id, caller.UserKey!, body.Secret, alias, ct);
         return TypedResults.Ok(new AcceptedInvitationView(accepted.MembershipId, accepted.Alias, MemberRoles.ToText(accepted.Role), accepted.Status));
     }
@@ -146,16 +144,4 @@ public static class SharingApi
         await memberships.WithdrawAsync(await OwnVaultIdAsync(vault, caller, catalog, ct), id, ct);
         return TypedResults.NoContent();
     }
-
-    /// <summary>An alias follows the rules of a vault name: it is one, to the member.</summary>
-    private static string AliasOf(string? requested)
-    {
-        var alias = (requested ?? "").Normalize(NormalizationForm.FormC).Trim();
-        if (alias.Length is 0 or > MaxAlias) throw ApiErrors.BadRequest($"A vault name has 1 to {MaxAlias} characters.");
-        if (alias.Contains('/')) throw ApiErrors.BadRequest("A vault name can't contain '/'.");
-        if (NoteNames.Problem(VaultPath.Root.Child(alias).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
-        return alias;
-    }
-
-    private const int MaxAlias = 64;
 }

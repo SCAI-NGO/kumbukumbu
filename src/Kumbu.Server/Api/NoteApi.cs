@@ -145,7 +145,6 @@ public static class NoteApi
 {
     private const int DefaultResults = 10;
     private const int MaxResults = 50;
-    private const int MaxVaultName = 64;
 
     /// <summary>What a note is, beside the attachments' media types.</summary>
     public const string NoteMediaType = "text/markdown";
@@ -227,11 +226,7 @@ public static class NoteApi
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
     {
-        var name = body.Name.Normalize(NormalizationForm.FormC).Trim();
-        if (name.Length is 0 or > MaxVaultName) throw ApiErrors.BadRequest($"A vault name has 1 to {MaxVaultName} characters.");
-        if (name.Contains('/')) throw ApiErrors.BadRequest("A vault name can't contain '/'.");
-        // A vault is the top folder of its notes, so its name follows the rules of every other path segment.
-        if (NoteNames.Problem(VaultPath.Root.Child(name).Child("note.md")) is { } problem) throw ApiErrors.BadRequest($"That can't be a vault name: {problem}.");
+        var name = VaultNames.Check(body.Name);
 
         await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
         return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true));

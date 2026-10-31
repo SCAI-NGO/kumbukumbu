@@ -413,21 +413,40 @@ public sealed partial class Memberships(
             _ => null,
         };
 
+    internal const string LiveMemberIndex = "vault_1_member_1_live";
+
     /// <summary>Creates the indexes once per process; lazy, so the server starts before MongoDB is reachable.</summary>
     internal async Task EnsureReadyAsync(CancellationToken ct)
     {
         if (_ready) return;
         var keys = Builders<MembershipDocument>.IndexKeys;
+        // The index of the same keys before it was limited to live memberships, which kept a declined, revoked or left
+        // person from ever being invited again; gone wherever it was made.
+        try
+        {
+            await Docs.Indexes.DropOneAsync("vault_1_member_1", ct);
+        }
+        catch (MongoCommandException e) when (e.Code is 26 or 27)
+        {
+            // No such collection or index (any more).
+        }
+
         await Docs.Indexes.CreateManyAsync(
             [
-                // One membership per vault and member; a pending invitation nobody redeemed has no member (null), and
-                // any number of those may wait side by side: $type, since $exists would count a null.
+                // One live membership per vault and member; a pending invitation nobody redeemed has no member (null),
+                // and any number of those may wait side by side: $type, since $exists would count a null. Tombstones
+                // stay out, so a person declined, revoked or gone can be invited again.
                 new CreateIndexModel<MembershipDocument>(
                     keys.Ascending(m => m.Vault).Ascending(m => m.Member),
                     new CreateIndexOptions<MembershipDocument>
                     {
+                        Name = LiveMemberIndex,
                         Unique = true,
-                        PartialFilterExpression = new BsonDocument("member", new BsonDocument("$type", "string")),
+                        PartialFilterExpression = new BsonDocument
+                        {
+                            ["member"] = new BsonDocument("$type", "string"),
+                            ["status"] = new BsonDocument("$in", new BsonArray(Live)),
+                        },
                     }),
                 // A member's vaults, and a vault's members, each by status.
                 new CreateIndexModel<MembershipDocument>(keys.Ascending(m => m.Member).Ascending(m => m.Status)),

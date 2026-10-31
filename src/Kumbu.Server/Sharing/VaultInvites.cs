@@ -25,8 +25,8 @@ public sealed record InvitePeek(
 public sealed record AcceptedInvite(string MembershipId, string Alias, MemberRole Role, string Status);
 
 /// <summary>A membership as its owner sees it before confirming (collab design §4.2): her label for the person, and who
-/// redeemed it, from the redeemer's user document: the display name as typed (to be shown sanitised) and the username.
-/// The one place the owner sees a member's username.</summary>
+/// redeemed it, from the redeemer's user document: the display name as typed (to be shown sanitised) and the username,
+/// only while it waits for her confirmation. The one place the owner sees a member's username.</summary>
 public sealed record OwnersMembership(
     string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, string? RedeemerDisplay, string? RedeemerUsername);
 
@@ -216,7 +216,11 @@ public sealed partial class Memberships
     private async Task<OwnersMembership> OwnersViewAsync(MembershipDocument doc, byte[] vaultKey, CancellationToken ct)
     {
         var label = Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, doc.Vault, LabelPurpose, doc.Label, $"membership-label:{doc.Vault}:{doc.Id}"));
-        var redeemer = doc.Member is { } member ? await Users.Find(u => u.Id == member).FirstOrDefaultAsync(ct) : null;
+        // Who redeemed it only for the confirm dialog (collab design §4.2): the one place the owner sees a member's
+        // username, and only when she asked to confirm. An invitation without confirm keeps the member's identity hers.
+        var redeemer = doc is { Status: MembershipStatus.Pending, Confirm: true, Member: { } member }
+            ? await Users.Find(u => u.Id == member).FirstOrDefaultAsync(ct)
+            : null;
         return new OwnersMembership(
             doc.Id, label, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, doc.Status, doc.Confirm, doc.ExpiresAt, doc.RedeemedAt, redeemer?.Display, redeemer?.Username);
     }
@@ -225,7 +229,7 @@ public sealed partial class Memberships
     /// The owner confirms a redeemed invitation of her vault (collab design §4.2): the membership becomes active. One
     /// transaction with the vault document's write (an activation, §13 M8), filtered on the membership's id, its vault
     /// and its status (pending, redeemed); <see cref="MembershipNotFoundException"/> if nothing matches. Returns the
-    /// membership as the owner sees it, with who redeemed it.
+    /// membership as the owner sees it now: active, without the redeemer, whom the dialog showed before.
     /// </summary>
     public async Task<OwnersMembership> ConfirmAsync(string ownerId, byte[] ownerKey, string vaultId, string membershipId, CancellationToken ct)
     {
