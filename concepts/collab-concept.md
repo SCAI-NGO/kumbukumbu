@@ -49,7 +49,7 @@ A shared vault **stays the owner's**: Alice owns *Gartenarbeit*, and she alone i
 - **Web app:** the tree shows shared vaults in their own section, "Shared with me", grouped by the person who shared them.
 - **Agents** see a flat namespace: Bob's agents reach the vault as `/gartenarbeit`, not `/alice/gartenarbeit`.
 - **The alias:** when accepting, Bob sees a name field prefilled with the owner's vault name. If that name collides with one of his own vaults or another alias, he **must** change it before he can accept. The name he accepts is stored in his membership as `alias`.
-- **The alias is stable.** If Alice renames her vault or Bob deletes his own vault of the same name, the alias stays, so paths in Bob's notes and in his agents' memories keep working. Bob can rename the alias later like one of his own vaults.
+- **The alias is stable.** If Alice renames her vault or Bob deletes his own vault of the same name, the alias stays, so paths in Bob's notes and in his agents' memories keep working. Bob can rename the alias later (his own vaults have no rename yet).
 - **No collisions in either direction:** Bob cannot create or rename one of his own vaults to a name one of his aliases already uses, and the other way round.
 
 ## 4. Invitation
@@ -195,6 +195,7 @@ The owner can raise or lower a member's role at any time. It is one write to the
 
   The privacy deletion through an admin offers the same choice, set from the request. 7 days stays well within the GDPR's month; the receipt names the shared vaults and their deletion date.
 - **Member deactivated by an admin:** memberships stay, all requests refused, as for the member's own vaults.
+- **Owner deactivated by an admin:** her shared vaults are read-only for members, who may export them, until she is reactivated (§14.9).
 - **Re-sharing:** members cannot invite others in v1.
 - **A member deletes or overwrites the owner's notes or attachments:** allowed with `write`; whom she shares with is the owner's responsibility. Nothing is lost for good: deletions stay in the trash for 30 days with who deleted them (there is no way to empty it by hand), overwrites stay in the history, and the owner can restore both. The share dialog says so.
 
@@ -252,3 +253,5 @@ Attachments part 1 is merged (#81, #84), part 2 (`img`, `pdf`, the PDF sidecar) 
 6. **Embedding provider change:** told, not asked; the owner confirms knowingly (§8).
 7. **Attachments (§13):** follow the rules for notes; members with `write` may also delete the owner's notes and attachments, recoverable from trash and history (§9).
 8. **Live updates and presence** in the web app; live co-typing is an anti-goal (§9a).
+9. **Owner deactivated by an admin:** her shared vaults become read-only for members, export allowed, until she is reactivated (design §7.4).
+10. The design (`docs/superpowers/specs/2026-10-31-collab-design.md`) settles the rest; where it and this concept differ, the design wins.
