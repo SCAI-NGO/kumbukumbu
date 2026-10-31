@@ -363,6 +363,22 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_version_names_the_kind_of_its_last_writer()
+    {
+        var user = await UserAsync();
+        var first = await user.CreateAsync("plan.md", "# Plan\n");
+        using var own = await user.GetAsync(user.Url("plan.md", "version"));
+
+        var agent = await user.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        using var byAgent = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "# Plan\n\nLions.\n", version = first }, bearer: agent);
+        Assert.Equal(HttpStatusCode.OK, byAgent.StatusCode);
+        using var agents = await user.GetAsync(user.Url("plan.md", "version"));
+
+        Assert.Equal("self", Text(await JsonAsync(own), "lastWriterKind"));
+        Assert.Equal("agent", Text(await JsonAsync(agents), "lastWriterKind"));
+    }
+
+    [Fact]
     public void Polling_the_version_and_the_board_does_not_count_as_the_sessions_activity()
     {
         var endpoints = Api.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>().Endpoints

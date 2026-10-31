@@ -68,7 +68,7 @@ function api(server: Server, puts: unknown[] = [], previousSignInAt: string | nu
         return json(409, { error: "changed", current: { content: texts[server.version], version: server.version } });
       }
       texts.v9 = body.content;
-      writeElsewhere(server, "v9", "ada");
+      writeElsewhere(server, "v9", "ada", "self");
       return json(200, note(server));
     },
     // Any other note: one the test made (a copy of the text), with its path.
@@ -238,10 +238,34 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     renderApp("/notes/Work/plan.md");
     await screen.findByText("Second.");
 
-    writeElsewhere(server, "v2", "ada");
+    writeElsewhere(server, "v2", "ada", "self");
     backToThePage();
 
     expect(await bar()).toHaveTextContent("You changed this note elsewhere");
+  });
+
+  it("takes the user from the server's kind: an agent with the user's name is someone else", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "ada", "agent");
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent(/^ada changed this note/);
+  });
+
+  it("does not take a write for the user's by the name alone, when the server gives no kind", async () => {
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "ada");
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent(/^ada changed this note/);
   });
 
   it("is taken at once with “Refresh Read mode automatically” on, with a short note who changed it", async () => {
@@ -257,6 +281,25 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated by liz");
     expect(document.querySelector("[data-changed]")).toHaveTextContent("Second, changed by liz.");
+  });
+
+  it("says the user changed it elsewhere when their own write is taken at once, and not for an agent with their name", async () => {
+    setAutoRefresh(true);
+    texts.v3 = "# Plan\n\nThird.\n";
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    writeElsewhere(server, "v2", "ada", "self");
+    backToThePage();
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated: you changed this note elsewhere");
+
+    writeElsewhere(server, "v3", "ada", "agent");
+    backToThePage();
+    expect(await screen.findByText("Third.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated by ada");
   });
 
   it("says the user changed it in Obsidian when a device's write is taken at once", async () => {

@@ -13,7 +13,6 @@ import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
-import { useSession } from "../state/session";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
 import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
@@ -86,11 +85,10 @@ export default function NoteView({ path }: { path: string }) {
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
   const elsewhere = useChangedElsewhere(path, note.data);
-  const username = useSession((s) => s.user?.username);
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
-  // A writer's name, or the user's own device (Obsidian) by its name.
-  const [updatedBy, setUpdatedBy] = useState<string | { device: string } | null>(null);
+  // A writer's name, the user's own device (Obsidian) by its name, or the user themself (the server's kind `self`).
+  const [updatedBy, setUpdatedBy] = useState<string | { device: string } | { self: true } | null>(null);
   // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
   const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
@@ -122,6 +120,7 @@ export default function NoteView({ path }: { path: string }) {
       refreshing.current = true;
       const writer = writerOf(newer.lastWriter);
       const device = newer.lastWriterKind === "device";
+      const self = newer.lastWriterKind === "self";
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
       for (const embedded of new Set(links.data?.filter((l) => l.raw.startsWith("!") && l.kind === "note" && l.path && l.path !== path).map((l) => l.path!))) {
@@ -136,7 +135,7 @@ export default function NoteView({ path }: { path: string }) {
       keepScroll.current = top;
       // The tint names who wrote, as the bar does: the user's own device is "you", not the key's name.
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer: device ? `you, in Obsidian (${deviceOf(writer)})` : writer, version: fresh.data.version });
-      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : writer) : null);
+      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : self ? { self: true } : writer) : null);
     },
     [note, links.data, path, queryClient],
   );
@@ -306,11 +305,11 @@ export default function NoteView({ path }: { path: string }) {
         updatedBy &&
         !(note.data && sameWrite(note.data)) && (
           <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
-            {typeof updatedBy === "object"
-              ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
-              : updatedBy === username
-                ? "Updated: you changed this note elsewhere"
-                : `Updated by ${updatedBy}`}
+            {typeof updatedBy === "string"
+              ? `Updated by ${updatedBy}`
+              : "device" in updatedBy
+                ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
+                : "Updated: you changed this note elsewhere"}
           </p>
         )
       )}

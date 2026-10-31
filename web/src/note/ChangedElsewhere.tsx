@@ -6,7 +6,6 @@ import { deviceOf } from "../api/activity";
 import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
 import { noteUrl } from "../api/paths";
-import { useSession } from "../state/session";
 import { ago, writerOf } from "./AgentBanner";
 
 /**
@@ -58,13 +57,13 @@ const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-t
 
 /**
  * "liz changed this note just now"; "You changed this note in Obsidian (Laptop) …" for a write by one of the user's
- * devices, and "You changed this note elsewhere …" for their own write in another tab.
+ * devices, and "You changed this note elsewhere …" for their own write in another tab. Which writes are the user's
+ * the server says (`self`), never a comparison of names.
  */
 export function ChangeText({ change }: { change: NoteVersion }) {
-  const username = useSession((s) => s.user?.username);
   const writer = writerOf(change.lastWriter);
   if (change.lastWriterKind === "device") return <>You changed this note in Obsidian ({deviceOf(writer)}) {ago(change.lastWriteAt)}</>;
-  return writer === username ? (
+  return change.lastWriterKind === "self" ? (
     <>You changed this note elsewhere {ago(change.lastWriteAt)}</>
   ) : (
     <>
