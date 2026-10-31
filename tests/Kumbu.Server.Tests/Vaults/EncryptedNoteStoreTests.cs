@@ -17,10 +17,10 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
     private static readonly DateTime T0 = new(2026, 10, 23, 12, 0, 0, DateTimeKind.Utc);
 
-    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, []);
+    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, [], Ref: WriterRef.Server);
 
     private static async Task<bool> MoveAsync(INoteStore store, StoredNote current, StoredNote target) =>
-        (await store.TryCommitAsync(new NoteBatch { Moves = { (current, target) } }, Writers.Dev, T0, Ct)).Count == 0;
+        (await store.TryCommitAsync(new NoteBatch { Moves = { (current, target) } }, Writers.Dev, WriterRef.Server, T0, Ct)).Count == 0;
 
     private async Task<(VaultWorld World, VaultCatalog Catalog, EncryptedNoteStore Store)> WorldAsync(params string[] vaults)
     {
@@ -34,7 +34,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     public async Task Create_then_get_round_trips_every_field_also_in_a_second_process()
     {
         var (world, _, store) = await WorldAsync();
-        var note = New("/Work/a.md", "a") with { History = [new HistoryEntry("older", Writers.Seed, T0.AddDays(-1))], SeedContent = "older" };
+        var note = New("/Work/a.md", "a") with { History = [new HistoryEntry("older", Writers.Seed, T0.AddDays(-1), Ref: WriterRef.Server)], SeedContent = "older" };
 
         Assert.True(await store.TryCreateAsync(note, Ct));
 
@@ -50,9 +50,9 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync("Geheimprojekt");
         await store.TryCreateAsync(New("/Geheimprojekt/Pläne/Übernahme.md", "Wir kaufen die Firma Acme-Übernahme-Geheimprojekt."), Ct);
         var created = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
-        await store.TryReplaceAsync(created, NoteWriter.Next(created, "Wir kaufen die Firma Acme-Übernahme-Geheimprojekt nicht.", "other", T0.AddDays(1)), Ct);
+        await store.TryReplaceAsync(created, NoteWriter.Next(created, "Wir kaufen die Firma Acme-Übernahme-Geheimprojekt nicht.", "other", WriterRef.Server, T0.AddDays(1)), Ct);
         await store.TryCreateAsync(New("/Geheimprojekt/weg.md", "Acme-Übernahme-Geheimprojekt Papierkorb-Löschung"), Ct);
-        await store.TryTrashAsync((await store.GetAsync(P("/Geheimprojekt/weg.md"), Ct))!, Writers.Dev, T0, Ct);
+        await store.TryTrashAsync((await store.GetAsync(P("/Geheimprojekt/weg.md"), Ct))!, Writers.Dev, WriterRef.Server, T0, Ct);
         var other = (await store.GetAsync(P("/Geheimprojekt/Pläne/Übernahme.md"), Ct))!;
         await MoveAsync(store, other, other with { Path = P("/Geheimprojekt/Archiv-Übernahme/Geheimakte Übernahme.md"), Revision = other.Revision + 1 });
         var moved = (await store.GetAsync(P("/Geheimprojekt/Archiv-Übernahme/Geheimakte Übernahme.md"), Ct))!;
@@ -154,14 +154,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         // The trash goes through, then a create hits an existing note: nothing happens.
         var failing = new NoteBatch { Trashes = { a }, Creates = { New("/Work/back.md", "b"), New("/Work/taken.md", "x") } };
-        Assert.Equal([P("/Work/taken.md")], await store.TryCommitAsync(failing, "dev (restore)", T0, Ct));
+        Assert.Equal([P("/Work/taken.md")], await store.TryCommitAsync(failing, "dev (restore)", WriterRef.Server, T0, Ct));
         var later = Store(world.Catalog());
         Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
         Assert.Null(await later.ReadAsync(P("/Work/back.md"), Ct));
         Assert.Empty(await later.ListTrashAsync(P("/Work"), Ct));
 
         var ok = new NoteBatch { Trashes = { a }, Creates = { New("/Work/back.md", "b"), New("/Work/a.md", "a again") } };
-        Assert.Empty(await store.TryCommitAsync(ok, "dev (restore)", T0, Ct));
+        Assert.Empty(await store.TryCommitAsync(ok, "dev (restore)", WriterRef.Server, T0, Ct));
         later = Store(world.Catalog());
         Assert.Equal("a again", await later.ReadAsync(P("/Work/a.md"), Ct));
         Assert.Equal("b", await later.ReadAsync(P("/Work/back.md"), Ct));
@@ -192,7 +192,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var changeset = Changeset.New(T0);
 
         var batch = new NoteBatch { Moves = { (a, a with { Path = P("/Work/moved.md"), Revision = 2 }) }, Trashes = { b }, Changeset = changeset };
-        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0.AddMinutes(1), Ct));
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0.AddMinutes(1), Ct));
 
         // A fresh catalog: the records come from the database, not the working set.
         var later = Store(world.Catalog());
@@ -222,7 +222,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         Assert.Null(vault.OpenTrash(trashDoc).Changeset);
 
         // And a record without a changeset is still sealed in that shape.
-        var written = vault.SealMove(moveId, new MoveRecord(P("/Work/a.md"), P("/Work/b.md"), "dev", T0));
+        var written = vault.SealMove(moveId, new MoveRecord(P("/Work/a.md"), P("/Work/b.md"), "dev", T0, Ref: WriterRef.Server));
         Assert.DoesNotContain("Changeset", Encoding.UTF8.GetString(VaultCrypto.Open(content, written, $"move:v1:{moveId}")));
     }
 
@@ -285,8 +285,8 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var second = Store(world.Catalog());
         var seenBySecond = (await second.GetAsync(P("/Work/a.md"), Ct))!;
 
-        Assert.True(await first.TryReplaceAsync(v1, NoteWriter.Next(v1, "two", Writers.Dev, T0.AddHours(1)), Ct));
-        Assert.False(await second.TryReplaceAsync(seenBySecond, NoteWriter.Next(seenBySecond, "rival", "other", T0.AddHours(1)), Ct));
+        Assert.True(await first.TryReplaceAsync(v1, NoteWriter.Next(v1, "two", Writers.Dev, WriterRef.Server, T0.AddHours(1)), Ct));
+        Assert.False(await second.TryReplaceAsync(seenBySecond, NoteWriter.Next(seenBySecond, "rival", "other", WriterRef.Server, T0.AddHours(1)), Ct));
 
         // The failed swap refreshed the second process's working set.
         Assert.Equal("two", await second.ReadAsync(P("/Work/a.md"), Ct));
@@ -301,15 +301,15 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync();
         var v1 = New("/Work/a.md", "one");
         await store.TryCreateAsync(v1, Ct);
-        var v2 = NoteWriter.Next(v1, "two", "other", T0.AddHours(1));
+        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1));
         await store.TryReplaceAsync(v1, v2, Ct);
 
-        Assert.True(await store.TryTrashAsync(v2, Writers.Dev, T0.AddHours(2), Ct));
+        Assert.True(await store.TryTrashAsync(v2, Writers.Dev, WriterRef.Server, T0.AddHours(2), Ct));
         Assert.Null(await store.GetAsync(P("/Work/a.md"), Ct));
         var trashed = Assert.Single(await Store(world.Catalog()).ListTrashAsync(P("/Work"), Ct));
         Assert.Equal((T0.AddHours(2), Writers.Dev, "two"), (trashed.DeletedAt, trashed.DeletedBy, trashed.Note.Content));
 
-        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, T0.AddHours(3), Ct);
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), Ct);
 
         Assert.NotNull(restored);
         Assert.Equal(["one"], restored.History.Select(h => h.Content));
@@ -323,9 +323,9 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync();
         var v1 = New("/Work/a.md", "one");
         await store.TryCreateAsync(v1, Ct);
-        await Store(world.Catalog()).TryReplaceAsync(v1, NoteWriter.Next(v1, "two", Writers.Dev, T0), Ct);
+        await Store(world.Catalog()).TryReplaceAsync(v1, NoteWriter.Next(v1, "two", Writers.Dev, WriterRef.Server, T0), Ct);
 
-        Assert.False(await store.TryTrashAsync(v1, Writers.Dev, T0, Ct));
+        Assert.False(await store.TryTrashAsync(v1, Writers.Dev, WriterRef.Server, T0, Ct));
         Assert.Empty(await Store(world.Catalog()).ListTrashAsync(Kumbu.Core.Paths.VaultPath.Root, Ct));
         Assert.Equal("two", await store.ReadAsync(P("/Work/a.md"), Ct));
     }
@@ -338,14 +338,14 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         {
             var note = New("/Work/a.md", content);
             await store.TryCreateAsync(note, Ct);
-            await store.TryTrashAsync(note, Writers.Dev, T0.AddHours(hour), Ct);
+            await store.TryTrashAsync(note, Writers.Dev, WriterRef.Server, T0.AddHours(hour), Ct);
         }
 
         await store.TryCreateAsync(New("/Work/a.md", "occupied"), Ct);
-        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, T0, Ct));
+        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0, Ct));
 
-        await store.TryTrashAsync((await store.GetAsync(P("/Work/a.md"), Ct))!, Writers.Dev, T0.AddHours(3), Ct);
-        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), VersionToken.Of("first"), Writers.Dev, T0.AddHours(4), Ct);
+        await store.TryTrashAsync((await store.GetAsync(P("/Work/a.md"), Ct))!, Writers.Dev, WriterRef.Server, T0.AddHours(3), Ct);
+        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), VersionToken.Of("first"), Writers.Dev, WriterRef.Server, T0.AddHours(4), Ct);
         Assert.Equal("first", await Store(world.Catalog()).ReadAsync(P("/Work/a.md"), Ct));
     }
 
@@ -361,7 +361,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var later = Store(world.Catalog());
         Assert.Null(await later.GetAsync(P("/Work/a.md"), Ct));
         Assert.Equal(("one", 2L), ((await later.GetAsync(P("/Work/b.md"), Ct))!.Content, (await later.GetAsync(P("/Work/b.md"), Ct))!.Revision));
-        Assert.Equal(new MoveRecord(P("/Work/a.md"), P("/Work/b.md"), Writers.Dev, T0), await later.FindMoveAsync(P("/Work/a.md"), Ct));
+        Assert.Equal(new MoveRecord(P("/Work/a.md"), P("/Work/b.md"), Writers.Dev, T0, Ref: WriterRef.Server), await later.FindMoveAsync(P("/Work/a.md"), Ct));
     }
 
     [Fact]
@@ -375,7 +375,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         Assert.False(await MoveAsync(store, a, a with { Path = P("/Work/b.md"), Revision = 2 }));
         Assert.Equal("b", await store.ReadAsync(P("/Work/b.md"), Ct));
 
-        await Store(world.Catalog()).TryReplaceAsync(a, NoteWriter.Next(a, "a2", Writers.Dev, T0), Ct);
+        await Store(world.Catalog()).TryReplaceAsync(a, NoteWriter.Next(a, "a2", Writers.Dev, WriterRef.Server, T0), Ct);
         Assert.False(await MoveAsync(store, a, a with { Path = P("/Work/c.md"), Revision = 2 }));
         var later = Store(world.Catalog());
         Assert.Equal("a2", await later.ReadAsync(P("/Work/a.md"), Ct));
@@ -396,11 +396,11 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var taken = New("/Work/taken.md", "taken");
         var batch = new NoteBatch
         {
-            Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, T0)) },
+            Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, WriterRef.Server, T0)) },
             Moves = { (b, b with { Path = P("/Work/moved/b.md"), Revision = 2 }), (taken, taken with { Path = P("/Work/a.md"), Revision = 2 }) },
         };
 
-        var conflicts = await store.TryCommitAsync(batch, Writers.Dev, T0, Ct);
+        var conflicts = await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0, Ct);
 
         Assert.Equal([P("/Work/a.md")], conflicts);
         var later = Store(world.Catalog());
@@ -422,11 +422,11 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var b = New("/Work/b.md", "b");
         await store.TryCreateAsync(a, Ct);
         await store.TryCreateAsync(b, Ct);
-        await Store(world.Catalog()).TryReplaceAsync(b, NoteWriter.Next(b, "b by someone else", "other", T0), Ct);
+        await Store(world.Catalog()).TryReplaceAsync(b, NoteWriter.Next(b, "b by someone else", "other", WriterRef.Server, T0), Ct);
 
-        var batch = new NoteBatch { Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, T0)), (b, NoteWriter.Next(b, "b2", Writers.Dev, T0)) } };
+        var batch = new NoteBatch { Replaces = { (a, NoteWriter.Next(a, "a2", Writers.Dev, WriterRef.Server, T0)), (b, NoteWriter.Next(b, "b2", Writers.Dev, WriterRef.Server, T0)) } };
 
-        Assert.Equal([P("/Work/b.md")], await store.TryCommitAsync(batch, Writers.Dev, T0, Ct));
+        Assert.Equal([P("/Work/b.md")], await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0, Ct));
         var later = Store(world.Catalog());
         Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
         Assert.Equal("b by someone else", await later.ReadAsync(P("/Work/b.md"), Ct));
@@ -444,7 +444,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
 
         var batch = new NoteBatch { Moves = { (a, a with { Path = P("/Work/b.md"), Revision = 2 }), (b, b with { Path = P("/Work/c.md"), Revision = 2 }) } };
 
-        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0, Ct));
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0, Ct));
         var later = Store(world.Catalog());
         Assert.Null(await later.ReadAsync(P("/Work/a.md"), Ct));
         Assert.Equal("a", await later.ReadAsync(P("/Work/b.md"), Ct));
@@ -459,7 +459,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await store.TryCreateAsync(a, Ct);
         await store.GetAsync(a.Path, Ct);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.TryTrashAsync(a, Writers.Dev, T0, new CancellationToken(canceled: true)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.TryTrashAsync(a, Writers.Dev, WriterRef.Server, T0, new CancellationToken(canceled: true)));
 
         var later = Store(world.Catalog());
         Assert.Equal("a", await later.ReadAsync(P("/Work/a.md"), Ct));
@@ -607,7 +607,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var store = Store(catalog);
         var note = New("/Work/a.md", "a");
         await store.TryCreateAsync(note, Ct);
-        await store.TryTrashAsync(note, Writers.Dev, clock.GetUtcNow().UtcDateTime, Ct);
+        await store.TryTrashAsync(note, Writers.Dev, WriterRef.Server, clock.GetUtcNow().UtcDateTime, Ct);
 
         clock.Advance(TimeSpan.FromDays(31));
         await Store(catalog).ListVaultsAsync(Ct);
@@ -671,7 +671,7 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         await store.TryCreateAsync(note, Ct);
         await DamageAsync(world, "rev");
 
-        Assert.False(await Store(catalog).TryReplaceAsync(note, NoteWriter.Next(note, "b", Writers.Dev, T0), Ct));
+        Assert.False(await Store(catalog).TryReplaceAsync(note, NoteWriter.Next(note, "b", Writers.Dev, WriterRef.Server, T0), Ct));
 
         var after = Store(catalog);
         Assert.Null(await after.GetAsync(P("/Work/a.md"), Ct));

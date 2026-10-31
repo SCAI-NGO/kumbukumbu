@@ -220,12 +220,12 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             }
 
             // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", caller.Reference, now, changeset)));
         }
 
         if (changed.Count == 0)
         {
-            var conflicts = await store.TryCommitAsync(batch, writer, now, ct);
+            var conflicts = await store.TryCommitAsync(batch, writer, caller.Reference, now, ct);
             changed.AddRange(conflicts.Select(c => c.Value));
         }
 

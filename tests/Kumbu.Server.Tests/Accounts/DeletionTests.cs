@@ -71,7 +71,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     {
         var vault = await Catalog().CreateForUserAsync(name, user.Id, key, Ct);
         var store = new EncryptedNoteStore(Catalog(), new UserCredential(user.Id, key));
-        Assert.True(await store.TryCreateAsync(new StoredNote(P($"/{name}/plan.md"), "Geheim: wir kaufen Acme.", 1, user.Username, Now, []), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(P($"/{name}/plan.md"), "Geheim: wir kaufen Acme.", 1, user.Username, Now, [], Ref: WriterRef.Server), Ct));
         foreach (var collection in ContentCollections.Skip(1))
         {
             await Raw(collection).InsertOneAsync(new BsonDocument { ["vault"] = vault.Id, ["pid"] = new BsonBinaryData([1, 2, 3]), ["blob"] = new BsonBinaryData([4]) }, cancellationToken: Ct);
@@ -185,7 +185,7 @@ public sealed class DeletionTests(MongoFixture fixture)
 
         await Deletion().DeleteVaultAsync(lea, key, "Tagebuch", Password, "Tagebuch", Ct);
 
-        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
+        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, [], Ref: WriterRef.Server), Ct));
         await AssertGoneAsync(diary.Id);
     }
 
@@ -263,7 +263,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         var path = P("/Tagebuch/long.md");
         var long_ = string.Join("\n\n", Enumerable.Range(1, 3).Select(i => $"# Teil {i}\n\n{string.Concat(Enumerable.Repeat($"Abschnitt {i} mit eigenem Text. ", 60))}"));
         var store = new EncryptedNoteStore(Catalog(), new UserCredential(lea.Id, key));
-        Assert.True(await store.TryCreateAsync(new StoredNote(path, long_, 1, lea.Username, Now, []), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(path, long_, 1, lea.Username, Now, [], Ref: WriterRef.Server), Ct));
         var indexing = index.IndexAsync(vault, path, Ct);
         await remote.Hanging.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
         return (lea, key, vault, remote, indexing, index);
@@ -520,8 +520,8 @@ public sealed class DeletionTests(MongoFixture fixture)
             batch.AttachmentCreates.Add(new Kumbu.Core.Attachments.StoredAttachment(P(path), state, 1, lea.Username, Now, [], null));
         }
 
-        Assert.Empty(await store.TryCommitAsync(batch, lea.Username, Now, Ct));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { batch.AttachmentCreates[2] } }, lea.Username, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(batch, lea.Username, WriterRef.Server, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { batch.AttachmentCreates[2] } }, lea.Username, WriterRef.Server, Now, Ct));
         Assert.Equal(2, await CountAsync("blobs", "vault", diary.Id));
 
         var result = await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct);
@@ -557,7 +557,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         Assert.NotNull(await Deletion().DeleteUserAsync(anna, annaKey, Password, lea.Id, "lea", Ct));
 
         Assert.Null(await Sessions().ResolveAsync(session, Ct));
-        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, []), Ct));
+        await Assert.ThrowsAsync<VaultDeletedException>(() => store.TryCreateAsync(new StoredNote(P("/Tagebuch/late.md"), "late", 1, "lea", Now, [], Ref: WriterRef.Server), Ct));
         await Assert.ThrowsAsync<CredentialsChangedException>(() => Catalog().CreateForUserAsync("Spät", lea.Id, key, Ct));
         await AssertGoneAsync(diary.Id);
     }

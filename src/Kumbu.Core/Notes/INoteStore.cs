@@ -23,23 +23,23 @@ public interface INoteStore : INoteReader
     /// <summary>
     /// Writes every change of <paramref name="batch"/>, or none: each note must still be at the revision the
     /// batch saw, and no move target or created note may exist. Moves and trashed notes are recorded with
-    /// <paramref name="by"/> and <paramref name="at"/>. Returns the paths that stood in the way; empty if it
-    /// was written.
+    /// <paramref name="by"/>, its reference <paramref name="byRef"/> and <paramref name="at"/>. Returns the paths that
+    /// stood in the way; empty if it was written. Refuses (throws) an entry without a writer reference.
     /// </summary>
-    Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct);
+    Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct);
 
     /// <summary>Moves the note to the trash if it is still at <c>current.Revision</c>, with no changeset. For tests and
     /// tools only: a removal by a writer goes through <see cref="TryCommitAsync"/> with the writer's changeset
     /// (<see cref="NoteWriter.RemoveAsync"/>), so it shows in the vault's activity.</summary>
-    Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct);
+    Task<bool> TryTrashAsync(StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, CancellationToken ct);
 
     /// <summary>Trashed notes at <paramref name="path"/> or below it, most recently deleted first.</summary>
     Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct);
 
     /// <summary>Moves a deleted note at the path back: the most recently deleted one, or the one with
-    /// <paramref name="version"/>. Records <paramref name="writer"/> as its last writer. Returns null if
-    /// there is no such note in the trash, or if a note exists at the path.</summary>
-    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct);
+    /// <paramref name="version"/>. Records <paramref name="writer"/> and <paramref name="reference"/> as its last
+    /// writer. Returns null if there is no such note in the trash, or if a note exists at the path.</summary>
+    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct);
 
     /// <summary>The named checkpoints of every vault (root) or of one vault, oldest first.</summary>
     Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct);

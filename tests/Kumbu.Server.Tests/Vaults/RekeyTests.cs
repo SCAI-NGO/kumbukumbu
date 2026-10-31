@@ -123,7 +123,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
     private EncryptedNoteStore Store(Account a, VaultCatalog? catalog = null, byte[]? key = null) =>
         new(catalog ?? Catalog(), new UserCredential(a.User.Id, key ?? a.Key), _index);
 
-    private StoredNote New(string path, string content) => new(P(path), content, 1, "lea", Now, []);
+    private StoredNote New(string path, string content) => new(P(path), content, 1, "lea", Now, [], Ref: WriterRef.Server);
 
     private static Checkpoint Cp(string name, string path, params StoredNote[] notes) =>
         new(name, P(path), !path.EndsWith(".md", StringComparison.Ordinal), "lea", new DateTime(2026, 10, 26, 9, 0, 0, DateTimeKind.Utc), [.. notes.Select(n => new CheckpointNote(n.Path, n.Version))]);
@@ -144,16 +144,16 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         for (var i = 1; i <= 3; i++)
         {
             var current = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
-            Assert.True(await store.TryReplaceAsync(current, NoteWriter.Next(current, $"# Plan\n\nalpha beta gamma, take {i}\n", "lea", Now.AddMinutes(20 * i)), Ct));
+            Assert.True(await store.TryReplaceAsync(current, NoteWriter.Next(current, $"# Plan\n\nalpha beta gamma, take {i}\n", "lea", WriterRef.Server, Now.AddMinutes(20 * i)), Ct));
         }
 
         Assert.True(await store.TryCreateAsync(New("/Arbeit/ideen/a.md", "the same text\n"), Ct));
         Assert.True(await store.TryCreateAsync(New("/Arbeit/b.md", "the same text\n"), Ct));
         Assert.True(await store.TryCreateAsync(New("/Arbeit/weg.md", "gone soon\n"), Ct));
-        Assert.True(await store.TryTrashAsync((await store.GetAsync(P("/Arbeit/weg.md"), Ct))!, "lea", Now, Ct));
+        Assert.True(await store.TryTrashAsync((await store.GetAsync(P("/Arbeit/weg.md"), Ct))!, "lea", WriterRef.Server, Now, Ct));
         Assert.True(await store.TryCreateAsync(New("/Arbeit/alt.md", "moving delta\n"), Ct));
         var old = (await store.GetAsync(P("/Arbeit/alt.md"), Ct))!;
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { Moves = { (old, old with { Path = P("/Arbeit/neu.md"), Revision = old.Revision + 1 }) } }, "lea", Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { Moves = { (old, old with { Path = P("/Arbeit/neu.md"), Revision = old.Revision + 1 }) } }, "lea", WriterRef.Server, Now, Ct));
 
         var na = (await store.GetAsync(P("/Arbeit/ideen/a.md"), Ct))!;
         var nb = (await store.GetAsync(P("/Arbeit/b.md"), Ct))!;
@@ -299,8 +299,8 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
     private async Task<StoredAttachment> AttachAsync(EncryptedNoteStore store, string path, byte[] bytes)
     {
-        var attachment = new StoredAttachment(P(path), await StateAsync(store, bytes), 1, "lea", Now, [], null);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea", Now, Ct));
+        var attachment = new StoredAttachment(P(path), await StateAsync(store, bytes), 1, "lea", Now, [], null, Ref: WriterRef.Server);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea", WriterRef.Server, Now, Ct));
         return attachment;
     }
 
@@ -313,11 +313,11 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var a = await AccountAsync("Arbeit");
         var store = Store(a);
         var first = await AttachAsync(store, "/Arbeit/a.png", Png(2000, 2));
-        var next = first with { Current = await StateAsync(store, Png(3000, 1)), Revision = 2, History = [new AttachmentVersion(first.Current, "lea", Now, null)] };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, "lea", Now, Ct));
+        var next = first with { Current = await StateAsync(store, Png(3000, 1)), Revision = 2, History = [new AttachmentVersion(first.Current, "lea", Now, null, Ref: WriterRef.Server)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, "lea", WriterRef.Server, Now, Ct));
         await AttachAsync(store, "/Arbeit/b.png", Png(3000, 1));
         var c = await AttachAsync(store, "/Arbeit/c.png", Png(3000, 1));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { c } }, "lea", Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { c } }, "lea", WriterRef.Server, Now, Ct));
         Assert.Equal(2, await Raw("blobs").CountDocumentsAsync(new BsonDocument("vault", a.Id("Arbeit")), cancellationToken: Ct));
         return a;
     }
@@ -615,10 +615,10 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var writes = new (string Name, Func<Task> Write)[]
         {
             ("create", () => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct)),
-            ("replace", () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct)),
-            ("trash", () => stale.TryTrashAsync(plan, "lea", Now, Ct)),
-            ("restore", () => stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", Now, Ct)),
-            ("move", () => stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", Now, Ct)),
+            ("replace", () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct)),
+            ("trash", () => stale.TryTrashAsync(plan, "lea", WriterRef.Server, Now, Ct)),
+            ("restore", () => stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, Ct)),
+            ("move", () => stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", WriterRef.Server, Now, Ct)),
             ("checkpoint", () => stale.TryAddCheckpointAsync(Cp("drei", "/Arbeit/plan.md", plan), [new Note(plan.Path, plan.Content)], Ct)),
             ("uncheckpoint", () => stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct)),
             ("provider", () => Catalog().SetEmbeddingProviderAsync(staleVault, EmbeddingProviders.Internal, Ct)),
@@ -671,10 +671,10 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
         var after = await RawAsync(id);
 
-        Assert.False(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct));
-        Assert.False(await stale.TryTrashAsync(b, "lea", Now, Ct));
-        Assert.NotEmpty(await stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", Now, Ct));
-        Assert.Null(await stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", Now, Ct));
+        Assert.False(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct));
+        Assert.False(await stale.TryTrashAsync(b, "lea", WriterRef.Server, Now, Ct));
+        Assert.NotEmpty(await stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", WriterRef.Server, Now, Ct));
+        Assert.Null(await stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, Ct));
         Assert.False(await stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct));
 
         Assert.Equal(after, await RawAsync(id));
@@ -871,9 +871,9 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
         // x.png goes to the trash, y.png gets other bytes and keeps no history: the shared bytes are left to the trash
         // entry and the checkpoint.
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { x } }, "lea", Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { x } }, "lea", WriterRef.Server, Now, Ct));
         var other = y with { Current = await StateAsync(store, Png(3000, 4)), Revision = 2 };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (y, other) } }, "lea", Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (y, other) } }, "lea", WriterRef.Server, Now, Ct));
         var before = await BlobReferencesAsync(a);
         Assert.Equal(
             ["/Arbeit/y.png", "/Arbeit/x.png trash", "/Arbeit/x.png checkpoint cp", "/Arbeit/y.png checkpoint cp"],
@@ -1010,7 +1010,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             for (var i = start; i < start + 200; i++)
             {
                 var path = P($"/Arbeit/notes/{i:D4}.md");
-                var note = new StoredNote(path, Text(2048), 11, "lea", Now, [.. Enumerable.Range(0, 10).Select(h => new HistoryEntry(Text(2048), "lea", Now.AddMinutes(-h)))]);
+                var note = new StoredNote(path, Text(2048), 11, "lea", Now, [.. Enumerable.Range(0, 10).Select(h => new HistoryEntry(Text(2048), "lea", Now.AddMinutes(-h)))], Ref: WriterRef.Server);
                 var docId = ObjectId.GenerateNewId();
                 notes.Add(new SealedDocument { Id = docId, Vault = id, PathId = k.PathId(path), Revision = 11, Blob = k.SealNote(docId, note) });
                 var vectors = new NoteEmbeddings("arctic-m", note.Version, [new EmbeddedChunk(0, "h" + i, [.. Enumerable.Range(0, 768).Select(_ => (float)random.NextDouble())])]);
@@ -1135,7 +1135,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var store = Store(a);
         var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
         var embedded = RemoteNotes;
-        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nsomething else entirely\n", "lea", Now.AddHours(2)), Ct));
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nsomething else entirely\n", "lea", WriterRef.Server, Now.AddHours(2)), Ct));
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.True(RemoteNotes > embedded);
         var vault = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single();
@@ -1193,7 +1193,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var index = _index = new SearchIndex(Catalog(), EmbeddingProviders.Of(new FakeEmbedder(), new EmbeddingProvider("remote", "Remote", null, _remote)), NullLogger<SearchIndex>.Instance);
         var stale = Store(a);
         var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
-        Assert.True(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nwritten just before the run\n", "lea", Now.AddHours(1)), Ct));
+        Assert.True(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nwritten just before the run\n", "lea", WriterRef.Server, Now.AddHours(1)), Ct));
         Assert.Equal(1, index.Queued);
 
         await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
@@ -1217,7 +1217,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         _remote.Hang = true;
         var store = Store(a);
         var plan = (await store.GetAsync(P("/Arbeit/plan.md"), Ct))!;
-        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nembedded while the run begins\n", "lea", Now.AddHours(1)), Ct));
+        Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nembedded while the run begins\n", "lea", WriterRef.Server, Now.AddHours(1)), Ct));
         await _remote.Hanging.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         // The call holds the index gate, which the run waits for: the mark cancels it.
@@ -1459,7 +1459,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         foreach (var write in new Func<Task>[]
         {
             () => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct),
-            () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct),
+            () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct),
             () => stale.TryAddCheckpointAsync(Cp("drei", "/Arbeit/plan.md", plan), [new Note(plan.Path, plan.Content)], Ct),
             () => Catalog().SetEmbeddingProviderAsync(staleVault, EmbeddingProviders.Internal, Ct),
         })
@@ -1508,7 +1508,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         // A runner still holding the key the rotation replaced.
         await Assert.ThrowsAsync<VaultNotRekeyableException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
 
-        Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", Now), Ct))).Message);
+        Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct))).Message);
         await Index().IndexAsync((await stale.UnlockedVaultsAsync(Ct)).Single(), P("/Arbeit/plan.md"), Ct);
         Assert.Equal(before, await RawAsync(id));
         await Catalog().RekeyAsync(id, a.User.Id, rotation.NewUserKey, Ct);

@@ -20,7 +20,7 @@ public class InMemoryAttachmentStoreTests
     {
         var blobId = await store.PutBlobAsync(P(path).Vault!, bytes, CancellationToken.None);
         var state = new AttachmentState("image/png", bytes.Length, 1, 1, VersionToken.Of(bytes), blobId);
-        return new StoredAttachment(P(path), state, 1, "dev", Now, [], null);
+        return new StoredAttachment(P(path), state, 1, "dev", Now, [], null, Ref: WriterRef.Server);
     }
 
     [Fact]
@@ -49,11 +49,11 @@ public class InMemoryAttachmentStoreTests
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]);
         var batch = new NoteBatch
         {
-            Creates = { new StoredNote(P("/work/a.md"), "again", 1, "dev", Now, []) },
+            Creates = { new StoredNote(P("/work/a.md"), "again", 1, "dev", Now, [], Ref: WriterRef.Server) },
             AttachmentCreates = { attachment },
         };
 
-        var conflicts = await store.TryCommitAsync(batch, "dev", Now, CancellationToken.None);
+        var conflicts = await store.TryCommitAsync(batch, "dev", WriterRef.Server, Now, CancellationToken.None);
 
         Assert.Equal([P("/work/a.md")], conflicts);
         Assert.Null(await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None));
@@ -61,10 +61,10 @@ public class InMemoryAttachmentStoreTests
 
         var fresh = new NoteBatch
         {
-            Creates = { new StoredNote(P("/work/b.md"), "![[x.png]]", 1, "dev", Now, []) },
+            Creates = { new StoredNote(P("/work/b.md"), "![[x.png]]", 1, "dev", Now, [], Ref: WriterRef.Server) },
             AttachmentCreates = { attachment },
         };
-        Assert.Empty(await store.TryCommitAsync(fresh, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(fresh, "dev", WriterRef.Server, Now, CancellationToken.None));
         Assert.Equal(attachment, await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None));
         Assert.Equal([attachment], await store.ListAttachmentsUnderAsync(P("/work"), CancellationToken.None));
     }
@@ -74,13 +74,13 @@ public class InMemoryAttachmentStoreTests
     {
         var store = new InMemoryNoteStore(("/work/a.md", "a"));
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
         var next = attachment with { Revision = 2 };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (attachment, next) } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (attachment, next) } }, "dev", WriterRef.Server, Now, CancellationToken.None));
 
         var stale = new NoteBatch { AttachmentReplaces = { (attachment, attachment with { Revision = 2 }) } };
 
-        Assert.Equal([P("/work/x.png")], await store.TryCommitAsync(stale, "dev", Now, CancellationToken.None));
+        Assert.Equal([P("/work/x.png")], await store.TryCommitAsync(stale, "dev", WriterRef.Server, Now, CancellationToken.None));
         Assert.Equal(2, (await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None))!.Revision);
     }
 
@@ -89,15 +89,15 @@ public class InMemoryAttachmentStoreTests
     {
         var store = new InMemoryNoteStore(("/work/a.md", "a"));
         var attachment = await Attachment(store, "/work/img/x.png", [1, 2, 3]);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
         var changeset = Changeset.New(Now);
 
         var removal = new NoteBatch { Changeset = changeset, AttachmentTrashes = { attachment } };
-        Assert.Empty(await store.TryCommitAsync(removal, "dev (rm)", Now.AddMinutes(1), CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(removal, "dev (rm)", WriterRef.Server, Now.AddMinutes(1), CancellationToken.None));
 
         Assert.Null(await store.GetAttachmentAsync(P("/work/img/x.png"), CancellationToken.None));
         var trashed = Assert.Single(await store.ListAttachmentTrashAsync(P("/work/img"), CancellationToken.None));
-        Assert.Equal(new TrashedAttachment(attachment, "dev (rm)", Now.AddMinutes(1), changeset), trashed);
+        Assert.Equal(new TrashedAttachment(attachment, "dev (rm)", Now.AddMinutes(1), changeset, WriterRef.Server), trashed);
         Assert.Equal([trashed], await store.ListAttachmentTrashAsync(null, CancellationToken.None));
         Assert.Empty(await store.ListAttachmentTrashAsync(P("/other"), CancellationToken.None));
         Assert.Empty(await store.ListTrashAsync(P("/work"), CancellationToken.None));
@@ -108,18 +108,18 @@ public class InMemoryAttachmentStoreTests
     {
         var store = new InMemoryNoteStore(("/work/a.md", "a"));
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", Now, CancellationToken.None));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
         var trashed = Assert.Single(await store.ListAttachmentTrashAsync(null, CancellationToken.None));
         var restored = attachment with { Revision = 2, LastWriteAt = Now.AddMinutes(1) };
 
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "dev", WriterRef.Server, Now, CancellationToken.None));
 
         Assert.Equal(restored, await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None));
         Assert.Empty(await store.ListAttachmentTrashAsync(null, CancellationToken.None));
         Assert.Equal(
             [P("/work/x.png")],
-            await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "dev", Now, CancellationToken.None));
+            await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, "dev", WriterRef.Server, Now, CancellationToken.None));
     }
 
     [Fact]
@@ -128,12 +128,12 @@ public class InMemoryAttachmentStoreTests
         var store = new InMemoryNoteStore(("/work/a.md", "a"));
         var changeset = Changeset.New(Now);
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]) with { LastWriter = "lea (upload)", Changeset = changeset };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea (upload)", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "lea (upload)", WriterRef.Server, Now, CancellationToken.None));
 
         Assert.Equal((changeset, Now), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
 
         var removal = Changeset.New(Now.AddMinutes(5));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment }, Changeset = removal }, "lea (rm)", Now.AddMinutes(5), CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment }, Changeset = removal }, "lea (rm)", WriterRef.Server, Now.AddMinutes(5), CancellationToken.None));
 
         Assert.Equal((removal, Now.AddMinutes(5)), await store.LatestChangesetAsync("work", "lea", CancellationToken.None));
         Assert.Null(await store.LatestChangesetAsync("other", "lea", CancellationToken.None));
@@ -144,13 +144,13 @@ public class InMemoryAttachmentStoreTests
     {
         var store = new InMemoryNoteStore(("/work/a.md", "a"));
         var attachment = await Attachment(store, "/work/x.png", [1, 2, 3]);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", Now, CancellationToken.None));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment } }, "dev", Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { attachment } }, "dev", WriterRef.Server, Now, CancellationToken.None));
         var listed = Assert.Single(await store.ListAttachmentTrashAsync(null, CancellationToken.None));
         var copy = listed with { Attachment = listed.Attachment with { History = [.. listed.Attachment.History] } };
 
         Assert.Empty(await store.TryCommitAsync(
-            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 2 }) } }, "dev", Now, CancellationToken.None));
+            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 2 }) } }, "dev", WriterRef.Server, Now, CancellationToken.None));
 
         Assert.Equal(2, (await store.GetAttachmentAsync(P("/work/x.png"), CancellationToken.None))!.Revision);
         Assert.Empty(await store.ListAttachmentTrashAsync(null, CancellationToken.None));

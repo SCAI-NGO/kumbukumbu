@@ -175,7 +175,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (rewrites.TryGetValue(to, out var own))
             {
                 if (Apply(current.Content, own) is not { } content) return Changed(from);
-                moved = NoteWriter.Next(current, content, marked, now, changeset) with { Path = to };
+                moved = NoteWriter.Next(current, content, marked, caller.Reference, now, changeset) with { Path = to };
                 links += own.Count;
                 changed.Add(to);
             }
@@ -190,12 +190,12 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (caller.Refuse("mv", path) is { } refused) return refused;
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, caller.Reference, now, changeset)));
             links += list.Count;
             changed.Add(path);
         }
 
-        var conflicts = await store.TryCommitAsync(batch, writer, now, ct);
+        var conflicts = await store.TryCommitAsync(batch, writer, caller.Reference, now, ct);
         if (conflicts.Count > 0)
         {
             return ShellResult.Error(

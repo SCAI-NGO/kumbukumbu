@@ -103,7 +103,7 @@ public sealed class WriterKindTests(KumbuAppFactory app)
         await user.CreateAsync("mine.md", "mine\n");
         var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
         var seeded = VaultPath.Root.Child(user.Vault).Child("seeded.md");
-        Assert.True(await store.TryCreateAsync(new StoredNote(seeded, "seeded\n", 1, Writers.Seed, DateTime.UtcNow, []), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(seeded, "seeded\n", 1, Writers.Seed, DateTime.UtcNow, [], Ref: WriterRef.Server), Ct));
 
         Assert.Equal(("user", "user", "user"), await KindsAsync(user, "mine.md"));
         Assert.Equal(("server", "server", "server"), await KindsAsync(user, "seeded.md"));

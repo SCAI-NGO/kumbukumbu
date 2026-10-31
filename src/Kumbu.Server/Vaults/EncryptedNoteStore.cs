@@ -104,7 +104,7 @@ public sealed class EncryptedNoteStore(
     }
 
     public async Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct) =>
-        (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, current.LastWriter, current.LastWriteAt, ct)).Count == 0;
+        (await TryCommitAsync(new NoteBatch { Replaces = { (current, next) } }, next.LastWriter, next.Ref!, next.LastWriteAt, ct)).Count == 0;
 
     /// <summary>
     /// One transaction: replaces (compare-and-swap on the revision), notes and attachments to the trash, restored
@@ -114,7 +114,7 @@ public sealed class EncryptedNoteStore(
     /// The blobs the attachments name are put before (<see cref="PutBlobAsync"/>), outside the transaction, and checked in
     /// it (<see cref="RequireBlobsAsync"/>).
     /// </summary>
-    public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
+    public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (batch.IsEmpty) return [];
         var paths = batch.Paths.ToList();
@@ -149,7 +149,7 @@ public sealed class EncryptedNoteStore(
 
             foreach (var current in batch.Trashes)
             {
-                if (await TrashInAsync(session, vault, current, by, at, batch.Changeset, ct) is not { } trashed) return Refuse(current.Path);
+                if (await TrashInAsync(session, vault, current, by, byRef, at, batch.Changeset, ct) is not { } trashed) return Refuse(current.Path);
                 apply.Add(trashed);
             }
 
@@ -159,7 +159,7 @@ public sealed class EncryptedNoteStore(
                 var deleted = await catalog.Attachments.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
                 if (deleted.DeletedCount == 0) return Refuse(current.Path);
 
-                var trashed = new TrashedAttachment(current, by, at, batch.Changeset);
+                var trashed = new TrashedAttachment(current, by, at, batch.Changeset, byRef);
                 var trashId = ObjectId.GenerateNewId();
                 await catalog.AttachmentTrash.InsertOneAsync(
                     session,
@@ -259,7 +259,7 @@ public sealed class EncryptedNoteStore(
 
         async Task<MoveRecord> RecordMoveAsync(IClientSessionHandle session, VaultPath from, VaultPath to)
         {
-            var move = new MoveRecord(from, to, by, at, batch.Changeset);
+            var move = new MoveRecord(from, to, by, at, batch.Changeset, byRef);
             var moveId = ObjectId.GenerateNewId();
             await catalog.Moves.InsertOneAsync(
                 session,
@@ -423,10 +423,10 @@ public sealed class EncryptedNoteStore(
         return Convert.TryFromBase64String(blobId, id, out var written) && written == id.Length;
     }
 
-    public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
+    public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, CancellationToken ct)
     {
         if (await VaultAsync(current.Path, ct) is not { } vault) return false;
-        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedAt, null, ct), ct);
+        return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedByRef, deletedAt, null, ct), ct);
     }
 
     /// <summary>
@@ -655,13 +655,14 @@ public sealed class EncryptedNoteStore(
     /// <summary>Within a transaction: deletes the note if it is still at <c>current.Revision</c> and keeps it in
     /// the trash. Returns the change to the working set, or null if the note changed.</summary>
     private async Task<Action?> TrashInAsync(
-        IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, DateTime deletedAt, Changeset? changeset, CancellationToken ct)
+        IClientSessionHandle session, UnlockedVault vault, StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, Changeset? changeset,
+        CancellationToken ct)
     {
         if (!vault.Notes.TryGetValue(current.Path, out var entry)) return null;
         var deleted = await catalog.Notes.DeleteOneAsync(session, AtRevision(entry.Id, current.Revision, vault.PathId(current.Path)), cancellationToken: ct);
         if (deleted.DeletedCount == 0) return null;
 
-        var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset);
+        var trashed = new TrashedNote(current, deletedBy, deletedAt, changeset, deletedByRef);
         var trashId = ObjectId.GenerateNewId();
         await catalog.Trash.InsertOneAsync(
             session,
@@ -684,7 +685,7 @@ public sealed class EncryptedNoteStore(
             .OrderByDescending(t => t.DeletedAt)];
     }
 
-    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct)
+    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
     {
         if (await VaultAsync(path, ct) is not { } vault) return null;
         StoredNote? restored = null;
@@ -697,7 +698,7 @@ public sealed class EncryptedNoteStore(
             if (latest.Trashed is null) return null;
 
             var note = latest.Trashed.Note;
-            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null };
+            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null, Ref = reference };
             var id = ObjectId.GenerateNewId();
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
             var removed = await catalog.Trash.DeleteOneAsync(session, F.Eq(d => d.Id, latest.Id) & F.Eq(d => d.PathId, vault.PathId(path)), cancellationToken: ct);

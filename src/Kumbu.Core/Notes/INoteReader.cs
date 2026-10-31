@@ -8,7 +8,8 @@ public sealed record Note(VaultPath Path, string Content);
 /// <summary>Where a note went with <c>mv</c>; kept for a while, so an old path can say so.</summary>
 /// <param name="Changeset">The writer's changeset the move belongs to; null for a restore, or a move recorded before
 /// moves carried one.</param>
-public sealed record MoveRecord(VaultPath From, VaultPath To, string MovedBy, DateTime MovedAt, Changeset? Changeset = null);
+/// <param name="Ref">The reference sealed beside <paramref name="MovedBy"/>.</param>
+public sealed record MoveRecord(VaultPath From, VaultPath To, string MovedBy, DateTime MovedAt, Changeset? Changeset = null, WriterRef? Ref = null);
 
 /// <summary>Read-only access to the notes of the vault tree.</summary>
 public interface INoteReader

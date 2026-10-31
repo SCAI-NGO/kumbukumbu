@@ -44,13 +44,13 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     {
         var blobId = await store.PutBlobAsync("Work", bytes, Ct);
         var state = new AttachmentState("image/png", bytes.Length, 640, 480, VersionToken.Of(bytes), blobId);
-        return new StoredAttachment(P(path), state, 1, Writers.Dev, Now, [], changeset);
+        return new StoredAttachment(P(path), state, 1, Writers.Dev, Now, [], changeset, Ref: WriterRef.Server);
     }
 
     private async Task<StoredAttachment> CreateAsync(EncryptedNoteStore store, string path, byte[] bytes, Changeset? changeset = null)
     {
         var attachment = await AttachmentAsync(store, path, bytes, changeset);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, Writers.Dev, WriterRef.Server, Now, Ct));
         return attachment;
     }
 
@@ -78,8 +78,8 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var changeset = Changeset.New(T0);
         var attachment = await AttachmentAsync(store, "/Work/Screens/shot.png", bytes, changeset);
         var olderState = new AttachmentState("image/png", older.Length, 10, 20, VersionToken.Of(older), await store.PutBlobAsync("Work", older, Ct));
-        attachment = attachment with { Revision = 2, History = [new AttachmentVersion(olderState, Writers.Seed, T0.AddDays(-1), null)] };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, Writers.Dev, T0, Ct));
+        attachment = attachment with { Revision = 2, History = [new AttachmentVersion(olderState, Writers.Seed, T0.AddDays(-1), null, Ref: WriterRef.Server)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { attachment } }, Writers.Dev, WriterRef.Server, T0, Ct));
 
         var later = Store(world.Catalog(time: _time));
         var read = await later.GetAttachmentAsync(P("/Work/Screens/shot.png"), Ct);
@@ -101,13 +101,13 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var (world, _, store) = await WorldAsync();
         var first = await CreateAsync(store, "/Work/a.png", Png(100));
         var second = await AttachmentAsync(store, "/Work/a.png", Png(100, 8));
-        var next = second with { Revision = 2, History = [new AttachmentVersion(first.Current, first.LastWriter, first.LastWriteAt, null)] };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, Writers.Dev, Now, Ct));
+        var next = second with { Revision = 2, History = [new AttachmentVersion(first.Current, first.LastWriter, first.LastWriteAt, null, Ref: WriterRef.Server)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, Writers.Dev, WriterRef.Server, Now, Ct));
         // A stale revision is refused.
-        Assert.Equal([P("/Work/a.png")], await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next with { Revision = 3 }) } }, Writers.Dev, Now, Ct));
+        Assert.Equal([P("/Work/a.png")], await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next with { Revision = 3 }) } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         var changeset = Changeset.New(Now);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next }, Changeset = changeset }, "lea", Now.AddMinutes(1), Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next }, Changeset = changeset }, "lea", WriterRef.Server, Now.AddMinutes(1), Ct));
         Assert.Null(await store.GetAttachmentAsync(P("/Work/a.png"), Ct));
         Assert.Equal((changeset, Now.AddMinutes(1)), await store.LatestChangesetAsync("Work", "lea", Ct));
 
@@ -118,9 +118,9 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal((changeset, Now.AddMinutes(1)), await later.LatestChangesetAsync("Work", "lea", Ct));
 
         var restored = trashed.Attachment with { Revision = trashed.Attachment.Revision + 1, Changeset = null };
-        Assert.Empty(await later.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await later.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, WriterRef.Server, Now, Ct));
         // The same trash entry can't come back twice.
-        Assert.NotEmpty(await later.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, Now, Ct));
+        Assert.NotEmpty(await later.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         var again = Store(world.Catalog(time: _time));
         Assert.Equal(restored.Current, (await again.GetAttachmentAsync(P("/Work/a.png"), Ct))!.Current);
@@ -131,11 +131,11 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     public async Task A_note_and_an_attachment_commit_together_or_not_at_all()
     {
         var (world, _, store) = await WorldAsync();
-        Assert.True(await store.TryCreateAsync(new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, []), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, [], Ref: WriterRef.Server), Ct));
         var attachment = await AttachmentAsync(store, "/Work/x.png", Png(100));
 
         var conflicts = await store.TryCommitAsync(
-            new NoteBatch { Creates = { new StoredNote(P("/Work/a.md"), "again", 1, Writers.Dev, T0, []) }, AttachmentCreates = { attachment } }, Writers.Dev, T0, Ct);
+            new NoteBatch { Creates = { new StoredNote(P("/Work/a.md"), "again", 1, Writers.Dev, T0, [], Ref: WriterRef.Server) }, AttachmentCreates = { attachment } }, Writers.Dev, WriterRef.Server, T0, Ct);
 
         Assert.Equal([P("/Work/a.md")], conflicts);
         Assert.Null(await store.GetAttachmentAsync(P("/Work/x.png"), Ct));
@@ -147,7 +147,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     public async Task An_attachment_moves_with_a_note_in_one_transaction_and_is_recorded_as_moved()
     {
         var (world, _, store) = await WorldAsync();
-        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, []);
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, [], Ref: WriterRef.Server);
         Assert.True(await store.TryCreateAsync(note, Ct));
         var shot = await CreateAsync(store, "/Work/Screens/shot.png", Png(100));
         var changeset = Changeset.New(T0);
@@ -158,7 +158,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
             Changeset = changeset,
         };
 
-        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, T0.AddMinutes(1), Ct));
+        Assert.Empty(await store.TryCommitAsync(batch, Writers.Dev, WriterRef.Server, T0.AddMinutes(1), Ct));
 
         var later = Store(world.Catalog(time: _time));
         Assert.Null(await later.GetAttachmentAsync(P("/Work/Screens/shot.png"), Ct));
@@ -177,7 +177,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     public async Task An_attachment_move_onto_an_existing_attachment_changes_nothing()
     {
         var (world, _, store) = await WorldAsync();
-        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, []);
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, T0, [], Ref: WriterRef.Server);
         Assert.True(await store.TryCreateAsync(note, Ct));
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
         await CreateAsync(store, "/Work/taken.png", Png(200));
@@ -188,7 +188,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
                 Moves = { (note, note with { Path = P("/Work/b.md"), Revision = 2 }) },
                 AttachmentMoves = { (shot, shot with { Path = P("/Work/taken.png"), Revision = 2 }) },
             },
-            Writers.Dev, T0, Ct);
+            Writers.Dev, WriterRef.Server, T0, Ct);
 
         Assert.NotEmpty(conflicts);
         var later = Store(world.Catalog(time: _time));
@@ -210,7 +210,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal(a.Current.BlobId, b.Current.BlobId);
         Assert.Equal(1, await Raw(world, "blobs").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
 
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { a } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { a } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromDays(31));
         await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct);
 
@@ -219,7 +219,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Equal(bytes, await ReadBlobAsync(Store(world.Catalog(time: _time)), b.Current.BlobId));
 
         // Once the last reference has gone past the trash's retention too, so do the bytes.
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { b } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { b } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromDays(29));
         await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct);
         Assert.NotNull(await ReadBlobAsync(store, b.Current.BlobId));
@@ -328,7 +328,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
         Assert.True(await other.TryAddCheckpointAsync(checkpoint, [], Ct));
         // The attachment is removed and its trash entry expires: the checkpoint alone references the bytes.
-        Assert.Empty(await other.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await other.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromDays(31));
 
         await Sweep(catalog).RunAsync(stale, Now, Ct);
@@ -351,8 +351,8 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var (_, catalog, store) = await WorldAsync();
         var first = await CreateAsync(store, "/Work/a.png", Png(100));
         var second = await AttachmentAsync(store, "/Work/a.png", Png(100, 8));
-        var next = second with { Revision = 2, History = [new AttachmentVersion(first.Current, first.LastWriter, first.LastWriteAt, null)] };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, Writers.Dev, Now, Ct));
+        var next = second with { Revision = 2, History = [new AttachmentVersion(first.Current, first.LastWriter, first.LastWriteAt, null, Ref: WriterRef.Server)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (first, next) } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromHours(1));
 
         await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct);
@@ -377,16 +377,16 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     {
         var (world, _, store) = await WorldAsync();
         var a = await CreateAsync(store, "/Work/a.png", Png(100));
-        var next = a with { Revision = 2, History = [new AttachmentVersion(a.Current, a.LastWriter, a.LastWriteAt, null)] };
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (a, next) } }, Writers.Dev, Now, Ct));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next } }, Writers.Dev, Now, Ct));
+        var next = a with { Revision = 2, History = [new AttachmentVersion(a.Current, a.LastWriter, a.LastWriteAt, null, Ref: WriterRef.Server)] };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (a, next) } }, Writers.Dev, WriterRef.Server, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { next } }, Writers.Dev, WriterRef.Server, Now, Ct));
         var listed = Assert.Single(await store.ListAttachmentTrashAsync(null, Ct));
         // Equal, but with its own history list: as a request that rebuilt it from what it was shown would have it.
         var copy = listed with { Attachment = listed.Attachment with { History = [.. listed.Attachment.History] } };
         Assert.NotEqual(listed, copy);
 
         Assert.Empty(await store.TryCommitAsync(
-            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 3 }) } }, Writers.Dev, Now, Ct));
+            new NoteBatch { AttachmentRestores = { (copy, copy.Attachment with { Revision = 3 }) } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         Assert.Equal(3, (await Store(world.Catalog(time: _time)).GetAttachmentAsync(P("/Work/a.png"), Ct))!.Revision);
     }
@@ -420,7 +420,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
         var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
         _time.Advance(TimeSpan.FromDays(31));
         await Sweep(catalog).RunAsync(await VaultAsync(catalog), Now, Ct);
         Assert.Empty(await store.ListAttachmentTrashAsync(null, Ct));
@@ -438,8 +438,8 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var at = await AtAsync(blobs);
 
         // The checkpoint holds the bytes: the commit reads their index entry only, and no sweep can run meanwhile.
-        var restored = new StoredAttachment(shot.Path, shot.Current, 1, Writers.Dev, Now, [], null);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, Now, Ct));
+        var restored = new StoredAttachment(shot.Path, shot.Current, 1, Writers.Dev, Now, [], null, Ref: WriterRef.Server);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         Assert.Equal(at, await AtAsync(blobs));
     }
@@ -453,8 +453,8 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var held = Assert.Single(Assert.Single(await store.ListCheckpointsAsync(P("/Work"), Ct)).Attachments);
         Assert.True(await store.TryRemoveCheckpointAsync("Work", "before", Ct));
 
-        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null);
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, Now, Ct));
+        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null, Ref: WriterRef.Server);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         // Within the sweep's grace again, whatever a sweep of another process knows of the records.
         Assert.Equal(Now, await AtAsync(blobs));
@@ -526,15 +526,15 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         var shot = await CreateAsync(store, "/Work/shot.png", Png(100));
         var checkpoint = new Checkpoint("before", P("/Work"), true, Writers.Dev, Now, []) { Attachments = [new(shot.Path, shot.Current)] };
         Assert.True(await store.TryAddCheckpointAsync(checkpoint, [], Ct));
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, Now, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { shot } }, Writers.Dev, WriterRef.Server, Now, Ct));
         var held = Assert.Single(Assert.Single(await store.ListCheckpointsAsync(P("/Work"), Ct)).Attachments);
         // Between the restore's read and its commit, the checkpoint and the trash entry go, and a sweep with them.
         await Raw(world, "blobs").DeleteManyAsync(FilterDefinition<BsonDocument>.Empty, Ct);
 
-        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null);
-        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, Now, []);
+        var restored = new StoredAttachment(held.Path, held.State, 1, Writers.Dev, Now, [], null, Ref: WriterRef.Server);
+        var note = new StoredNote(P("/Work/a.md"), "a", 1, Writers.Dev, Now, [], Ref: WriterRef.Server);
         var refused = await Assert.ThrowsAsync<ContentMissingException>(
-            () => store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored }, Creates = { note } }, Writers.Dev, Now, Ct));
+            () => store.TryCommitAsync(new NoteBatch { AttachmentCreates = { restored }, Creates = { note } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         Assert.Contains("/Work/shot.png", refused.Message, StringComparison.Ordinal);
         // Nothing of the batch was written, in MongoDB or the working set.

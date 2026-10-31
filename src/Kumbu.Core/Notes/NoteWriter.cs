@@ -31,10 +31,10 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// Without a changeset (a restore), the new state joins none, so it stays a version of its own.
     /// </summary>
     public static StoredNote Next(
-        StoredNote current, string content, string writer, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
+        StoredNote current, string content, string writer, WriterRef reference, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
     {
         var history = HistoryAfterWrite(
-            current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset),
+            current.History, new HistoryEntry(current.Content, current.LastWriter, current.LastWriteAt, current.Changeset, current.Ref),
             current.Changeset, changeset, keepCurrent, (a, b) => a.Content == b.Content);
         return current with
         {
@@ -44,6 +44,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             LastWriteAt = now,
             History = history,
             Changeset = changeset,
+            Ref = reference,
         };
     }
 
@@ -94,7 +95,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             if (await CheckNewNoteAsync(tool, path, ct) is { } newError) return newError;
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message(tool, path));
 
-            var note = new StoredNote(path, content, 1, caller.Writer, Now, [], Changeset: await ChangesetAsync(path, ct));
+            var note = new StoredNote(path, content, 1, caller.Writer, Now, [], Changeset: await ChangesetAsync(path, ct), Ref: caller.Reference);
             if (!await store.TryCreateAsync(note, ct))
             {
                 return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again");
@@ -288,7 +289,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
 
         // A batch rather than a plain trash, so the trash record joins the writer's changeset.
         var batch = new NoteBatch { Trashes = { existing }, Changeset = await ChangesetAsync(path, ct) };
-        if ((await store.TryCommitAsync(batch, caller.Writer, Now, ct)).Count > 0)
+        if ((await store.TryCommitAsync(batch, caller.Writer, caller.Reference, Now, ct)).Count > 0)
         {
             return ShellResult.Error($"rm: {path.Value} changed while removing it; try again");
         }
@@ -315,7 +316,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
-            var restored = await store.TryRestoreFromTrashAsync(path, version, caller.Writer, Now, ct);
+            var restored = await store.TryRestoreFromTrashAsync(path, version, caller.Writer, caller.Reference, Now, ct);
             if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
 
             return version is null
@@ -341,7 +342,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         }
 
         // In no changeset, so the next write doesn't coalesce into it: a restore is a checkpoint.
-        var next = Next(existing, entry.Content, $"{caller.Writer} (restore)", Now, changeset: null, keepCurrent: true);
+        var next = Next(existing, entry.Content, $"{caller.Writer} (restore)", caller.Reference, Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to version {version}", next)
             : ShellResult.Error($"restore: {path.Value} changed while restoring it; try again");
@@ -383,7 +384,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     private async Task<ShellResult> ReplaceAsync(
         string tool, StoredNote existing, string content, string message, CancellationToken ct)
     {
-        var next = Next(existing, content, caller.Writer, Now, await ChangesetAsync(existing.Path, ct));
+        var next = Next(existing, content, caller.Writer, caller.Reference, Now, await ChangesetAsync(existing.Path, ct));
         if (!await store.TryReplaceAsync(existing, next, ct))
         {
             var now = await store.GetAsync(existing.Path, ct);

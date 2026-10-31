@@ -75,12 +75,12 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (!TryOwnedKeys(path, content, changes, out var written, out error)) return error;
 
             var changeset = await writer.ChangesetAsync(path, ct);
-            var note = new StoredNote(path, written, 1, caller.Writer, writer.Now, [], Changeset: changeset);
+            var note = new StoredNote(path, written, 1, caller.Writer, writer.Now, [], Changeset: changeset, Ref: caller.Reference);
             var batch = new NoteBatch { Changeset = changeset, Creates = { note } };
             var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
             if (refusal is not null) return refusal;
             if (!ready) continue;
-            if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
+            if ((await store.TryCommitAsync(batch, caller.Writer, caller.Reference, writer.Now, ct)).Count > 0) continue;
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, note, ct);
             return Written($"added '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
@@ -121,7 +121,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             else if (!target.NeedsReason && entering && values.ContainsKey("reason")) changes.Add(("reason", null));
             if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
             var changeset = await writer.ChangesetAsync(current.Path, ct);
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset);
+            var next = NoteWriter.Next(current, content, caller.Writer, caller.Reference, writer.Now, changeset);
 
             if (respread.Count == 0)
             {
@@ -133,7 +133,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
                 if (refusal is not null) return refusal;
                 if (!ready) continue;
-                if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
+                if ((await store.TryCommitAsync(batch, caller.Writer, caller.Reference, writer.Now, ct)).Count > 0) continue;
             }
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, next, ct);
@@ -175,7 +175,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (current is null) return cardError!;
 
             if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(current.Path, ct));
+            var next = NoteWriter.Next(current, content, caller.Writer, caller.Reference, writer.Now, await writer.ChangesetAsync(current.Path, ct));
             if (!await store.TryReplaceAsync(current, next, ct)) continue;
             return Written($"updated '{TitleOf(current.Path)}': {string.Join(", ", said)}", next);
         }
@@ -227,14 +227,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 changes.Add(("moved", Renamed(moved, column.Name, name)));
             if (changes.Count == 0) continue;
             if (!TryOwnedKeys(card.Path, card.Content, changes, out var renamed, out error)) return error;
-            batch.Replaces.Add((card, NoteWriter.Next(card, renamed, caller.Writer, writer.Now, changeset)));
+            batch.Replaces.Add((card, NoteWriter.Next(card, renamed, caller.Writer, caller.Reference, writer.Now, changeset)));
         }
 
         var cards = batch.Replaces.Count;
         var content = Frontmatter.Set(definition.Content, [("columns", FlowList(columns.Select(ColumnYaml), quote: false))]);
-        batch.Replaces.Add((definition, NoteWriter.Next(definition, content, caller.Writer, writer.Now, changeset)));
+        batch.Replaces.Add((definition, NoteWriter.Next(definition, content, caller.Writer, caller.Reference, writer.Now, changeset)));
 
-        var conflicts = await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct);
+        var conflicts = await store.TryCommitAsync(batch, caller.Writer, caller.Reference, writer.Now, ct);
         if (conflicts.Count > 0)
             return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again", ShellErrorKind.Conflict);
         // The Instructions are the user's text: the rename leaves them alone, but says when they name the old column.
@@ -471,7 +471,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             var current = await store.GetAsync(card.Path, ct);
             if (current is null || Frontmatter.Read(current.Content).Problem is not null) return (false, null);
             if (!TryOwnedKeys(current.Path, current.Content, [("rank", Scalar(rank))], out var content, out var error)) return (false, error);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, caller.Writer, caller.Reference, writer.Now, changeset)));
         }
 
         return (true, null);
@@ -574,7 +574,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         {
             if (await store.GetAsync(path, ct) is not { } current || Frontmatter.Read(current.Content).Problem is not null) return null;
             if (!TryOwnedKeys(path, current.Content, [("archived", Day(Today))], out var content, out _)) return null;
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(path, ct));
+            var next = NoteWriter.Next(current, content, caller.Writer, caller.Reference, writer.Now, await writer.ChangesetAsync(path, ct));
             if (await store.TryReplaceAsync(current, next, ct)) return next;
         }
 

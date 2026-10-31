@@ -14,7 +14,7 @@ public sealed class CheckpointView(Checkpoint checkpoint, IReadOnlyList<Note> no
     private readonly Dictionary<VaultPath, string> _byPath = notes.ToDictionary(n => n.Path, n => n.Content);
 
     private readonly Dictionary<VaultPath, StoredAttachment> _attachments = checkpoint.Attachments.ToDictionary(
-        a => a.Path, a => new StoredAttachment(a.Path, a.State, 0, checkpoint.CreatedBy, checkpoint.CreatedAt, [], null));
+        a => a.Path, a => new StoredAttachment(a.Path, a.State, 0, checkpoint.CreatedBy, checkpoint.CreatedAt, [], null, checkpoint.Ref));
 
     public Checkpoint Checkpoint => checkpoint;
 

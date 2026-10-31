@@ -275,7 +275,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var bytes = Encoding.ASCII.GetBytes("%PDF-1.7 the paper");
         var state = new AttachmentState("application/pdf", bytes.Length, null, null, Kumbu.Core.Notes.VersionToken.Of(bytes), Convert.ToBase64String(w.BlobId));
         Assert.Empty(await Store(w.Catalog).TryCommitAsync(
-            new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { new StoredAttachment(P("/Work/paper.pdf"), state, 1, "lea", DateTime.UtcNow, [], null) } }, "lea", DateTime.UtcNow, Ct));
+            new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { new StoredAttachment(P("/Work/paper.pdf"), state, 1, "lea", DateTime.UtcNow, [], null, Ref: Kumbu.Core.Notes.WriterRef.Server) } }, "lea", Kumbu.Core.Notes.WriterRef.Server, DateTime.UtcNow, Ct));
 
         // A sweep within the grace period leaves them (a store may be under way in another process), later it doesn't.
         var sweep = new BlobSweep(w.Catalog, NullLogger.Instance);

@@ -9,6 +9,9 @@ public interface ICaller
 {
     string Writer { get; }
 
+    /// <summary>The reference sealed beside <see cref="Writer"/> in every entry the caller writes (collab design §8.1).</summary>
+    WriterRef Reference { get; }
+
     /// <summary>How long the caller's changeset stays open without a write (concept §4): an agent's ten minutes, or
     /// two for a person, whose editor saves every few seconds.</summary>
     TimeSpan ChangesetIdle => Changeset.Idle;
@@ -46,9 +49,11 @@ public interface ICaller
 
 /// <summary>A caller with a fixed label; owner of every vault unless <paramref name="LevelOf"/> says otherwise, or
 /// <paramref name="CanWriteVault"/> (write where it says so, else read). <paramref name="Human"/>: a person rather
-/// than an agent, for <see cref="ICaller.ChangesetIdle"/>.</summary>
+/// than an agent, for <see cref="ICaller.ChangesetIdle"/>. Its <see cref="Reference"/> is an owner's agent's unless set.</summary>
 public sealed record FixedCaller(string Writer, Func<string, bool>? CanWriteVault = null, bool Human = false, Func<string, AccessLevel?>? LevelOf = null) : ICaller
 {
+    public WriterRef Reference { get; init; } = WriterRef.ForOwner(WriterRef.Agent, null);
+
     public AccessLevel? Level(string vault) =>
         LevelOf is not null ? LevelOf(vault)
         : CanWriteVault is not null ? (CanWriteVault(vault) ? AccessLevel.Write : AccessLevel.Read)

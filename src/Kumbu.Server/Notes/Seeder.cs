@@ -118,7 +118,7 @@ public sealed class Seeder(
             var now = time.GetUtcNow().UtcDateTime;
             foreach (var file in files)
             {
-                if (await store.TryCreateAsync(new StoredNote(file.Path, file.Content, 1, Writers.Seed, now, [], file.Content), ct)) seeded++;
+                if (await store.TryCreateAsync(new StoredNote(file.Path, file.Content, 1, Writers.Seed, now, [], file.Content, Ref: WriterRef.Server), ct)) seeded++;
             }
 
             if (kept.Count > 0)
@@ -128,11 +128,11 @@ public sealed class Seeder(
                 var batch = new NoteBatch();
                 foreach (var folder in kept)
                 {
-                    batch.AttachmentCreates.Add(new StoredAttachment(FolderMarker.In(folder), FolderMarker.State(blob), 1, Writers.Seed, now, [], null));
+                    batch.AttachmentCreates.Add(new StoredAttachment(FolderMarker.In(folder), FolderMarker.State(blob), 1, Writers.Seed, now, [], null, WriterRef.Server));
                 }
 
                 // All of them or none: one marker there already stops the batch.
-                if ((await store.TryCommitAsync(batch, Writers.Seed, now, ct)).Count == 0) folders += kept.Count;
+                if ((await store.TryCommitAsync(batch, Writers.Seed, WriterRef.Server, now, ct)).Count == 0) folders += kept.Count;
                 else log.LogWarning("Made none of the {Count} of vault {Vault}: one exists already", Count(kept.Count, "kept folder"), name);
             }
         }

@@ -58,7 +58,7 @@ public sealed class AdminTests(MongoFixture fixture)
         await catalog.CreateForUserAsync("Tagebuch", lea.Id, key, Ct);
         var store = new EncryptedNoteStore(catalog, new UserCredential(lea.Id, key));
         Assert.True(await store.TryCreateAsync(
-            new StoredNote(P("/Geheimprojekt/Plan.md"), "Wir kaufen die Firma Acme.", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+            new StoredNote(P("/Geheimprojekt/Plan.md"), "Wir kaufen die Firma Acme.", 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: WriterRef.Server), Ct));
         // A dev-token vault belongs to nobody and counts for nobody.
         await catalog.CreateAsync("Dev", Token, null, Ct);
 
@@ -94,7 +94,7 @@ public sealed class AdminTests(MongoFixture fixture)
         var before = (await Admin().ListUsersAsync(admin, Ct)).Single(u => u.Username == "lea").BytesStored;
 
         var store = new EncryptedNoteStore(catalog, new UserCredential(lea.Id, key));
-        await store.TryCreateAsync(new StoredNote(P("/Notes/a.md"), new string('x', 10_000), 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct);
+        await store.TryCreateAsync(new StoredNote(P("/Notes/a.md"), new string('x', 10_000), 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: WriterRef.Server), Ct);
 
         var after = (await Admin().ListUsersAsync(admin, Ct)).Single(u => u.Username == "lea").BytesStored;
         Assert.True(after - before >= 10_000, $"{before} → {after}");

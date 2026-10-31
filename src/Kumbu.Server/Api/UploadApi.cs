@@ -96,17 +96,17 @@ public static class UploadApi
         var now = writer.Now;
         var changeset = await writer.ChangesetAsync(dir, ct);
         var batch = new NoteBatch();
-        foreach (var (path, (_, content)) in creates) batch.Creates.Add(new StoredNote(path, content, 1, caller.Writer, now, [], Changeset: changeset));
+        foreach (var (path, (_, content)) in creates) batch.Creates.Add(new StoredNote(path, content, 1, caller.Writer, now, [], Changeset: changeset, Ref: caller.Reference));
         foreach (var (_, (file, content, note)) in existing)
         {
             if (body.OnConflict == "skip") skipped.Add(new SkippedView(file.Path, "a note exists at this path"));
             else if (note.Content == content) skipped.Add(new SkippedView(file.Path, "the note has this content already"));
             // The replaced state goes into the history even if it is of the same changeset (written a moment ago
             // in the web app): replacing on upload must stay undoable.
-            else batch.Replaces.Add((note, NoteWriter.Next(note, content, caller.Writer, now, changeset, keepCurrent: true)));
+            else batch.Replaces.Add((note, NoteWriter.Next(note, content, caller.Writer, caller.Reference, now, changeset, keepCurrent: true)));
         }
 
-        if (await store.TryCommitAsync(batch, caller.Writer, now, ct) is { Count: > 0 } changed)
+        if (await store.TryCommitAsync(batch, caller.Writer, caller.Reference, now, ct) is { Count: > 0 } changed)
         {
             throw new ApiException(StatusCodes.Status409Conflict,
                 $"Nothing was uploaded: {string.Join(", ", changed.Select(c => c.Value))} changed meanwhile; try again.");

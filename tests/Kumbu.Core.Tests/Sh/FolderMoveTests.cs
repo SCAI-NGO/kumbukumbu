@@ -65,7 +65,7 @@ public class FolderMoveTests
     }
 
     private Task Seed(string path, string content) =>
-        _store.TryCreateAsync(new StoredNote(P(path), content, 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+        _store.TryCreateAsync(new StoredNote(P(path), content, 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
     [Fact]
     public async Task MovesIntoAnExistingFolder()
@@ -104,7 +104,7 @@ public class FolderMoveTests
     [Fact]
     public async Task ANameCollisionMovesNothing()
     {
-        await _store.TryCreateAsync(new StoredNote(P("/Demo/archive/projects/deep/spec.md"), "taken\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+        await _store.TryCreateAsync(new StoredNote(P("/Demo/archive/projects/deep/spec.md"), "taken\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
         var result = await Run("mv /Demo/projects/ /Demo/archive/");
 

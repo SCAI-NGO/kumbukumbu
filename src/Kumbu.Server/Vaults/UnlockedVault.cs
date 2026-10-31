@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
@@ -153,21 +154,25 @@ public sealed class UnlockedVault
     public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider));
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
-        Seal($"trash:{Id}:{docId}", new TrashPayload(Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
+        Seal($"trash:{Id}:{docId}", new TrashPayload(
+            Payload.From(trashed.Note), trashed.Note.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset),
+            WriterRefPayload.VersionOf(trashed.Ref), WriterRefPayload.From(trashed.Ref)));
 
     public TrashedNote OpenTrash(SealedDocument doc)
     {
         var p = Open<TrashPayload>($"trash:{Id}:{doc.Id}", doc.Blob);
-        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt, p.Changeset?.ToChangeset());
+        return new TrashedNote(p.Note.ToNote(p.Revision), p.DeletedBy, p.DeletedAt, p.Changeset?.ToChangeset(), WriterRefPayload.Read(p.V, p.Ref));
     }
 
     public byte[] SealMove(ObjectId docId, MoveRecord move) =>
-        Seal($"move:{Id}:{docId}", new MovePayload(move.From.Value, move.To.Value, move.MovedBy, move.MovedAt, ChangesetPayload.From(move.Changeset)));
+        Seal($"move:{Id}:{docId}", new MovePayload(
+            move.From.Value, move.To.Value, move.MovedBy, move.MovedAt, ChangesetPayload.From(move.Changeset),
+            WriterRefPayload.VersionOf(move.Ref), WriterRefPayload.From(move.Ref)));
 
     public MoveRecord OpenMove(SealedDocument doc)
     {
         var p = Open<MovePayload>($"move:{Id}:{doc.Id}", doc.Blob);
-        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset());
+        return new MoveRecord(Payload.Path(p.From), Payload.Path(p.To), p.MovedBy, p.MovedAt, p.Changeset?.ToChangeset(), WriterRefPayload.Read(p.V, p.Ref));
     }
 
     /// <summary>An attachment's record, bound to its revision as a note is (<see cref="SealNote"/>).</summary>
@@ -188,12 +193,14 @@ public sealed class UnlockedVault
 
     public byte[] SealAttachmentTrash(ObjectId docId, TrashedAttachment trashed) =>
         Seal($"attachtrash:{Id}:{docId}", new AttachmentTrashPayload(
-            AttachmentPayload.From(trashed.Attachment), trashed.Attachment.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset)));
+            AttachmentPayload.From(trashed.Attachment), trashed.Attachment.Revision, trashed.DeletedBy, trashed.DeletedAt, ChangesetPayload.From(trashed.Changeset),
+            WriterRefPayload.VersionOf(trashed.Ref), WriterRefPayload.From(trashed.Ref)));
 
     public TrashedAttachment OpenAttachmentTrash(SealedDocument doc)
     {
         var p = Open<AttachmentTrashPayload>($"attachtrash:{Id}:{doc.Id}", doc.Blob);
-        return new TrashedAttachment(p.Attachment.ToAttachment(p.Revision), p.DeletedBy, DateTime.SpecifyKind(p.DeletedAt, DateTimeKind.Utc), p.Changeset?.ToChangeset());
+        return new TrashedAttachment(
+            p.Attachment.ToAttachment(p.Revision), p.DeletedBy, DateTime.SpecifyKind(p.DeletedAt, DateTimeKind.Utc), p.Changeset?.ToChangeset(), WriterRefPayload.Read(p.V, p.Ref));
     }
 
     /// <summary>A keyed hash of an attachment's bytes: the id its blob is stored under. Equal bytes give equal ids
@@ -271,7 +278,8 @@ public sealed class UnlockedVault
             [.. checkpoint.Notes.Select(n => new CheckpointNotePayload(n.Path.Value, n.Version, Convert.ToBase64String(textIds[n.Path])))],
             checkpoint.Attachments.Count == 0
                 ? null
-                : [.. checkpoint.Attachments.Select(a => new CheckpointAttachmentPayload(a.Path.Value, AttachmentStatePayload.From(a.State)))]));
+                : [.. checkpoint.Attachments.Select(a => new CheckpointAttachmentPayload(a.Path.Value, AttachmentStatePayload.From(a.State)))],
+            WriterRefPayload.VersionOf(checkpoint.Ref), WriterRefPayload.From(checkpoint.Ref)));
 
     /// <summary>Opens a checkpoint and checks its name against the document's name id, as for notes and paths.</summary>
     public StoredCheckpoint OpenCheckpoint(SealedDocument doc)
@@ -287,6 +295,7 @@ public sealed class UnlockedVault
             [.. p.Notes.Select(n => new CheckpointNote(Payload.Path(n.Path), n.Version))])
         {
             Attachments = [.. (p.Attachments ?? []).Select(a => new CheckpointAttachment(Payload.Path(a.Path), a.State.ToState()))],
+            Ref = WriterRefPayload.Read(p.V, p.Ref),
         };
         return new StoredCheckpoint(doc.Id, checkpoint, p.Notes.ToDictionary(n => Payload.Path(n.Path), n => Convert.FromBase64String(n.TextId)));
     }
@@ -492,28 +501,71 @@ internal sealed record ChangesetPayload(string Id, DateTime Started)
     public Changeset ToChangeset() => new(Id, DateTime.SpecifyKind(Started, DateTimeKind.Utc));
 }
 
-internal sealed record HistoryPayload(string Content, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset = null);
+/// <summary>
+/// A writer reference as sealed in every payload that carries a writer (collab design §8.1), beside a payload version
+/// <c>v</c>: the owner's <c>{owner: true, kind, id}</c> (no id for a session or the server), a member's
+/// <c>{writer, kind}</c> and nothing else. Without <c>v</c> a payload was written before 0.3.0 and is read as the
+/// owner's (<see cref="WriterRef.Legacy"/>); with <c>v</c> but no reference, as unknown, never as the owner's.
+/// </summary>
+internal sealed record WriterRefPayload(
+    [property: JsonPropertyName("owner"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Owner,
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Id = null,
+    [property: JsonPropertyName("writer"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Writer = null)
+{
+    /// <summary>The payload version of 0.3.0, the first with references.</summary>
+    public const int Version = 2;
+
+    public static WriterRef Read(int? v, WriterRefPayload? r) =>
+        v is null ? WriterRef.Legacy
+        : r is null ? WriterRef.Unknown
+        : r.Owner ? WriterRef.ForOwner(r.Kind, r.Id)
+        : WriterRef.ForMember(r.Writer ?? "", r.Kind);
+
+    /// <summary>The <c>v</c> to seal with <paramref name="reference"/>: none for a legacy entry, so that it still reads
+    /// as the owner's after a rewrap (a note's next write keeps its history entries).</summary>
+    public static int? VersionOf(WriterRef? reference) => reference is { IsLegacy: true } ? null : Version;
+
+    /// <summary>The reference to seal; none for a legacy or unknown entry (and for none, which a store refuses first).</summary>
+    public static WriterRefPayload? From(WriterRef? reference) =>
+        reference is null || reference.IsLegacy || reference.IsUnknown ? null
+        : reference.Owner ? new(true, reference.Kind, reference.Id)
+        : new(false, reference.Kind, Writer: reference.Writer);
+}
+
+/// <remarks>V and Ref (<see cref="WriterRefPayload"/>) per entry: an entry keeps the reference it was written with.</remarks>
+internal sealed record HistoryPayload(
+    string Content, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset = null,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 /// <remarks>Changeset is missing in notes written before step 6b; such a state joins no changeset.</remarks>
 internal sealed record NotePayload(
     string Path, string Content, string LastWriter, DateTime LastWriteAt, List<HistoryPayload> History, string? SeedContent,
-    ChangesetPayload? Changeset = null)
+    ChangesetPayload? Changeset = null,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
-        [.. History.Select(h => new HistoryEntry(h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset()))],
-        SeedContent, Changeset?.ToChangeset());
+        [.. History.Select(h => new HistoryEntry(
+            h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref)))],
+        SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref));
 }
 
 /// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
 internal sealed record TrashPayload(
     NotePayload Note, long Revision, string DeletedBy, DateTime DeletedAt,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 /// <remarks>Changeset as in <see cref="TrashPayload"/>.</remarks>
 internal sealed record MovePayload(
     string From, string To, string MovedBy, DateTime MovedAt,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ChangesetPayload? Changeset = null,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 /// <remarks>Embeddings: the embedding provider the owner chose; missing (vaults before the overnight round, or never
 /// chosen) or null is the instance's default (<see cref="EmbeddingsOptions.Default"/>). Up to 0.2.2 an explicit
@@ -541,23 +593,33 @@ internal sealed record AttachmentStatePayload(string MediaType, long Size, int? 
     public AttachmentState ToState() => new(MediaType, Size, Width, Height, Version, BlobId);
 }
 
-internal sealed record AttachmentVersionPayload(AttachmentStatePayload State, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset);
+internal sealed record AttachmentVersionPayload(
+    AttachmentStatePayload State, string WrittenBy, DateTime WrittenAt, ChangesetPayload? Changeset,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 internal sealed record AttachmentPayload(
-    string Path, AttachmentStatePayload Current, string LastWriter, DateTime LastWriteAt, List<AttachmentVersionPayload> History, ChangesetPayload? Changeset)
+    string Path, AttachmentStatePayload Current, string LastWriter, DateTime LastWriteAt, List<AttachmentVersionPayload> History, ChangesetPayload? Changeset,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null)
 {
     public static AttachmentPayload From(StoredAttachment a) => new(
         a.Path.Value, AttachmentStatePayload.From(a.Current), a.LastWriter, a.LastWriteAt,
-        [.. a.History.Select(h => new AttachmentVersionPayload(AttachmentStatePayload.From(h.State), h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset)))],
-        ChangesetPayload.From(a.Changeset));
+        [.. a.History.Select(h => new AttachmentVersionPayload(
+            AttachmentStatePayload.From(h.State), h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref)))],
+        ChangesetPayload.From(a.Changeset), WriterRefPayload.VersionOf(a.Ref), WriterRefPayload.From(a.Ref));
 
     public StoredAttachment ToAttachment(long revision) => new(
         Payload.Path(Path), Current.ToState(), revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
-        [.. History.Select(h => new AttachmentVersion(h.State.ToState(), h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset()))],
-        Changeset?.ToChangeset());
+        [.. History.Select(h => new AttachmentVersion(
+            h.State.ToState(), h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref)))],
+        Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref));
 }
 
-internal sealed record AttachmentTrashPayload(AttachmentPayload Attachment, long Revision, string DeletedBy, DateTime DeletedAt, ChangesetPayload? Changeset);
+internal sealed record AttachmentTrashPayload(
+    AttachmentPayload Attachment, long Revision, string DeletedBy, DateTime DeletedAt, ChangesetPayload? Changeset,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 internal sealed record CheckpointNotePayload(string Path, string Version, string TextId);
 
@@ -566,7 +628,9 @@ internal sealed record CheckpointAttachmentPayload(string Path, AttachmentStateP
 /// <remarks>Attachments is missing in checkpoints made before attachments existed, and omitted when there are none.</remarks>
 internal sealed record CheckpointPayload(
     string Name, string Path, bool Folder, string CreatedBy, DateTime CreatedAt, List<CheckpointNotePayload> Notes,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] List<CheckpointAttachmentPayload>? Attachments = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] List<CheckpointAttachmentPayload>? Attachments = null,
+    [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
 internal sealed record TextPayload(string Content);
 
@@ -578,8 +642,9 @@ internal static class Payload
 {
     public static NotePayload From(StoredNote n) => new(
         n.Path.Value, n.Content, n.LastWriter, n.LastWriteAt,
-        [.. n.History.Select(h => new HistoryPayload(h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset)))], n.SeedContent,
-        ChangesetPayload.From(n.Changeset));
+        [.. n.History.Select(h => new HistoryPayload(
+            h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref)))],
+        n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref));
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");

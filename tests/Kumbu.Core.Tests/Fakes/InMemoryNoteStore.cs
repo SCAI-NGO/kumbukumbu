@@ -22,7 +22,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         foreach (var (path, content) in notes)
         {
             if (!VaultPath.TryParse(path, out var parsed)) throw new ArgumentException($"Bad path: {path}");
-            _notes[parsed] = new StoredNote(parsed, content, 1, Writers.Seed, Seeded, [], content);
+            _notes[parsed] = new StoredNote(parsed, content, 1, Writers.Seed, Seeded, [], content, Ref: WriterRef.Server);
             _vaults.Add(parsed.Vault!);
         }
     }
@@ -40,7 +40,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         byte[] bytes = format.Kind == AttachmentKind.Pdf ? "%PDF-1.7"u8.ToArray() : [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         var id = PutBlobAsync(parsed.Vault!, bytes, CancellationToken.None).Result;
         var attachment = new StoredAttachment(
-            parsed, new AttachmentState(format.MediaType, bytes.Length, null, null, VersionToken.Of(bytes), id), 1, Writers.Seed, Seeded, [], null);
+            parsed, new AttachmentState(format.MediaType, bytes.Length, null, null, VersionToken.Of(bytes), id), 1, Writers.Seed, Seeded, [], null, WriterRef.Server);
         _attachments[parsed] = attachment;
         _vaults.Add(parsed.Vault!);
         return attachment;
@@ -114,7 +114,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     /// <summary>How many batches <see cref="TryCommitAsync"/> wrote.</summary>
     public int Commits { get; private set; }
 
-    public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, DateTime at, CancellationToken ct)
+    public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         var existing = batch.Replaces.Select(r => r.Current).Concat(batch.Moves.Select(m => m.Current)).Concat(batch.Trashes).ToList();
         foreach (var current in existing) Race(current.Path);
@@ -154,7 +154,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         foreach (var current in batch.Trashes)
         {
             _notes.Remove(current.Path);
-            _trash.Add(new TrashedNote(current, by, at, batch.Changeset));
+            _trash.Add(new TrashedNote(current, by, at, batch.Changeset, byRef));
         }
 
         foreach (var (current, _) in batch.Moves) _notes.Remove(current.Path);
@@ -162,14 +162,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         foreach (var (current, target) in batch.Moves)
         {
             _notes[target.Path] = target;
-            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset));
+            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset, byRef));
         }
 
         foreach (var (current, next) in batch.AttachmentReplaces) _attachments[current.Path] = next;
         foreach (var current in batch.AttachmentTrashes)
         {
             _attachments.Remove(current.Path);
-            _attachmentTrash.Add(new TrashedAttachment(current, by, at, batch.Changeset));
+            _attachmentTrash.Add(new TrashedAttachment(current, by, at, batch.Changeset, byRef));
         }
 
         foreach (var (current, _) in batch.AttachmentMoves) _attachments.Remove(current.Path);
@@ -177,7 +177,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         foreach (var (current, target) in batch.AttachmentMoves)
         {
             _attachments[target.Path] = target;
-            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset));
+            _moves.Add(new MoveRecord(current.Path, target.Path, by, at, batch.Changeset, byRef));
         }
 
         foreach (var (trashed, restored) in batch.AttachmentRestores)
@@ -207,12 +207,12 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<IReadOnlyList<Note>> ReadCheckpointAsync(Checkpoint checkpoint, CancellationToken ct) =>
         Task.FromResult(_checkpoints.Single(c => c.Checkpoint == checkpoint).Notes);
 
-    public Task<bool> TryTrashAsync(StoredNote current, string deletedBy, DateTime deletedAt, CancellationToken ct)
+    public Task<bool> TryTrashAsync(StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, CancellationToken ct)
     {
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
         _notes.Remove(current.Path);
-        _trash.Add(new TrashedNote(stored, deletedBy, deletedAt));
+        _trash.Add(new TrashedNote(stored, deletedBy, deletedAt, Ref: deletedByRef));
         return Task.FromResult(true);
     }
 
@@ -223,7 +223,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         return Task.FromResult(result);
     }
 
-    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, DateTime at, CancellationToken ct)
+    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
     {
         var latest = _trash
             .Where(t => t.Note.Path == path && (version is null || t.Note.Version == version))
@@ -231,7 +231,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             .FirstOrDefault();
         if (latest is null || _notes.ContainsKey(path)) return Task.FromResult<StoredNote?>(null);
 
-        var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null };
+        var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null, Ref = reference };
         _trash.Remove(latest);
         _notes[path] = restored;
         return Task.FromResult<StoredNote?>(restored);

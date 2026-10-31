@@ -63,7 +63,8 @@ public sealed record Changeset(string Id, DateTime Started)
 }
 
 /// <summary>An earlier state of a note: its content, who wrote it when, and in which changeset.</summary>
-public sealed record HistoryEntry(string Content, string WrittenBy, DateTime WrittenAt, Changeset? Changeset = null);
+/// <param name="Ref">The reference sealed beside <paramref name="WrittenBy"/> (<see cref="WriterRef"/>).</param>
+public sealed record HistoryEntry(string Content, string WrittenBy, DateTime WrittenAt, Changeset? Changeset = null, WriterRef? Ref = null);
 
 /// <summary>A note as stored, with what the write rules need.</summary>
 /// <param name="Revision">Increases with every write; the store replaces a note only at the revision the
@@ -71,6 +72,7 @@ public sealed record HistoryEntry(string Content, string WrittenBy, DateTime Wri
 /// <param name="History">Earlier states, newest first, at most <see cref="NoteWriter.HistoryLimit"/>.</param>
 /// <param name="SeedContent">What the seeder last loaded from disk, or null if it never did.</param>
 /// <param name="Changeset">The changeset of the current state; null for a state that joins none (restore, seed).</param>
+/// <param name="Ref">The reference sealed beside <paramref name="LastWriter"/>; a store refuses a write without one.</param>
 public sealed record StoredNote(
     VaultPath Path,
     string Content,
@@ -79,17 +81,20 @@ public sealed record StoredNote(
     DateTime LastWriteAt,
     IReadOnlyList<HistoryEntry> History,
     string? SeedContent = null,
-    Changeset? Changeset = null)
+    Changeset? Changeset = null,
+    WriterRef? Ref = null)
 {
     public string Version => VersionToken.Of(Content);
 }
 
 /// <param name="Changeset">The writer's changeset the removal belongs to; null for a restore, or a removal recorded
 /// before trash records carried one.</param>
-public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null);
+/// <param name="Ref">The reference sealed beside <paramref name="DeletedBy"/>.</param>
+public sealed record TrashedNote(StoredNote Note, string DeletedBy, DateTime DeletedAt, Changeset? Changeset = null, WriterRef? Ref = null);
 
 /// <param name="Changeset">The writer's changeset the removal belongs to; null for a removal without one.</param>
-public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset)
+/// <param name="Ref">The reference sealed beside <paramref name="DeletedBy"/>.</param>
+public sealed record TrashedAttachment(StoredAttachment Attachment, string DeletedBy, DateTime DeletedAt, Changeset? Changeset, WriterRef? Ref = null)
 {
     /// <summary>Whether <paramref name="other"/> names the same trash entry: same path, state and removal time. Record
     /// equality won't do, since it compares the history list by reference.</summary>

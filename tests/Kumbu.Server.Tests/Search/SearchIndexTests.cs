@@ -21,7 +21,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     private static readonly DateTime T0 = new(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
 
-    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, []);
+    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, [], Ref: WriterRef.Server);
 
     private sealed record Setup(VaultWorld World, VaultCatalog Catalog, SearchIndex Index, EncryptedNoteStore Store, FakeEmbedder Embedder);
 
@@ -88,11 +88,11 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         Assert.Equal(3, s.Embedder.Embedded);
 
         var current = (await s.Store.GetAsync(note.Path, Ct))!;
-        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, T0), Ct);
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
         await IdleAsync(s);
         Assert.Equal(4, s.Embedder.Embedded);
 
-        await s.Store.TryTrashAsync((await s.Store.GetAsync(note.Path, Ct))!, Writers.Dev, T0, Ct);
+        await s.Store.TryTrashAsync((await s.Store.GetAsync(note.Path, Ct))!, Writers.Dev, WriterRef.Server, T0, Ct);
         await IdleAsync(s);
         Assert.Empty((await s.Store.SearchAsync(P("/Work"), "beta", 10, Ct)).Hits);
         Assert.Equal(0, await s.World.Db.GetCollection<BsonDocument>("embeddings").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));

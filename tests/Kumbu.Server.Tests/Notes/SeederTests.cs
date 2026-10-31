@@ -107,7 +107,7 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
         await SeedAsync(world);
         var store = Store(world.Catalog());
         var marker = (await store.GetAttachmentAsync(P("/Work/Drafts/.vaultkeep"), Ct))!;
-        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { marker } }, Writers.Dev, DateTime.UtcNow, Ct));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { marker } }, Writers.Dev, WriterRef.Server, DateTime.UtcNow, Ct));
 
         var log = await SeedAsync(world);
 
@@ -140,7 +140,7 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
         await SeedAsync(world);
         var store = Store(world.Catalog());
         var note = (await store.GetAsync(P("/Demo/a.md"), Ct))!;
-        await store.TryReplaceAsync(note, NoteWriter.Next(note, "agent", Writers.Dev, DateTime.UtcNow), Ct);
+        await store.TryReplaceAsync(note, NoteWriter.Next(note, "agent", Writers.Dev, WriterRef.Server, DateTime.UtcNow), Ct);
         Write("Demo/a.md", "disk");
         Write("Demo/new.md", "new");
 
@@ -160,7 +160,7 @@ public sealed class SeederTests(MongoFixture fixture) : IDisposable
         Write("Demo/a.md", "one");
         await SeedAsync(world);
         var store = Store(world.Catalog());
-        await store.TryTrashAsync((await store.GetAsync(P("/Demo/a.md"), Ct))!, Writers.Dev, DateTime.UtcNow, Ct);
+        await store.TryTrashAsync((await store.GetAsync(P("/Demo/a.md"), Ct))!, Writers.Dev, WriterRef.Server, DateTime.UtcNow, Ct);
 
         await SeedAsync(world);
 

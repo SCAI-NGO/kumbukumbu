@@ -189,8 +189,8 @@ public class VersionCommandsTests
     {
         var store = new InMemoryNoteStore(("/W/r/x.md", "x\n"), ("/W/r/y.md", "y\n"));
         var at = _time.GetUtcNow().UtcDateTime;
-        store.AddMove(new MoveRecord(Path("/W/elsewhere/x2.md"), Path("/W/r/x.md"), "dev (restore)", at));
-        store.AddMove(new MoveRecord(Path("/W/r/sub/z.md"), Path("/W/r/y.md"), "dev (restore)", at));
+        store.AddMove(new MoveRecord(Path("/W/elsewhere/x2.md"), Path("/W/r/x.md"), "dev (restore)", at, Ref: WriterRef.Server));
+        store.AddMove(new MoveRecord(Path("/W/r/sub/z.md"), Path("/W/r/y.md"), "dev (restore)", at, Ref: WriterRef.Server));
         var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
 
         var rows = (await sh.RunAsync("history --since 1h /W", CancellationToken.None)).Output.Split('\n');
@@ -206,9 +206,9 @@ public class VersionCommandsTests
     {
         var store = new InMemoryNoteStore(("/W/b/x.md", "x\n"), ("/W/b/deep/y.md", "y\n"), ("/W/d.md", "d\n"));
         var at = _time.GetUtcNow().UtcDateTime;
-        store.AddMove(new MoveRecord(Path("/W/a/x.md"), Path("/W/b/x.md"), "dev", at));
-        store.AddMove(new MoveRecord(Path("/W/a/deep/y.md"), Path("/W/b/deep/y.md"), "dev", at));
-        store.AddMove(new MoveRecord(Path("/W/c.md"), Path("/W/d.md"), "dev", at));
+        store.AddMove(new MoveRecord(Path("/W/a/x.md"), Path("/W/b/x.md"), "dev", at, Ref: WriterRef.Server));
+        store.AddMove(new MoveRecord(Path("/W/a/deep/y.md"), Path("/W/b/deep/y.md"), "dev", at, Ref: WriterRef.Server));
+        store.AddMove(new MoveRecord(Path("/W/c.md"), Path("/W/d.md"), "dev", at, Ref: WriterRef.Server));
         var sh = new Shell(store, new NoteWriter(store, _time, new FixedCaller(Writers.Dev)), new NoteMover(store, _time, new FixedCaller(Writers.Dev)));
 
         // The "what" column is padded to the longest entry, so the note count lines up.
