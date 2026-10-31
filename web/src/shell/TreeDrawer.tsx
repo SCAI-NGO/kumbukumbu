@@ -29,7 +29,7 @@ export const sidebarId = "file-tree";
 
 export type Row =
   | { kind: "folder"; folder: TreeFolder; depth: number; count: number; open: boolean }
-  | { kind: "note"; path: string; depth: number; fileKind: FileKind };
+  | { kind: "note"; path: string; depth: number; fileKind: FileKind; version?: string | null };
 
 /** What a tree entry holds, as the server says (`kind`); an entry without one is a note. */
 const fileKindOfEntry = (entry: TreeFolder["notes"][number]): FileKind => (entry.kind === "image" || entry.kind === "pdf" ? entry.kind : "note");
@@ -43,7 +43,7 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
       const open = !!expanded[f.path];
       return [{ kind: "folder", folder: f, depth, count: count(f), open }, ...(open ? rows(f, expanded, depth + 1) : [])];
     }),
-    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n) })),
+    ...folder.notes.map((n): Row => ({ kind: "note", path: n.path, depth, fileKind: fileKindOfEntry(n), version: n.version })),
   ];
 }
 
@@ -120,6 +120,29 @@ function FolderButton({ folder, count, open, selected, onToggle }: { folder: Tre
  * A note's entry shows the title, an attachment's its name with the icon of its kind; when that is cut off, the path
  * is what the tooltip tells (the title alone may repeat).
  */
+/** What a file row's "Delete" opens: a note's dialog, or an attachment's at the version the tree shows. */
+export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment"; path: string; version: string };
+
+/**
+ * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
+ * server's deletion needs, can't be deleted from here.
+ */
+function FileMenu({ row, onMove, onDelete }: { row: Extract<Row, { kind: "note" }>; onMove(subject: MoveSubject): void; onDelete(subject: DeleteSubject): void }) {
+  const note = row.fileKind === "note";
+  const { path, version } = row;
+  const items: MenuItem[] = [
+    { label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) },
+    note
+      ? { label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }
+      : { label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version },
+  ];
+  return (
+    <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
+      <Ellipsis size={18} aria-hidden />
+    </Menu>
+  );
+}
+
 function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKind: FileKind; current: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
   const Icon = fileKindIcon[fileKind];
@@ -285,9 +308,10 @@ export default function TreeDrawer(props: {
   onNewFolder(parent: string): void;
   onNewVault(): void;
   onMove(subject: MoveSubject): void;
+  onDelete(subject: DeleteSubject): void;
   onVaultSheet(sheet: { kind: "trash" | "activity" | "checkpoints"; vault: string }): void;
 }) {
-  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onVaultSheet } = props;
+  const { docked = false, hidden = false, onNewNote, onNewFolder, onNewVault, onMove, onDelete, onVaultSheet } = props;
   const { activeVault, currentPath, expandedFolders, selectedFolder, toggleFolder, setOverlay } = useEditor();
   const tree = useTree(activeVault);
   const navigate = useNavigate();
@@ -390,19 +414,7 @@ export default function TreeDrawer(props: {
                 ) : (
                   <>
                     <NoteButton path={row.path} fileKind={row.fileKind} current={row.path === currentPath} onOpen={() => openEntry(row.path, row.fileKind)} />
-                    {/* An attachment is moved from the lightbox: the note's dialog would give it a `.md`. */}
-                    {row.fileKind === "note" ? (
-                      <Menu
-                        label={`Actions for ${titleOf(row.path)}`}
-                        items={[{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "note", path: row.path }) }]}
-                        placement="below"
-                        className={menuButtonClass}
-                      >
-                        <Ellipsis size={18} aria-hidden />
-                      </Menu>
-                    ) : (
-                      <span aria-hidden className="size-11 flex-none" />
-                    )}
+                    <FileMenu row={row} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>
