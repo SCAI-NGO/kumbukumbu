@@ -31,7 +31,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var catalog = world.Catalog();
         await catalog.CreateAsync("Work", Token, (_, _) => Task.CompletedTask, Ct);
         var store = Store(catalog);
-        var vault = (await store.UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await store.UnlockedVaultsAsync(Ct)).Single().Vault;
         var blobId = Convert.FromBase64String(await store.PutBlobAsync("Work", Encoding.ASCII.GetBytes(pdf), Ct));
         return new World(world, catalog, vault, new PdfAnalyses(catalog, NullLogger<PdfAnalyses>.Instance), blobId);
     }
@@ -136,7 +136,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var w = await WorldAsync();
         await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(60, PageText), Ct);
         await w.Catalog.CreateAsync("Other", Token, (_, _) => Task.CompletedTask, Ct);
-        var other = (await Store(w.Catalog).UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Other");
+        var other = (await Store(w.Catalog).UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Other").Vault;
         // The documents copied under the other vault's id, as someone with the database could.
         var docs = await w.Parts.Find(new BsonDocument("vault", w.Vault.Id)).ToListAsync(Ct);
         foreach (var d in docs)

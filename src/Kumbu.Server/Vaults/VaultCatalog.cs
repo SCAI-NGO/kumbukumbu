@@ -127,14 +127,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
     /// <summary>The vaults <paramref name="secret"/> has a slot for, unlocked. A vault in the cache is used only
     /// for a secret whose slot was found here, so the cache saves work but never replaces authorization.</summary>
-    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(string secret, CancellationToken ct)
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(string secret, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var lookup = VaultCrypto.Derive(secret, LookupLabel, []);
         var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey)
             & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup) & Builders<SlotDocument>.Filter.Exists(s => s.KeyId, false)).ToListAsync(ct);
 
-        var result = new List<UnlockedVault>();
+        var result = new List<VaultAccess>();
         foreach (var slot in slots)
         {
             // Always open the slot, also for a vault already in memory: a slot that matches the lookup but
@@ -150,7 +150,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 continue;
             }
 
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(vault);
+            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) result.Add(VaultAccess.Owned(vault));
         }
 
         return result;
@@ -196,9 +196,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// The vaults of a user, unlocked with their user key: their own, and those shared with them whose membership is
     /// active now. Opens slots as <see cref="OpenAsync"/> does. The memberships behind the member slots are read in one
     /// query on every call, before any vault is loaded or taken from memory (collab design §3.1): a vault the member
-    /// unlocked a minute ago is out of reach on the next request once the membership is revoked.
+    /// unlocked a minute ago is out of reach on the next request once the membership is revoked. A shared vault comes
+    /// under the member's alias, opened from her slot, at her role.
     /// </summary>
-    public async Task<IReadOnlyList<UnlockedVault>> OpenForUserAsync(string userId, byte[] userKey, CancellationToken ct)
+    public async Task<IReadOnlyList<VaultAccess>> OpenForUserAsync(string userId, byte[] userKey, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var lookup = UserLookup(userKey, userId);
@@ -208,11 +209,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         // Owners without shared vaults pay nothing.
         var active = members.Count == 0 ? null : await ActiveMembershipsAsync(members.Select(s => s.Membership ?? ""), ct);
 
-        var result = new List<UnlockedVault>();
+        var result = new List<VaultAccess>();
         foreach (var slot in slots)
         {
             // Skipped as if absent: a member slot without a membership that is active, of this member, on this vault.
             if (slot.Kind == SlotDocument.Member && !IsActiveMembership(active, slot, userId)) continue;
+            string? alias = null;
+            if (slot.Kind == SlotDocument.Member && (alias = OpenAliasOf(slot)) is null) continue;
             if (OpenUserSlot(slot) is not { } vaultKey) continue;
             UnlockedVault? vault;
             try
@@ -230,7 +233,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             }
 
             if (vault is null) continue;
-            result.Add(vault);
+            result.Add(alias is null ? VaultAccess.Owned(vault) : MemberAccess(vault, alias, active![slot.Membership!]));
             // Only a session meets a placeholder: the start of a run deleted every API key and connection slot. Only the
             // owner's resumes the run.
             if (vault.Pending && slot.Kind == SlotDocument.User) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
@@ -247,6 +250,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             catch (CryptographicException)
             {
                 log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
+                return null;
+            }
+        }
+
+        string? OpenAliasOf(SlotDocument slot)
+        {
+            try
+            {
+                return OpenAlias(userKey, slot);
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("The alias of a member slot of vault {VaultId} did not open", slot.Vault);
                 return null;
             }
         }
@@ -393,8 +409,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 if (slot.Kind == SlotDocument.Member && !IsActiveMembership(active, slot, userId)) continue;
                 try
                 {
-                    grant = new VaultKeyGrant(
-                        VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind)), slot.Kind == SlotDocument.Member ? slot.Membership : null);
+                    var key = VaultCrypto.Open(UserKek(userKey, vaultId), slot.Wrapped, SlotContext(vaultId, slot.Kind));
+                    grant = slot.Kind == SlotDocument.Member ? new VaultKeyGrant(key, slot.Membership) { Alias = OpenAlias(userKey, slot) } : new VaultKeyGrant(key, null);
                     break;
                 }
                 catch (CryptographicException)
@@ -410,8 +426,12 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         return result;
     }
 
-    /// <summary>A vault key opened for a new credential; <c>Membership</c> is set when it came through a member slot.</summary>
-    internal sealed record VaultKeyGrant(byte[] Key, string? Membership);
+    /// <summary>A vault key opened for a new credential; <c>Membership</c> and the member's <c>Alias</c> are set when it came
+    /// through a member slot. The credential's slot seals both: it has no user key to open the alias with.</summary>
+    internal sealed record VaultKeyGrant(byte[] Key, string? Membership)
+    {
+        public string? Alias { get; init; }
+    }
 
     /// <summary>
     /// The slots a new API key gets: one per vault in <paramref name="vaults"/> (vault id → right), sealing the vault
@@ -431,7 +451,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             KeyId = keyId,
             GrantedVia = vaultKeys[v.Key].Membership,
             Wrapped = VaultCrypto.Seal(
-                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership)),
+                ApiKeyKek(apiKey, v.Key), JsonSerializer.SerializeToUtf8Bytes(
+                    new ApiKeySlotPayload(vaultKeys[v.Key].Key, Accounts.KeyRights.ToText(v.Value), Accounts.KeyRights.SealedVersion, vaultKeys[v.Key].Membership, vaultKeys[v.Key].Alias)),
                 ApiKeySlotContext(v.Key, keyId)),
             CreatedAt = Now,
         })];
@@ -455,7 +476,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         var vaultKeys = await UserVaultKeysAsync(userId, userKey, [.. vaults.Keys], "A connection", ct);
         var slots = WrapConnectionSlots(
-            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value) { GrantedVia = vaultKeys[v.Key].Membership })], connectionId, tokenId, token, expiresAt);
+            [.. vaults.Select(v => new ConnectionVaultKey(v.Key, vaultKeys[v.Key].Key, v.Value) { GrantedVia = vaultKeys[v.Key].Membership, Alias = vaultKeys[v.Key].Alias })],
+            connectionId, tokenId, token, expiresAt);
         await IssueFaultAsync("after-wrap");
         return (slots, vaultKeys);
     }
@@ -466,6 +488,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     internal sealed record ConnectionVaultKey(string Vault, byte[] VaultKey, Accounts.KeyRight Right)
     {
         public string? GrantedVia { get; init; }
+
+        /// <summary>The member's alias for the vault, sealed with the key (derived slots only).</summary>
+        public string? Alias { get; init; }
 
         public Sharing.MembershipDocument? Membership { get; init; }
     }
@@ -513,7 +538,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 used.Add(slot);
             }
 
-            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, Membership = membership });
+            result.Add(new ConnectionVaultKey(slot.Vault, payload.VaultKey, right) { GrantedVia = slot.GrantedVia, Alias = payload.Name, Membership = membership });
         }
 
         TouchUsed(used);
@@ -535,7 +560,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             GrantedVia = k.GrantedVia,
             Wrapped = VaultCrypto.Seal(
                 ConnectionKek(token, k.Vault),
-                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia)),
+                JsonSerializer.SerializeToUtf8Bytes(new ApiKeySlotPayload(k.VaultKey, Accounts.KeyRights.ToText(k.Right), Accounts.KeyRights.SealedVersion, k.GrantedVia, k.Alias)),
                 ConnectionSlotContext(k.Vault, connectionId, tokenId)),
             CreatedAt = Now,
         })];
@@ -545,14 +570,15 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// request, as <see cref="OpenForApiKeyAsync"/>, so a revoked or expired token (whose slots are gone or past their
     /// expiry) opens nothing, whatever is in memory.
     /// </summary>
-    internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForConnectionAsync(
+    internal async Task<IReadOnlyList<VaultAccess>> OpenForConnectionAsync(
         string connectionId, string tokenId, string token, CancellationToken ct)
     {
-        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        var result = new List<VaultAccess>();
         // Every key here passed the membership check of this call, before anything is loaded.
         foreach (var key in await OpenConnectionSlotsAsync(connectionId, tokenId, token, ct))
         {
-            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add((vault, key.Membership is { } m ? Capped(key.Right, m) : key.Right));
+            if (key.Membership is not null && key.Alias is null) continue;
+            if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, key.Right, key.Membership, key.Alias));
         }
 
         return result;
@@ -570,7 +596,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// through a membership opens its vault only while the membership is active, read in one query on every call before
     /// any vault is loaded or taken from memory (collab design §3.1), and its right is capped by the role.
     /// </summary>
-    internal async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct)
+    internal async Task<IReadOnlyList<VaultAccess>> OpenForApiKeyAsync(string keyId, string apiKey, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var slots = await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.ApiKey) & Builders<SlotDocument>.Filter.Eq(s => s.KeyId, keyId)).ToListAsync(ct);
@@ -591,20 +617,19 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
 
         var active = await ActiveGrantsAsync(opened.Select(o => o.Slot), ct);
-        var result = new List<(UnlockedVault, Accounts.KeyRight)>();
+        var result = new List<VaultAccess>();
         var used = new List<SlotDocument>();
         foreach (var (slot, payload, right) in opened)
         {
-            var level = right;
+            MembershipDocument? membership = null;
             if (slot.GrantedVia is not null)
             {
                 // Skipped as if absent, before the vault is loaded: its membership isn't active (any more).
-                if (ActiveGrant(active, slot) is not { } membership) continue;
-                level = Capped(right, membership);
+                if ((membership = ActiveGrant(active, slot)) is null || payload.Name is null) continue;
                 used.Add(slot);
             }
 
-            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add((vault, level));
+            if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault) result.Add(CredentialAccess(vault, right, membership, payload.Name));
         }
 
         TouchUsed(used);
@@ -1230,7 +1255,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         [property: System.Text.Json.Serialization.JsonPropertyName("rights")] string Rights,
         [property: System.Text.Json.Serialization.JsonPropertyName("v")] int? V = null,
         [property: System.Text.Json.Serialization.JsonPropertyName("via"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-        string? Via = null);
+        string? Via = null,
+        [property: System.Text.Json.Serialization.JsonPropertyName("name"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        string? Name = null);
 
     /// <summary>The slot's <c>grantedVia</c> is the membership sealed into it: one changed, added or removed in the
     /// database (to dodge the membership check, or to borrow another's) makes the slot not open.</summary>

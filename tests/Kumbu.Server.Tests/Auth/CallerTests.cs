@@ -162,18 +162,20 @@ public sealed class CallerTests(KumbuAppFactory app)
 
         Assert.Null(credential.Level("Mine"));
         Assert.False(credential.Level("Mine") >= AccessLevel.Write);
-        await credential.OpenWithRightsAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
+        await credential.OpenAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
         Assert.Equal(AccessLevel.Maintain, credential.Level("Mine"));
     }
 
-    // Names are unique per user, but the rule must not depend on it: of two vaults the store would name alike, the
-    // lower right counts.
+    // Names are unique per caller, but the rule must not depend on it: a name two vaults share gives no level at all
+    // (the store refuses to serve them; collab design §3.2), and the name is resolved to the vault's id once.
     [Fact]
-    public void A_key_with_two_vaults_of_one_name_has_the_lower_level()
+    public void A_key_with_two_vaults_of_one_name_has_no_level()
     {
-        IReadOnlyList<(string Name, KeyRight Right)> opened = [("Mine", KeyRight.Maintain), ("Mine", KeyRight.Read), ("Other", KeyRight.Write)];
+        static VaultAccess Access(string id, string name, AccessLevel level) =>
+            new(new UnlockedVault(id, name, Kumbu.Core.Crypto.VaultCrypto.NewKey(), DateTime.UtcNow, new VaultLocks()), name, level, null, IsOwner: true);
+        IReadOnlyList<VaultAccess> opened = [Access("v1", "Mine", AccessLevel.Maintain), Access("v2", "Mine", AccessLevel.Read), Access("v3", "Other", AccessLevel.Write)];
 
-        Assert.Equal(AccessLevel.Read, RightsCredentials.LevelOf(opened, "Mine"));
+        Assert.Null(RightsCredentials.LevelOf(opened, "Mine"));
         Assert.Equal(AccessLevel.Write, RightsCredentials.LevelOf(opened, "Other"));
         Assert.Null(RightsCredentials.LevelOf(opened, "mine"));
         Assert.Null(RightsCredentials.LevelOf(null, "Mine"));

@@ -137,7 +137,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var a = await AccountAsync(["Arbeit", .. more]);
         await Index().StartAsync(Ct);
         var store = Store(a);
-        var vault = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit");
+        var vault = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit").Vault;
         await Catalog().SetEmbeddingProviderAsync(vault, "remote", Ct);
 
         Assert.True(await store.TryCreateAsync(New("/Arbeit/plan.md", "# Plan\n\nalpha beta gamma\n"), Ct));
@@ -184,7 +184,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var search = await store.SearchAsync(root, "alpha delta", 10, Ct);
         return JsonSerializer.Serialize(new
         {
-            Vaults = (await store.UnlockedVaultsAsync(Ct)).OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new { v.Name, v.EmbeddingProvider }),
+            Vaults = (await store.UnlockedVaultsAsync(Ct)).OrderBy(v => v.Name, StringComparer.Ordinal).Select(v => new { v.Name, v.Vault.EmbeddingProvider }),
             Notes = notes,
             Trash = (await store.ListTrashAsync(root, Ct)).Select(t => new { Path = t.Note.Path.Value, t.Note.Content, t.DeletedBy, t.DeletedAt }),
             Moves = (await store.ListMovesAsync(root, Ct)).Select(m => new { From = m.From.Value, To = m.To.Value, m.MovedBy }),
@@ -610,7 +610,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         // A request that opened the vault before the run, and writes during it and after it.
         var stale = Store(a);
         var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
-        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single();
+        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single().Vault;
         var checkpoint = (await stale.ListCheckpointsAsync(P("/Arbeit"), Ct)).First();
         var writes = new (string Name, Func<Task> Write)[]
         {
@@ -854,7 +854,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         // A sweep afterwards finds every blob referenced.
         _time.Advance(TimeSpan.FromHours(1));
-        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
         Assert.Equal(after, await BlobReferencesAsync(a));
     }
@@ -891,7 +891,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         // A sweep afterwards finds every blob referenced.
         _time.Advance(TimeSpan.FromHours(1));
-        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         Assert.Equal(0, await new BlobSweep(Catalog(), NullLogger.Instance).RunAsync(vault, Now, Ct));
         Assert.Equal(after, await BlobReferencesAsync(a));
     }
@@ -905,7 +905,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var oldKey = await VaultKeyAsync(a.Key, id);
         // Every blob past its grace: a sweep that ran would release what it doesn't see referenced.
         _time.Advance(TimeSpan.FromHours(1));
-        var stale = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var stale = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         var sweep = new BlobSweep(Catalog(), NullLogger.Instance);
         Catalog().BatchDocuments = 1;
         int? sweptDuringRun = null;
@@ -942,7 +942,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         var id = a.Id("Arbeit");
         var pdf = "%PDF-1.7 analysed before the re-keying"u8.ToArray();
         var attachment = await AttachAsync(Store(a), "/Arbeit/paper.pdf", pdf);
-        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         var texts = Enumerable.Range(1, 3).Select(n => $"Seite {n} " + new string('x', 600_000)).ToList();
         var book = new Kumbu.Server.Attachments.SidecarAnalysis(
             new PdfAnalysis(Kumbu.Server.Attachments.PdfAnalyses.Analyser, 3, 3, null, null,
@@ -989,7 +989,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.Equal(count, after.Count);
         Assert.All(after, d => Assert.Equal(current.BlobId, Convert.ToBase64String(d.BlobId)));
         Assert.Equal((count, 0), (Opening(newKey, after), Opening(oldKey, after)));
-        var reopened = (await store.UnlockedVaultsAsync(Ct)).Single();
+        var reopened = (await store.UnlockedVaultsAsync(Ct)).Single().Vault;
         var read = new Kumbu.Server.Attachments.PdfAnalyses(other, NullLogger<Kumbu.Server.Attachments.PdfAnalyses>.Instance);
         Assert.Equal(texts, await read.TextAsync(reopened, Convert.FromBase64String(current.BlobId), 1, 3, Ct));
     }
@@ -1074,13 +1074,13 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         // The name lists keep it.
         Assert.Equal(["Arbeit", "Privat"], (await store.ListVaultsAsync(Ct)).Order(StringComparer.Ordinal));
-        var placeholder = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit");
+        var placeholder = (await store.UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Arbeit").Vault;
         Assert.True(placeholder.Pending);
         Assert.Equal("remote", placeholder.EmbeddingProvider);
         Assert.Empty(placeholder.Notes);
         Assert.Equal([(id, a.User.Id)], found.Select(f => (f.Item1, f.Item2)));
         Assert.Equal(a.Key, found[0].Item3);
-        Assert.Contains((await Catalog().OpenForUserAsync(a.User.Id, a.Key, Ct)).Select(v => (v.Name, v.Pending)), v => v == ("Arbeit", true));
+        Assert.Contains((await Catalog().OpenForUserAsync(a.User.Id, a.Key, Ct)).Select(v => (v.Name, v.Vault.Pending)), v => v == ("Arbeit", true));
         Assert.Equal([id], await Catalog().PendingVaultIdsAsync(a.User.Id, a.Key, Ct));
         // The key and connection lists and the consent page name it too.
         var caller = Kumbu.Server.Auth.RequestCaller.ForSession(a.User, a.Key, a.ReadAt, windowOpen: true, Catalog());
@@ -1138,7 +1138,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.True(await store.TryReplaceAsync(plan, NoteWriter.Next(plan, "# Plan\n\nsomething else entirely\n", "lea", WriterRef.Server, Now.AddHours(2)), Ct));
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         Assert.True(RemoteNotes > embedded);
-        var vault = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single().Vault;
         Assert.Equal((await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!.Version, vault.Embeddings[P("/Arbeit/plan.md")].Version);
     }
 
@@ -1198,14 +1198,14 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
 
         await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct);
         // The new object's catch-up finds the note queued already, for the old object.
-        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         await index.StartAsync(Ct);
         await index.IdleAsync(TimeSpan.FromSeconds(10), Ct);
 
         var note = (await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!;
         Assert.Equal("# Plan\n\nwritten just before the run\n", note.Content);
         Assert.Equal(note.Version, current.Embeddings[P("/Arbeit/plan.md")].Version);
-        var reloaded = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single();
+        var reloaded = (await Store(a, NewCatalog()).UnlockedVaultsAsync(Ct)).Single().Vault;
         Assert.Equal(note.Version, reloaded.Embeddings[P("/Arbeit/plan.md")].Version);
     }
 
@@ -1224,7 +1224,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         await Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct).WaitAsync(TimeSpan.FromSeconds(10), Ct);
 
         _remote.Hang = false;
-        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single();
+        var current = (await Store(a).UnlockedVaultsAsync(Ct)).Single().Vault;
         await Index().IdleAsync(TimeSpan.FromSeconds(10), Ct);
         var note = (await Store(a).GetAsync(P("/Arbeit/plan.md"), Ct))!;
         Assert.Equal(note.Version, current.Embeddings[P("/Arbeit/plan.md")].Version);
@@ -1448,7 +1448,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         // A request that opened the vault before the run.
         var stale = Store(a);
         var plan = (await stale.GetAsync(P("/Arbeit/plan.md"), Ct))!;
-        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single();
+        var staleVault = (await stale.UnlockedVaultsAsync(Ct)).Single().Vault;
         Catalog().BatchDocuments = 3;
         CrashOnceAt(point);
         await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
@@ -1509,7 +1509,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         await Assert.ThrowsAsync<VaultNotRekeyableException>(() => Catalog().RekeyAsync(id, a.User.Id, a.Key, Ct));
 
         Assert.Equal(VaultBusyException.BeingReencrypted, (await Assert.ThrowsAsync<VaultBusyException>(() => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct))).Message);
-        await Index().IndexAsync((await stale.UnlockedVaultsAsync(Ct)).Single(), P("/Arbeit/plan.md"), Ct);
+        await Index().IndexAsync((await stale.UnlockedVaultsAsync(Ct)).Single().Vault, P("/Arbeit/plan.md"), Ct);
         Assert.Equal(before, await RawAsync(id));
         await Catalog().RekeyAsync(id, a.User.Id, rotation.NewUserKey, Ct);
         Assert.Equal("# Plan\n\nalpha beta gamma, take 3\n", await Store(a, key: rotation.NewUserKey).ReadAsync(P("/Arbeit/plan.md"), Ct));

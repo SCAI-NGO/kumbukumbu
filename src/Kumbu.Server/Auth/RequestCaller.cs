@@ -73,7 +73,8 @@ public sealed class RequestCaller : ICaller
 
     public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
-    public Task<IReadOnlyList<UnlockedVault>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
+    /// <summary>The caller's vaults, each under the caller's name for it (collab design §3.2).</summary>
+    public Task<IReadOnlyList<VaultAccess>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
 
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
         new(CallerKind.DevToken, null, Writers.Dev, WriterRef.Server, new FixedCredential(devToken), catalog);
@@ -86,7 +87,7 @@ public sealed class RequestCaller : ICaller
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
     {
         var credential = new ApiKeyCredential(key.Id, apiKey);
-        await credential.OpenWithRightsAsync(catalog, ct);
+        await credential.OpenAsync(catalog, ct);
         var reference = WriterRef.ForOwner(key.Kind == ApiKeyKind.Device ? WriterRef.Device : WriterRef.Agent, key.Id);
         return new(CallerKind.ApiKey, key.User, key.Name, reference, credential, catalog, device: key.Kind == ApiKeyKind.Device);
     }
@@ -96,7 +97,7 @@ public sealed class RequestCaller : ICaller
     internal static async Task<RequestCaller?> ForConnectionAsync(ResolvedConnection connection, string token, VaultCatalog catalog, CancellationToken ct)
     {
         var credential = new ConnectionCredential(connection.ConnectionId, connection.TokenId, token);
-        if ((await credential.OpenWithRightsAsync(catalog, ct)).Count == 0) return null;
+        if ((await credential.OpenAsync(catalog, ct)).Count == 0) return null;
         return new(CallerKind.Connection, connection.User, connection.Name, WriterRef.ForOwner(WriterRef.Agent, connection.ConnectionId), credential, catalog);
     }
 

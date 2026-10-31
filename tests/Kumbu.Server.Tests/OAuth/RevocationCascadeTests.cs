@@ -184,8 +184,8 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         Assert.NotNull(await Service<Deletion>().DeleteVaultAsync(flow.Owner.User, flow.Owner.UserKey, "Privat", RestClient.Password, "Privat", Ct));
 
         var resolved = (await Service<OAuthTokens>().ResolveAccessAsync(pair.Access, flow.ConnectionId, flow.Resource, Ct)).Connection!;
-        var opened = await new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access).OpenWithRightsAsync(Service<VaultCatalog>(), Ct);
-        Assert.Equal([("Arbeit", KeyRight.Write)], opened.Select(v => (v.Vault.Name, v.Right)));
+        var opened = await new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access).OpenAsync(Service<VaultCatalog>(), Ct);
+        Assert.Equal([("Arbeit", Kumbu.Core.Notes.AccessLevel.Write)], opened.Select(v => (v.Name, v.Level)));
         Assert.Equal(HttpStatusCode.OK, await InitializeAsync(flow, pair.Access));
         using var refreshed = await flow.RefreshAsync(pair.Refresh);
         Assert.Equal("kumbu:read kumbu:write", (await PairOf(refreshed)).Scope);
@@ -342,19 +342,19 @@ public sealed class RevocationCascadeTests(KumbuAppFactory app)
         // A request checked before the revocation: its token resolved and its vaults opened, as the middleware does first.
         var resolved = (await Service<OAuthTokens>().ResolveAccessAsync(pair.Access, flow.ConnectionId, flow.Resource, Ct)).Connection!;
         var inFlight = new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access);
-        Assert.Single(await inFlight.OpenWithRightsAsync(Service<VaultCatalog>(), Ct));
+        Assert.Single(await inFlight.OpenAsync(Service<VaultCatalog>(), Ct));
 
         using var revoked = await flow.Owner.SendAsync(HttpMethod.Delete, $"/api/connections/{flow.ConnectionId}");
         Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
 
         // It finishes with what it was checked with ...
         Assert.True(inFlight.Level("Arbeit") >= Kumbu.Core.Notes.AccessLevel.Write);
-        Assert.Single(await inFlight.OpenWithRightsAsync(Service<VaultCatalog>(), Ct));
+        Assert.Single(await inFlight.OpenAsync(Service<VaultCatalog>(), Ct));
         // ... and the next request checks again.
         var next = await Service<OAuthTokens>().ResolveAccessAsync(pair.Access, flow.ConnectionId, flow.Resource, Ct);
         Assert.Null(next.Connection);
         Assert.True(next.Known);
-        Assert.Empty(await new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access).OpenWithRightsAsync(Service<VaultCatalog>(), Ct));
+        Assert.Empty(await new ConnectionCredential(flow.ConnectionId, resolved.TokenId, pair.Access).OpenAsync(Service<VaultCatalog>(), Ct));
         Assert.Equal(HttpStatusCode.Unauthorized, await InitializeAsync(flow, pair.Access));
     }
 }

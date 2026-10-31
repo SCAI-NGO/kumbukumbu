@@ -99,6 +99,25 @@ public sealed partial class VaultCatalog
         return sealedRight < role ? sealedRight : role;
     }
 
+    /// <summary>A member's session on a shared vault: under her alias, at her role (collab design §3.3).</summary>
+    private static VaultAccess MemberAccess(UnlockedVault vault, string alias, MembershipDocument membership) =>
+        new(vault, alias, LevelOf(membership), membership, IsOwner: false);
+
+    /// <summary>A key's or a connection's access: the owner's, under the vault's name at its sealed level; a member's,
+    /// under her alias sealed with it, at most at her role.</summary>
+    private static VaultAccess CredentialAccess(UnlockedVault vault, Accounts.KeyRight right, MembershipDocument? membership, string? alias) =>
+        membership is null
+            ? new(vault, vault.Name, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
+            : new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false);
+
+    /// <summary>The level a membership's role gives; a role that doesn't parse reads as <c>read</c>.</summary>
+    private static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch
+    {
+        MemberRole.Maintain => Kumbu.Core.Notes.AccessLevel.Maintain,
+        MemberRole.Write => Kumbu.Core.Notes.AccessLevel.Write,
+        _ => Kumbu.Core.Notes.AccessLevel.Read,
+    };
+
     /// <summary>
     /// "Last use on this vault" of derived slots (planner's decision 9): <c>usedAt</c>, set at most once a minute per
     /// slot, by one update that doesn't hold up the request; a failure is only logged.

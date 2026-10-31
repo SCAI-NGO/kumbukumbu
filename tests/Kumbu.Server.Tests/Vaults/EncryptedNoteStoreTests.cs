@@ -30,6 +30,18 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         return (world, catalog, Store(catalog));
     }
 
+    // Decision 12 of the collab plan: a broken invariant is loud. Before, one of the two was silently hidden.
+    [Fact]
+    public async Task Two_vaults_of_one_name_fail_loudly()
+    {
+        var (world, _, _) = await WorldAsync("Work", "Work");
+
+        var store = Store(world.Catalog());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.ListVaultsAsync(Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct));
+    }
+
     [Fact]
     public async Task Create_then_get_round_trips_every_field_also_in_a_second_process()
     {

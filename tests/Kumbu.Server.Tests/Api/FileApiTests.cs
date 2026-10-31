@@ -57,7 +57,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
     private async Task<long> BlobCountAsync(RestClient user)
     {
-        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         // A sweep with the grace period long over: only blobs something references are left.
         await new BlobSweep(Api.Services.GetRequiredService<VaultCatalog>(), NullLogger.Instance).RunAsync(vault, DateTime.UtcNow.AddHours(1), Ct);
         return await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs")

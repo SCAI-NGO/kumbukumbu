@@ -37,7 +37,7 @@ public static class PairingApi
     {
         // A session opens its user's own vaults and nothing else.
         var found = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == vault) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        if (found.Pending) throw VaultBusyException.Being();
+        if (found.Vault.Pending) throw VaultBusyException.Being();
         var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, found.Id, found.Name, body.ExpiresInDays);
         return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt, (int)Pairings.Lifetime.TotalSeconds));
     }

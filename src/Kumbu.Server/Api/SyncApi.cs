@@ -109,8 +109,9 @@ public static class SyncApi
     {
         var withFiles = attachments is "1" or "true";
         var root = ApiPaths.Parse(vault, null, note: false);
-        var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
+        var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
+        var unlocked = access.Vault;
         if (unlocked.Pending) throw VaultBusyException.Being();
         var now = catalog.Now;
         unlocked.Touch(now);
@@ -122,7 +123,8 @@ public static class SyncApi
         var files = withFiles ? unlocked.Attachments : [];
         // Damaged attachment records count only for a client that knows attachments: the plain answer stays today's.
         var damaged = withFiles ? unlocked.DamagedPathIds.Count : unlocked.DamagedNotes;
-        var state = State(notes.Values.Select(n => (n.Note.Path, n.Note.Version)).Concat(files.Values.Select(a => (a.Attachment.Path, a.Attachment.Version))), damaged);
+        // The working set holds the vault's own paths; the answer is in the caller's view (a member's alias).
+        var state = State(notes.Values.Select(n => (access.ToCaller(n.Note.Path), n.Note.Version)).Concat(files.Values.Select(a => (access.ToCaller(a.Attachment.Path), a.Attachment.Version))), damaged);
         http.Response.Headers.ETag = $"\"{state}\"";
         var marker = withFiles ? true : (bool?)null;
 
@@ -130,8 +132,8 @@ public static class SyncApi
         if (from is null)
         {
             if (since is null && http.Request.Headers.IfNoneMatch.Contains($"\"{state}\"")) return TypedResults.StatusCode(StatusCodes.Status304NotModified);
-            var all = notes.Values.Select(n => Entry(n.Note.Path, n.Note.Version, withFiles))
-                .Concat(files.Values.Select(a => Entry(a.Attachment.Path, a.Attachment.Version, withFiles)))
+            var all = notes.Values.Select(n => Entry(access.ToCaller(n.Note.Path), n.Note.Version, withFiles))
+                .Concat(files.Values.Select(a => Entry(access.ToCaller(a.Attachment.Path), a.Attachment.Version, withFiles)))
                 .OrderBy(e => e.Path, TextOrder.Default)
                 .ToList();
             return TypedResults.Ok(new VersionsView(true, cursor, state, damaged, all, [], marker));
@@ -144,10 +146,10 @@ public static class SyncApi
         var deleted = new List<string>();
         foreach (var path in touched)
         {
-            if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(path, entry.Note.Version, withFiles));
-            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(path, file.Attachment.Version, withFiles));
+            if (notes.TryGetValue(path, out var entry)) listed.Add(Entry(access.ToCaller(path), entry.Note.Version, withFiles));
+            else if (files.TryGetValue(path, out var file)) listed.Add(Entry(access.ToCaller(path), file.Attachment.Version, withFiles));
             // A note that doesn't open isn't gone: the client mustn't trash its copy. It is counted in damaged.
-            else if (!unlocked.IsDamaged(path)) deleted.Add(path.Value);
+            else if (!unlocked.IsDamaged(path)) deleted.Add(access.ToCaller(path).Value);
         }
 
         return TypedResults.Ok(new VersionsView(false, cursor, state, damaged, listed, deleted, marker));

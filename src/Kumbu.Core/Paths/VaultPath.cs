@@ -95,6 +95,9 @@ public sealed record VaultPath
 
     public VaultPath Child(string name) => new([.. Segments, name.Normalize(NormalizationForm.FormC)]);
 
+    /// <summary>The same path in the vault named <paramref name="vault"/>: its first segment replaced; the root stays the root.</summary>
+    public VaultPath WithVault(string vault) => IsRoot ? this : new([vault.Normalize(NormalizationForm.FormC), .. Segments.Skip(1)]);
+
     public bool Equals(VaultPath? other) => other is not null && string.Equals(Value, other.Value, StringComparison.Ordinal);
 
     public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Value);

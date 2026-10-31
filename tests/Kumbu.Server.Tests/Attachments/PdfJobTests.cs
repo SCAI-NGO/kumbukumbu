@@ -41,7 +41,7 @@ public sealed class PdfJobTests(KumbuAppFactory app)
         Raw("pdf_analyses").CountDocumentsAsync(new BsonDocument { ["vault"] = vaultId, ["part"] = 0 }, cancellationToken: Ct);
 
     internal static async Task<UnlockedVault> VaultAsync(WebApplicationFactory<Program> host, RestClient user) =>
-        (await host.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        (await host.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
 
     internal static async Task<AttachmentState> StateAsync(WebApplicationFactory<Program> host, RestClient user, string path) =>
         (await new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey))

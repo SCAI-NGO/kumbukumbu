@@ -146,7 +146,7 @@ public sealed class OwnershipTests(MongoFixture fixture)
         var other = _world.Catalog();
         other.RekeyPendingFound += (_, user, _) => found.Add(user);
 
-        Assert.True(Assert.Single(await other.OpenForUserAsync("u2", bob, Ct)).Pending);
+        Assert.True(Assert.Single(await other.OpenForUserAsync("u2", bob, Ct)).Vault.Pending);
         Assert.Empty(found);
         await other.OpenForUserAsync("u1", alice, Ct);
         Assert.Equal(["u1"], found);

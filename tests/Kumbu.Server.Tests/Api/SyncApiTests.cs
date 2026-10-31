@@ -236,7 +236,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         var cursor = Cursor(await VersionsAsync(user));
         using var edit = await user.SendAsync(HttpMethod.Put, user.Url("a.md"), new { content = "b\n", version });
         Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
-        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var notes = app.Database.GetCollection<BsonDocument>("notes");
         await notes.UpdateOneAsync(new BsonDocument("vault", vault.Id), Builders<BsonDocument>.Update.Set("blob", new BsonBinaryData(new byte[64])), cancellationToken: Ct);
         await Catalog.RefreshAsync(vault, Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("a.md"), Ct);
@@ -254,14 +254,14 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
     {
         var user = await NewAsync(Api);
         await user.CreateAsync("a.md", "a\n");
-        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         Assert.NotEmpty(vault.ChangedAt);
 
         _time.Advance(Kumbu.Server.Api.SyncApi.MaxCursorAge + Kumbu.Server.Api.SyncApi.Overlap + TimeSpan.FromMinutes(1));
         vault.Touch(_time.GetUtcNow().UtcDateTime);
         Catalog.Sweep();
 
-        Assert.Same(vault, (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault));
+        Assert.Same(vault, (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault);
         Assert.Empty(vault.ChangedAt);
     }
 
@@ -275,7 +275,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Contains(user.Vault, await stale.ListVaultsAsync(Ct));
         _time.Advance(TimeSpan.FromMinutes(20));
         Catalog.Sweep();
-        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var path = Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("late.md");
 
         Assert.True(await stale.TryCreateAsync(new Kumbu.Core.Notes.StoredNote(path, "late\n", 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: Kumbu.Core.Notes.WriterRef.Server), Ct));
@@ -295,7 +295,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Contains(user.Vault, await stale.ListVaultsAsync(Ct));
         _time.Advance(TimeSpan.FromMinutes(20));
         Catalog.Sweep();
-        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var current = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var path = Kumbu.Core.Paths.VaultPath.Root.Child(user.Vault).Child("late.md");
         var hints = 0;
         Action<string> counted = id =>
@@ -317,7 +317,7 @@ public sealed class SyncApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(1, hints);
         // The object that couldn't follow is let go: the next request reads the vault afresh, with the note.
         Assert.False(current.ChangedAt.ContainsKey(path));
-        var reloaded = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var reloaded = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         Assert.NotSame(current, reloaded);
         Assert.True(reloaded.Notes.ContainsKey(path));
     }

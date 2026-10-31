@@ -199,7 +199,7 @@ public sealed class DeletionTests(MongoFixture fixture)
         Catalog().Sweep();
         Assert.Equal(0, Catalog().OpenCount);
 
-        Task<IReadOnlyList<UnlockedVault>>? load = null;
+        Task<IReadOnlyList<VaultAccess>>? load = null;
         await Catalog().DeleteVaultsAsync(
             [diary.Id],
             async (_, _) =>

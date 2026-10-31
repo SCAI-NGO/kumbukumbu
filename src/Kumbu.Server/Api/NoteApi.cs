@@ -178,7 +178,7 @@ public static class NoteApi
 
     private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, RequestCaller caller, CancellationToken ct)
     {
-        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
+        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.Vault, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
@@ -205,8 +205,9 @@ public static class NoteApi
         string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
-        var unlocked = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
+        var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
+        var unlocked = access.Vault;
         if (index.Providers.Get(body.Provider) is null)
         {
             throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'; it has {string.Join(", ", index.Providers.All.Select(p => p.Name))}.");
@@ -218,7 +219,7 @@ public static class NoteApi
             index.CatchUp(unlocked);
         }
 
-        return TypedResults.Ok(new VaultView(unlocked.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending, caller.CanWrite(unlocked.Name)));
+        return TypedResults.Ok(new VaultView(access.Name, unlocked.Notes.Count, unlocked.EmbeddingProvider, unlocked.Pending, caller.CanWrite(access.Name)));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)

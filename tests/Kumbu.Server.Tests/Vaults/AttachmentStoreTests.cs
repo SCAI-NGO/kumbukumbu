@@ -67,7 +67,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
 
     private BlobSweep Sweep(VaultCatalog catalog) => new(catalog, NullLogger.Instance);
 
-    private static async Task<UnlockedVault> VaultAsync(VaultCatalog catalog) => Assert.Single(await catalog.OpenAsync(Token, Ct));
+    private static async Task<UnlockedVault> VaultAsync(VaultCatalog catalog) => Assert.Single(await catalog.OpenAsync(Token, Ct)).Vault;
 
     [Fact]
     public async Task An_attachment_round_trips_in_a_second_process()

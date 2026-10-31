@@ -270,7 +270,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     private async Task DamageNoteAsync(RestClient user, string path)
     {
         var catalog = Api.Services.GetRequiredService<VaultCatalog>();
-        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var notes = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("notes");
         Assert.True(Kumbu.Core.Paths.VaultPath.TryParse($"/{user.Vault}/{path}", out var notePath));
         var filter = Builders<BsonDocument>.Filter.Eq("vault", vault.Id) & Builders<BsonDocument>.Filter.Eq("pid", new BsonBinaryData(vault.PathId(notePath)));

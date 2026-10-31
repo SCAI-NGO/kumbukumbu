@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
@@ -474,7 +475,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
             filter, Builders<BsonDocument>.Update.Set("wrapped", LegacySlot.Seal(key, vaults["Work"], info.Id, vaultKey, "write")), cancellationToken: Ct);
 
         var opened = Assert.Single(await app.Services.GetRequiredService<VaultCatalog>().OpenForApiKeyAsync(info.Id, key, Ct));
-        Assert.Equal(KeyRight.Maintain, opened.Right);
+        Assert.Equal(AccessLevel.Maintain, opened.Level);
     }
 
     [Fact]
@@ -486,7 +487,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
 
         Assert.Equal(2, LegacySlot.Open(key, vaults["Work"], info.Id, slot["wrapped"].AsByteArray).V);
         var opened = Assert.Single(await app.Services.GetRequiredService<VaultCatalog>().OpenForApiKeyAsync(info.Id, key, Ct));
-        Assert.Equal(KeyRight.Write, opened.Right);
+        Assert.Equal(AccessLevel.Write, opened.Level);
     }
 
     [Fact]
@@ -497,7 +498,7 @@ public sealed class ApiKeyTests(KumbuAppFactory app)
             user, userKey, JustRead, "maintainer", new Dictionary<string, KeyRight> { [vaults["Work"]] = KeyRight.Maintain, [vaults["Diary"]] = KeyRight.Read }, Ct);
         var credential = new ApiKeyCredential(info.Id, key);
 
-        await credential.OpenWithRightsAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
+        await credential.OpenAsync(app.Services.GetRequiredService<VaultCatalog>(), Ct);
 
         Assert.True(credential.Level("Work") >= Kumbu.Core.Notes.AccessLevel.Write);
         Assert.False(credential.Level("Diary") >= Kumbu.Core.Notes.AccessLevel.Write);

@@ -3,11 +3,12 @@ namespace Kumbu.Server.Vaults;
 
 /// <summary>
 /// How a caller opens vaults: through key slots of a secret (the dev token), through the slots of an API key, or through the
-/// user slots of a user key (a session). The store asks once per request.
+/// user slots of a user key (a session). The store asks once per request; each vault comes as the caller's access to
+/// it (<see cref="VaultAccess"/>): the caller's name for it, the caller's level.
 /// </summary>
 public interface ICredential
 {
-    Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct);
+    Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct);
 
     /// <summary>Vaults in the database this credential has no way into; <c>ls /</c> mentions them.</summary>
     Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct);
@@ -16,15 +17,15 @@ public interface ICredential
 /// <summary>A secret with key slots of its own: the dev token. Not a record, so that ToString can't print it.</summary>
 public sealed class FixedCredential(string secret) : ICredential
 {
-    public Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenAsync(secret, ct);
+    public Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenAsync(secret, ct);
 
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => catalog.CountLockedAsync(secret, ct);
 }
 
-/// <summary>A user's key, from their session: opens exactly the user's own vaults.</summary>
+/// <summary>A user's key, from their session: opens the user's own vaults, and those shared with them.</summary>
 public sealed class UserCredential(string userId, byte[] userKey) : ICredential
 {
-    public Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenForUserAsync(userId, userKey, ct);
+    public Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenForUserAsync(userId, userKey, ct);
 
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.
@@ -32,20 +33,26 @@ public sealed class UserCredential(string userId, byte[] userKey) : ICredential
 }
 
 /// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): its level on a
-/// vault is the one its slot seals. Every other credential is owner of whatever it opens.</summary>
+/// vault is the one its slot seals (capped by the role on a shared vault). Every other credential is owner of whatever it opens.</summary>
 public interface IRightsCredential
 {
-    /// <summary>The level sealed into the slot of <paramref name="vault"/> (named as the store names vaults, ordinally).
+    /// <summary>The level of <paramref name="vault"/> (named as the store names vaults, ordinally) as it was opened.
     /// Fails closed: null before the vaults were opened, and for a vault this credential doesn't have.</summary>
     Kumbu.Core.Notes.AccessLevel? Level(string vault);
 }
 
 internal static class RightsCredentials
 {
-    /// <summary>The level on <paramref name="vault"/> among the vaults a credential opened: the lowest right of all the
-    /// vaults of that name, so that no second vault of the same name lends it more; null without any, or unopened.</summary>
-    internal static Kumbu.Core.Notes.AccessLevel? LevelOf(IEnumerable<(string Name, Accounts.KeyRight Right)>? opened, string vault) =>
-        opened?.Where(v => v.Name == vault).Select(v => v.Right).ToList() is { Count: > 0 } rights ? Accounts.KeyRights.ToLevel(rights.Min()) : null;
+    /// <summary>The level on <paramref name="vault"/> among the vaults a credential opened: the name is resolved to one
+    /// vault id once, and the level is that vault's. Null without any, unopened, or for a name two vaults share (which
+    /// the store refuses anyway).</summary>
+    internal static Kumbu.Core.Notes.AccessLevel? LevelOf(IReadOnlyList<VaultAccess>? opened, string vault)
+    {
+        if (opened is null) return null;
+        var ids = opened.Where(v => v.Name == vault).Select(v => v.Id).Distinct(StringComparer.Ordinal).ToList();
+        if (ids.Count != 1) return null;
+        return opened.Where(v => v.Id == ids[0]).Min(v => v.Level);
+    }
 }
 
 /// <summary>
@@ -54,21 +61,18 @@ internal static class RightsCredentials
 /// </summary>
 public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential, IRightsCredential
 {
-    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+    private IReadOnlyList<VaultAccess>? _opened;
 
     /// <summary>The key's id (not the key): what a sync WebSocket's ticket is bound to.</summary>
     public string KeyId => keyId;
 
-    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
-        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
-
-    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
         _opened ??= await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
 
     // As for a session: the other vaults belong to someone else or weren't given to this key.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
-    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Select(v => (v.Vault.Name, v.Right)), vault);
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
 }
 
 /// <summary>
@@ -77,17 +81,14 @@ public sealed class ApiKeyCredential(string keyId, string apiKey) : ICredential,
 /// </summary>
 public sealed class ConnectionCredential(string connectionId, string tokenId, string token) : ICredential, IRightsCredential
 {
-    private IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>? _opened;
+    private IReadOnlyList<VaultAccess>? _opened;
 
-    public async Task<IReadOnlyList<UnlockedVault>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
-        [.. (await OpenWithRightsAsync(catalog, ct)).Select(v => v.Vault)];
-
-    public async Task<IReadOnlyList<(UnlockedVault Vault, Accounts.KeyRight Right)>> OpenWithRightsAsync(VaultCatalog catalog, CancellationToken ct) =>
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
         _opened ??= await catalog.OpenForConnectionAsync(connectionId, tokenId, token, ct);
 
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 
-    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened?.Select(v => (v.Vault.Name, v.Right)), vault);
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
 }
 
 /// <summary>Vaults can't be used at all, e.g. because the database still holds plaintext notes.</summary>

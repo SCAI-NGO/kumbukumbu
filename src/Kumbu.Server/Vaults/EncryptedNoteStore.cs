@@ -19,7 +19,10 @@ public sealed class EncryptedNoteStore(
 {
     private static FilterDefinitionBuilder<SealedDocument> F => Builders<SealedDocument>.Filter;
 
-    private Dictionary<string, UnlockedVault>? _vaults;
+    private Dictionary<string, VaultAccess>? _vaults;
+
+    /// <summary>The same accesses by vault id, to show a path of the vault in the caller's view.</summary>
+    private Dictionary<string, VaultAccess> _byId = [];
 
     public async Task<IReadOnlyList<string>> ListVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Keys];
 
@@ -34,32 +37,38 @@ public sealed class EncryptedNoteStore(
     public async Task<IReadOnlyList<Note>> ReadNotesUnderAsync(VaultPath dir, CancellationToken ct) =>
         [.. (await NotesUnderAsync(dir, ct)).Select(n => new Note(n.Path, n.Content))];
 
-    public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct) =>
-        await VaultAsync(from, ct) is { } v ? v.Moves.Where(m => m.From == from).MaxBy(m => m.MovedAt) : null;
+    public async Task<MoveRecord?> FindMoveAsync(VaultPath from, CancellationToken ct)
+    {
+        if (await VaultAsync(from, ct) is not { } a) return null;
+        var path = a.ToVault(from);
+        return a.Vault.Moves.Where(m => m.From == path).MaxBy(m => m.MovedAt) is { } move ? Shown(a, move) : null;
+    }
 
     public async Task<IReadOnlyList<MoveRecord>> ListMovesAsync(VaultPath dir, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
+        IEnumerable<VaultAccess> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
         var prefix = dir.IsRoot ? "/" : dir.Value + "/";
-        return [.. vaults.SelectMany(v => v.Moves)
+        return [.. vaults.SelectMany(v => v.Vault.Moves.Select(m => Shown(v, m)))
             .Where(m => m.From.Value.StartsWith(prefix, StringComparison.Ordinal) || m.To.Value.StartsWith(prefix, StringComparison.Ordinal))];
     }
 
     /// <summary>Only the marker: <see cref="GetAsync"/>, which every command reads a note with first, already
     /// checked a damaged path against MongoDB again.</summary>
     public async Task<bool> IsDamagedAsync(VaultPath path, CancellationToken ct) =>
-        await VaultAsync(path, ct) is { } v && !v.Notes.ContainsKey(path) && !v.Attachments.ContainsKey(path) && v.IsDamaged(path);
+        await VaultAsync(path, ct) is { } a && a.ToVault(path) is var p && !a.Vault.Notes.ContainsKey(p) && !a.Vault.Attachments.ContainsKey(p) && a.Vault.IsDamaged(p);
 
     public async Task<int> CountDamagedAsync(VaultPath vaultOrRoot, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? (await VaultsAsync(ct)).Values.Where(v => !v.Pending) : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
+        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot
+            ? (await VaultsAsync(ct)).Values.Select(a => a.Vault).Where(v => !v.Pending)
+            : await VaultAsync(vaultOrRoot, ct) is { } a ? [a.Vault] : [];
         return vaults.Sum(v => v.DamagedPathIds.Count);
     }
 
     public Task<int> CountLockedVaultsAsync(CancellationToken ct) => credential.CountLockedAsync(catalog, ct);
 
     public async Task<(Changeset Changeset, DateTime LastWrite)?> LatestChangesetAsync(string vault, string changesetKey, CancellationToken ct) =>
-        await VaultAsync(VaultPath.Root.Child(vault), ct) is { } v
+        await VaultAsync(VaultPath.Root.Child(vault), ct) is { Vault: var v }
             ? Changeset.Latest(
                 v.Notes.Values.Select(n => n.Note), v.Trash.Select(t => t.Trashed), v.Moves, changesetKey,
                 v.Attachments.Values.Select(a => a.Attachment), v.AttachmentTrash.Select(t => t.Trashed))
@@ -69,9 +78,10 @@ public sealed class EncryptedNoteStore(
     /// counts on the first access, without restarting the server.</summary>
     public async Task<StoredNote?> GetAsync(VaultPath path, CancellationToken ct)
     {
-        if (await VaultAsync(path, ct) is not { } vault) return null;
-        if (!vault.Notes.ContainsKey(path)) await RefreshDamagedAsync(vault, path, ct);
-        return vault.Notes.TryGetValue(path, out var n) ? n.Note : null;
+        if (await VaultAsync(path, ct) is not { } a) return null;
+        var (vault, stored) = (a.Vault, a.ToVault(path));
+        if (!vault.Notes.ContainsKey(stored)) await RefreshDamagedAsync(vault, stored, ct);
+        return vault.Notes.TryGetValue(stored, out var n) ? Shown(a, n.Note) : null;
     }
 
     /// <summary>A note or attachment path marked damaged is read from MongoDB again (<see cref="GetAsync"/>).</summary>
@@ -94,7 +104,9 @@ public sealed class EncryptedNoteStore(
 
     public async Task<bool> TryCreateAsync(StoredNote note, CancellationToken ct)
     {
-        if (await VaultAsync(note.Path, ct) is not { } vault) return false;
+        if (await VaultAsync(note.Path, ct) is not { } a) return false;
+        var vault = a.Vault;
+        note = Stored(a, note);
         return await WriteAsync(vault, [note.Path], async session =>
         {
             var id = ObjectId.GenerateNewId();
@@ -118,9 +130,12 @@ public sealed class EncryptedNoteStore(
     public async Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (batch.IsEmpty) return [];
+        var asked = batch.Paths.ToList();
+        if (asked.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));
+        if (await VaultAsync(asked[0], ct) is not { } access) return asked;
+        var vault = access.Vault;
+        batch = Stored(access, batch);
         var paths = batch.Paths.ToList();
-        if (paths.Select(p => p.Vault).Distinct().Count() != 1) throw new ArgumentException("A batch changes notes of one vault", nameof(batch));
-        if (await VaultAsync(paths[0], ct) is not { } vault) return paths;
 
         VaultPath? conflict = null;
         var written = await WriteAsync(vault, paths, async session =>
@@ -257,7 +272,7 @@ public sealed class EncryptedNoteStore(
             await pdf.EnqueueAsync(vault, states, CancellationToken.None);
         }
 
-        return written ? [] : [conflict ?? paths[0]];
+        return written ? [] : [access.ToCaller(conflict ?? paths[0])];
 
         Action? Refuse(VaultPath path)
         {
@@ -325,7 +340,7 @@ public sealed class EncryptedNoteStore(
             .ToListAsync(ct);
         foreach (var doc in found) stored[Convert.ToBase64String(doc["bid"].AsByteArray)] = doc["at"].ToUniversalTime();
 
-        if (wanted.Where(n => !stored.ContainsKey(n.BlobId)).Select(n => n.Path.Value).Distinct().Order(StringComparer.Ordinal).ToList() is { Count: > 0 } missing)
+        if (wanted.Where(n => !stored.ContainsKey(n.BlobId)).Select(n => Shown(vault, n.Path).Value).Distinct().Order(StringComparer.Ordinal).ToList() is { Count: > 0 } missing)
         {
             throw new ContentMissingException($"The content of {string.Join(", ", missing)} is no longer stored (it was removed meanwhile); nothing was written. Try again.");
         }
@@ -348,24 +363,25 @@ public sealed class EncryptedNoteStore(
     /// <summary>As <see cref="GetAsync"/>, a damaged path is read from MongoDB again first.</summary>
     public async Task<StoredAttachment?> GetAttachmentAsync(VaultPath path, CancellationToken ct)
     {
-        if (await VaultAsync(path, ct) is not { } vault) return null;
-        if (!vault.Attachments.ContainsKey(path)) await RefreshDamagedAsync(vault, path, ct);
-        return vault.Attachments.TryGetValue(path, out var a) ? a.Attachment : null;
+        if (await VaultAsync(path, ct) is not { } access) return null;
+        var (vault, stored) = (access.Vault, access.ToVault(path));
+        if (!vault.Attachments.ContainsKey(stored)) await RefreshDamagedAsync(vault, stored, ct);
+        return vault.Attachments.TryGetValue(stored, out var a) ? Shown(access, a.Attachment) : null;
     }
 
     public async Task<IReadOnlyList<StoredAttachment>> ListAttachmentsUnderAsync(VaultPath folder, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = folder.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(folder, ct) is { } v ? [v] : [];
+        IEnumerable<VaultAccess> vaults = folder.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(folder, ct) is { } v ? [v] : [];
         var prefix = folder.IsRoot ? "/" : folder.Value + "/";
-        return [.. vaults.SelectMany(v => v.Attachments.Values.Select(a => a.Attachment)).Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal))];
+        return [.. vaults.SelectMany(v => v.Vault.Attachments.Values.Select(a => Shown(v, a.Attachment))).Where(a => a.Path.Value.StartsWith(prefix, StringComparison.Ordinal))];
     }
 
     public async Task<IReadOnlyList<TrashedAttachment>> ListAttachmentTrashAsync(VaultPath? path, CancellationToken ct)
     {
         var scope = path ?? VaultPath.Root;
-        IEnumerable<UnlockedVault> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
         return [.. vaults
-            .SelectMany(v => v.AttachmentTrash.Select(t => t.Trashed))
+            .SelectMany(v => v.Vault.AttachmentTrash.Select(t => Shown(v, t.Trashed)))
             .Where(t => InScope(scope, t.Attachment.Path))
             .OrderByDescending(t => t.DeletedAt)];
     }
@@ -377,12 +393,12 @@ public sealed class EncryptedNoteStore(
     /// </summary>
     public async Task<Stream?> OpenBlobAsync(string vault, string blobId, CancellationToken ct)
     {
-        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v || !TryParseBlobId(blobId, out var id)) return null;
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v } || !TryParseBlobId(blobId, out var id)) return null;
         return await catalog.ReadBlobAsync(v, id, ct) is { } bytes ? new MemoryStream(bytes, writable: false) : null;
     }
 
     /// <summary>The unlocked vault of a path, as every read finds it; null if the credential has no such vault.</summary>
-    internal Task<UnlockedVault?> VaultOfAsync(VaultPath path, CancellationToken ct) => VaultAsync(path, ct);
+    internal async Task<UnlockedVault?> VaultOfAsync(VaultPath path, CancellationToken ct) => (await VaultAsync(path, ct))?.Vault;
 
     /// <summary>
     /// Stores the bytes sealed under their keyed hash unless the vault holds them already, in which case only their time
@@ -393,7 +409,7 @@ public sealed class EncryptedNoteStore(
     public async Task<string> PutBlobAsync(string vault, ReadOnlyMemory<byte> bytes, CancellationToken ct)
     {
         if (bytes.Length > AttachmentFormat.MaxBytes) throw new ArgumentException("An attachment holds at most 15 MB.", nameof(bytes));
-        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { } v) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
+        if (await VaultAsync(VaultPath.Root.Child(vault), ct) is not { Vault: var v }) throw new ArgumentException($"There is no vault named '{vault}'.", nameof(vault));
         var id = v.BlobId(bytes.Span);
         var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
 
@@ -434,7 +450,9 @@ public sealed class EncryptedNoteStore(
 
     public async Task<bool> TryTrashAsync(StoredNote current, string deletedBy, WriterRef deletedByRef, DateTime deletedAt, CancellationToken ct)
     {
-        if (await VaultAsync(current.Path, ct) is not { } vault) return false;
+        if (await VaultAsync(current.Path, ct) is not { } a) return false;
+        var vault = a.Vault;
+        current = Stored(a, current);
         return await WriteAsync(vault, [current.Path], session => TrashInAsync(session, vault, current, deletedBy, deletedByRef, deletedAt, null, ct), ct);
     }
 
@@ -455,8 +473,8 @@ public sealed class EncryptedNoteStore(
     {
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
 
-        IEnumerable<UnlockedVault> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
-        var groups = vaults.GroupBy(v => v.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
+        IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        var groups = vaults.GroupBy(v => v.Vault.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
         if (groups.Count == 0)
         {
             var driver = index.Providers.InternalProvider.Driver;
@@ -467,7 +485,7 @@ public sealed class EncryptedNoteStore(
         var hits = new List<Kumbu.Core.Search.SemanticHit>();
         var pending = 0;
         var searched = false;
-        var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<UnlockedVault> Vaults)>();
+        var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<VaultAccess> Vaults)>();
         // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
         var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
         foreach (var (group, (state, reason, vector)) in groups.Zip(queries))
@@ -480,12 +498,14 @@ public sealed class EncryptedNoteStore(
 
             searched = true;
             var model = index.Providers.Get(group.Key)!.Driver.ModelKey;
-            foreach (var vault in group)
+            foreach (var access in group)
             {
+                var vault = access.Vault;
+                var within = access.ToVault(scope);
                 var embeddings = vault.Embeddings;
                 foreach (var (path, (_, note)) in vault.Notes)
                 {
-                    if (!InScope(scope, path)) continue;
+                    if (!InScope(within, path)) continue;
                     if (!embeddings.TryGetValue(path, out var e) || e.Model != model) { pending++; continue; }
 
                     // Same key, other length: the provider's model changed its output (no Dimensions configured).
@@ -498,14 +518,14 @@ public sealed class EncryptedNoteStore(
                     }
 
                     if (e.Version != note.Version) pending++;
-                    foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                    foreach (var chunk in e.Chunks) hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
                 }
 
                 // The pages of PDFs, as embedded for their current version; any other version's pages are left out
                 // (their text is no longer the PDF's). PDFs don't count as pending: semsearch --words doesn't find them.
                 foreach (var (path, (_, file)) in vault.Attachments)
                 {
-                    if (!AttachmentFormat.IsPdf(file.Current) || !InScope(scope, path)) continue;
+                    if (!AttachmentFormat.IsPdf(file.Current) || !InScope(within, path)) continue;
                     if (!embeddings.TryGetValue(path, out var e) || e.Model != model || e.Version != file.Version) continue;
                     if (e.Chunks.Any(c => c.Vector.Length != vector.Length))
                     {
@@ -513,7 +533,7 @@ public sealed class EncryptedNoteStore(
                         continue;
                     }
 
-                    foreach (var chunk in e.Chunks) hits.Add(new(path, chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
+                    foreach (var chunk in e.Chunks) hits.Add(new(access.ToCaller(path), chunk.StartLine, Search.Vectors.Dot(vector, chunk.Vector)));
                 }
             }
         }
@@ -531,12 +551,13 @@ public sealed class EncryptedNoteStore(
             WordsOnlyVaults = [.. unavailable.SelectMany(u => u.Vaults).Select(v => v.Name)],
         };
 
-        static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<UnlockedVault> Vaults) u) =>
+        static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<VaultAccess> Vaults) u) =>
             $"{string.Join(", ", u.Vaults.Select(v => v.Name).Order(StringComparer.Ordinal))}: {u.Reason}";
     }
 
-    /// <summary>The caller's vaults, unlocked (the vault endpoints show each one's embedding provider).</summary>
-    internal async Task<IReadOnlyList<UnlockedVault>> UnlockedVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Values];
+    /// <summary>The caller's vaults, unlocked, each under the caller's name for it (the vault endpoints show each one's
+    /// embedding provider; the version list reads the working set).</summary>
+    internal async Task<IReadOnlyList<VaultAccess>> UnlockedVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Values];
 
     private static bool InScope(VaultPath scope, VaultPath path) =>
         scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
@@ -562,8 +583,8 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = vaultOrRoot.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
-        return [.. vaults.SelectMany(v => v.Checkpoints).Select(c => c.Checkpoint).OrderBy(c => c.Vault, StringComparer.Ordinal).ThenBy(c => c.CreatedAt).ThenBy(c => c.Name, StringComparer.Ordinal)];
+        IEnumerable<VaultAccess> vaults = vaultOrRoot.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(vaultOrRoot, ct) is { } v ? [v] : [];
+        return [.. vaults.SelectMany(v => v.Vault.Checkpoints.Select(c => Shown(v, c.Checkpoint))).OrderBy(c => c.Vault, StringComparer.Ordinal).ThenBy(c => c.CreatedAt).ThenBy(c => c.Name, StringComparer.Ordinal)];
     }
 
     /// <summary>One transaction: the checkpoint's document, and each content it holds that the vault doesn't
@@ -573,7 +594,10 @@ public sealed class EncryptedNoteStore(
     public async Task<bool> TryAddCheckpointAsync(Checkpoint checkpoint, IReadOnlyList<Note> notes, CancellationToken ct)
     {
         WriterRef.RequireStorable(checkpoint.Ref);
-        if (await VaultAsync(checkpoint.Path, ct) is not { } vault) return false;
+        if (await VaultAsync(checkpoint.Path, ct) is not { } access) return false;
+        var vault = access.Vault;
+        checkpoint = Stored(access, checkpoint);
+        notes = [.. notes.Select(n => n with { Path = access.ToVault(n.Path) })];
         var textIds = notes.ToDictionary(n => n.Path, n => vault.TextId(n.Content));
         return await WriteAsync(vault, [], async session =>
         {
@@ -611,7 +635,7 @@ public sealed class EncryptedNoteStore(
     /// attachments that nothing else references any more go with the next <see cref="BlobSweep"/>.</summary>
     public async Task<bool> TryRemoveCheckpointAsync(string vaultName, string name, CancellationToken ct)
     {
-        if (await VaultAsync(VaultPath.Root.Child(vaultName), ct) is not { } vault) return false;
+        if (await VaultAsync(VaultPath.Root.Child(vaultName), ct) is not { Vault: var vault }) return false;
         return await WriteAsync(vault, [], async session =>
         {
             if (vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == name) is not { } stored) return null;
@@ -632,11 +656,13 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<Note>> ReadCheckpointAsync(Checkpoint checkpoint, CancellationToken ct)
     {
-        if (await VaultAsync(checkpoint.Path, ct) is not { } vault
-            || vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == checkpoint.Name) is not { } stored)
+        if (await VaultAsync(checkpoint.Path, ct) is not { } access
+            || access.Vault.Checkpoints.FirstOrDefault(c => c.Checkpoint.Name == checkpoint.Name) is not { } stored)
         {
             return [];
         }
+
+        var vault = access.Vault;
 
         var ids = stored.TextIds.Values.DistinctBy(Convert.ToBase64String).ToList();
         var texts = new Dictionary<string, string>();
@@ -659,7 +685,7 @@ public sealed class EncryptedNoteStore(
                 $"checkpoint '{checkpoint.Name}' doesn't open: content it holds is missing, or was changed or damaged outside Kumbu²");
         }
 
-        return [.. stored.TextIds.Select(t => new Note(t.Key, texts[Convert.ToBase64String(t.Value)]))];
+        return [.. stored.TextIds.Select(t => new Note(access.ToCaller(t.Key), texts[Convert.ToBase64String(t.Value)]))];
     }
 
     /// <summary>Within a transaction: deletes the note if it is still at <c>current.Revision</c> and keeps it in
@@ -688,17 +714,19 @@ public sealed class EncryptedNoteStore(
 
     public async Task<IReadOnlyList<TrashedNote>> ListTrashAsync(VaultPath path, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = path.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(path, ct) is { } v ? [v] : [];
+        IEnumerable<VaultAccess> vaults = path.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(path, ct) is { } v ? [v] : [];
         var prefix = path.IsRoot ? "/" : path.Value + "/";
         return [.. vaults
-            .SelectMany(v => v.Trash.Select(t => t.Trashed))
+            .SelectMany(v => v.Vault.Trash.Select(t => Shown(v, t.Trashed)))
             .Where(t => t.Note.Path == path || t.Note.Path.Value.StartsWith(prefix, StringComparison.Ordinal))
             .OrderByDescending(t => t.DeletedAt)];
     }
 
     public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
     {
-        if (await VaultAsync(path, ct) is not { } vault) return null;
+        if (await VaultAsync(path, ct) is not { } access) return null;
+        var vault = access.Vault;
+        path = access.ToVault(path);
         StoredNote? restored = null;
         var written = await WriteAsync(vault, [path], async session =>
         {
@@ -721,7 +749,7 @@ public sealed class EncryptedNoteStore(
                 vault.Trash = vault.Trash.Remove(latest);
             };
         }, ct);
-        return written ? restored : null;
+        return written ? Shown(access, restored!) : null;
     }
 
     /// <summary>
@@ -871,37 +899,100 @@ public sealed class EncryptedNoteStore(
 
     private async Task<IEnumerable<StoredNote>> NotesUnderAsync(VaultPath dir, CancellationToken ct)
     {
-        IEnumerable<UnlockedVault> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
+        IEnumerable<VaultAccess> vaults = dir.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(dir, ct) is { } v ? [v] : [];
         var prefix = dir.IsRoot ? "/" : dir.Value + "/";
-        return vaults.SelectMany(v => v.Notes.Values.Select(n => n.Note)).Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal));
+        return vaults.SelectMany(v => v.Vault.Notes.Values.Select(n => Shown(v, n.Note))).Where(n => n.Path.Value.StartsWith(prefix, StringComparison.Ordinal));
     }
 
     /// <summary>The vault of a path, marked as used now: only vaults a request actually touches count for
     /// the idle timeout and the least-recently-used order, not every vault its token can open. A vault in its
     /// two-key period is named but not served: <see cref="VaultBusyException"/>.</summary>
-    private async Task<UnlockedVault?> VaultAsync(VaultPath path, CancellationToken ct)
+    private async Task<VaultAccess?> VaultAsync(VaultPath path, CancellationToken ct)
     {
-        if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var vault)) return null;
-        if (vault.Pending) throw VaultBusyException.Being();
-        vault.Touch(catalog.Now);
-        return vault;
+        if (path.Vault is not { } name || !(await VaultsAsync(ct)).TryGetValue(name, out var access)) return null;
+        if (access.Vault.Pending) throw VaultBusyException.Being();
+        access.Vault.Touch(catalog.Now);
+        return access;
     }
 
     /// <summary>All of the credential's vaults, marked as used (a search or listing over every vault); a vault in its
     /// two-key period is left out.</summary>
-    private async Task<IEnumerable<UnlockedVault>> AllVaultsAsync(CancellationToken ct)
+    private async Task<IEnumerable<VaultAccess>> AllVaultsAsync(CancellationToken ct)
     {
-        var all = (await VaultsAsync(ct)).Values.Where(v => !v.Pending).ToList();
-        foreach (var v in all) v.Touch(catalog.Now);
+        var all = (await VaultsAsync(ct)).Values.Where(v => !v.Vault.Pending).ToList();
+        foreach (var v in all) v.Vault.Touch(catalog.Now);
         return all;
     }
 
-    /// <summary>The credential's vaults by name, unlocked once per store (one request); a vault in its two-key period
-    /// as a placeholder (<see cref="UnlockedVault.Pending"/>), so that the name lists keep it.</summary>
-    private async Task<Dictionary<string, UnlockedVault>> VaultsAsync(CancellationToken ct)
+    /// <summary>
+    /// The credential's vaults by the caller's names for them (collab design §3.2), unlocked once per store (one request);
+    /// a vault in its two-key period as a placeholder (<see cref="UnlockedVault.Pending"/>), so that the name lists keep
+    /// it. Two vaults under one name can't arise (the name index arbitrates own names and aliases alike); if they do,
+    /// the request fails loudly rather than hide one of them (planner's decision 12).
+    /// </summary>
+    private async Task<Dictionary<string, VaultAccess>> VaultsAsync(CancellationToken ct)
     {
         if (_vaults is not null) return _vaults;
-        var open = await credential.OpenAsync(catalog, ct);
-        return _vaults = open.GroupBy(v => v.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var byName = new Dictionary<string, VaultAccess>(StringComparer.Ordinal);
+        foreach (var access in await credential.OpenAsync(catalog, ct))
+        {
+            if (!byName.TryAdd(access.Name, access) && byName[access.Name].Id != access.Id)
+            {
+                throw new InvalidOperationException($"Vaults {byName[access.Name].Id} and {access.Id} have one name for this caller; neither is served.");
+            }
+        }
+
+        _byId = byName.Values.ToDictionary(a => a.Id, StringComparer.Ordinal);
+        return _vaults = byName;
+    }
+
+    /// <summary>A path of the vault as the caller sees it, for what the store says about it.</summary>
+    private VaultPath Shown(UnlockedVault vault, VaultPath path) => _byId.TryGetValue(vault.Id, out var a) ? a.ToCaller(path) : path;
+
+    // What the store hands out is in the caller's view (Shown), what it is given back is stored in the vault's own
+    // (Stored): its notes' paths are sealed under the vault's own name. For the owner both are the same objects.
+
+    private static StoredNote Shown(VaultAccess a, StoredNote n) => a.Renamed ? n with { Path = a.ToCaller(n.Path) } : n;
+
+    private static StoredNote Stored(VaultAccess a, StoredNote n) => a.Renamed ? n with { Path = a.ToVault(n.Path) } : n;
+
+    private static StoredAttachment Shown(VaultAccess a, StoredAttachment f) => a.Renamed ? f with { Path = a.ToCaller(f.Path) } : f;
+
+    private static StoredAttachment Stored(VaultAccess a, StoredAttachment f) => a.Renamed ? f with { Path = a.ToVault(f.Path) } : f;
+
+    private static TrashedNote Shown(VaultAccess a, TrashedNote t) => a.Renamed ? t with { Note = Shown(a, t.Note) } : t;
+
+    private static TrashedAttachment Shown(VaultAccess a, TrashedAttachment t) => a.Renamed ? t with { Attachment = Shown(a, t.Attachment) } : t;
+
+    private static TrashedAttachment Stored(VaultAccess a, TrashedAttachment t) => a.Renamed ? t with { Attachment = Stored(a, t.Attachment) } : t;
+
+    private static MoveRecord Shown(VaultAccess a, MoveRecord m) => a.Renamed ? m with { From = a.ToCaller(m.From), To = a.ToCaller(m.To) } : m;
+
+    private static Checkpoint Shown(VaultAccess a, Checkpoint c) => a.Renamed ? Rebased(c, a.ToCaller) : c;
+
+    private static Checkpoint Stored(VaultAccess a, Checkpoint c) => a.Renamed ? Rebased(c, a.ToVault) : c;
+
+    private static Checkpoint Rebased(Checkpoint c, Func<VaultPath, VaultPath> to) => c with
+    {
+        Path = to(c.Path),
+        Notes = [.. c.Notes.Select(n => n with { Path = to(n.Path) })],
+        Attachments = [.. c.Attachments.Select(f => f with { Path = to(f.Path) })],
+    };
+
+    /// <summary>A batch in the vault's own paths: every note and attachment in it.</summary>
+    private static NoteBatch Stored(VaultAccess a, NoteBatch batch)
+    {
+        if (!a.Renamed) return batch;
+        var stored = new NoteBatch { Changeset = batch.Changeset };
+        stored.Replaces.AddRange(batch.Replaces.Select(r => (Stored(a, r.Current), Stored(a, r.Next))));
+        stored.Moves.AddRange(batch.Moves.Select(m => (Stored(a, m.Current), Stored(a, m.Target))));
+        stored.Trashes.AddRange(batch.Trashes.Select(n => Stored(a, n)));
+        stored.Creates.AddRange(batch.Creates.Select(n => Stored(a, n)));
+        stored.AttachmentReplaces.AddRange(batch.AttachmentReplaces.Select(r => (Stored(a, r.Current), Stored(a, r.Next))));
+        stored.AttachmentMoves.AddRange(batch.AttachmentMoves.Select(m => (Stored(a, m.Current), Stored(a, m.Target))));
+        stored.AttachmentTrashes.AddRange(batch.AttachmentTrashes.Select(f => Stored(a, f)));
+        stored.AttachmentCreates.AddRange(batch.AttachmentCreates.Select(f => Stored(a, f)));
+        stored.AttachmentRestores.AddRange(batch.AttachmentRestores.Select(r => (Stored(a, r.Trashed), Stored(a, r.Restored))));
+        return stored;
     }
 }

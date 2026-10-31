@@ -37,8 +37,8 @@ public sealed class UserVaultTests(MongoFixture fixture)
         Assert.Equal("remote", created.EmbeddingProvider);
 
         // Nothing was stored for it: the next process's default is what it gets.
-        Assert.Equal("remote", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
-        Assert.Equal("internal", Assert.Single(await world.Catalog().OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
+        Assert.Equal("remote", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).Vault.EmbeddingProvider);
+        Assert.Equal("internal", Assert.Single(await world.Catalog().OpenForUserAsync("u1", key, Ct)).Vault.EmbeddingProvider);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public sealed class UserVaultTests(MongoFixture fixture)
 
         await catalog.SetEmbeddingProviderAsync(vault, EmbeddingProviders.Internal, Ct);
 
-        Assert.Equal("internal", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).EmbeddingProvider);
+        Assert.Equal("internal", Assert.Single(await world.Catalog(embeddingsDefault: "remote").OpenForUserAsync("u1", key, Ct)).Vault.EmbeddingProvider);
     }
 
     [Fact]

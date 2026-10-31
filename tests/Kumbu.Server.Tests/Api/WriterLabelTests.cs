@@ -245,7 +245,7 @@ public sealed class WriterLabelTests(KumbuAppFactory app)
         Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("gone.md"), "gone\n", 1, user.Username, DateTime.UtcNow, [], Ref: session), Ct));
         Assert.True(await store.TryTrashAsync((await store.GetAsync(root.Child("gone.md"), Ct))!, user.Username, session, DateTime.UtcNow, Ct));
 
-        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
         await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "notes", p => p["Path"]!.GetValue<string>().EndsWith("/orphan.md", StringComparison.Ordinal), p => p.Remove("ref"), Ct);
         await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "trash", _ => true, p => { p.Remove("ref"); p["Note"]!.AsObject().Remove("ref"); }, Ct);
