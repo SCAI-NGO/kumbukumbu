@@ -22,18 +22,28 @@ public sealed class FixedCredential(string secret) : ICredential
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => catalog.CountLockedAsync(secret, ct);
 }
 
-/// <summary>A user's key, from their session: opens the user's own vaults, and those shared with them.</summary>
-public sealed class UserCredential(string userId, byte[] userKey) : ICredential
+/// <summary>
+/// A user's key, from their session: opens the user's own vaults, as their owner, and those shared with them, at the
+/// membership's role (collab design §3.3). Opened once per request, as a key is, so <see cref="Level"/> answers from
+/// exactly the vaults the store sees; before that it has none (every write endpoint opens the vault first).
+/// </summary>
+public sealed class UserCredential(string userId, byte[] userKey) : ICredential, IRightsCredential
 {
-    public Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) => catalog.OpenForUserAsync(userId, userKey, ct);
+    private IReadOnlyList<VaultAccess>? _opened;
+
+    public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
+        _opened ??= await catalog.OpenForUserAsync(userId, userKey, ct);
+
+    public Kumbu.Core.Notes.AccessLevel? Level(string vault) => RightsCredentials.LevelOf(_opened, vault);
 
     // Every other vault in the database belongs to someone else; counting them would tell a user how many
     // vaults the instance holds, and none of them is theirs to unlock.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
 }
 
-/// <summary>A credential whose slots carry a right per vault (an API key, a connection's access token): its level on a
-/// vault is the one its slot seals (capped by the role on a shared vault). Every other credential is owner of whatever it opens.</summary>
+/// <summary>A credential whose level differs per vault: an API key's or a connection's is the one its slot seals, a
+/// session's is the owner's on her own vaults; on a shared vault a member's is capped by her role. Only the dev token
+/// is owner of whatever it opens.</summary>
 public interface IRightsCredential
 {
     /// <summary>The level of <paramref name="vault"/> (named as the store names vaults, ordinally) as it was opened.

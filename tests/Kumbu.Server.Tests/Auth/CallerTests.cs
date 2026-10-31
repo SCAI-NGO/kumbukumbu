@@ -130,6 +130,9 @@ public sealed class CallerTests(KumbuAppFactory app)
         var (_, key, readAt) = (await users.TrySignInAsync(user.Username, Password, Ct))!.Value;
         var caller = RequestCaller.ForSession(user, key, readAt, windowOpen: true, app.Services.GetRequiredService<VaultCatalog>());
 
+        // As a key's: none before its vaults are opened.
+        Assert.Null(caller.Level("Journal"));
+        await caller.OpenVaultsAsync(Ct);
         Assert.Equal(AccessLevel.Owner, caller.Level("Journal"));
         Assert.True(caller.CanWrite("Journal"));
     }

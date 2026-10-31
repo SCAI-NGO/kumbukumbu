@@ -67,11 +67,17 @@ public sealed class RequestCaller : ICaller
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
-    /// <summary>Sessions and the dev token are owner of every vault they open; an API key or a connection has the level
-    /// its slot seals. Fails closed: every credential with rights is asked.</summary>
+    /// <summary>The level of the caller's access record for the vault (collab design §3.3): a session is owner of its own
+    /// vaults and at its role on a shared one; an API key or a connection has the level its slot seals, at most the role
+    /// on a shared vault; the dev token is owner of every vault it opens. Fails closed: every credential with records is
+    /// asked, and has none before its vaults were opened.</summary>
     public AccessLevel? Level(string vault) => Credential is IRightsCredential rights ? rights.Level(vault) : AccessLevel.Owner;
 
     public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
+
+    /// <summary>A person's session isn't a key (planner's decision 4).</summary>
+    public string ReadOnlySentence(string vault) =>
+        Kind == CallerKind.Session ? $"you can only read vault {vault}" : $"this key can only read vault {vault}";
 
     /// <summary>The caller's vaults, each under the caller's name for it (collab design §3.2).</summary>
     public Task<IReadOnlyList<VaultAccess>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);

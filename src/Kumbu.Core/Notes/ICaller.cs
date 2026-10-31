@@ -22,13 +22,17 @@ public interface ICaller
 
     bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
+    /// <summary>Why a write to <paramref name="vault"/> is refused below <see cref="AccessLevel.Write"/>, in words for the
+    /// caller: a key's or connection's "this key can only read …"; a person's session says "you" (a session is no key).</summary>
+    string ReadOnlySentence(string vault) => $"this key can only read vault {vault}";
+
     /// <summary>The refusal for a write by <paramref name="command"/> to <paramref name="path"/>, or null if allowed.
     /// Asked once per entry point, before the store is touched: first whether the caller may write at all, then
     /// whether it may change the vault's structure (<see cref="StructuralFiles"/>).</summary>
     ShellResult? Refuse(string command, VaultPath path)
     {
         if (path.Vault is not { } vault) return null;
-        if (!CanWrite(vault)) return Refusals.Of(command, Refusals.ReadOnly, $"this key can only read vault {vault}");
+        if (!CanWrite(vault)) return Refusals.Of(command, Refusals.ReadOnly, ReadOnlySentence(vault));
         if (Level(vault) >= AccessLevel.Maintain) return null;
         if (StructuralFiles.StructuralCommands.Contains(command) || StructuralFiles.IsStructural(path))
         {
