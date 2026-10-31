@@ -13,6 +13,12 @@ namespace Kumbu.Server.Sharing;
 /// <summary>An invitation just made: the secret for the link, shown this once, the membership and its expiry.</summary>
 public sealed record CreatedInvite(string Secret, string MembershipId, DateTime ExpiresAt);
 
+/// <summary>What the share page shows of an invitation before it is accepted (collab design §4.2): the vault's name,
+/// its owner's display name as she typed it (to be shown sanitised) and her username, the role, the vault's embedding
+/// provider, the alias asked about and whether it is free for the caller.</summary>
+public sealed record InvitePeek(
+    string Vault, string OwnerDisplay, string OwnerUsername, MemberRole Role, string EmbeddingProvider, string Alias, bool AliasFree, bool Confirm, DateTime ExpiresAt);
+
 /// <summary>
 /// Vault invitations (collab design §4): a pending membership with a single-use link <c>/share#{secret}</c>. MongoDB
 /// holds only an HMAC of the secret under a key derived from the server secret, and an <c>invite</c> slot wrapping the
@@ -90,6 +96,80 @@ public sealed partial class Memberships
         return new CreatedInvite(inviteSecret, id, expiresAt);
     }
 
+    /// <summary>
+    /// What an invitation shows to <paramref name="userId"/> (collab design §4.2): the invite slot is opened with the
+    /// secret only to read the vault's meta, and its key is then forgotten; the vault is neither loaded nor unlocked.
+    /// <paramref name="alias"/>, or the vault's own name, is checked against the caller's vault names and aliases.
+    /// <see cref="InvitationNotFoundException"/> alike for a secret that isn't one, was used, expired or withdrawn;
+    /// <see cref="SharingRefusedException"/> while the owner is inactive or the vault closing.
+    /// </summary>
+    public async Task<InvitePeek> PeekAsync(string userId, byte[] userKey, string inviteSecret, string? alias, CancellationToken ct)
+    {
+        var (doc, vaultKey) = await FindInviteAsync(inviteSecret, ct) ?? throw new InvitationNotFoundException();
+        InviteVaultMeta? meta;
+        try
+        {
+            meta = await catalog.InviteMetaAsync(null, doc.Vault, vaultKey, ct);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(vaultKey);
+        }
+
+        if (meta is null) throw new InvitationNotFoundException();
+        var owner = await Users.Find(u => u.Id == doc.Owner).FirstOrDefaultAsync(ct) ?? throw new InvitationNotFoundException();
+        if (!owner.Active) throw SharingRefusedException.OwnerInactive();
+        if (meta.Closing) throw SharingRefusedException.Closing();
+        var asked = string.IsNullOrWhiteSpace(alias) ? meta.Name : alias.Normalize(NormalizationForm.FormC).Trim();
+        return new InvitePeek(
+            meta.Name, owner.Display, owner.Username, MemberRoles.Parse(doc.Role) ?? MemberRole.Read, meta.EmbeddingProvider, asked,
+            await catalog.NameFreeAsync(userId, userKey, asked, ct), doc.Confirm, doc.ExpiresAt!.Value);
+    }
+
+    /// <summary>
+    /// The open invitation <paramref name="inviteSecret"/> is the secret of, with the vault key its invite slot holds;
+    /// null alike for a secret that isn't one and for an invitation used, expired (checked here: the TTL monitor
+    /// runs only about once a minute) or withdrawn.
+    /// </summary>
+    private async Task<(MembershipDocument Doc, byte[] VaultKey)?> FindInviteAsync(string inviteSecret, CancellationToken ct)
+    {
+        if (DecodeSecret(inviteSecret) is not { } bytes) return null;
+        await EnsureReadyAsync(ct);
+        var lookup = await InviteLookupAsync(inviteSecret, ct);
+        var now = Now;
+        var doc = await Docs.Find(OpenInvite(lookup, now)).FirstOrDefaultAsync(ct);
+        if (doc is null) return null;
+        var key = await OpenInviteSlotAsync(null, doc, bytes, now, ct);
+        CryptographicOperations.ZeroMemory(bytes);
+        return key is null ? null : (doc, key);
+    }
+
+    /// <summary>An invitation that can still be used: pending, unexpired, redeemed by nobody.</summary>
+    private static FilterDefinition<MembershipDocument> OpenInvite(byte[] lookup, DateTime now)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        return f.Eq(m => m.InviteLookup, lookup) & f.Eq(m => m.Status, MembershipStatus.Pending) & f.Gt(m => m.ExpiresAt, now) & f.Eq(m => m.Member, null);
+    }
+
+    /// <summary>The vault key of <paramref name="doc"/>'s invite slot, opened with the secret's bytes; null if there is
+    /// none on its vault, it expired, or it doesn't open.</summary>
+    private async Task<byte[]?> OpenInviteSlotAsync(IClientSessionHandle? session, MembershipDocument doc, byte[] secretBytes, DateTime now, CancellationToken ct)
+    {
+        var f = Builders<SlotDocument>.Filter;
+        var filter = f.Eq(sl => sl.Kind, SlotDocument.Invite) & f.Eq(sl => sl.Membership, doc.Id) & f.Eq(sl => sl.Vault, doc.Vault) & f.Gt(sl => sl.ExpiresAt, now);
+        var slot = await (session is null ? catalog.Slots.Find(filter) : catalog.Slots.Find(session, filter)).FirstOrDefaultAsync(ct);
+        if (slot is null) return null;
+        try
+        {
+            return VaultCatalog.OpenInviteSlot(secretBytes, slot);
+        }
+        catch (CryptographicException)
+        {
+            log.LogWarning("The invite slot of membership {MembershipId} on vault {VaultId} did not open with its secret", doc.Id, doc.Vault);
+            return null;
+        }
+    }
+
     /// <summary>The owner's label for a member: trimmed, 1 to <see cref="MaxLabel"/> characters, no control or format
     /// characters; <see cref="ArgumentException"/> otherwise.</summary>
     private static string CheckLabel(string label)
@@ -133,6 +213,9 @@ public sealed partial class Memberships
         return Base64Url.TryDecodeFromChars(inviteSecret, bytes, out var written) && written == SecretBytes ? bytes : null;
     }
 }
+
+/// <summary>An invitation secret that isn't one, or one used, expired or withdrawn: all alike, so nothing tells them apart.</summary>
+public sealed class InvitationNotFoundException() : Exception("This invitation link is not valid (any more).");
 
 /// <summary>A vault that can't take a new member now, with the refusal's <see cref="Refusals"/> code.</summary>
 public sealed class SharingRefusedException(string code, string message) : Exception(message)

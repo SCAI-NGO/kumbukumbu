@@ -136,6 +136,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/search/earlier"] = Reading,
         ["GET /api/changes"] = Reading,
         ["GET /api/vaults/{vault}/activity"] = Reading,
+        ["POST /api/vault-invitations/peek"] = Reading,
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,
         ["DELETE /api/admin/invitations/{id}"] = CleaningUp,

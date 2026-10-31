@@ -237,6 +237,15 @@ public sealed class AccountLimits : IDisposable
     /// </summary>
     public const int HistoryScansPerUser = 60;
 
+    /// <summary>
+    /// Peeks at and acceptances of vault invitations, a minute per account and per network (collab design §4.2, L4).
+    /// A secret is 256 random bits, so these bound the work a client makes the server do, not guessing; and there is
+    /// no server-wide count, which would let anyone hold off every invitation.
+    /// </summary>
+    public const int InvitePeeksPerAccount = 20;
+
+    public const int InvitePeeksPerNetwork = 60;
+
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>No username is longer; a longer one only needs a partition, not a distinct one.</summary>
@@ -251,17 +260,21 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _redeemFailuresByNetwork;
     private readonly PartitionedRateLimiter<string> _redeemFailures;
     private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
+    private readonly PartitionedRateLimiter<string> _invitePeekByAccount;
+    private readonly PartitionedRateLimiter<string> _invitePeekByNetwork;
 
     public AccountLimits()
         : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes, so that one can be reached in a few requests.</summary>
-    internal AccountLimits(int redeemFailuresPerNetwork, int redeemFailuresPerServer)
+    /// <summary>For tests: other limits on wrong pairing codes and on invitation peeks, so that one can be reached in a few requests.</summary>
+    internal AccountLimits(int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork)
     {
         _redeemFailuresByNetwork = Limiter(redeemFailuresPerNetwork);
         _redeemFailures = Limiter(redeemFailuresPerServer);
+        _invitePeekByAccount = Limiter(invitePeeksPerAccount);
+        _invitePeekByNetwork = Limiter(invitePeeksPerNetwork);
     }
 
     /// <summary>Null if the sign-in may go ahead, else how long to wait. The address is asked first, so a client
@@ -283,6 +296,11 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>Searching earlier versions or reading a vault's activity, counted per user across their sessions.</summary>
     public TimeSpan? HistoryScan(string userId) => Take(_historyScanByUser, userId);
+
+    /// <summary>A peek at or an acceptance of a vault invitation: the account is asked first, so one over its own
+    /// limit uses up nothing of its network's.</summary>
+    public TimeSpan? InvitePeek(HttpContext context, string userId) =>
+        Take(_invitePeekByAccount, userId) ?? Take(_invitePeekByNetwork, Network(context));
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
@@ -357,6 +375,8 @@ public sealed class AccountLimits : IDisposable
         _redeemFailuresByNetwork.Dispose();
         _redeemFailures.Dispose();
         _historyScanByUser.Dispose();
+        _invitePeekByAccount.Dispose();
+        _invitePeekByNetwork.Dispose();
     }
 }
 

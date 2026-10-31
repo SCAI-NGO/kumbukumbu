@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -9,7 +10,9 @@ using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Kumbu.Server.Api;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -35,6 +38,23 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
     /// <summary>An invitation made through the service, without the route's password check (whose budget is 5 a minute).</summary>
     private async Task<CreatedInvite> InviteDirectAsync(RestClient owner, bool confirm = false, MemberRole role = MemberRole.Write) =>
         await Memberships.InviteAsync(owner.User.Id, owner.UserKey, await owner.VaultIdAsync(), "Bob", role, TimeSpan.FromDays(7), confirm, Ct);
+
+    private static Task<HttpResponseMessage> PeekAsync(RestClient user, string secret, string? alias = null) =>
+        user.SendAsync(HttpMethod.Post, "/api/vault-invitations/peek", alias is null ? new { secret } : new { secret, alias });
+
+    /// <summary>A request as <paramref name="user"/>'s session from <paramref name="address"/>, on <paramref name="api"/>.</summary>
+    private static async Task<HttpResponseMessage> FromAsync(WebApplicationFactory<Program> api, RestClient user, string path, object body, string address)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
+        request.Headers.Add("Cookie", $"{Kumbu.Server.Auth.CallerMiddleware.SessionCookie}={user.Session}");
+        request.Headers.Add("Origin", RestClient.Origin);
+        request.Headers.Add("X-Forwarded-For", address);
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
+        return await client.SendAsync(request, Ct);
+    }
+
+    /// <summary>A secret of the right shape that is nobody's invitation.</summary>
+    private static string WrongSecret() => System.Buffers.Text.Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32));
 
     private Task<long> PendingAsync(string vaultId) => Docs.CountDocumentsAsync(m => m.Vault == vaultId && m.Status == MembershipStatus.Pending, cancellationToken: Ct);
 
@@ -164,5 +184,148 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
         Assert.Equal(allowed ? HttpStatusCode.Created : HttpStatusCode.BadRequest, response.StatusCode);
         if (!allowed) Assert.Equal("An invitation is valid for 1 to 30 days.", await RestClient.ErrorAsync(response));
         Assert.Equal(allowed ? 1 : 0, await PendingAsync(await alice.VaultIdAsync()));
+    }
+
+    [Fact]
+    public async Task Peek_shows_vault_owner_role_and_provider_without_loading_the_vault()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "Alice\u202e\nExample"), cancellationToken: Ct);
+        var invite = await InviteDirectAsync(alice, confirm: true, role: MemberRole.Read);
+        // Another process, which has never unlocked Alice's vault.
+        await using var fresh = Api.WithWebHostBuilder(_ => { });
+        var bob = await RestClient.NewAsync(fresh, vault: "Work");
+        var catalog = fresh.Services.GetRequiredService<VaultCatalog>();
+        var before = catalog.UnlockedCount;
+
+        using var peek = await PeekAsync(bob, invite.Secret);
+
+        Assert.Equal(HttpStatusCode.OK, peek.StatusCode);
+        var json = await RestClient.JsonAsync(peek);
+        Assert.Equal("Gartenarbeit", json["vault"]!.GetValue<string>());
+        // Sanitised and quoted; the username beside it.
+        Assert.Equal("\"AliceExample\"", json["owner"]!.GetValue<string>());
+        Assert.Equal(alice.Username, json["ownerUsername"]!.GetValue<string>());
+        Assert.Equal("read", json["role"]!.GetValue<string>());
+        Assert.Equal(catalog.DefaultEmbeddingProvider, json["embeddingProvider"]!.GetValue<string>());
+        Assert.True(json["confirm"]!.GetValue<bool>());
+        Assert.Equal(before, catalog.UnlockedCount);
+        // Nothing changed: the invitation is still open.
+        Assert.Equal(MembershipStatus.Pending, (await Share.MembershipAsync(app.Database, invite.MembershipId)).Status);
+    }
+
+    [Fact]
+    public async Task A_wrong_and_a_used_secret_answer_the_same_404()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var used = await InviteDirectAsync(alice);
+        var expired = await InviteDirectAsync(alice);
+        var withdrawn = await InviteDirectAsync(alice);
+        // As a redemption leaves it, an expiry the TTL monitor hasn't seen yet, and a withdrawal.
+        await Docs.UpdateOneAsync(
+            m => m.Id == used.MembershipId,
+            Builders<MembershipDocument>.Update.Set(m => m.Member, bob.User.Id).Set(m => m.Status, MembershipStatus.Active).Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt),
+            cancellationToken: Ct);
+        await Docs.UpdateOneAsync(m => m.Id == expired.MembershipId, Builders<MembershipDocument>.Update.Set(m => m.ExpiresAt, DateTime.UtcNow.AddMinutes(-1)), cancellationToken: Ct);
+        await Docs.UpdateOneAsync(m => m.Id == withdrawn.MembershipId, Builders<MembershipDocument>.Update.Set(m => m.Status, MembershipStatus.Revoked), cancellationToken: Ct);
+
+        var answers = new List<(HttpStatusCode, string)>();
+        foreach (var secret in new[] { WrongSecret(), "not-a-secret", used.Secret, expired.Secret, withdrawn.Secret })
+        {
+            using var response = await PeekAsync(bob, secret);
+            answers.Add((response.StatusCode, await response.Content.ReadAsStringAsync(Ct)));
+        }
+
+        Assert.All(answers, a => Assert.Equal((HttpStatusCode.NotFound, """{"error":"This invitation link is not valid (any more)."}"""), a));
+    }
+
+    [Fact]
+    public async Task Peek_is_rate_limited_per_account_and_network_not_server_wide()
+    {
+        await using var api = Api.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<AccountLimits>();
+            s.AddSingleton(new AccountLimits(AccountLimits.RedeemFailuresPerNetwork, AccountLimits.RedeemFailuresPerServer, invitePeeksPerAccount: 3, invitePeeksPerNetwork: 5));
+        }));
+        var users = new List<RestClient>();
+        for (var i = 0; i < 4; i++) users.Add(await RestClient.NewAsync(api, vault: "Work"));
+        var network = $"198.40.{Random.Shared.Next(256)}";
+        var body = new { secret = WrongSecret() };
+
+        // One account: 3 a minute, then refused from any network.
+        for (var i = 0; i < 3; i++)
+        {
+            using var wrong = await FromAsync(api, users[0], "/api/vault-invitations/peek", body, $"{network}.{i + 1}");
+            Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
+        }
+
+        using (var account = await FromAsync(api, users[0], "/api/vault-invitations/peek", body, $"198.41.{Random.Shared.Next(256)}.1")) Assert.Equal(HttpStatusCode.TooManyRequests, account.StatusCode);
+
+        // One network: 5 a minute, whoever asks.
+        for (var i = 0; i < 2; i++)
+        {
+            using var wrong = await FromAsync(api, users[1], "/api/vault-invitations/peek", body, $"{network}.{i + 10}");
+            Assert.Equal(HttpStatusCode.NotFound, wrong.StatusCode);
+        }
+
+        using (var same = await FromAsync(api, users[2], "/api/vault-invitations/peek", body, $"{network}.20")) Assert.Equal(HttpStatusCode.TooManyRequests, same.StatusCode);
+        // Nobody else is held off.
+        using (var other = await FromAsync(api, users[3], "/api/vault-invitations/peek", body, $"198.42.{Random.Shared.Next(256)}.1")) Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
+        using (var otherAgain = await FromAsync(api, users[2], "/api/vault-invitations/peek", body, $"198.43.{Random.Shared.Next(256)}.1")) Assert.Equal(HttpStatusCode.NotFound, otherAgain.StatusCode);
+    }
+
+    [Fact]
+    public async Task Peek_says_whether_the_alias_is_free()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await carol.ShareWithAsync(bob, "Garten");
+        var invite = await InviteDirectAsync(alice);
+
+        async Task<(string Alias, bool Free)> AskAsync(string? alias)
+        {
+            using var response = await PeekAsync(bob, invite.Secret, alias);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var json = await RestClient.JsonAsync(response);
+            return (json["alias"]!.GetValue<string>(), json["aliasFree"]!.GetValue<bool>());
+        }
+
+        Assert.Equal(("Gartenarbeit", true), await AskAsync(null));
+        Assert.Equal(("work", false), await AskAsync("work"));
+        Assert.Equal(("garten", false), await AskAsync(" garten "));
+        Assert.Equal(("Beete", true), await AskAsync("Beete"));
+    }
+
+    [Fact]
+    public async Task Peek_is_refused_while_the_owner_is_inactive_or_closing()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var invite = await InviteDirectAsync(alice);
+        var users = app.Database.GetCollection<UserDocument>("users");
+        var vaults = app.Database.GetCollection<VaultDocument>("vaults");
+        var vaultId = await alice.VaultIdAsync();
+
+        await users.UpdateOneAsync(u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        using (var inactive = await PeekAsync(bob, invite.Secret))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, inactive.StatusCode);
+            Assert.Equal("owner-inactive", (await RestClient.JsonAsync(inactive))["code"]!.GetValue<string>());
+        }
+
+        await users.UpdateOneAsync(u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Active, true), cancellationToken: Ct);
+        await vaults.UpdateOneAsync(v => v.Id == vaultId, Builders<VaultDocument>.Update.Set(v => v.ClosingAt, DateTime.UtcNow.AddDays(7)), cancellationToken: Ct);
+        using (var closing = await PeekAsync(bob, invite.Secret))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, closing.StatusCode);
+            Assert.Equal("closing", (await RestClient.JsonAsync(closing))["code"]!.GetValue<string>());
+        }
+
+        await vaults.UpdateOneAsync(v => v.Id == vaultId, Builders<VaultDocument>.Update.Unset(v => v.ClosingAt), cancellationToken: Ct);
+        using var open = await PeekAsync(bob, invite.Secret);
+        Assert.Equal(HttpStatusCode.OK, open.StatusCode);
     }
 }

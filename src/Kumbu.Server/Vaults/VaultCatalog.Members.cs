@@ -63,6 +63,37 @@ public sealed partial class VaultCatalog
 
     private static string InviteSlotContext(string vaultId, string membershipId) => $"slot:{vaultId}:{SlotDocument.Invite}:{membershipId}";
 
+    /// <summary>
+    /// What an invitation shows of its vault (collab design §4.2): its name and embedding provider, opened from the
+    /// vault document's meta with <paramref name="vaultKey"/>, inside <paramref name="session"/>'s transaction if given.
+    /// Nothing is loaded or unlocked, and the key is kept nowhere. Null if the vault is gone, in its two-key period, or
+    /// its meta doesn't open with the key (it is no longer the vault's).
+    /// </summary>
+    internal async Task<InviteVaultMeta?> InviteMetaAsync(IClientSessionHandle? session, string vaultId, byte[] vaultKey, CancellationToken ct)
+    {
+        var doc = await (session is null ? Vaults.Find(v => v.Id == vaultId) : Vaults.Find(session, v => v.Id == vaultId)).FirstOrDefaultAsync(ct);
+        if (doc is null || doc.RekeyStartedAt is not null) return null;
+        try
+        {
+            var meta = System.Text.Json.JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
+            return new InviteVaultMeta(meta.Name, meta.Embeddings ?? DefaultEmbeddingProvider, doc.ClosingAt is not null);
+        }
+        catch (Exception e) when (e is CryptographicException or System.Text.Json.JsonException)
+        {
+            log.LogWarning("An invite slot of vault {VaultId} opened to a key its meta doesn't open with", vaultId);
+            return null;
+        }
+    }
+
+    /// <summary>Whether <paramref name="name"/> is free among the user's vault names and aliases: what the name index
+    /// would refuse for a new member slot of hers.</summary>
+    internal async Task<bool> NameFreeAsync(string userId, byte[] userKey, string name, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var f = Builders<SlotDocument>.Filter;
+        return !await Slots.Find(f.Eq(s => s.Lookup, UserLookup(userKey, userId)) & f.Eq(s => s.NameId, AliasNameId(userKey, name))).AnyAsync(ct);
+    }
+
     /// <summary>The AAD of a member slot's wrapped vault key.</summary>
     internal static string MemberSlotContext(string vaultId, string membershipId) => $"slot:{vaultId}:{SlotDocument.Member}:{membershipId}";
 
@@ -332,3 +363,7 @@ public sealed partial class VaultCatalog
         slot.Membership is { } id && active is not null && active.TryGetValue(id, out var m)
         && m.Vault == slot.Vault && m.Member == userId;
 }
+
+/// <summary>What an invitation shows of its vault: the owner's name for it, its embedding provider, and whether it is closing.</summary>
+internal sealed record InviteVaultMeta(string Name, string EmbeddingProvider, bool Closing);
+

@@ -72,6 +72,10 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
         }
+        catch (Sharing.InvitationNotFoundException e)
+        {
+            return Result(StatusCodes.Status404NotFound, e.Message);
+        }
         catch (Sharing.SharingRefusedException e)
         {
             return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status409Conflict);

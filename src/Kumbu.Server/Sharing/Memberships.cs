@@ -32,6 +32,8 @@ public sealed partial class Memberships(
 
     internal IMongoCollection<MembershipDocument> Docs { get; } = db.GetCollection<MembershipDocument>(CollectionName);
 
+    private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
+
     internal const string LabelPurpose = "kumbu/v1/membership-label";
     internal const string WritersPurpose = "kumbu/v1/membership-writers";
     internal const string WriterIdsPurpose = "kumbu/v1/membership-writer-ids";
