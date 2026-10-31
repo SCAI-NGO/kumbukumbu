@@ -78,7 +78,7 @@ public sealed record NoteView(string Path, string Content, string Version, strin
 {
     public static async Task<NoteView> FromAsync(StoredNote note, IWriterLabels labels, CancellationToken ct)
     {
-        var (writer, kind) = await labels.RenderAsync(note.LastWriter, note.Ref, ct);
+        var (writer, kind) = await labels.RenderAsync(note.Path.Segments[0], note.LastWriter, note.Ref, ct);
         return new(note.Path.Value, note.Content, note.Version, writer, note.LastWriteAt, Current: true, kind);
     }
 }
@@ -331,7 +331,7 @@ public static class NoteApi
             throw note is null ? await MissingAsync(store, notePath, ct) : ApiErrors.NotFound($"{notePath.Value} has no version {version} (its history lists them).");
         }
 
-        var (writer, kind) = await labels.RenderAsync(found.Writer, found.Ref, ct);
+        var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], found.Writer, found.Ref, ct);
         return TypedResults.Ok(new NoteView(notePath.Value, found.Content, found.Version, writer, found.WrittenAt, found.Current, kind));
     }
 
@@ -492,7 +492,7 @@ public static class NoteApi
             var versions = new List<HistoryEntryView>();
             foreach (var v in NoteHistory.Versions(attachment))
             {
-                var (writer, kind) = await labels.RenderAsync(v.Writer, v.Ref, ct);
+                var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
                 versions.Add(new HistoryEntryView(
                     v.Version, v.WrittenAt, writer, 0, (int)v.State.Size, v.Current, v.Changeset?.Short, kind,
                     AttachmentFormat.KindOf(notePath.Name), v.State.MediaType));
@@ -505,7 +505,7 @@ public static class NoteApi
         var entries = new List<HistoryEntryView>();
         foreach (var v in NoteHistory.Versions(note))
         {
-            var (writer, kind) = await labels.RenderAsync(v.Writer, v.Ref, ct);
+            var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], v.Writer, v.Ref, ct);
             entries.Add(new HistoryEntryView(
                 v.Version, v.WrittenAt, writer, Lines.Split(v.Content).Count, Encoding.UTF8.GetByteCount(v.Content), v.Current, v.Changeset?.Short, kind));
         }
@@ -547,7 +547,7 @@ public static class NoteApi
         var views = new List<EarlierResultView>();
         foreach (var h in EarlierSearch.Find(notes, query, max, ct))
         {
-            var (writer, kind) = await labels.RenderAsync(h.Writer, h.Ref, ct);
+            var (writer, kind) = await labels.RenderAsync(h.Path.Segments[0], h.Writer, h.Ref, ct);
             views.Add(new EarlierResultView(h.Path.Value, h.Version, h.WrittenAt, writer, h.StartLine, h.EndLine, h.Snippet, h.Before, h.BeforeLost, kind));
         }
 
@@ -658,9 +658,10 @@ public static class NoteApi
         foreach (var path in await store.ListNotesUnderAsync(VaultPath.Root, ct))
         {
             if (await store.GetAsync(path, ct) is not { } note || note.LastWriteAt <= from) continue;
-            var (writer, kind) = await labels.RenderAsync(Writers.Identity(note.LastWriter), note.Ref, ct);
-            if (kind == WriterLabels.Agent) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
-            else if (await labels.ResumedAsync(Writers.Identity(note.LastWriter), note.Ref, note.LastWriteAt, from, ct) is { } resumed)
+            var (writer, kind) = await labels.RenderAsync(path.Segments[0], Writers.Identity(note.LastWriter), note.Ref, ct);
+            // Only the viewer's own agents: on a shared vault the others' are not hers to be told about.
+            if (kind == WriterLabels.Agent && await labels.IsOwnAsync(path.Segments[0], note.Ref, ct)) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
+            else if (await labels.ResumedAsync(path.Segments[0], Writers.Identity(note.LastWriter), note.Ref, note.LastWriteAt, from, ct) is { } resumed)
             {
                 changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version, WriterLabels.Device, resumed.QuietSince, resumed.At));
             }

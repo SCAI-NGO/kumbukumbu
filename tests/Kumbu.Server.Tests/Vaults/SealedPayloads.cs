@@ -69,6 +69,7 @@ public static class SealedPayloads
         "attachments" => $"attachment:{vaultId}:{doc.Id}:{doc.Revision}",
         "attachment_trash" => $"attachtrash:{vaultId}:{doc.Id}",
         "checkpoints" => $"checkpoint:{vaultId}:{doc.Id}",
+        "checkpoint_texts" => $"cptext:{vaultId}:{Convert.ToBase64String(doc.PathId)}",
         _ => throw new ArgumentException(collection, nameof(collection)),
     };
 }

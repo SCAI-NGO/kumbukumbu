@@ -147,7 +147,7 @@ public sealed partial class VaultCatalog
         var f = Builders<MembershipDocument>.Filter;
         var found = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
             .Find(f.In(m => m.Id, ids.Distinct(StringComparer.Ordinal)) & f.Eq(m => m.Status, MembershipStatus.Active))
-            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds))
+            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Owner).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds))
             .ToListAsync(ct);
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }

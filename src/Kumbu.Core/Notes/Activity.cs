@@ -24,7 +24,8 @@ public sealed record ActivityFile(
 /// <summary>A changeset of a vault: what one writer did close together in time.</summary>
 /// <param name="Id">Null for writes that join no changeset (restore, seed) or moves/removals recorded before moves
 /// and trash records carried one; those of one writer at one instant (one commit) are one row.</param>
-/// <param name="Key">Tells rows apart, also rows that end at the same instant: the paging cursor is (<c>To</c>, <c>Key</c>).</param>
+/// <param name="Key">Tells rows apart, also rows that end at the same instant: the paging cursor is (<c>To</c>, <c>Key</c>).
+/// Opaque per viewer when <see cref="Activity.Rows"/> is given a row key (collab design §8.2).</param>
 /// <param name="Restore">The row is a restore (a version, a checkpoint).</param>
 /// <param name="Ref">The reference of the row's writer, to render it for a viewer (<see cref="IWriterLabels"/>).</param>
 public sealed record ActivityRow(
@@ -56,9 +57,11 @@ public static class Activity
     /// ended earlier, or at that instant with a greater key. Without a key, rows that ended earlier.</param>
     /// <param name="attachments">The vault's attachments, folded with the notes; <paramref name="moves"/> holds their
     /// moves too.</param>
+    /// <param name="rowKey">Makes a row's key, from its changeset (or, without one, its commit), what the viewer gets:
+    /// opaque, so that the keys of another person's rows say nothing that groups them by writer.</param>
     public static IReadOnlyList<ActivityRow> Rows(
         IReadOnlyList<StoredNote> notes, IReadOnlyList<TrashedNote> trash, IReadOnlyList<MoveRecord> moves, DateTime? before, int limit, string? beforeKey = null,
-        IReadOnlyList<StoredAttachment>? attachments = null, IReadOnlyList<TrashedAttachment>? attachmentTrash = null)
+        IReadOnlyList<StoredAttachment>? attachments = null, IReadOnlyList<TrashedAttachment>? attachmentTrash = null, Func<string, string>? rowKey = null)
     {
         attachments ??= [];
         attachmentTrash ??= [];
@@ -77,17 +80,18 @@ public static class Activity
             .Concat(moves.Select(m => new Item(m.Changeset?.Id, m.MovedBy, m.Ref, m.MovedAt, where.After(m.To.Value, m.MovedAt), Move: m)))
             .Concat(removals.Select(r => new Item(r.Changeset?.Id, r.DeletedBy, r.Ref, r.DeletedAt, r.Path, Trash: r)));
 
-        // By changeset; without one, by commit: one writer at one instant (a restore, an older folder mv).
+        // By changeset; without one, by commit: one writer at one instant (a restore, an older folder mv). The writer by
+        // its reference: members store no label, and two of them restoring at one instant are two rows.
         var groups = new Dictionary<string, List<Item>>(StringComparer.Ordinal);
         foreach (var item in items)
         {
-            var key = item.Id is { } id ? "c:" + id : $"w:{item.At.Ticks}:{item.Writer}";
+            var key = item.Id is { } id ? "c:" + id : $"w:{item.At.Ticks}:{item.Ref?.ChangesetKey(item.Label) ?? "label:" + item.Writer}";
             if (groups.TryGetValue(key, out var group)) group.Add(item);
             else groups[key] = [item];
         }
 
         return [.. groups
-            .Select(g => Row(g.Key, g.Value, statesByPath))
+            .Select(g => Row(rowKey is null ? g.Key : rowKey(g.Key), g.Value, statesByPath))
             .Where(r => before is null || r.To < before || (beforeKey is not null && r.To == before && string.CompareOrdinal(r.Key, beforeKey) > 0))
             .OrderByDescending(r => r.To)
             .ThenBy(r => r.Key, StringComparer.Ordinal)

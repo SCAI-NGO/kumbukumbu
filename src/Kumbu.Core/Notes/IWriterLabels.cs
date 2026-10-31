@@ -8,8 +8,9 @@ namespace Kumbu.Core.Notes;
 /// </summary>
 public interface IWriterLabels
 {
-    /// <summary>The display and kind (null: none for this viewer) of the writer of an entry.</summary>
-    ValueTask<(string Display, string? Kind)> RenderAsync(string label, WriterRef? reference, CancellationToken ct);
+    /// <summary>The display and kind (null: none for this viewer) of the writer of an entry of <paramref name="vault"/>
+    /// (named as the store names it to the viewer): who wrote is the vault's matter, a member's or the owner's.</summary>
+    ValueTask<(string Display, string? Kind)> RenderAsync(string vault, string label, WriterRef? reference, CancellationToken ct);
 }
 
 /// <summary>The labels as they are, without kinds; an entry without a reference shows as unknown, never as anyone.</summary>
@@ -19,6 +20,6 @@ public sealed class PlainWriterLabels : IWriterLabels
 
     public static readonly PlainWriterLabels Instance = new();
 
-    public ValueTask<(string Display, string? Kind)> RenderAsync(string label, WriterRef? reference, CancellationToken ct) =>
+    public ValueTask<(string Display, string? Kind)> RenderAsync(string vault, string label, WriterRef? reference, CancellationToken ct) =>
         ValueTask.FromResult<(string, string?)>(reference is null || reference.IsUnknown ? (UnknownWriter, null) : (label, null));
 }

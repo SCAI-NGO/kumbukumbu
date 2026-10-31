@@ -21,7 +21,7 @@ public sealed record FileStateView(string Path, string MediaType, long Size, int
 {
     internal static async Task<FileStateView> OfAsync(StoredAttachment a, IWriterLabels labels, CancellationToken ct) => new(
         a.Path.Value, a.Current.MediaType, a.Current.Size, a.Current.Width, a.Current.Height, a.Version, a.LastWriteAt,
-        (await labels.RenderAsync(a.LastWriter, a.Ref, ct)).Display);
+        (await labels.RenderAsync(a.Path.Segments[0], a.LastWriter, a.Ref, ct)).Display);
 }
 
 /// <summary>A write or delete that lost against another one: the attachment as it is now, without its bytes.</summary>

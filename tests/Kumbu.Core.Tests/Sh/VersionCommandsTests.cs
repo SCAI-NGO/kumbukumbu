@@ -319,7 +319,7 @@ public class VersionCommandsTests
     /// <summary>Shows every writer upper-cased, to see which output goes through it.</summary>
     private sealed class ShoutingLabels : IWriterLabels
     {
-        public ValueTask<(string Display, string? Kind)> RenderAsync(string label, WriterRef? reference, CancellationToken ct) =>
+        public ValueTask<(string Display, string? Kind)> RenderAsync(string vault, string label, WriterRef? reference, CancellationToken ct) =>
             ValueTask.FromResult<(string, string?)>((label.ToUpperInvariant(), null));
     }
 

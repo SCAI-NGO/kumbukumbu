@@ -209,14 +209,14 @@ public static class HistoryApi
         if (notePath.IsAttachment)
         {
             var file = await StoreAttachments.GetAsync(store, notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
-            var (fileWriter, fileKind) = await labels.RenderAsync(file.LastWriter, file.Ref, ct);
+            var (fileWriter, fileKind) = await labels.RenderAsync(notePath.Segments[0], file.LastWriter, file.Ref, ct);
             return TypedResults.Ok(new NoteVersionView(
                 notePath.Value, file.Version, fileWriter, file.LastWriteAt, fileKind,
                 AttachmentFormat.KindOf(notePath.Name), file.Current.MediaType, file.Current.Size, file.Current.Width, file.Current.Height));
         }
 
         var note = await store.GetAsync(notePath, ct) ?? throw await NoteApi.MissingAsync(store, notePath, ct);
-        var (writer, kind) = await labels.RenderAsync(note.LastWriter, note.Ref, ct);
+        var (writer, kind) = await labels.RenderAsync(notePath.Segments[0], note.LastWriter, note.Ref, ct);
         return TypedResults.Ok(new NoteVersionView(notePath.Value, note.Version, writer, note.LastWriteAt, kind, Size: Encoding.UTF8.GetByteCount(note.Content)));
     }
 
@@ -228,7 +228,7 @@ public static class HistoryApi
         foreach (var t in await store.ListTrashAsync(root, ct))
         {
             notes.Add(new TrashEntryView(
-                t.Note.Path.Value, t.Note.Version, t.DeletedAt, (await labels.RenderAsync(t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
+                t.Note.Path.Value, t.Note.Version, t.DeletedAt, (await labels.RenderAsync(t.Note.Path.Segments[0], t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
                 Lines.Split(t.Note.Content).Count, Encoding.UTF8.GetByteCount(t.Note.Content)));
         }
 
@@ -236,7 +236,7 @@ public static class HistoryApi
         foreach (var t in store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : [])
         {
             files.Add(new TrashEntryView(
-                t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, (await labels.RenderAsync(t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
+                t.Attachment.Path.Value, t.Attachment.Version, t.DeletedAt, (await labels.RenderAsync(t.Attachment.Path.Segments[0], t.DeletedBy, t.Ref, ct)).Display, t.DeletedAt + NoteWriter.TrashRetention,
                 0, (int)t.Attachment.Current.Size, AttachmentFormat.KindOf(t.Attachment.Path.Name), t.Attachment.Current.MediaType));
         }
 
@@ -282,11 +282,11 @@ public static class HistoryApi
         var rows = Activity.Rows(
             notes, await store.ListTrashAsync(root, ct), await store.ListMovesAsync(root, ct), until, max + 1, key,
             await StoreAttachments.UnderAsync(store, root, ct),
-            store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : []);
+            store is IAttachmentStore attachments ? await attachments.ListAttachmentTrashAsync(root, ct) : [], labels.RowKey);
         var views = new List<ActivityRowView>();
         foreach (var row in rows.Take(max))
         {
-            var (writer, kind) = await labels.RenderAsync(row.Writer, row.Ref, ct);
+            var (writer, kind) = await labels.RenderAsync(root.Segments[0], row.Writer, row.Ref, ct);
             views.Add(new ActivityRowView(row.Id, writer, kind, row.From, row.To, [.. row.Files.Select(f => new ActivityFileView(
                 f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed, f.To, f.FileKind))], row.Key, row.Restore));
         }
@@ -432,5 +432,5 @@ public static class HistoryApi
     }
 
     private static async Task<CheckpointEntryView> ViewAsync(Checkpoint c, IWriterLabels labels, CancellationToken ct) => new(
-        c.Name, c.Scope, (await labels.RenderAsync(c.CreatedBy, c.Ref, ct)).Display, c.CreatedAt, c.Notes.Count, c.Attachments.Count(a => !FolderMarker.Is(a.Path)));
+        c.Name, c.Scope, (await labels.RenderAsync(c.Path.Segments[0], c.CreatedBy, c.Ref, ct)).Display, c.CreatedAt, c.Notes.Count, c.Attachments.Count(a => !FolderMarker.Is(a.Path)));
 }

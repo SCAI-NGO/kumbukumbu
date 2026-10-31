@@ -19,9 +19,9 @@ public static class Share
         memberships.GrantAsync(owner.Id, owner.Key, vaultId, member.Id, member.Key, alias, label, role, Ct);
 
     /// <summary>Shares this client's vault with <paramref name="member"/>, through the server's own services.</summary>
-    public static async Task<string> ShareWithAsync(this RestClient owner, RestClient member, string alias, MemberRole role = MemberRole.Write) =>
+    public static async Task<string> ShareWithAsync(this RestClient owner, RestClient member, string alias, MemberRole role = MemberRole.Write, string? label = null) =>
         await owner.Api.Services.GetRequiredService<Memberships>().GrantAsync(
-            owner.User.Id, owner.UserKey, await owner.VaultIdAsync(), member.User.Id, member.UserKey, alias, member.Username, role, Ct);
+            owner.User.Id, owner.UserKey, await owner.VaultIdAsync(), member.User.Id, member.UserKey, alias, label ?? member.Username, role, Ct);
 
     /// <summary>The id of this client's own vault.</summary>
     public static async Task<string> VaultIdAsync(this RestClient owner) =>

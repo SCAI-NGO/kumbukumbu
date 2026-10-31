@@ -22,6 +22,7 @@ public sealed class UnlockedVault
     private readonly byte[] _pathKey;
     private readonly byte[] _textKey;
     private readonly byte[] _blobKey;
+    private readonly IReadOnlyDictionary<string, byte[]> _membershipKeys;
     private long _lastUsed;
 
     public UnlockedVault(string id, string name, ReadOnlySpan<byte> vaultKey, DateTime now, VaultLocks locks)
@@ -35,6 +36,14 @@ public sealed class UnlockedVault
         _pathKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/path-id", []);
         _textKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/text-id", []);
         _blobKey = VaultCrypto.Derive(vaultKey, "kumbu/v1/blob-id", []);
+        var salt = System.Text.Encoding.UTF8.GetBytes(id);
+        var membershipKeys = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var purpose in new[] { Sharing.Memberships.LabelPurpose, Sharing.Memberships.WritersPurpose, Sharing.Memberships.WriterIdsPurpose })
+        {
+            membershipKeys[purpose] = VaultCrypto.Derive(vaultKey, purpose, salt);
+        }
+
+        _membershipKeys = membershipKeys;
         Horizon = now;
         Touch(now);
     }
@@ -132,6 +141,11 @@ public sealed class UnlockedVault
 
     /// <summary>A keyed hash of the path: equal paths give equal ids, but the id reveals nothing else.</summary>
     public byte[] PathId(VaultPath path) => VaultCrypto.Mac(_pathKey, path.Value);
+
+    /// <summary>Opens what a membership of this vault seals under the vault key for <paramref name="purpose"/> (its label,
+    /// writers, writer ids: <see cref="VaultCatalog.SealForVault"/>), so that the writers of an entry can be shown
+    /// without the vault key itself.</summary>
+    internal byte[] OpenForMembership(string purpose, byte[] sealedBlob, string aad) => VaultCrypto.Open(_membershipKeys[purpose], sealedBlob, aad);
 
     /// <summary>The revision is part of the context, so a blob only opens next to the revision it was written with.</summary>
     public byte[] SealNote(ObjectId docId, StoredNote note) => Seal($"note:{Id}:{docId}:{note.Revision}", Payload.From(note));

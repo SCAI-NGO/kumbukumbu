@@ -189,6 +189,40 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
             VaultCatalog.OpenForVault(vaultKey, doc.Vault, WriterIdsPurpose, doc.WriterIds, $"membership-writer-ids:{doc.Vault}:{doc.Id}"))!;
 
     /// <summary>
+    /// What names the members of <paramref name="vault"/> (collab design §8.2), opened with the vault: every membership
+    /// with a member, tombstones included, or only <paramref name="membershipId"/>. Read afresh on every call; one that
+    /// doesn't open is left out (its writers show as a former member's).
+    /// </summary>
+    internal async Task<IReadOnlyList<MembershipNames>> NamesAsync(UnlockedVault vault, string? membershipId, CancellationToken ct)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var filter = f.Eq(m => m.Vault, vault.Id) & f.Ne(m => m.Member, null);
+        if (membershipId is not null) filter &= f.Eq(m => m.Id, membershipId);
+        var result = new List<MembershipNames>();
+        foreach (var doc in await Docs.Find(filter).ToListAsync(ct))
+        {
+            try
+            {
+                result.Add(new MembershipNames(
+                    doc.Id, doc.Owner, doc.Status,
+                    Encoding.UTF8.GetString(vault.OpenForMembership(LabelPurpose, doc.Label, $"membership-label:{doc.Vault}:{doc.Id}")),
+                    JsonSerializer.Deserialize<Dictionary<string, string>>(vault.OpenForMembership(WritersPurpose, doc.Writers, $"membership-writers:{doc.Vault}:{doc.Id}"))!,
+                    JsonSerializer.Deserialize<Dictionary<string, string>>(vault.OpenForMembership(WriterIdsPurpose, doc.WriterIds, $"membership-writer-ids:{doc.Vault}:{doc.Id}"))!));
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("Membership {MembershipId} of vault {VaultId} does not open", doc.Id, vault.Id);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The display name of the user <paramref name="userId"/> (the username as typed), or null.</summary>
+    internal async Task<string?> DisplayNameAsync(string userId, CancellationToken ct) =>
+        (await db.GetCollection<UserDocument>("users").Find(u => u.Id == userId).Project(u => u.Display).FirstOrDefaultAsync(ct));
+
+    /// <summary>
     /// The filter that moves a membership from <paramref name="from"/> to <paramref name="to"/>, or null if statuses
     /// can't move that way: only <c>pending → active → revoked | left</c> and <c>pending → revoked</c>. A tombstone
     /// never comes back.
@@ -241,3 +275,9 @@ public sealed class MemberLimitException(int limit) : Exception($"A vault can be
 
 /// <summary>The person already has a membership of the vault.</summary>
 public sealed class AlreadyMemberException() : Exception("This person is already a member of the vault.");
+
+/// <summary>A membership's names, opened with its vault: the owner's <c>Label</c> for the member, the member's
+/// <c>Writers</c> (credential id → display name) and <c>WriterIds</c> (writer id → credential id, or
+/// <see cref="Memberships.SessionWriter"/>).</summary>
+internal sealed record MembershipNames(
+    string Id, string Owner, string Status, string Label, IReadOnlyDictionary<string, string> Writers, IReadOnlyDictionary<string, string> WriterIds);

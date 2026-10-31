@@ -40,14 +40,14 @@ public sealed class Trash(INoteStore notes, IWriterLabels? labels = null) : ICom
         var rows = new List<(DateTime DeletedAt, string Line)>();
         foreach (var t in await notes.ListTrashAsync(path, ct))
         {
-            rows.Add((t.DeletedAt, $"{History.Time(t.DeletedAt)}  {t.Note.Path.Value}  {t.Note.Version}  {Lines.Count(t.Note.Content)}  (by {await ByAsync(t.DeletedBy, t.Ref, ct)})"));
+            rows.Add((t.DeletedAt, $"{History.Time(t.DeletedAt)}  {t.Note.Path.Value}  {t.Note.Version}  {Lines.Count(t.Note.Content)}  (by {await ByAsync(t.Note.Path.Segments[0], t.DeletedBy, t.Ref, ct)})"));
         }
 
         if (notes is IAttachmentStore store)
         {
             foreach (var t in await store.ListAttachmentTrashAsync(path.IsRoot ? null : path, ct))
             {
-                var by = await ByAsync(t.DeletedBy, t.Ref, ct);
+                var by = await ByAsync(t.Attachment.Path.Segments[0], t.DeletedBy, t.Ref, ct);
                 rows.Add((t.DeletedAt, FolderMarker.Is(t.Attachment.Path)
                     ? $"{History.Time(t.DeletedAt)}  {FolderMarker.Shown(t.Attachment.Path)}  folder  (by {by})"
                     : $"{History.Time(t.DeletedAt)}  {t.Attachment.Path.Value}  {t.Attachment.Version}  {AttachmentText.Summary(t.Attachment.Current)}  (by {by})"));
@@ -58,5 +58,5 @@ public sealed class Trash(INoteStore notes, IWriterLabels? labels = null) : ICom
         return ShellResult.Ok(Lines.Join(rows.OrderByDescending(r => r.DeletedAt).Select(r => r.Line)));
     }
 
-    private async Task<string> ByAsync(string label, WriterRef? reference, CancellationToken ct) => (await _labels.RenderAsync(label, reference, ct)).Display;
+    private async Task<string> ByAsync(string vault, string label, WriterRef? reference, CancellationToken ct) => (await _labels.RenderAsync(vault, label, reference, ct)).Display;
 }

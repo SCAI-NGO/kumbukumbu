@@ -119,7 +119,7 @@ public sealed class DiffCommand(INoteStore notes, Checkpoints checkpoints, IWrit
 
     /// <summary>The side with its writer as the caller is shown it; an absent side names none.</summary>
     private async Task<Side> ShownAsync(Side side, CancellationToken ct) =>
-        side.Absent is null ? side with { Writer = (await _labels.RenderAsync(side.Writer, side.Ref, ct)).Display } : side;
+        side.Absent is null ? side with { Writer = (await _labels.RenderAsync(side.Path.Segments[0], side.Writer, side.Ref, ct)).Display } : side;
 
     private async Task<ShellResult> AgainstCheckpointAsync(VaultPath path, string name, bool words, CancellationToken ct)
     {

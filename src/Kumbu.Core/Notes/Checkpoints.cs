@@ -131,7 +131,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
     }
 
     /// <summary>Who made <paramref name="checkpoint"/>, as the caller is shown it.</summary>
-    private async Task<string> MakerAsync(Checkpoint checkpoint, CancellationToken ct) => (await _labels.RenderAsync(checkpoint.CreatedBy, checkpoint.Ref, ct)).Display;
+    private async Task<string> MakerAsync(Checkpoint checkpoint, CancellationToken ct) => (await _labels.RenderAsync(checkpoint.Path.Segments[0], checkpoint.CreatedBy, checkpoint.Ref, ct)).Display;
 
     public async Task<ShellResult> ListAsync(VaultPath path, CancellationToken ct)
     {
