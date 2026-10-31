@@ -75,6 +75,13 @@ public sealed class MarkerTests(KumbuAppFactory app)
             Assert.False(failed, $"{command}: {text}");
         }
 
+        // The web app's folder upload, through her key: a write path of the server's own.
+        using (var folder = await carol.SendAsync(
+            HttpMethod.Post, "/api/upload/Beete/ord", new { files = new[] { new { path = "hoch.md", content = "Hochbeet\n" } }, onConflict = "ask" }, key))
+        {
+            Assert.True(folder.IsSuccessStatusCode, await folder.Content.ReadAsStringAsync(Ct));
+        }
+
         using (var upload = await PutFileAsync(carol, "/api/files/Beete/bild.png", key)) Assert.True(upload.IsSuccessStatusCode, await upload.Content.ReadAsStringAsync(Ct));
         using (var board = await carol.SendAsync(HttpMethod.Post, "/api/vaults/Beete/board", bearer: key)) Assert.True(board.IsSuccessStatusCode, await board.Content.ReadAsStringAsync(Ct));
         using (var card = await carol.SendAsync(HttpMethod.Post, "/api/vaults/Beete/board/cards", new { title = "Mulchen", column = "Ideas" }, bearer: key))
@@ -120,6 +127,7 @@ public sealed class MarkerTests(KumbuAppFactory app)
             $"/api/changes?since={since}", "/api/vaults/garten/activity", "/api/vaults/garten/trash", "/api/vaults/garten/checkpoints",
             "/api/vaults/garten/checkpoints/vorher/tree", "/api/vaults/garten/checkpoints/vorher/notes/kohl2.md", "/api/vaults/garten/board",
             "/api/vaults/garten/versions", "/api/links/garten/kohl2.md", "/api/backlinks/garten/kohl2.md", "/api/keys", "/api/session",
+            "/api/notes/garten/ord/hoch.md", "/api/history/garten/ord/hoch.md",
         ];
         var answers = new List<(string What, string Text)>();
         foreach (var path in gets)
@@ -150,6 +158,27 @@ public sealed class MarkerTests(KumbuAppFactory app)
             answers.Add(("note conflict", await note.Content.ReadAsStringAsync(Ct)));
         }
 
+        // A restore's conflict carries the state it met; a checkpoint restore's preview what it would do.
+        var kohl2 = (await RestClient.JsonAsync(await bob.GetAsync("/api/notes/garten/kohl2.md")))["version"]!.GetValue<string>();
+        using (var restore = await bob.SendAsync(HttpMethod.Post, "/api/restore/garten/kohl2.md", new { version = kohl2, expected = "0000000000" }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, restore.StatusCode);
+            answers.Add(("restore conflict", await restore.Content.ReadAsStringAsync(Ct)));
+        }
+
+        var bild = (await RestClient.JsonAsync(await bob.GetAsync("/api/version/garten/bild.png")))["version"]!.GetValue<string>();
+        using (var restore = await bob.SendAsync(HttpMethod.Post, "/api/restore/garten/bild.png", new { version = bild, expected = "0000000000" }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, restore.StatusCode);
+            answers.Add(("restore file conflict", await restore.Content.ReadAsStringAsync(Ct)));
+        }
+
+        using (var preview = await bob.SendAsync(HttpMethod.Post, "/api/vaults/garten/checkpoints/vorher/preview"))
+        {
+            Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+            answers.Add(("checkpoint preview", await preview.Content.ReadAsStringAsync(Ct)));
+        }
+
         // Refusals.
         foreach (var (method, path, body) in new (HttpMethod, string, object?)[]
         {
@@ -168,22 +197,30 @@ public sealed class MarkerTests(KumbuAppFactory app)
         {
             "history /garten/kohl2.md", "history /garten", "history /garten/bild.png", "history /", "diff /garten/kohl2.md", "trash /garten", "trash /",
             "lscp /garten", "ls /", "ls /garten", "cat /garten/kohl2.md", "cat /garten/Board/Board.md", "rg MARKER /", "rg -i marker /",
-            "diff --checkpoint vorher /garten",
+            "diff --checkpoint vorher /garten", "restore --checkpoint vorher /garten", "history /garten/ord/hoch.md",
         })
         {
             var (_, text) = await bob.ShAsync(command, w.BobKey);
             answers.Add((command, text));
         }
 
-        // Carol's entries are there, as "another user": through the renderer, not as her empty label.
-        foreach (var command in new[] { "lscp /garten", "trash /garten", "history /garten/kohl2.md", "history /garten" })
+        // Carol's entries are there, as "another user", in every answer that names a writer: through the renderer, not as
+        // her empty label, so a route that skipped it couldn't pass on absence alone. (The tree, links, board, versions,
+        // a note conflict and a checkpoint preview name no writer; changes lists only the viewer's own agents.)
+        string[] rendered =
+        [
+            "lscp /garten", "trash /garten", "trash /", "history /garten/kohl2.md", "history /garten", "history /", "history /garten/bild.png",
+            "history /garten/ord/hoch.md", "diff /garten/kohl2.md", "diff --checkpoint vorher /garten", "restore --checkpoint vorher /garten",
+            "/api/vaults/garten/activity", "/api/vaults/garten/trash", "/api/vaults/garten/checkpoints", "/api/history/garten/kohl2.md",
+            "/api/history/garten/weg.md", "/api/history/garten/bild.png", "/api/history/garten/Board/Board.md", "/api/history/garten/ord/hoch.md",
+            "/api/notes/garten/kohl2.md", "/api/notes/garten/salat.md", "/api/notes/garten/dill.md", "/api/notes/garten/ord/hoch.md",
+            "/api/search/earlier?q=Kohl", "/api/version/garten/kohl2.md", "/api/version/garten/bild.png", "/api/version/garten/dill.md",
+            "/api/notes/garten/kohl2.md (key)", "/api/history/garten/kohl2.md (key)", "/api/vaults/garten/trash (key)", "/api/vaults/garten/checkpoints (key)",
+            "/api/version/garten/bild.png (key)", "file state", "restore file conflict",
+        ];
+        foreach (var what in rendered)
         {
-            Assert.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, answers.Single(a => a.What == command).Text, StringComparison.Ordinal);
-        }
-
-        foreach (var path in new[] { "/api/vaults/garten/activity", "/api/vaults/garten/trash", "/api/vaults/garten/checkpoints", "/api/history/garten/kohl2.md" })
-        {
-            Assert.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, answers.Single(a => a.What == path).Text, StringComparison.Ordinal);
+            Assert.True(answers.Single(a => a.What == what).Text.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, StringComparison.Ordinal), $"{what} shows no writer");
         }
 
         Assert.Contains(answers, a => a.Text.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, StringComparison.Ordinal));

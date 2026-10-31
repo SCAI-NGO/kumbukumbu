@@ -103,6 +103,7 @@ public sealed class NoNamesTests(MongoFixture fixture)
         [
             "write", "edit", "replace", "mv", "mv folder", "rm", "restore from trash", "restore version", "restore --checkpoint",
             "board add", "board move", "board rename_column", "mkcp", "upload", "upload replace", "rm attachment", "restore attachment", "mkdir",
+            "upload folder",
         ];
         foreach (var kind in new[] { "session", "key", "device" })
         {
@@ -152,7 +153,9 @@ public sealed class NoNamesTests(MongoFixture fixture)
             "upload replace" => (await files.WriteAsync("/garten/x.png", (byte[])[.. Png, 5], (1, 1), VersionToken.Of(Png), Ct)).Result,
             "rm attachment" => await t.Shell.RunAsync("rm /garten/x.png", Ct),
             "restore attachment" => await t.Shell.RunAsync("restore /garten/y.png", Ct),
-            _ => await t.Shell.RunAsync("mkdir /garten/empty", Ct),
+            "mkdir" => await t.Shell.RunAsync("mkdir /garten/empty", Ct),
+            // The web app's folder upload, the server's own write path (a new note, and one replaced).
+            _ => await UploadFolderAsync(t, caller),
         };
 
         Assert.False(result.IsError, result.Output);
@@ -242,6 +245,14 @@ public sealed class NoNamesTests(MongoFixture fixture)
     }
 
     private HashSet<string> Seen { get; } = [];
+
+    private static async Task<ShellResult> UploadFolderAsync(Tools t, RequestCaller caller)
+    {
+        var request = new Kumbu.Server.Api.UploadRequest([new("hoch.md", "Hochbeet\n"), new("b.md", "b neu\n")], "replace");
+        var result = (await Kumbu.Server.Api.UploadApi.UploadAsync("garten", "sub", request, caller, t.Store, t.Writer, Ct)).Value!;
+        Assert.Equal((1, 1), (result.Written, result.Replaced));
+        return ShellResult.Ok("uploaded");
+    }
 
     private static async Task<ShellResult> ReplaceAsync(EncryptedNoteStore store, ICaller caller)
     {

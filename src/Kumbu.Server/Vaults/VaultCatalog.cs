@@ -1481,7 +1481,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 }
                 catch (CryptographicException)
                 {
-                    log.LogWarning("The alias of a member slot of vault {VaultId} of user {UserId} does not open; the slot is wrapped again without it", slot.Vault, userId);
+                    // Left as it is, like a slot that doesn't open: rewrapped without its hash, it would leave the name
+                    // index, and its alias key would stay under the old key for good.
+                    log.LogWarning("The alias of a member slot of vault {VaultId} of user {UserId} does not open; the slot is left as it is", slot.Vault, userId);
+                    skipped.Add(slot.Id);
+                    continue;
                 }
             }
             else if (slot.Kind == SlotDocument.User)

@@ -631,4 +631,21 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
 
         await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
     }
+
+    [Fact]
+    public async Task A_member_slot_whose_alias_does_not_open_is_left_as_it_is()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+        var before = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        await Slots.UpdateOneAsync(s => s.Id == before.Id, Builders<SlotDocument>.Update.Set(s => s.Alias, (byte[])[.. before.Alias!.Take(before.Alias!.Length - 1), 0]), cancellationToken: Ct);
+
+        Assert.NotNull(await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct));
+
+        // Still in the name index under its old lookup, rather than rewrapped without its hash.
+        var after = await Slots.Find(s => s.Id == before.Id).SingleAsync(Ct);
+        Assert.Equal(before.Lookup, after.Lookup);
+        Assert.Equal(before.NameId, after.NameId);
+        Assert.Equal(before.AliasKey, after.AliasKey);
+    }
 }
+

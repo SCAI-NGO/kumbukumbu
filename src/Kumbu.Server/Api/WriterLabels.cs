@@ -39,6 +39,9 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
     public const string AnotherUser = "another user";
     public const string FormerMember = "a former member";
 
+    /// <summary>A member's own sessions, to her session (collab design §8.2: viewer = writer).</summary>
+    public const string You = "You";
+
     /// <summary>How long a display name that crosses between users may be (collab design §8.2, L6).</summary>
     public const int DisplayLimit = 64;
 
@@ -86,7 +89,7 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
         if (own is not null && reference.Writer is { } writer && own.WriterIds.TryGetValue(writer, out var credential))
         {
             return credential == Memberships.SessionWriter
-                ? (caller.User?.Username ?? caller.Writer, Kinded(Self))
+                ? (caller.Kind == CallerKind.Session ? You : caller.User?.Username ?? caller.Writer, Kinded(Self))
                 : (own.Writers.GetValueOrDefault(credential) ?? PlainWriterLabels.UnknownWriter, Kinded(reference.Kind == WriterRef.Device ? Device : Agent));
         }
 

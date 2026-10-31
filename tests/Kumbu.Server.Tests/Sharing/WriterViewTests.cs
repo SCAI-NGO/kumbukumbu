@@ -63,7 +63,7 @@ public sealed class WriterViewTests(KumbuAppFactory app)
         Assert.Equal(("Bob · Claude", WriterLabels.Agent), await WriterAsync(alice, "/api/notes/Gartenarbeit/k.md"));
         Assert.Equal(("Bob", WriterLabels.User), await WriterAsync(alice, "/api/notes/Gartenarbeit/s.md"));
         // Bob sees his own as his own.
-        Assert.Equal((bob.Username, WriterLabels.Self), await WriterAsync(bob, "/api/notes/garten/s.md"));
+        Assert.Equal((WriterLabels.You, WriterLabels.Self), await WriterAsync(bob, "/api/notes/garten/s.md"));
         Assert.Equal(("Claude", WriterLabels.Agent), await WriterAsync(bob, "/api/notes/garten/k.md"));
     }
 

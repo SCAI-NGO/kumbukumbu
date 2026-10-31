@@ -50,7 +50,7 @@ Statuses only move forward: `pending → active → revoked | left`, `pending �
 
 | Kind | Wrapped under | Carries |
 |---|---|---|
-| `member` | the member's **public key** (§5.2) | `Membership`, `Lookup` = the member's user-slot lookup, `NameId` = MAC of the member's **alias** (§2.3), `Alias` sealed under a key from the member's user key |
+| `member` | the member's **public key** (§5.2) | `Membership`, `Lookup` = the member's user-slot lookup, `NameId` = MAC of the member's **alias** (§2.3), `Alias` sealed under a key from the member's user key (amended in §14) |
 | `invite` | `HKDF-SHA256(invite secret, "kumbu/v1/invite-slot", salt=vaultId)`, AAD `slot:{vault}:invite:{membershipId}` | `Membership`, `ExpiresAt` (TTL index, §2.4) |
 
 Derived slots (kinds `key` and `connection`) of a member get a new field `GrantedVia: membershipId`. Slots without it are the owner's.
@@ -59,7 +59,7 @@ Derived slots (kinds `key` and `connection`) of a member get a new field `Grante
 
 The existing unique partial index `(Lookup, NameId)` (`VaultCatalog.cs:1266`) is kind-agnostic: it applies to every slot whose `nameId` is binary. A member slot carries the member's own `Lookup` and the MAC of the alias under the member's own name-id key (`HKDF(userKey, "kumbu/v1/vault-name-id")`, as at `:264`). So **one index arbitrates own vault names and aliases in both directions**, without a second collection, and MongoDB never sees a name. Creating one's own vault with an alias's name fails with the existing `VaultNameTakenException`; accepting with a taken alias fails the same way and the dialog asks for another name.
 
-The alias is sealed in the member slot under `HKDF(userKey, "kumbu/v1/alias", salt=vaultId)`, AAD `alias:{vault}:{membershipId}`. The owner can't read it; it is the member's.
+The alias is sealed in the member slot under `HKDF(userKey, "kumbu/v1/alias", salt=vaultId)`, AAD `alias:{vault}:{membershipId}`. The owner can't read it; it is the member's. (Amended in §14: the alias is sealed under a random alias key, and that key under the user key.)
 
 **Renaming an alias** (decided here, not in the concept): one update of `NameId` and `Alias` on the member's slot, in a transaction; the index refuses a taken name. Own vaults still have no rename (none exists today), so the concept's "like one of his own vaults" is corrected in the concept to "Bob can rename the alias later".
 
@@ -233,7 +233,7 @@ The deletion dialog lists the shared vaults with the two choices of the concept 
 
 **Deletion by an admin** (`Deletion.DeleteUserAsync`, `:92`, e.g. for a privacy request): the admin's dialog offers the same two choices, once for all of the user's shared vaults, default "Give members 7 days"; it is set from the request. The choice is recorded with the deletion in `DeletionList`, so `RepeatAsync` (`:120`, the repeat after a restored backup) applies it again: a restored shared vault whose `closingAt` has passed is deleted at once, otherwise it closes at the original `closingAt`. A privacy deletion keeps the concept's decided default of 7 days for shared vaults (well within the GDPR's month); the receipt says "scheduled for deletion on <date>" for each.
 
-"Delete it for everyone now" runs today's deletion; members get a notice in their own list ("The owner has deleted *gartenarbeit*."), naming the vault by the member's alias and not naming the deleted owner. It lives in a small `member_notices` document per member, holding a copy of the alias ciphertext from the member slot (sealed under the member's user key, so the server needn't read it), deleted when dismissed or after 30 days. The owner's account deletion also withdraws her open invitations.
+"Delete it for everyone now" runs today's deletion; members get a notice in their own list ("The owner has deleted *gartenarbeit*."), naming the vault by the member's alias and not naming the deleted owner. It lives in a small `member_notices` document per member, holding a copy of the alias ciphertext from the member slot (sealed under the member's user key, so the server needn't read it; amended in §14: with the slot's sealed alias key beside it), deleted when dismissed or after 30 days. The owner's account deletion also withdraws her open invitations.
 
 ### 7.4 Owner deactivated (decided by Chris, 2026-10-31)
 
@@ -394,3 +394,16 @@ The review saw only this document and `docs/security-architecture.md`. Every fin
 - §8 (AI providers): a shared vault's notes reach the providers of every member's agents.
 
 **Answers to the review's questions:** the fragment survives sign-in only in `sessionStorage` (§4.2); the notice after "delete for everyone" lives in `member_notices` with the alias ciphertext and doesn't name the deleted owner (§7.3); redemption unsets `inviteLookup` and `expiresAt`, and a redeemed unconfirmed membership lapses 7 days after `redeemedAt` (§2.1); activity row keys are per changeset (§8.2); a privacy deletion keeps the decided 7 days, the receipt names the date (§7.3); writer names must never be written into note content, pinned by the marker test (§8.2), and the plugin's conflict copies drop the device name in shared vaults (§10.2); deletion during a re-key run waits for the run (§7.1).
+
+## 14. Amendments during the build (2026-10-31)
+
+**The alias is sealed under an alias key** (task 1.9; replaces the sealing in §2.2, §2.3 and §7.3).
+
+- **As built.** Each member slot holds a random 256-bit alias key, sealed in `aliasKey` under `HKDF(userKey, "kumbu/v1/alias", salt=vaultId)`, AAD `alias-key:{vault}:{membershipId}`. The alias itself is in `alias`, sealed under the alias key, AAD `alias:{vault}:{membershipId}`. `NameId` is unchanged: the MAC of the normalised alias under the member's name-id key (§2.3).
+- **Derived slots.** A member's API key and connection slots (`GrantedVia`) seal a copy of the alias key in their payload (`aliasKey`; the earlier draft's `name` is gone). On every opening they read `alias` from the membership's member slot with it, in one indexed query for derived slots only. A missing, doubled or unopenable member slot opens nothing for the credential (fail closed).
+- **Rename.** One transaction updates `NameId` and `alias`; the alias key stays.
+- **Rotation of the member's user key.** `aliasKey` is sealed again under the new user key, `NameId` is recomputed and `alias` stays. The update is conditional on `alias` being unchanged, so a rename during a rotation makes the rotation conflict.
+- **Why.** A rename must reach the member's keys and connections, whose slots are sealed under the API key or the token. The server holds neither and can't rewrite those slots. A sealed copy of the alias in each credential would keep the old name for good. An own vault later created under the old name would then meet the stale alias in one credential's view, and fail as a duplicate name.
+- **The owner still can't read it.** The alias key is reachable only through the member's user key, her API key secrets or her connection tokens; the owner holds none of them.
+- **§7.3's notice therefore copies both.** A `member_notices` document holds the member slot's `alias` ciphertext together with its `aliasKey` (the alias key sealed under the member's user key, AAD as above). The member's session opens `aliasKey` with her user key, then `alias` with it. A rotation of her user key before she reads the notice must reseal the notice's `aliasKey` as it does the slot's. Otherwise the notice falls back to "a shared vault".
+

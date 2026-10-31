@@ -47,7 +47,7 @@ public static class UploadApi
             .Errors(400, 401, 403, 404, 409, 413, 503);
     }
 
-    private static async Task<Ok<UploadResultView>> UploadAsync(
+    internal static async Task<Ok<UploadResultView>> UploadAsync(
         string vault, string? folder, UploadRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
     {
         if (body.OnConflict is not ("ask" or "replace" or "skip")) throw ApiErrors.BadRequest("onConflict is 'ask', 'replace' or 'skip'.");
