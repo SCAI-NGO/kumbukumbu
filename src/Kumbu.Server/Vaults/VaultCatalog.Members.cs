@@ -128,6 +128,18 @@ public sealed partial class VaultCatalog
     internal static byte[] OpenForVault(byte[] vaultKey, string vaultId, string purpose, byte[] sealedBlob, string aad) =>
         VaultCrypto.Open(VaultCrypto.Derive(vaultKey, purpose, Encoding.UTF8.GetBytes(vaultId)), sealedBlob, aad);
 
+    /// <summary>
+    /// Whether the vault has a membership or an invitation that is neither revoked nor left: shared, for what phase 1
+    /// still refuses on shared vaults (re-keying, pairing a device). Inside <paramref name="session"/>'s transaction if given.
+    /// </summary>
+    internal async Task<bool> IsSharedAsync(IClientSessionHandle? session, string vaultId, CancellationToken ct)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var filter = f.Eq(m => m.Vault, vaultId) & f.Nin(m => m.Status, [MembershipStatus.Revoked, MembershipStatus.Left]);
+        var docs = db.GetCollection<MembershipDocument>(Memberships.CollectionName);
+        return await (session is null ? docs.Find(filter) : docs.Find(session, filter)).AnyAsync(ct);
+    }
+
     /// <summary>The key of a vault <paramref name="ownerId"/> owns, from her user slot: <see cref="ArgumentException"/> if
     /// it isn't hers, <see cref="VaultBusyException"/> while it is re-keyed.</summary>
     internal async Task<byte[]> OwnerVaultKeyAsync(string ownerId, byte[] ownerKey, string vaultId, CancellationToken ct)

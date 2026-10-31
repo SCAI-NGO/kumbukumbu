@@ -24,20 +24,25 @@ public static class PairingApi
 {
     public const string NotValid = "This pairing code is not valid (any more).";
 
+    public const string SharedNotYet = "Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.";
+
     public static void MapPairingApi(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
-        api.MapPost("/vaults/{vault}/pairing", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapPost("/vaults/{vault}/pairing", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 503);
         // It carries its own secret and no ambient credential, so there is nothing for a forged request to ride on;
         // and Obsidian sends no Origin of ours.
         api.MapPost("/pairing/redeem", RedeemAsync).AllowAnonymous().WithMetadata(OriginExemptMetadata.Instance).Errors(400, 404, 409, 429);
     }
 
-    private static async Task<Created<PairingCodeView>> CreateAsync(string vault, CreatePairingRequest body, RequestCaller caller, Pairings pairings, CancellationToken ct)
+    private static async Task<Created<PairingCodeView>> CreateAsync(
+        string vault, CreatePairingRequest body, RequestCaller caller, Pairings pairings, VaultCatalog catalog, CancellationToken ct)
     {
-        // A session opens its user's own vaults and nothing else.
         var found = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == vault) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         if (found.Vault.Pending) throw VaultBusyException.Being();
+        // A device on a shared vault needs a plugin that knows members (collab design §10.2): refused for the owner and
+        // the members alike until then.
+        if (found.Membership is not null || await catalog.IsSharedAsync(null, found.Id, ct)) throw new ApiException(StatusCodes.Status409Conflict, SharedNotYet);
         var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, found.Id, found.Name, body.ExpiresInDays);
         return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt, (int)Pairings.Lifetime.TotalSeconds));
     }

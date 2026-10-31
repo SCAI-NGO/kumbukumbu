@@ -197,8 +197,7 @@ public static class NoteApi
             .ToArray());
 
     /// <summary>
-    /// The owner points a vault at another embedding provider (sessions only: a session opens its user's own vaults
-    /// and nothing else). The vault is embedded again with it, in the background; until a note is, it is found by
+    /// The owner points a vault at another embedding provider (her sessions only; a member's session answers 404). The vault is embedded again with it, in the background; until a note is, it is found by
     /// words. Choosing an external provider is what sends the vault's text there, so the web app asks first.
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
@@ -207,6 +206,9 @@ public static class NoteApi
         var root = ApiPaths.Parse(vault, null, note: false);
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
             ?? throw ApiErrors.NotFound($"There is no vault '{root.Segments[0]}'.");
+        // Owner-only (collab design §3.3): a member reaches the vault through the open store, and answers 404 as on the
+        // other owner-only endpoints.
+        if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         var unlocked = access.Vault;
         if (index.Providers.Get(body.Provider) is null)
         {

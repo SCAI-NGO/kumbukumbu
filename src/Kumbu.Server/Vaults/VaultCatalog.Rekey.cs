@@ -344,12 +344,7 @@ public sealed partial class VaultCatalog
         // Until re-keying wraps the new key to members (collab design §7.1), a shared vault is left as it is: the
         // deletion of other slots below would take its members' slots. Inside the transaction, so that a grant
         // committing meanwhile conflicts with the vault document's write below, and the retry sees it.
-        var m = Builders<Sharing.MembershipDocument>.Filter;
-        if (await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
-                .Find(s, m.Eq(x => x.Vault, id) & m.Nin(x => x.Status, [Sharing.MembershipStatus.Revoked, Sharing.MembershipStatus.Left])).AnyAsync(ct))
-        {
-            throw new VaultSharedException();
-        }
+        if (await IsSharedAsync(s, id, ct)) throw new VaultSharedException();
 
         await FaultAsync("inside-start");
 
