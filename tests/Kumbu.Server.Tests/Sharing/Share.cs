@@ -83,13 +83,14 @@ public static class Share
     public static Task<MembershipDocument> MembershipAsync(IMongoDatabase db, string membershipId) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Id == membershipId).SingleAsync(Ct);
 
-    /// <summary>A revocation or a departure, written as one update straight to MongoDB, as the routes will (design §6.1).</summary>
+    /// <summary>A revocation or a departure, written as one update straight to MongoDB, as the routes will (design §6.1),
+    /// <c>revision</c> raised.</summary>
     public static Task SetStatusAsync(IMongoDatabase db, string membershipId, string status) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName).UpdateOneAsync(
-            m => m.Id == membershipId, Builders<MembershipDocument>.Update.Set(m => m.Status, status), cancellationToken: Ct);
+            m => m.Id == membershipId, Builders<MembershipDocument>.Update.Set(m => m.Status, status).Inc(m => m.Revision, 1), cancellationToken: Ct);
 
-    /// <summary>A role change, written straight to MongoDB.</summary>
+    /// <summary>A role change, written straight to MongoDB with <c>revision</c> raised, as the route will (design §6.3).</summary>
     public static Task SetRoleAsync(IMongoDatabase db, string membershipId, MemberRole role) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName).UpdateOneAsync(
-            m => m.Id == membershipId, Builders<MembershipDocument>.Update.Set(m => m.Role, MemberRoles.ToText(role)), cancellationToken: Ct);
+            m => m.Id == membershipId, Builders<MembershipDocument>.Update.Set(m => m.Role, MemberRoles.ToText(role)).Inc(m => m.Revision, 1), cancellationToken: Ct);
 }

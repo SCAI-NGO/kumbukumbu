@@ -252,6 +252,42 @@ public sealed class PinTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_members_rotation_wraps_only_through_a_valid_pin_to_her_new_key()
+    {
+        var (alice, vaultId, vaultKey) = await AlicesVaultAsync();
+        var workId = await VaultAsync(alice, "Work");
+        var workKey = await VaultKeyAsync(alice, workId);
+        var bob = await PersonAsync("bob");
+        var garten = await GrantAsync(alice, vaultId, bob, "Garten");
+        var work = await GrantAsync(alice, workId, bob, "Arbeit");
+        // Someone with the vault key and the database pins his own key into the Work membership, properly sealed.
+        using var attacker = MemberSlotCrypto.NewKeyPair();
+        await SetPinAsync(work, ForgedPin(workKey, workId, work, new MembershipPin(work, workId, bob.Id, MemberSlotCrypto.P256, MemberSlotCrypto.PublicOf(attacker))));
+        using var oldPrivate = await PrivateOfAsync(bob);
+
+        var rotation = new UserKeyRotation(
+            _db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<UserKeyRotation>());
+        var (user, _, _) = (await Users().TrySignInAsync("bob", Password, Ct))!.Value;
+        var newUserKey = (await rotation.RotateAsync(user, bob.Key, Password, null, Ct))!.NewUserKey;
+
+        // The valid pin: the slot is wrapped to the key just made, and the pin names it now; nothing else opens it.
+        using var newPrivate = await PrivateOfAsync(bob with { Key = newUserKey });
+        var newPublic = MemberKeys.PublicFromPrivate(newPrivate);
+        var slot = Assert.Single(await MemberSlotsAsync(garten));
+        AssertOpensWith(newPrivate, slot, vaultKey);
+        Assert.ThrowsAny<CryptographicException>(() => MemberSlotCrypto.Unwrap(oldPrivate, slot.Wrapped, $"slot:{vaultId}:member:{garten}"));
+        Assert.ThrowsAny<CryptographicException>(() => MemberSlotCrypto.Unwrap(attacker, slot.Wrapped, $"slot:{vaultId}:member:{garten}"));
+        Assert.Equal(newPublic, Kumbu.Server.Sharing.Memberships.PinnedKey(await MembershipAsync(garten), vaultKey));
+        Assert.False(LoggedDamaged(garten));
+
+        // The pin naming another key than the one his slot was wrapped to: the slot is gone, the pin left as it was.
+        Assert.Empty(await MemberSlotsAsync(work));
+        Assert.True(LoggedDamaged(work));
+        Assert.Equal(MemberSlotCrypto.PublicOf(attacker), Kumbu.Server.Sharing.Memberships.PinnedKey(await MembershipAsync(work), workKey));
+        Assert.Empty(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == workId).ToListAsync(Ct));
+    }
+
+    [Fact]
     public void Nothing_but_WrapToPinAsync_wraps_a_member_slot()
     {
         var root = RepoRoot();

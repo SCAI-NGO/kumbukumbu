@@ -1454,7 +1454,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         var (rewraps, skipped, orphans, vaultIds) = (new List<Accounts.SlotRewrap>(), new List<MongoDB.Bson.ObjectId>(), new List<MongoDB.Bson.ObjectId>(), new List<string>());
         foreach (var slot in slots)
         {
-            // A member slot is wrapped to the member's public key, not under the user key: its Wrapped stays.
+            // A member slot is wrapped to the member's public key, not under the user key: its Wrapped stays here, and the
+            // rotation wraps it to the new keypair's public key through its pin (UserKeyRotation.ApplyMemberSlotsAsync).
             byte[]? vaultKey = null;
             try
             {

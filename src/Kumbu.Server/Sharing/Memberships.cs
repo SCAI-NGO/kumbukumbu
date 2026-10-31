@@ -157,23 +157,37 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     /// rewritten, never one created. Without a valid pin, the membership's member slots are deleted and logged as
     /// damaged. Returns the pinned key, or null if there was none (or no member slot to rewrap).
     /// </summary>
-    internal async Task<byte[]?> WrapToPinAsync(IClientSessionHandle session, MembershipDocument membership, byte[] vaultKey, byte[]? newVaultKey, CancellationToken ct)
+    internal Task<byte[]?> WrapToPinAsync(IClientSessionHandle session, MembershipDocument membership, byte[] vaultKey, byte[]? newVaultKey, CancellationToken ct) =>
+        WrapToPinAsync(db, log, session, membership, vaultKey, newVaultKey, null, ct);
+
+    /// <summary>
+    /// As the instance method, on the collections, for <see cref="UserKeyRotation"/>, which can't depend on this class.
+    /// With <paramref name="rotation"/>, the member's own rotation (collab design §5.1): the pin must name her old public
+    /// key, or it counts as damaged; the slot is wrapped to her new public key instead, and only where it still holds
+    /// what her old private key opened. The caller then seals the pin again for the new key.
+    /// </summary>
+    internal static async Task<byte[]?> WrapToPinAsync(
+        IMongoDatabase db, ILogger log, IClientSessionHandle session, MembershipDocument membership, byte[] vaultKey, byte[]? newVaultKey, PinRotation? rotation,
+        CancellationToken ct)
     {
+        var slotDocs = db.GetCollection<SlotDocument>("slots");
         var f = Builders<SlotDocument>.Filter;
         var slots = f.Eq(s => s.Kind, SlotDocument.Member) & f.Eq(s => s.Membership, membership.Id);
-        if (PinnedKey(membership, vaultKey) is not { } pinned)
+        if (PinnedKey(membership, vaultKey) is not { } pinned || (rotation is not null && !CryptographicOperations.FixedTimeEquals(pinned, rotation.OldPublicKey)))
         {
-            var deleted = await catalog.Slots.DeleteManyAsync(session, slots, cancellationToken: ct);
+            var deleted = await slotDocs.DeleteManyAsync(session, slots, cancellationToken: ct);
             log.LogWarning(
                 "Membership {MembershipId} of vault {VaultId} has no valid pin: damaged; its {Count} member slots were deleted", membership.Id, membership.Vault, deleted.DeletedCount);
             return null;
         }
 
         // Every member slot of the membership on its vault: a second one written to the database gets the pinned key too.
-        var updated = await catalog.Slots.UpdateManyAsync(
+        var target = slots & f.Eq(s => s.Vault, membership.Vault);
+        if (rotation is not null) target &= f.Eq(s => s.Wrapped, rotation.OldWrapped);
+        var updated = await slotDocs.UpdateManyAsync(
             session,
-            slots & f.Eq(s => s.Vault, membership.Vault),
-            Builders<SlotDocument>.Update.Set(s => s.Wrapped, MemberSlotCrypto.Wrap(pinned, newVaultKey ?? vaultKey, VaultCatalog.MemberSlotContext(membership.Vault, membership.Id))),
+            target,
+            Builders<SlotDocument>.Update.Set(s => s.Wrapped, MemberSlotCrypto.Wrap(rotation?.NewPublicKey ?? pinned, newVaultKey ?? vaultKey, VaultCatalog.MemberSlotContext(membership.Vault, membership.Id))),
             cancellationToken: ct);
         return updated.MatchedCount > 0 ? pinned : null;
     }
@@ -379,6 +393,14 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
         _ready = true;
     }
 }
+
+/// <summary>
+/// A member's rotation of her keypair, for the rotation's <c>Memberships.WrapToPinAsync</c>:
+/// <c>OldPublicKey</c> and <c>NewPublicKey</c> both derived from private keys in hand (the old one opened with her old
+/// user key, the new one just made), never read from her user document; <c>OldWrapped</c> the member slot her old
+/// private key opened.
+/// </summary>
+internal sealed record PinRotation(byte[] OldPublicKey, byte[] NewPublicKey, byte[] OldWrapped);
 
 /// <summary>What a membership's <c>pin</c> holds, sealed under the vault key (collab design §2.1).</summary>
 internal sealed record MembershipPin(

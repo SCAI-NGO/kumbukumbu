@@ -20,9 +20,13 @@ public sealed record SlotRewrap(ObjectId Id, byte[] OldWrapped, byte[] NewWrappe
     public byte[]? NewAliasKey { get; init; }
 }
 
-/// <summary>The user's private key sealed again under the new user key (collab design §5.1), written only if it is still
-/// <c>OldPrivateKey</c>; null <c>OldPrivateKey</c>: the user has no keypair, and must still have none.</summary>
-public sealed record KeypairReseal(byte[]? OldPrivateKey, byte[]? NewPrivateKey);
+/// <summary>The user's new keypair (collab design §5.1), its private key sealed under the new user key, written only if
+/// her private key is still <c>OldPrivateKey</c>; null <c>OldPrivateKey</c>: she had no keypair, and must still have none.</summary>
+public sealed record KeypairRotation(byte[]? OldPrivateKey, byte[] NewPublicKey, byte[] NewPrivateKey);
+
+/// <summary>A member slot to wrap to the new public key: the vault key her old private key opened from it, with that
+/// key's public key, and the revision its membership was read at; the pin is sealed again only at that revision.</summary>
+public sealed record MemberSlotRewrap(ObjectId SlotId, string MembershipId, int Revision, byte[] OldWrapped, byte[] OldPublicKey, byte[] VaultKey);
 
 /// <summary>An API key's or connection's meta sealed again under the new user key, with its name id. One that didn't
 /// open has its old values as the new ones: it is left as it is, but still counted among the user's.</summary>
@@ -44,8 +48,11 @@ public sealed record PreparedRotation(
     IReadOnlyList<string> VaultIds,
     byte[]? PasswordUsed)
 {
-    /// <summary>The private key sealed again; the same keypair (task 2.5 makes a new one on every rotation).</summary>
-    public KeypairReseal Keypair { get; init; } = new(null, null);
+    /// <summary>The new keypair, made on every rotation, so an old private key that leaks opens no member slot.</summary>
+    public required KeypairRotation Keypair { get; init; }
+
+    /// <summary>The member slots wrapped again to the new public key, in the rotation's transaction.</summary>
+    public IReadOnlyList<MemberSlotRewrap> MemberSlots { get; init; } = [];
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -104,7 +111,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         var connections = await Accounts.Connections.PrepareResealAsync(db, userId, oldUserKey, newUserKey, log, ct);
         var kept = keepSessionSecret is null ? null : await Sessions.PrepareKeepAsync(db, userId, keepSessionSecret, newUserKey, now, ct);
         var passwordUsed = (await UserSlots.Find(s => s.User == userId && s.Kind == UserSlotDocument.Password).FirstOrDefaultAsync(ct))?.Wrapped;
-        var keypair = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
+        var (keypair, memberSlots) = await PrepareKeypairAsync(userId, oldUserKey, newUserKey, ct);
 
         var recoveryKey = RecoveryKey.New();
         return new PreparedRotation(
@@ -127,24 +134,70 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             passwordUsed)
         {
             Keypair = keypair,
+            MemberSlots = memberSlots,
         };
     }
 
-    /// <summary>The user's private key opened with the old user key and sealed under the new one, for the same public
-    /// key. One that doesn't open is left as it is and logged: it opened nothing before either.</summary>
-    private async Task<KeypairReseal> PrepareKeypairAsync(string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
+    /// <summary>
+    /// A new keypair for the user (collab design §5.1), and her member slots, each opened with her old private key (opened
+    /// with the old user key) for the vault key, to be wrapped to the new public key. A private key that doesn't open,
+    /// or a member slot that doesn't, is logged: it opened nothing before either, and is left as it is. The member slots
+    /// are all those under the old lookup, those left as they are for their alias too: none may stay open to the old key.
+    /// </summary>
+    private async Task<(KeypairRotation Keypair, IReadOnlyList<MemberSlotRewrap> MemberSlots)> PrepareKeypairAsync(
+        string userId, byte[] oldUserKey, byte[] newUserKey, CancellationToken ct)
     {
         var doc = await Users.Find(u => u.Id == userId).FirstOrDefaultAsync(ct);
-        if (doc?.PrivateKey is not { } sealedKey) return new(null, null);
+        byte[] newPublic, newPrivate;
+        using (var made = MemberSlotCrypto.NewKeyPair())
+        {
+            newPublic = Sharing.MemberKeys.PublicFromPrivate(made);
+            newPrivate = Sharing.MemberKeys.SealPrivate(userId, newUserKey, made);
+        }
+
+        var keypair = new KeypairRotation(doc?.PrivateKey, newPublic, newPrivate);
+        if (doc?.PrivateKey is null) return (keypair, []);
+        var f = Builders<SlotDocument>.Filter;
+        var slots = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.Member) & f.Eq(s => s.Lookup, VaultCatalog.UserSlotLookup(oldUserKey, userId))).ToListAsync(ct);
+        if (slots.Count == 0) return (keypair, []);
+
+        ECDiffieHellman oldKey;
         try
         {
-            using var key = Sharing.MemberKeys.OpenPrivate(doc, oldUserKey);
-            return new(sealedKey, Sharing.MemberKeys.SealPrivate(userId, newUserKey, key));
+            oldKey = Sharing.MemberKeys.OpenPrivate(doc, oldUserKey);
         }
         catch (CryptographicException)
         {
-            log.LogWarning("The private key of user {UserId} does not open; it is left as it is", userId);
-            return new(sealedKey, sealedKey);
+            log.LogWarning("The private key of user {UserId} does not open; their {Count} member slots open nothing and are left as they are", userId, slots.Count);
+            return (keypair, []);
+        }
+
+        using (oldKey)
+        {
+            var oldPublic = Sharing.MemberKeys.PublicFromPrivate(oldKey);
+            var memberships = (await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+                .Find(Builders<Sharing.MembershipDocument>.Filter.In(m => m.Id, slots.Select(s => s.Membership ?? "")))
+                .ToListAsync(ct)).ToDictionary(m => m.Id, StringComparer.Ordinal);
+            var rewraps = new List<MemberSlotRewrap>();
+            foreach (var slot in slots)
+            {
+                if (slot.Membership is not { } id || !memberships.TryGetValue(id, out var membership))
+                {
+                    log.LogWarning("A member slot of vault {VaultId} of user {UserId} has no membership; it is left as it is", slot.Vault, userId);
+                    continue;
+                }
+
+                try
+                {
+                    rewraps.Add(new MemberSlotRewrap(slot.Id, id, membership.Revision, slot.Wrapped, oldPublic, VaultCatalog.OpenMemberSlot(oldKey, slot)));
+                }
+                catch (CryptographicException)
+                {
+                    log.LogWarning("A member slot of vault {VaultId} of user {UserId} does not open with their private key; it is left as it is", slot.Vault, userId);
+                }
+            }
+
+            return (keypair, rewraps);
         }
     }
 
@@ -169,21 +222,19 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             Builders<UserDocument>.Update.Set(u => u.KeyId, rotation.UserKeyId).Set(u => u.CredentialsChangedAt, stamp).AddToSetEach(u => u.RekeyPending, rotation.VaultIds),
             cancellationToken: ct);
         if (user.MatchedCount == 0) throw new CredentialsChangedException();
-        // The keypair as prepared: a keypair created meanwhile, under the old key, would be lost.
+        // The new keypair, only over the one prepared from: a keypair created meanwhile, under the old key, would be lost.
         var keypair = rotation.Keypair;
         var users = Builders<UserDocument>.Filter;
-        if (keypair.OldPrivateKey is { } oldPrivate)
-        {
-            Require(await Users.UpdateOneAsync(
-                session, users.Eq(u => u.Id, userId) & users.Eq(u => u.PrivateKey, oldPrivate), Builders<UserDocument>.Update.Set(u => u.PrivateKey, keypair.NewPrivateKey), cancellationToken: ct));
-        }
-        else if (await Users.Find(session, users.Eq(u => u.Id, userId) & users.Exists(u => u.PrivateKey)).AnyAsync(ct))
-        {
-            throw new RotationConflictException();
-        }
+        Require(await Users.UpdateOneAsync(
+            session,
+            users.Eq(u => u.Id, userId) & (keypair.OldPrivateKey is { } oldPrivate ? users.Eq(u => u.PrivateKey, oldPrivate) : users.Exists(u => u.PrivateKey, false)),
+            Builders<UserDocument>.Update.Set(u => u.PublicKey, keypair.NewPublicKey).Set(u => u.PrivateKey, keypair.NewPrivateKey),
+            cancellationToken: ct));
 
         await ApplyUserSlotsAsync(session, rotation, stamp, ct);
+        // The lookups first, then the member slots' wrapping: the lookup's update is conditional on the old wrapping.
         await ApplyVaultSlotsAsync(session, rotation, ct);
+        await ApplyMemberSlotsAsync(session, rotation, ct);
         await ApplyMetasAsync(session, Keys, rotation.ApiKeys, userId, ct);
         await ApplyMetasAsync(session, ConnectionDocs, rotation.Connections, userId, ct);
 
@@ -314,6 +365,49 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         // A slot added since the preparation (a vault being created with the old key) would be lost under the new key.
         var left = f.Eq(s => s.Lookup, rotation.OldLookup) & f.Nin(s => s.Id, rotation.SkippedSlotIds);
         if (await Slots.Find(session, left).AnyAsync(ct)) throw new RotationConflictException();
+    }
+
+    /// <summary>
+    /// Each member slot wrapped to the new public key through its membership's pin (HARD RULE 3: the pin must open under
+    /// the vault key, name this membership and member and the old public key), and the pin sealed again for the new key,
+    /// with <c>revision</c> raised: a re-key's finish, a role change or a revocation since the preparation conflicts.
+    /// A pin that isn't valid had its member slots deleted, logged as damaged; the rotation goes on without them.
+    /// </summary>
+    private async Task ApplyMemberSlotsAsync(IClientSessionHandle session, PreparedRotation rotation, CancellationToken ct)
+    {
+        var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
+        var f = Builders<Sharing.MembershipDocument>.Filter;
+        // By membership: a second member slot of one (written to the database) must not make the pin conflict with itself.
+        foreach (var group in rotation.MemberSlots.GroupBy(r => r.MembershipId, StringComparer.Ordinal))
+        {
+            var first = group.First();
+            var membership = await docs.Find(session, f.Eq(m => m.Id, first.MembershipId) & f.Eq(m => m.Revision, first.Revision)).FirstOrDefaultAsync(ct)
+                ?? throw new RotationConflictException();
+            var rewrapped = false;
+            foreach (var rewrap in group)
+            {
+                var pinned = await Sharing.Memberships.WrapToPinAsync(
+                    db, log, session, membership, rewrap.VaultKey, null, new Sharing.PinRotation(rewrap.OldPublicKey, rotation.Keypair.NewPublicKey, rewrap.OldWrapped), ct);
+                if (pinned is not null)
+                {
+                    rewrapped = true;
+                }
+                else if (Sharing.Memberships.PinnedKey(membership, rewrap.VaultKey) is { } key && CryptographicOperations.FixedTimeEquals(key, rewrap.OldPublicKey))
+                {
+                    // A valid pin, but the slot isn't as it was opened: it changed since.
+                    throw new RotationConflictException();
+                }
+            }
+
+            if (!rewrapped) continue;
+            Require(await docs.UpdateOneAsync(
+                session,
+                f.Eq(m => m.Id, membership.Id) & f.Eq(m => m.Revision, first.Revision),
+                Builders<Sharing.MembershipDocument>.Update
+                    .Set(m => m.Pin, Sharing.Memberships.SealPin(first.VaultKey, membership.Vault, membership.Id, membership.Member!, rotation.Keypair.NewPublicKey))
+                    .Inc(m => m.Revision, 1),
+                cancellationToken: ct));
+        }
     }
 
     private static async Task ApplyMetasAsync<T>(

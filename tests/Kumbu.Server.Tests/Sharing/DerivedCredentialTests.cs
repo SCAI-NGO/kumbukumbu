@@ -79,7 +79,8 @@ public sealed class DerivedCredentialTests(KumbuAppFactory app)
 
         Assert.False(await Slots.Find(s => s.Vault == vaultId && s.Kind == SlotDocument.ApiKey).AnyAsync(Ct));
         Assert.False(await app.Database.GetCollection<ApiKeyDocument>(ApiKeys.CollectionName).Find(k => k.User == bob.User.Id).AnyAsync(Ct));
-        Assert.Equal(0, (await Share.MembershipAsync(app.Database, membershipId)).Revision);
+        // Only the revocation's own raise (design §6.1): the key's transaction wrote nothing.
+        Assert.Equal(1, (await Share.MembershipAsync(app.Database, membershipId)).Revision);
     }
 
     [Fact]
