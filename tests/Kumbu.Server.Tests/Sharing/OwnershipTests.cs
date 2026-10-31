@@ -132,4 +132,23 @@ public sealed class OwnershipTests(MongoFixture fixture)
 
         Assert.Equal(1, await catalog.CountLockedAsync(Token, Ct));
     }
+
+    [Fact]
+    public async Task A_member_never_resumes_the_owners_re_keying()
+    {
+        var catalog = Catalog();
+        var (alice, bob) = (VaultCrypto.NewKey(), VaultCrypto.NewKey());
+        var vault = await catalog.CreateForUserAsync("Gartenarbeit", "u1", alice, Ct);
+        await Share.GrantAsync(catalog, _world.Memberships(catalog), ("u1", alice), vault.Id, ("u2", bob), "Garten", Kumbu.Server.Sharing.MemberRole.Write);
+        // A run whose start committed: the vault is in its two-key period.
+        await catalog.Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, _time.GetUtcNow().UtcDateTime), cancellationToken: Ct);
+        var found = new List<string>();
+        var other = _world.Catalog();
+        other.RekeyPendingFound += (_, user, _) => found.Add(user);
+
+        Assert.True(Assert.Single(await other.OpenForUserAsync("u2", bob, Ct)).Pending);
+        Assert.Empty(found);
+        await other.OpenForUserAsync("u1", alice, Ct);
+        Assert.Equal(["u1"], found);
+    }
 }

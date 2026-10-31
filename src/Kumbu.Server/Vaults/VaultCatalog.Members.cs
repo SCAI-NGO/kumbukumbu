@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
 using Kumbu.Core.Crypto;
+using Kumbu.Server.Sharing;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Vaults;
 
@@ -50,4 +52,24 @@ public sealed partial class VaultCatalog
     /// it isn't hers, <see cref="VaultBusyException"/> while it is re-keyed.</summary>
     internal async Task<byte[]> OwnerVaultKeyAsync(string ownerId, byte[] ownerKey, string vaultId, CancellationToken ct) =>
         (await UserVaultKeysAsync(ownerId, ownerKey, [vaultId], "A share", ct))[vaultId];
+
+    /// <summary>
+    /// Of the memberships <paramref name="ids"/>, those active now, by id: one indexed query, read afresh on every call
+    /// and never cached, since it is what stands between a revoked member and a vault already in memory.
+    /// </summary>
+    internal async Task<IReadOnlyDictionary<string, MembershipDocument>> ActiveMembershipsAsync(IEnumerable<string> ids, CancellationToken ct)
+    {
+        var f = Builders<MembershipDocument>.Filter;
+        var found = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .Find(f.In(m => m.Id, ids.Distinct(StringComparer.Ordinal)) & f.Eq(m => m.Status, MembershipStatus.Active))
+            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Member).Include(m => m.Role))
+            .ToListAsync(ct);
+        return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
+    }
+
+    /// <summary>Whether <paramref name="slot"/>'s membership is among <paramref name="active"/>, and is the membership of
+    /// <paramref name="userId"/> on the slot's vault: a slot pointed at someone else's membership opens nothing.</summary>
+    private static bool IsActiveMembership(IReadOnlyDictionary<string, MembershipDocument>? active, SlotDocument slot, string userId) =>
+        slot.Membership is { } id && active is not null && active.TryGetValue(id, out var m)
+        && m.Vault == slot.Vault && m.Member == userId;
 }
