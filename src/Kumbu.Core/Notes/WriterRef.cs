@@ -33,6 +33,25 @@ public sealed record WriterRef(bool Owner, string Kind, string? Id, string? Writ
     public static readonly WriterRef Unknown = new(false, "unknown", null, null) { IsUnknown = true };
 
     /// <summary>
+    /// Fails closed (collab design §8.1): a store refuses an entry without a reference, and an entry the caller writes
+    /// now with <see cref="Legacy"/> or <see cref="Unknown"/>, which are only ever read. A <paramref name="kept"/> entry,
+    /// moved or carried along as it was, keeps whatever it was read with.
+    /// </summary>
+    public static void RequireStorable(WriterRef? reference, bool kept = false)
+    {
+        if (reference is null) throw new InvalidOperationException("A write without a writer reference");
+        if (!kept && (reference.IsLegacy || reference.IsUnknown)) throw new InvalidOperationException("A write with a writer reference that is only ever read");
+    }
+
+    /// <summary>Whether <paramref name="next"/> keeps <paramref name="current"/>'s writer: a move or a carried state, not a new write.</summary>
+    public static bool Keeps(StoredNote current, StoredNote next) =>
+        next.Ref == current.Ref && next.LastWriter == current.LastWriter && next.LastWriteAt == current.LastWriteAt;
+
+    /// <inheritdoc cref="Keeps(StoredNote, StoredNote)"/>
+    public static bool Keeps(Attachments.StoredAttachment current, Attachments.StoredAttachment next) =>
+        next.Ref == current.Ref && next.LastWriter == current.LastWriter && next.LastWriteAt == current.LastWriteAt;
+
+    /// <summary>
     /// What changesets are keyed by (collab design §8.1): the owner and her credential (or session), a member's
     /// writer id, so that members, who store no label, don't share one. A legacy entry has only its label to go by
     /// (<see cref="Writers.Identity"/>); an unknown one belongs to no writer's changeset.

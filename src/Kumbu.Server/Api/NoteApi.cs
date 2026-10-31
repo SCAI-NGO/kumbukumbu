@@ -659,7 +659,7 @@ public static class NoteApi
             if (await store.GetAsync(path, ct) is not { } note || note.LastWriteAt <= from) continue;
             var (writer, kind) = await labels.RenderAsync(Writers.Identity(note.LastWriter), note.Ref, ct);
             if (kind == WriterLabels.Agent) changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version));
-            else if (await labels.ResumedAsync(writer, note.Ref, note.LastWriteAt, from, ct) is { } resumed)
+            else if (await labels.ResumedAsync(Writers.Identity(note.LastWriter), note.Ref, note.LastWriteAt, from, ct) is { } resumed)
             {
                 changes.Add(new ChangeView(path.Value, writer, note.LastWriteAt, note.Version, WriterLabels.Device, resumed.QuietSince, resumed.At));
             }

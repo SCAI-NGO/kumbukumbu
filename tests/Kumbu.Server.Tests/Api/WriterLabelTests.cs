@@ -232,17 +232,24 @@ public sealed class WriterLabelTests(KumbuAppFactory app)
         Assert.Null(change["resumedAt"]);
     }
 
-    /// <summary>A note written by <paramref name="user"/>'s name but sealed with <c>v: 2</c> and no reference, as a
-    /// write path that forgot one would have stored it, and the same for its removal: the server's own store, so the
-    /// working set holds it as MongoDB does.</summary>
-    private async Task<EncryptedNoteStore> UnreferencedAsync(RestClient user)
+    /// <summary>A note and a removed one by <paramref name="user"/>'s session, then sealed again behind the server's back
+    /// with <c>v: 2</c> and no reference, as a damaged or mistaken write would leave them (no write path may store
+    /// one); the server reads the vault afresh.</summary>
+    private async Task UnreferencedAsync(RestClient user)
     {
-        var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var store = new EncryptedNoteStore(catalog, new UserCredential(user.User.Id, user.UserKey));
         var root = VaultPath.Root.Child(user.Vault);
-        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("orphan.md"), "orphan\n", 1, user.Username, DateTime.UtcNow, [], Ref: WriterRef.Unknown), Ct));
-        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("gone.md"), "gone\n", 1, user.Username, DateTime.UtcNow, [], Ref: WriterRef.Unknown), Ct));
-        Assert.True(await store.TryTrashAsync((await store.GetAsync(root.Child("gone.md"), Ct))!, user.Username, WriterRef.Unknown, DateTime.UtcNow, Ct));
-        return store;
+        var session = WriterRef.ForOwner(WriterRef.Session, null);
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("orphan.md"), "orphan\n", 1, user.Username, DateTime.UtcNow, [], Ref: session), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("gone.md"), "gone\n", 1, user.Username, DateTime.UtcNow, [], Ref: session), Ct));
+        Assert.True(await store.TryTrashAsync((await store.GetAsync(root.Child("gone.md"), Ct))!, user.Username, session, DateTime.UtcNow, Ct));
+
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "notes", p => p["Path"]!.GetValue<string>().EndsWith("/orphan.md", StringComparison.Ordinal), p => p.Remove("ref"), Ct);
+        await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "trash", _ => true, p => { p.Remove("ref"); p["Note"]!.AsObject().Remove("ref"); }, Ct);
+        catalog.Forget(vault, new InvalidOperationException("rewritten by a test"));
     }
 
     [Fact]
@@ -293,5 +300,62 @@ public sealed class WriterLabelTests(KumbuAppFactory app)
         var written = (await JsonAsync(agentHistory)).AsArray().Single()!;
         Assert.Equal(("liz", "agent"), (written["writer"]!.GetValue<string>(), written["writerKind"]!.GetValue<string>()));
         Assert.Equal(("liz", "agent"), (Row($"/{user.Vault}/agent.md", "writer"), Row($"/{user.Vault}/agent.md", "writerKind")));
+    }
+
+    /// <summary>The reference sealed with the note at <paramref name="name"/> in <paramref name="user"/>'s vault, from MongoDB.</summary>
+    private async Task<JsonObject?> SealedRefAsync(RestClient user, string name)
+    {
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        var note = (await Vaults.SealedPayloads.OpenAllAsync(app.Database, vault.Id, key, "notes", Ct))
+            .Single(p => p["Path"]!.GetValue<string>() == $"/{user.Vault}/{name}");
+        Assert.Equal(2, (int)note["v"]!);
+        return note["ref"]?.AsObject();
+    }
+
+    private static (bool Owner, string Kind, string? Id) Parts(JsonObject? reference) =>
+        (reference!["owner"]!.GetValue<bool>(), reference["kind"]!.GetValue<string>(), reference["id"]?.GetValue<string>());
+
+    /// <summary>What each caller seals (collab design §8.1): the owner's reference with the kind of credential and its
+    /// id, so two keys or connections never share a changeset.</summary>
+    [Fact]
+    public async Task Each_caller_seals_the_owners_reference_with_its_kind_and_id()
+    {
+        var user = await NewAsync(Api);
+        var agent = await user.KeyAsync("laptop", KeyRight.Write);
+        var device = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        await user.CreateAsync("by-session.md", "s\n");
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "by-agent.md", "a\n", agent));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "by-device.md", "d\n", device));
+        await using var connection = await ConnectionClientAsync(user, "claude.ai");
+        var written = await connection.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = $"/{user.Vault}/by-connection.md", ["content"] = "c\n" }, cancellationToken: Ct);
+        Assert.NotEqual(true, written.IsError);
+
+        var keys = await Api.Services.GetRequiredService<ApiKeys>().ListAsync(user.User, user.UserKey, Ct);
+        var connections = await Api.Services.GetRequiredService<Connections>().ListAsync(user.User, user.UserKey, Ct);
+        Assert.Equal((true, "session", null), Parts(await SealedRefAsync(user, "by-session.md")));
+        Assert.Equal((true, "agent", keys.Single(k => k.Name == "laptop").Id), Parts(await SealedRefAsync(user, "by-agent.md")));
+        Assert.Equal((true, "device", keys.Single(k => k.Kind == ApiKeyKind.Device).Id), Parts(await SealedRefAsync(user, "by-device.md")));
+        Assert.Equal((true, "agent", connections.Single().Id), Parts(await SealedRefAsync(user, "by-connection.md")));
+    }
+
+    [Fact]
+    public async Task Two_agent_keys_of_one_owner_write_in_two_changesets()
+    {
+        var user = await NewAsync(Api);
+        var first = await user.KeyAsync("laptop", KeyRight.Write);
+        var second = await user.KeyAsync("desktop", KeyRight.Write);
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "a.md", "a\n", first));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "b.md", "b\n", second));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "c.md", "c\n", first));
+
+        async Task<string> ChangesetAsync(string name)
+        {
+            using var history = await user.GetAsync(user.Url(name, "history"));
+            return (await JsonAsync(history)).AsArray().Single()!["changeset"]!.GetValue<string>();
+        }
+
+        Assert.NotEqual(await ChangesetAsync("a.md"), await ChangesetAsync("b.md"));
+        Assert.Equal(await ChangesetAsync("a.md"), await ChangesetAsync("c.md"));
     }
 }

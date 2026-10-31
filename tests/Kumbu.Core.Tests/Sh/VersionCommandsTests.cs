@@ -350,10 +350,9 @@ public class VersionCommandsTests
     [Fact]
     public async Task An_entry_without_a_reference_shows_as_unknown_in_the_shell()
     {
-        Assert.True(await _store.TryReplaceAsync(
-            (await _store.GetAsync(VaultPath.TryParse("/Demo/plan.md", out var p) ? p : throw new ArgumentException(), CancellationToken.None))!,
-            NoteWriter.Next((await _store.GetAsync(p, CancellationToken.None))!, V2, "claude", WriterRef.Unknown, _time.GetUtcNow().UtcDateTime),
-            CancellationToken.None));
+        // As a store reads a note sealed with a version but no reference; no write may store one.
+        var path = VaultPath.TryParse("/Demo/plan.md", out var p) ? p : throw new ArgumentException("bad path");
+        _store.Put(NoteWriter.Next((await _store.GetAsync(path, CancellationToken.None))!, V2, "claude", WriterRef.Unknown, _time.GetUtcNow().UtcDateTime));
 
         var history = (await Run("history /Demo/plan.md")).Output;
 

@@ -36,6 +36,21 @@ public static class SealedPayloads
         return [.. docs.Select(d => Open(vaultId, vaultKey, collection, d))];
     }
 
+    /// <summary>Rewrites every payload of <paramref name="collection"/> in the vault that <paramref name="match"/> picks,
+    /// as <paramref name="change"/> makes it: a payload in a shape no write stores, written behind the server's back.</summary>
+    public static async Task RewriteAsync(
+        IMongoDatabase db, string vaultId, byte[] vaultKey, string collection, Func<JsonObject, bool> match, Action<JsonObject> change, CancellationToken ct)
+    {
+        var docs = db.GetCollection<SealedDocument>(collection);
+        foreach (var doc in await docs.Find(d => d.Vault == vaultId).ToListAsync(ct))
+        {
+            var payload = Open(vaultId, vaultKey, collection, doc);
+            if (!match(payload)) continue;
+            change(payload);
+            await docs.UpdateOneAsync(d => d.Id == doc.Id, Builders<SealedDocument>.Update.Set(d => d.Blob, Seal(vaultId, vaultKey, collection, doc, payload)), cancellationToken: ct);
+        }
+    }
+
     public static JsonObject Open(string vaultId, byte[] vaultKey, string collection, SealedDocument doc) =>
         JsonNode.Parse(VaultCrypto.Open(ContentKey(vaultKey), doc.Blob, Context(vaultId, collection, doc)))!.AsObject();
 

@@ -173,8 +173,7 @@ public class ChangesetRecordTests
     public async Task A_legacy_entry_continues_its_writers_changeset_by_label()
     {
         var before = Changeset.New(_time.GetUtcNow().UtcDateTime);
-        Assert.True(await _store.TryCreateAsync(
-            new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude (mv)", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy), Ct));
+        _store.Put(new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude (mv)", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy));
         _time.Advance(TimeSpan.FromMinutes(1));
 
         var continued = await WriteAsync(WriterFor("Claude", WriterRef.ForOwner(WriterRef.Agent, "key-1")), "/Work/a.md");
@@ -186,8 +185,7 @@ public class ChangesetRecordTests
     public async Task A_member_never_continues_a_legacy_changeset()
     {
         var before = Changeset.New(_time.GetUtcNow().UtcDateTime);
-        Assert.True(await _store.TryCreateAsync(
-            new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy), Ct));
+        _store.Put(new StoredNote(P("/Work/legacy.md"), "x\n", 1, "Claude", _time.GetUtcNow().UtcDateTime, [], Changeset: before, Ref: WriterRef.Legacy));
         _time.Advance(TimeSpan.FromMinutes(1));
 
         var own = await WriteAsync(WriterFor("Claude", WriterRef.ForMember("w1")), "/Work/a.md");

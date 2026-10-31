@@ -275,4 +275,48 @@ public sealed class WriterRefTests(MongoFixture fixture)
 
         foreach (var (_, child) in obj) AssertReferenced(where, child);
     }
+
+    public static TheoryData<string> Markers => ["legacy", "unknown"];
+
+    private static WriterRef Marker(string name) => name == "legacy" ? WriterRef.Legacy : WriterRef.Unknown;
+
+    /// <summary>The markers are only ever read: a write that brings one as its own reference is refused, as one without
+    /// any, since a legacy write would read back as the owner's.</summary>
+    [Theory]
+    [MemberData(nameof(Markers))]
+    public async Task A_write_with_a_marker_that_is_only_read_is_refused(string marker)
+    {
+        var w = await WorldAsync();
+        Assert.False((await w.Writer.WriteAsync("/Work/a.md", "a\n", null, Ct)).IsError);
+        var before = await DocumentsAsync(w);
+        var caller = new FixedCaller("Claude") { Reference = Marker(marker) };
+        var writer = new NoteWriter(w.Store, TimeProvider.System, caller);
+        var shell = new Shell(w.Store, writer, new NoteMover(w.Store, TimeProvider.System, caller));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.WriteAsync("/Work/b.md", "b\n", null, Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.WriteAsync("/Work/a.md", "a2\n", VersionToken.Of("a\n"), Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => shell.RunAsync("rm /Work/a.md", Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => shell.RunAsync("mv /Work/a.md /Work/c.md", Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => shell.RunAsync("mkcp /Work cp", Ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.ForAttachments()!.WriteAsync("/Work/x.png", Png, (1, 1), null, Ct));
+
+        Assert.Equal(before.Keys.Order(), (await DocumentsAsync(w)).Keys.Order());
+    }
+
+    [Fact]
+    public async Task A_moved_legacy_note_keeps_its_reference_and_the_move_gets_the_movers()
+    {
+        var w = await WorldAsync();
+        await w.Writer.WriteAsync("/Work/a.md", "a\n", null, Ct);
+        await RewriteNoteAsync(w, p => { p.Remove("v"); p.Remove("ref"); });
+        var store = Store(w.Vaults.Catalog());
+        var caller = new FixedCaller("Claude") { Reference = Key };
+
+        Assert.False((await new Shell(store, new NoteWriter(store, TimeProvider.System, caller), new NoteMover(store, TimeProvider.System, caller))
+            .RunAsync("mv /Work/a.md /Work/b.md", Ct)).IsError);
+
+        var later = Store(w.Vaults.Catalog());
+        Assert.True((await later.GetAsync(P("/Work/b.md"), Ct))!.Ref!.IsLegacy);
+        Assert.Equal(Key, (await later.FindMoveAsync(P("/Work/a.md"), Ct))!.Ref);
+    }
 }

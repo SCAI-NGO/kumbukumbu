@@ -27,6 +27,14 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         }
     }
 
+    /// <summary>Puts a note directly, as a store holds one it read: written before 0.3.0 (<see cref="WriterRef.Legacy"/>)
+    /// or sealed without a reference (<see cref="WriterRef.Unknown"/>), which no write may store.</summary>
+    public void Put(StoredNote note)
+    {
+        _notes[note.Path] = note;
+        _vaults.Add(note.Path.Vault!);
+    }
+
     /// <summary>Records a move directly, for tests that need a chosen writer and time.</summary>
     public void AddMove(MoveRecord move) => _moves.Add(move);
 
@@ -105,7 +113,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
 
     public Task<bool> TryReplaceAsync(StoredNote current, StoredNote next, CancellationToken ct)
     {
-        RequireRef(next.Ref);
+        WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
         Race(current.Path);
         if (!_notes.TryGetValue(current.Path, out var stored) || stored.Revision != current.Revision) return Task.FromResult(false);
         _notes[current.Path] = next;
@@ -118,12 +126,11 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
     public Task<IReadOnlyList<VaultPath>> TryCommitAsync(NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         // As the real store: every entry the batch stores has a reference, or nothing is written.
-        foreach (var note in batch.Replaces.Select(r => r.Next).Concat(batch.Moves.Select(m => m.Target)).Concat(batch.Creates)) RequireRef(note.Ref);
-        foreach (var attachment in batch.AttachmentReplaces.Select(r => r.Next).Concat(batch.AttachmentMoves.Select(m => m.Target))
-            .Concat(batch.AttachmentCreates).Concat(batch.AttachmentRestores.Select(r => r.Restored)))
-        {
-            RequireRef(attachment.Ref);
-        }
+        // A move or a carried state keeps the reference it was read with; anything the caller writes now needs its own.
+        foreach (var (current, next) in batch.Replaces.Concat(batch.Moves)) WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
+        foreach (var note in batch.Creates) RequireRef(note.Ref);
+        foreach (var (current, next) in batch.AttachmentReplaces.Concat(batch.AttachmentMoves)) WriterRef.RequireStorable(next.Ref, kept: WriterRef.Keeps(current, next));
+        foreach (var attachment in batch.AttachmentCreates.Concat(batch.AttachmentRestores.Select(r => r.Restored))) RequireRef(attachment.Ref);
 
         if (batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentTrashes.Count > 0 || batch.AttachmentMoves.Count > 0) RequireRef(byRef);
         var existing = batch.Replaces.Select(r => r.Current).Concat(batch.Moves.Select(m => m.Current)).Concat(batch.Trashes).ToList();
@@ -288,10 +295,13 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         _notes[path] = interfere(stored) with { Revision = stored.Revision + 1 };
     }
 
-    /// <summary>Fails closed as the real store does (<c>EncryptedNoteStore.RequireRef</c>), so a Core write path that
+    /// <summary>Fails closed as the real store does (<see cref="WriterRef.RequireStorable"/>), so a Core write path that
     /// forgets the writer reference fails here too.</summary>
-    private static bool RequireRef(WriterRef? reference) =>
-        reference is not null ? true : throw new InvalidOperationException("A write without a writer reference");
+    private static bool RequireRef(WriterRef? reference)
+    {
+        WriterRef.RequireStorable(reference);
+        return true;
+    }
 
     private static bool IsBelow(VaultPath path, VaultPath dir) =>
         path.Value.StartsWith(dir.IsRoot ? "/" : dir.Value + "/", StringComparison.Ordinal);
