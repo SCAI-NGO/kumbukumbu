@@ -227,6 +227,30 @@ public sealed class SharedRekeyRefusalTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_refused_attempt_leaves_the_vault_loaded_and_its_embedding_going()
+    {
+        var (alice, bob, vaultId, _, key) = await SharedAsync();
+        await AssertBobReadsAsync(bob, key);
+        var loaded = Catalog.Current(vaultId);
+        Assert.NotNull(loaded);
+        var embedding = Catalog.InterruptToken(vaultId);
+
+        using (var refused = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        }
+
+        await Assert.ThrowsAsync<VaultSharedException>(() => Api.Services.GetRequiredService<RekeyRunner>().RunAsync(vaultId, alice.User.Id, alice.UserKey).WaitAsync(Ct));
+
+        // Tried at every trigger until phase 4: neither attempt evicted the working set or cut an embedding call short.
+        Assert.Same(loaded, Catalog.Current(vaultId));
+        Assert.False(embedding.IsCancellationRequested);
+        Assert.False(Catalog.IsRekeying(vaultId));
+        await AssertBobReadsAsync(bob, key);
+        Assert.Same(loaded, Catalog.Current(vaultId));
+    }
+
+    [Fact]
     public async Task A_grant_racing_the_start_is_seen_by_it()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");

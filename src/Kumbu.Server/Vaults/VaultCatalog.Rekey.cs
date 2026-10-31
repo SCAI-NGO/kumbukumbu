@@ -230,6 +230,10 @@ public sealed partial class VaultCatalog
     {
         await EnsureReadyAsync(ct);
         if (IsDeleted(vaultId)) throw new VaultDeletedException();
+        // Before the mark, the interrupt and the gates: a shared vault stays pending until phase 4 and is tried at every
+        // trigger, which must not cut its embedding short or evict its working set each time. The start checks again
+        // inside its transaction, for a grant that commits meanwhile.
+        if (await IsSharedAsync(null, vaultId, ct)) throw new VaultSharedException();
         if (!_rekeying.TryAdd(vaultId, 0)) throw VaultBusyException.Being();
         var locks = LocksFor(vaultId);
         var (gate, indexGate) = (false, false);

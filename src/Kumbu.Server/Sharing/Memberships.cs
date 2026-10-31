@@ -164,8 +164,8 @@ public sealed class Memberships(IMongoDatabase db, VaultCatalog catalog, IOption
     /// <summary>
     /// Inside the transaction of <paramref name="userId"/>'s account deletion (collab design §7.2): every membership
     /// with that user as member goes, tombstones included, with its member slot and the slots derived through it
-    /// (<c>grantedVia</c>). Nothing that names the member stays with the vault; her writes resolve to "a former member".
-    /// Only <c>member == userId</c>: the vaults she owns, and their memberships, go with her vaults. The number deleted.
+    /// (<c>grantedVia</c>). Nothing that names the member stays with the vault; their writes resolve to "a former member".
+    /// Only <c>member == userId</c>: the vaults the user owns, and their memberships, go with those vaults. The number deleted.
     /// </summary>
     internal static async Task<int> DeleteOfMemberAsync(IMongoDatabase db, IClientSessionHandle s, string userId, CancellationToken ct)
     {

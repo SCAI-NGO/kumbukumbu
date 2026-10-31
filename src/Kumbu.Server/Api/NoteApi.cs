@@ -197,8 +197,9 @@ public static class NoteApi
             .ToArray());
 
     /// <summary>
-    /// The owner points a vault at another embedding provider (her sessions only; a member's session answers 404). The vault is embedded again with it, in the background; until a note is, it is found by
-    /// words. Choosing an external provider is what sends the vault's text there, so the web app asks first.
+    /// The owner points a vault at another embedding provider (her sessions only; a member's session answers 404). The
+    /// vault is embedded again with it, in the background; until a note is, it is found by words. Choosing an external
+    /// provider is what sends the vault's text there, so the web app asks first.
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
         string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller, CancellationToken ct)
