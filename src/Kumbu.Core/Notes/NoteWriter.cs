@@ -260,7 +260,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// </summary>
     public async Task<ShellResult> RemoveAsync(VaultPath path, CancellationToken ct, string? version = null)
     {
-        if (caller.Refuse("rm", path) is { } refused) return refused;
+        if (caller.RefuseFolder("rm", path) is { } refused) return refused;
         var existing = await store.GetAsync(path, ct);
         if (existing is null)
         {

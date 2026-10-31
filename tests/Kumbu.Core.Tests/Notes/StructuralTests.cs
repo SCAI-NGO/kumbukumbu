@@ -149,4 +149,96 @@ public class StructuralTests
         Assert.False(old.IsError, old.Output);
         Assert.Equal("a moved card\n", await _store.ReadAsync(P("/Work/Board/card.md"), Ct));
     }
+
+    [Fact]
+    public async Task A_writer_may_not_move_a_note_onto_Board_md()
+    {
+        await ShellFor(Maintainer).RunAsync("rm /Work/Board/Board.md", Ct);
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync("mv /Work/plan.md /Work/Board/Board.md", Ct);
+
+        AssertStructural(result, "mv");
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_move_Board_md_away()
+    {
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync("mv /Work/Board/Board.md /Work/Old.md", Ct);
+
+        AssertStructural(result, "mv");
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    [Theory]
+    [InlineData("mv /Work/Board /Work/Old")]
+    [InlineData("mv /Work/Board/ /Work/Elsewhere")]
+    [InlineData("rm /Work/Board/")]
+    [InlineData("rm /Work/Board")]
+    public async Task A_writer_may_not_move_or_remove_the_board_folder(string command)
+    {
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync(command, Ct);
+
+        AssertStructural(result, command[..2]);
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_move_a_folder_holding_Board_md_into_place()
+    {
+        await ShellFor(Maintainer).RunAsync("mv /Work/Board/ /Work/Draft/Board", Ct);
+        Assert.NotNull(await _store.ReadAsync(P("/Work/Draft/Board/Board.md"), Ct));
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync("mv /Work/Draft/Board/ /Work/", Ct);
+
+        AssertStructural(result, "mv");
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_restore_Board_md_from_the_trash()
+    {
+        await ShellFor(Maintainer).RunAsync("rm /Work/Board/Board.md", Ct);
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync("restore /Work/Board/Board.md", Ct);
+
+        AssertStructural(result, "restore");
+        Assert.Equal(before, await SnapshotAsync());
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_rewrite_a_link_in_Board_md_by_a_move()
+    {
+        var writer = new NoteWriter(_store, _time, Maintainer);
+        await writer.WriteAsync("/Work/Board/Board.md", Board + "See [[plan]].\n", VersionToken.Of(Board), Ct);
+        var before = await SnapshotAsync();
+
+        var result = await ShellFor(Writer).RunAsync("mv /Work/plan.md /Work/Plans/plan-2.md", Ct);
+        var kept = await ShellFor(Writer).RunAsync("mv --keep-links /Work/plan.md /Work/Plans/plan-2.md", Ct);
+
+        AssertStructural(result, "mv");
+        Assert.False(kept.IsError, kept.Output);
+        Assert.Contains("[[plan]]", await _store.ReadAsync(P("/Work/Board/Board.md"), Ct));
+        Assert.NotEqual(before, await SnapshotAsync());
+    }
+
+    [Fact]
+    public async Task A_writer_may_move_other_folders()
+    {
+        var sh = ShellFor(Writer);
+
+        var old = await sh.RunAsync("mv /Work/Old/ /Work/Older", Ct);
+        var card = await sh.RunAsync("mv /Work/Board/card.md /Work/card.md", Ct);
+
+        Assert.False(old.IsError, old.Output);
+        Assert.False(card.IsError, card.Output);
+        Assert.Equal("an old board\n", await _store.ReadAsync(P("/Work/Older/Board/Board.md"), Ct));
+    }
 }

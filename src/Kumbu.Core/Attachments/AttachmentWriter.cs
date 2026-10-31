@@ -189,7 +189,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
     public async Task<ShellResult> RemoveFolderAsync(VaultPath folder, CancellationToken ct)
     {
         const string tool = "rm";
-        if (caller.Refuse(tool, folder) is { } refused) return refused;
+        if (caller.RefuseFolder(tool, folder) is { } refused) return refused;
 
         var marker = FolderMarker.In(folder);
         var entries = (await notes.ListNotesUnderAsync(folder, ct)).Count + (await store.ListAttachmentsUnderAsync(folder, ct)).Count(a => a.Path != marker);

@@ -14,7 +14,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 {
     public async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
-        if (caller.Refuse("mv", source) is { } refused) return refused;
+        // As a folder: a folder named without its '/' is refused below as one, but a structural refusal comes first.
+        if (caller.RefuseFolder("mv", source) is { } refused) return refused;
         var existing = await store.GetAsync(source, ct);
         if (existing is null && await StoreAttachments.GetAsync(store, source, ct) is null)
         {
@@ -31,6 +32,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         if (target == source) return ShellResult.Error($"mv: {source.Value} and {target.Value} are the same {(existing is null ? "attachment" : "note")}");
+        if (caller.Refuse("mv", target) is { } refusedTarget) return refusedTarget;
         if (await CheckTargetAsync(source, target, [], ct) is { } problem) return problem;
 
         return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
@@ -41,7 +43,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// Unix mv, into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
     public async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
-        if (caller.Refuse("mv", source) is { } refused) return refused;
+        if (caller.RefuseFolder("mv", source) is { } refused) return refused;
         if (source.Segments.Count < 2) return ShellResult.Error($"mv: {source.Value}/ is a vault; a vault can't be moved");
         var notes = await store.ListNotesUnderAsync(source, ct);
         var attachments = (await StoreAttachments.UnderAsync(store, source, ct)).Select(a => a.Path).ToList();
@@ -67,6 +69,12 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (await ExistsAsync(target, ct)) return ShellResult.Error($"mv: {target.Value}: Not a directory");
 
         var map = notes.Concat(attachments).ToDictionary(p => p, p => Rebase(p, source, target));
+        // Each path on its own: a folder can carry a Board.md into the place of the board's.
+        foreach (var path in map.Keys.Concat(map.Values))
+        {
+            if (caller.Refuse("mv", path) is { } refusedPath) return refusedPath;
+        }
+
         foreach (var (from, to) in map)
         {
             if (await CheckTargetAsync(from, to, map.Keys.ToHashSet(), ct) is { } problem) return problem;
@@ -178,6 +186,8 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
         foreach (var (path, list) in rewrites.Where(r => !map.ContainsValue(r.Key)))
         {
+            // Rewriting a link is a write too: in a structural file only for those who may maintain the vault.
+            if (caller.Refuse("mv", path) is { } refused) return refused;
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
             batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, now, changeset)));
