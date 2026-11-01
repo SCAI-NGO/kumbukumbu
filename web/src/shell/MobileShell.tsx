@@ -13,6 +13,7 @@ import { topDialog } from "../hooks/useDialog";
 import { useDesktop } from "../hooks/useDesktop";
 import { useEdgeSwipe } from "../hooks/useEdgeSwipe";
 import { useSidebarCollapsed } from "../hooks/useSidebarCollapsed";
+import { useSyncSocket } from "../hooks/useSyncSocket";
 import { FindBar } from "../note/NoteTools";
 import NoteView, { DeleteNoteDialog } from "../note/NoteView";
 import InstallHint from "../update/InstallHint";
@@ -128,6 +129,7 @@ export default function MobileShell() {
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
+  useSyncSocket();
   const [vaultDialog, setVaultDialog] = useState(false);
   /** The folder a new folder goes into, while its dialog is open. */
   const [folderDialog, setFolderDialog] = useState<string | null>(null);
