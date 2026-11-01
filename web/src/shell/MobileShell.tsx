@@ -2,7 +2,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { useCreateUntitled, useVaults } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -73,26 +73,44 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
       </div>
     );
   }
+  const { own, shared } = groupVaults(vaults.data);
+  const item = (v: VaultView) => (
+    <li key={v.name}>
+      <button
+        type="button"
+        onClick={() => open(v.name)}
+        className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[12px] border border-line bg-surface px-4 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <span className="truncate font-medium">{v.name}</span>
+        <span className="flex-none font-mono text-[12px] text-dim">
+          {v.pending ? "Being re-encrypted" : levelOf(v) === "read" ? "Read only" : v.notes === 1 ? "1 note" : `${v.notes} notes`}
+        </span>
+      </button>
+    </li>
+  );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7">
       <h1 className="text-[28px] leading-tight font-bold text-text">Your vaults</h1>
-      <ul className="mt-4 flex flex-col gap-2">
-        {vaults.data.map((v) => (
-          <li key={v.name}>
-            <button
-              type="button"
-              onClick={() => open(v.name)}
-              className="flex min-h-12 w-full items-center justify-between gap-3 rounded-[12px] border border-line bg-surface px-4 text-left text-text focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <span className="truncate font-medium">{v.name}</span>
-              <span className="flex-none font-mono text-[12px] text-dim">{v.pending ? "Being re-encrypted" : v.notes === 1 ? "1 note" : `${v.notes} notes`}</span>
-            </button>
-          </li>
-        ))}
+      <ul aria-label="Your vaults" className="mt-4 flex flex-col gap-2">
+        {own.map(item)}
       </ul>
       <button type="button" onClick={onNewVault} className={`${secondaryButtonClass} mt-4`}>
         New vault
       </button>
+      {shared.length > 0 && (
+        <>
+          <h2 className="mt-8 text-[22px] leading-tight font-bold text-text">Shared with me</h2>
+          {shared.map(({ owner, vaults: list }) => (
+            <section key={owner} className="mt-4">
+              {/* The owner's display name, as she typed it: quoted by the server, so it reads as a name and nothing more. */}
+              <h3 className="truncate font-mono text-[12px] tracking-[0.08em] text-muted uppercase">{owner}</h3>
+              <ul aria-label={`Shared by ${owner}`} className="mt-2 flex flex-col gap-2">
+                {list.map(item)}
+              </ul>
+            </section>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -103,6 +121,8 @@ export default function MobileShell() {
   const path = match ? pathFromRoute(match.params.vault!, match.params["*"]!) : null;
   const { recentPaths, overlay, mode, activeVault, upload, noteTool, openNote, openUpload, setOverlay, setActiveVault } = useEditor();
   const vaults = useVaults();
+  const dockLevel = useLevel(activeVault);
+  const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
   const [vaultDialog, setVaultDialog] = useState(false);
@@ -175,6 +195,13 @@ export default function MobileShell() {
     if (!activeVault && vaults.data?.length) setActiveVault(vaults.data[0].name);
   }, [activeVault, vaults.data, setActiveVault]);
 
+  // A note the caller can't change (any more: her role was lowered) is only read. Not before the vaults are in, whose
+  // levels say so: Write would be off for a moment on every note, and a note opened in Write mode would drop out of it.
+  const readOnlyNote = !!path && !!vaults.data && !mayChange(noteLevel, path);
+  useEffect(() => {
+    if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
+  }, [readOnlyNote, mode]);
+
   if (!path && recentPaths.length) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
@@ -187,11 +214,14 @@ export default function MobileShell() {
     });
   // From the dock: the open note's folder, or the root of the vault the drawer shows.
   const dockFolder = activeVault && (path && vaultOf(path) === activeVault ? folderOf(path) : `/${activeVault}`);
+  // Below `write` the dock makes nothing, and the note can't be changed; the board's definition wants `maintain`.
+  const dockWrites = !!dockFolder && atLeast(dockLevel, "write");
+  const noteChanges = !!path && mayChange(noteLevel, path);
   const treeProps = { onNewNote: newNote, onNewFolder: setFolderDialog, onNewVault: () => setVaultDialog(true), onMove: setMoving, onDelete: setDeleting, onVaultSheet: setVaultSheet };
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
-      <TopBar path={path} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={path} writable={!readOnlyNote} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
       <InstallHint />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
@@ -207,16 +237,20 @@ export default function MobileShell() {
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
-              newNote={dockFolder ? () => newNote(dockFolder) : null}
-              newFolder={dockFolder ? () => setFolderDialog(dockFolder) : null}
-              upload={dockFolder ? () => openUpload(dockFolder) : null}
+              newNote={dockFolder && dockWrites ? () => newNote(dockFolder) : null}
+              newFolder={dockFolder && dockWrites ? () => setFolderDialog(dockFolder) : null}
+              upload={dockFolder && dockWrites ? () => openUpload(dockFolder) : null}
               noteActions={
                 path
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
-                      { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
-                      { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
+                      ...(noteChanges
+                        ? [
+                            { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },
+                            { label: "Delete note", icon: Trash2, onSelect: () => setDeleting({ kind: "note", path }) },
+                          ]
+                        : []),
                     ]
                   : null
               }

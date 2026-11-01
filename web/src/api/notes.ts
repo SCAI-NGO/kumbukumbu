@@ -3,12 +3,52 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, call } from "./client";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
+import { textOrder } from "./textOrder";
 import type { components } from "./schema";
 
 export type TreeFolder = components["schemas"]["TreeFolder"];
 export type TreeView = components["schemas"]["TreeView"];
 export type NoteView = components["schemas"]["NoteView"];
 export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
+
+export type VaultView = components["schemas"]["VaultView"];
+
+/** What the caller may do in a vault, in rising order (collab design §3.3): a member's role, or the owner's own vault. */
+export type Level = "read" | "write" | "maintain" | "owner";
+const levels: readonly Level[] = ["read", "write", "maintain", "owner"];
+
+/**
+ * The caller's level in `vault`. An answer without one (an older server) is her own vault unless it can't be written;
+ * a vault not in the list (yet) is read: no write action shows before its level is known.
+ */
+export function levelOf(vault: VaultView | undefined): Level {
+  if (!vault) return "read";
+  if (levels.includes(vault.level as Level)) return vault.level as Level;
+  return vault.canWrite === false ? "read" : "owner";
+}
+
+export const atLeast = (level: Level, least: Level) => levels.indexOf(level) >= levels.indexOf(least);
+
+/** The vault's structure (`/Work/Board/Board.md`, the board's columns), which takes `maintain` to change, as the server says. */
+export const isStructural = (path: string) => inVault(path) === "Board/Board.md";
+
+/** Whether the level lets the caller change `path` (a note, or a folder holding the board). */
+export const mayChange = (level: Level, path: string) => atLeast(level, isStructural(path) || inVault(path) === "Board" ? "maintain" : "write");
+
+/** The caller's level in the vault named `vault`, from the vault list. */
+export function useLevel(vault: string | null): Level {
+  const vaults = useVaults();
+  return levelOf(vaults.data?.find((v) => v.name === vault));
+}
+
+/** The caller's own vaults, and those shared with her grouped by owner (by display name, in text order). */
+export function groupVaults(vaults: VaultView[]) {
+  const own = vaults.filter((v) => v.owner == null);
+  const byOwner = new Map<string, VaultView[]>();
+  for (const v of vaults) if (v.owner != null) byOwner.set(v.owner, [...(byOwner.get(v.owner) ?? []), v]);
+  const shared = [...byOwner].sort(([a], [b]) => textOrder(a, b)).map(([owner, list]) => ({ owner, vaults: list }));
+  return { own, shared };
+}
 
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });

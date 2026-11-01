@@ -6,7 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { findFolder, useEmbeddingProviders, useTree, useVaults, type TreeFolder } from "../api/notes";
+import { atLeast, findFolder, levelOf, mayChange, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
@@ -56,6 +56,8 @@ type FolderActions = {
   onMove(subject: MoveSubject): void;
   onRemove(folder: string): void;
   removing: boolean;
+  /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
+  level: Level;
 };
 
 /**
@@ -63,16 +65,23 @@ type FolderActions = {
  * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
  * keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, level, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
   const inner = folder.path.split("/").length > 2;
+  const writes = atLeast(level, "write");
+  const moves = inner && mayChange(level, folder.path);
   const items: MenuItem[] = [
-    { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
-    { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
-    { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
-    ...(inner ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
-    ...(inner && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
+    ...(writes
+      ? [
+          { label: "New note here", icon: FilePlus, onSelect: () => onNewNote(folder.path) },
+          { label: "New folder…", icon: FolderPlus, onSelect: () => onNewFolder(folder.path) },
+          { label: "Upload here", icon: Upload, onSelect: () => useEditor.getState().openUpload(folder.path) },
+        ]
+      : []),
+    ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
+    ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
     ...extra,
   ];
+  if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${folder.name}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />
@@ -127,9 +136,10 @@ export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment
  * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
  * server's deletion needs, can't be deleted from here.
  */
-function FileMenu({ row, onMove, onDelete }: { row: Extract<Row, { kind: "note" }>; onMove(subject: MoveSubject): void; onDelete(subject: DeleteSubject): void }) {
+function FileMenu({ row, level, onMove, onDelete }: { row: Extract<Row, { kind: "note" }>; level: Level; onMove(subject: MoveSubject): void; onDelete(subject: DeleteSubject): void }) {
   const note = row.fileKind === "note";
   const { path, version } = row;
+  if (!mayChange(level, path)) return null;
   const items: MenuItem[] = [
     { label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) },
     note
@@ -322,7 +332,9 @@ export default function TreeDrawer(props: {
   const [exporting, setExporting] = useState(false);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
-  const embeddings = vaults.data?.find((v) => v.name === activeVault)?.embeddings;
+  const active = vaults.data?.find((v) => v.name === activeVault);
+  const embeddings = active?.embeddings;
+  const level = levelOf(active);
   const createBoard = useBoardAction(activeVault ?? "");
   const queryClient = useQueryClient();
   // A 404: removed meanwhile, which is what was asked.
@@ -334,7 +346,7 @@ export default function TreeDrawer(props: {
     },
     onSuccess: (_, folder) => queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(folder)] }),
   });
-  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder), removing: removeFolder.isPending };
+  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder), removing: removeFolder.isPending, level };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
   const openBoard = (vault: string) => {
@@ -353,7 +365,9 @@ export default function TreeDrawer(props: {
     const paths = folder?.notes.filter((n) => fileKindOfEntry(n) !== "note").map((n) => n.path) ?? [path];
     navigate(viewUrl(path), { state: { paths } satisfies LightboxState });
   };
-  // Offered only where the admin set up an external provider: otherwise there is nothing to choose.
+  // Offered only where the admin set up an external provider: otherwise there is nothing to choose. Like pairing a
+  // device with a vault shared with her, which comes later, it is the owner's alone; making a board wants `maintain`.
+  const owner = level === "owner";
   const vaultItems: MenuItem[] = [
     ...(activeVault
       ? [
@@ -361,15 +375,17 @@ export default function TreeDrawer(props: {
           { label: "Activity", icon: History, onSelect: () => onVaultSheet({ kind: "activity", vault: activeVault }) },
           { label: "Checkpoints", icon: Flag, onSelect: () => onVaultSheet({ kind: "checkpoints", vault: activeVault }) },
           // Made from the template at once, so no ellipsis: that would promise a dialog.
-          hasBoard
-            ? { label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }
-            : { label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) },
+          ...(hasBoard
+            ? [{ label: "Board", icon: SquareKanban, onSelect: () => openBoard(activeVault) }]
+            : atLeast(level, "maintain")
+              ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
+              : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
-          { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
+          ...(owner ? [{ label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) }] : []),
           { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
         ]
       : []),
-    ...(embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
+    ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
@@ -378,7 +394,7 @@ export default function TreeDrawer(props: {
     <>
       <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
         <div className="min-w-0 flex-1">
-          <p className="font-mono text-[11px] tracking-[0.08em] text-dim uppercase">Vault</p>
+          <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${active.owner}` : "Vault"}</p>
           <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
         {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
@@ -414,7 +430,7 @@ export default function TreeDrawer(props: {
                 ) : (
                   <>
                     <NoteButton path={row.path} fileKind={row.fileKind} current={row.path === currentPath} onOpen={() => openEntry(row.path, row.fileKind)} />
-                    <FileMenu row={row} onMove={onMove} onDelete={onDelete} />
+                    <FileMenu row={row} level={level} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>

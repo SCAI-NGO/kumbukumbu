@@ -7,8 +7,8 @@ const modes: { mode: Mode; label: string }[] = [
   { mode: "write", label: "Write" },
 ];
 
-/** Segmented Read / Write; Read ends Write mode the way Done does. */
-export default function ModeToggle() {
+/** Segmented Read / Write; Read ends Write mode the way Done does. Write is there only for a note the caller may change. */
+export default function ModeToggle({ writable }: { writable: boolean }) {
   const current = useEditor((s) => s.mode);
   const setMode = useEditor((s) => s.setMode);
   const endWrite = useEditor((s) => s.endWrite);
@@ -33,10 +33,12 @@ export default function ModeToggle() {
           key={mode}
           type="button"
           aria-pressed={current === mode}
+          disabled={mode === "write" && !writable}
+          title={mode === "write" && !writable ? "You can only read this note." : undefined}
           onClick={() => (mode === "read" ? void endWrite() : current !== "write" && write())}
           className={`min-h-11 rounded-[9px] px-3.5 text-sm font-medium focus-visible:outline-2 focus-visible:outline-accent ${
             current === mode ? "bg-accent text-on-accent" : "text-muted"
-          }`}
+          } disabled:opacity-50`}
         >
           {label}
         </button>

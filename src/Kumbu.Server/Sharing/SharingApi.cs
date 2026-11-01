@@ -19,11 +19,11 @@ public sealed record CreatedVaultInvitationView(string Id, string Link, string R
 
 /// <summary><c>secret</c>: what follows <c>#</c> in the link; <c>alias</c>, the name the caller would give the vault
 /// (default: the vault's own name), to check whether it is free.</summary>
-public sealed record PeekInvitationRequest(string Secret, string? Alias = null);
+public sealed record VaultInvitationPeekRequest(string Secret, string? Alias = null);
 
 /// <summary>An invitation before it is accepted: <c>owner</c> is the owner's display name, sanitised and quoted, since
 /// it is free text one user typed and another reads; <c>ownerUsername</c> is hers, beside it.</summary>
-public sealed record InvitationPeekView(
+public sealed record VaultInvitationPeekView(
     string Vault, string Owner, string OwnerUsername, string Role, string EmbeddingProvider, string Alias, bool AliasFree, bool Confirm, DateTime ExpiresAt);
 
 /// <summary><c>secret</c>: what follows <c>#</c> in the link; <c>alias</c>: the caller's name for the vault, a vault
@@ -108,12 +108,12 @@ public static class SharingApi
     /// What the share page shows before accepting. Every answer for a link that isn't valid is the same 404; the
     /// requests are limited per account and per network only (<see cref="AccountLimits.InvitePeek"/>).
     /// </summary>
-    private static async Task<Ok<InvitationPeekView>> PeekAsync(
-        PeekInvitationRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
+    private static async Task<Ok<VaultInvitationPeekView>> PeekAsync(
+        VaultInvitationPeekRequest body, HttpContext http, RequestCaller caller, AccountLimits limits, Memberships memberships, CancellationToken ct)
     {
         if (limits.InvitePeek(http, caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var peek = await memberships.PeekAsync(caller.User!.Id, caller.UserKey!, body.Secret, body.Alias, ct);
-        return TypedResults.Ok(new InvitationPeekView(
+        return TypedResults.Ok(new VaultInvitationPeekView(
             peek.Vault, WriterLabels.Quoted(peek.OwnerDisplay), peek.OwnerUsername, MemberRoles.ToText(peek.Role), peek.EmbeddingProvider, peek.Alias, peek.AliasFree,
             peek.Confirm, peek.ExpiresAt));
     }

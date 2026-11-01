@@ -6484,7 +6484,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["PeekInvitationRequest"];
+                    "application/json": components["schemas"]["VaultInvitationPeekRequest"];
                 };
             };
             responses: {
@@ -6494,7 +6494,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["InvitationPeekView"];
+                        "application/json": components["schemas"]["VaultInvitationPeekView"];
                     };
                 };
                 /** @description Bad Request */
@@ -8261,6 +8261,22 @@ export interface components {
             text: string;
             role?: null | string;
             vault?: null | string;
+        };
+        VaultInvitationPeekRequest: {
+            secret: string;
+            alias?: null | string;
+        };
+        VaultInvitationPeekView: {
+            vault: string;
+            owner: string;
+            ownerUsername: string;
+            role: string;
+            embeddingProvider: string;
+            alias: string;
+            aliasFree: boolean;
+            confirm: boolean;
+            /** Format: date-time */
+            expiresAt: string;
         };
         VaultView: {
             name: string;

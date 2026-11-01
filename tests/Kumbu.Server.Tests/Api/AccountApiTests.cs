@@ -1268,6 +1268,10 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull(paths["/api/recovery-key"]!["post"]!["responses"]!["429"]);
         Assert.Contains("currentPassword", (await JsonAsync(response))["components"]!["schemas"]!["RegenerateRecoveryKeyRequest"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
         Assert.DoesNotContain("reason", (await JsonAsync(response))["components"]!["schemas"]!["InvitationPeekView"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
+        // The vault invitations' records have names of their own: one name for two records gave the share page the
+        // join page's shapes.
+        Assert.Contains("ownerUsername", (await JsonAsync(response))["components"]!["schemas"]!["VaultInvitationPeekView"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
+        Assert.Contains("secret", (await JsonAsync(response))["components"]!["schemas"]!["VaultInvitationPeekRequest"]!["required"]!.AsArray().Select(r => r!.GetValue<string>()));
     }
 
     [Fact]
