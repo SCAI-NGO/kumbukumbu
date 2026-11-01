@@ -39,6 +39,14 @@ export function useAgentChange(path: string): Change | undefined {
 export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
+ * Who wrote, as the user is shown it: her own writers without the tool ("liz"), another person's as the server
+ * rendered them for her (collab design §8.2: "Bob · Claude", "Bob (left)", the owner's quoted name, "another user"),
+ * which carry no tool and may hold " (" themselves.
+ */
+export const shownWriter = (label: string, kind?: string | null) =>
+  kind === "user" || label.startsWith('"') || label.includes(" · ") ? label : writerOf(label);
+
+/**
  * The version the user last saw, roughly: the newest one before the agents' writes since the previous visit,
  * i.e. written before it, by the user (the server's kind `self`), or by one of their devices (Obsidian). Null when there is none: an agent
  * wrote the note from the start. A device back after a long pause (`change`) is not taken for the user: its writes

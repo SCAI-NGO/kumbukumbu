@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
-import { atLeast, groupVaults, levelOf, mayChange, refusalOf, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -202,11 +202,15 @@ export default function MobileShell() {
 
   // A note the caller can't change (any more: her role was lowered) is only read. Not before the vaults are in, whose
   // levels say so: Write would be off for a moment on every note, and a note opened in Write mode would drop out of it.
-  const readOnlyNote = !!path && !!vaults.data && !mayChange(noteLevel, path);
+  // A save of the open note the server refused counts at once, by its code, until the vault list read after it is in:
+  // that list then says (collab design §9.3).
+  const refused = useEditor((s) => s.refused);
+  const held = refused && refused.path === path && vaults.dataUpdatedAt <= refused.at ? refusalSentence(refused.code, vaultOf(path)) : null;
+  const readOnlyNote = !!held || (!!path && !!vaults.data && !mayChange(noteLevel, path));
   useEffect(() => {
     if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
   }, [readOnlyNote, mode]);
-  const refusal = path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null;
+  const refusal = held ?? (path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null);
 
   // A write the server refused for the level (a role lowered, the owner deactivated, the vault closing): the list is
   // read again, and the write actions and Write mode follow it.

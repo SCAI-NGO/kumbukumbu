@@ -302,6 +302,21 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent("Updated by ada");
   });
 
+  it("names another person's writer as the server shows her them, when taken at once", async () => {
+    setAutoRefresh(true);
+    const server = newServer();
+    api(server);
+    renderApp("/notes/Work/plan.md");
+    await screen.findByText("Second.");
+
+    // The owner's display name, quoted by the server: " (" in it is part of the name, not a tool.
+    writeElsewhere(server, "v2", '"Alice (Home)"', "user");
+    backToThePage();
+
+    expect(await screen.findByText("Second, changed by liz.")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Updated" })).toHaveTextContent(/^Updated by "Alice \(Home\)" (just now|.* ago|yesterday)$/);
+  });
+
   it("says the user changed it in Obsidian when a device's write is taken at once", async () => {
     setAutoRefresh(true);
     const server = newServer();
@@ -441,6 +456,17 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
     return screen.findByRole("textbox", { name: "Markdown source" });
   }
 
+  it("names the writer of a newer version from the server", async () => {
+    const server = newServer();
+    await openInWrite(server);
+
+    // A member's agent, as the owner is shown it: the member has left, which the server's " (left)" says.
+    writeElsewhere(server, "v2", "Bob (left) · Claude", "agent");
+    backToThePage();
+
+    expect(await bar()).toHaveTextContent(/^Bob \(left\) · Claude saved a newer version/);
+  });
+
   it("is shown, never refreshed by itself even with the setting on, and opens the conflict choice", async () => {
     setAutoRefresh(true);
     const server = newServer();
@@ -451,7 +477,7 @@ describe("a change made elsewhere to the open note, in Write mode", () => {
     backToThePage();
 
     const shown = await bar();
-    expect(shown).toHaveTextContent("liz changed this note");
+    expect(shown).toHaveTextContent("liz saved a newer version");
     expect(editor).toHaveValue(texts.v1);
 
     await userEvent.click(within(shown).getByRole("button", { name: "View the new version" }));

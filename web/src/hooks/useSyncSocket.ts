@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { api, call, HttpError } from "../api/client";
 import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
-import { useSyncStatus } from "../state/sync";
+import { presenceKey, useSyncStatus } from "../state/sync";
 
 /** The server closed the socket for a newer one of this session (more than four tabs): reconnecting would replace that one. */
 const REPLACED = 4409;
 const MAX_DELAY = 30_000;
+/** WebSocket.OPEN. */
+const OPEN = 1;
 
 const socketUrl = (ticket: string) => {
   const { protocol, host } = window.location;
@@ -26,7 +28,20 @@ function onFrame(queryClient: QueryClient, data: unknown) {
   }
   if (!frame || typeof frame !== "object" || !("type" in frame) || !("vault" in frame) || typeof frame.vault !== "string") return;
   if (frame.type === "changed") vaultHinted(queryClient, frame.vault);
+  if (frame.type === "presence" && "path" in frame && typeof frame.path === "string" && "editors" in frame && Array.isArray(frame.editors)) {
+    const key = presenceKey(frame.vault, frame.path);
+    const shown = frame.editors.filter((e): e is string => typeof e === "string");
+    useSyncStatus.setState(({ editors }) => {
+      const next = { ...editors };
+      if (shown.length) next[key] = shown;
+      else delete next[key];
+      return { editors: next };
+    });
+  }
 }
+
+/** Down: nobody is known to be editing anything, and nothing can be sent. */
+const down = { connected: false, editors: {}, send: () => false };
 
 /**
  * One socket per signed-in tab (collab design §9.1): each hint has the vault's tree, history, trash, checkpoints and
@@ -70,7 +85,14 @@ export function useSyncSocket() {
       socket = s;
       s.onopen = () => {
         attempt = 0;
-        useSyncStatus.setState({ connected: true });
+        useSyncStatus.setState({
+          connected: true,
+          send: (frame) => {
+            if (socket !== s || s.readyState !== OPEN) return false;
+            s.send(JSON.stringify(frame));
+            return true;
+          },
+        });
         // Hints sent while there was no socket are lost: everything they would have asked again is.
         if (opened.current) for (const key of ["tree", "vaults", "history", "trash", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
         opened.current = true;
@@ -79,7 +101,7 @@ export function useSyncSocket() {
       s.onclose = (e: CloseEvent) => {
         if (socket !== s) return;
         socket = null;
-        useSyncStatus.setState({ connected: false });
+        useSyncStatus.setState(down);
         if (e.code !== REPLACED) retry();
       };
     };
@@ -91,7 +113,7 @@ export function useSyncSocket() {
       const s = socket;
       socket = null;
       s?.close();
-      useSyncStatus.setState({ connected: false });
+      useSyncStatus.setState(down);
     };
   }, [queryClient, generation]);
 

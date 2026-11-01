@@ -629,6 +629,30 @@ describe("vaults shared with the user", () => {
     );
   });
 
+  it("refuses Write mode on Board.md for a write member with the structural sentence, by the refused save's code", async () => {
+    // The list still says maintain: her role was lowered to write since it was read, and the list read again hangs.
+    let reads = 0;
+    signedInApi({
+      "GET /api/vaults": () => (++reads === 1 ? json(200, sharedVaults) : new Promise<Response>(() => {})),
+      "GET /api/vaults/Beete/tree": () => json(200, tree("Beete", ["plan.md"], [{ name: "Board", notes: ["Board.md"] }])),
+      "GET /api/version/*": () => json(200, { path: "/Beete/Board/Board.md", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      // Whatever the text says, the code is what counts.
+      "PUT /api/notes/Beete/Board/Board.md": () => json(403, { error: "Refused.", code: "structural" }),
+    });
+    renderApp("/notes/Beete/Board/Board.md");
+    const write = await screen.findByRole("button", { name: "Write" });
+    await waitFor(() => expect(write).toBeEnabled());
+    await userEvent.click(write);
+    await userEvent.type(await screen.findByRole("textbox", { name: "Markdown source" }), " more");
+    fireEvent.blur(screen.getByRole("textbox", { name: "Markdown source" }));
+
+    const sentence = "Only those who may maintain Beete can change its board's columns.";
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Read" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+  });
+
   it("reads the vault list again when the server refuses a write for the level", async () => {
     const fetch = signedInApi({
       "GET /api/vaults": () => json(200, sharedVaults),

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { create } from "zustand";
 import { folderOf, vaultOf } from "../api/paths";
+import type { RefusalCode } from "../api/client";
 import type { Picked } from "../upload/collectFiles";
 
 export type Mode = "read" | "write";
@@ -62,6 +63,9 @@ interface EditorState {
   setScrollTarget(target: { path: string; line: number } | null): void;
   setBeforeRead(guard: BeforeRead | null): void;
   setDraft(draft: Draft | null): void;
+  /** A save of `path` the server refused for the level, by its `code`, at `at` (ms): the note is read only until the vault list read after it says. */
+  refused: { path: string; code: RefusalCode; at: number } | null;
+  setRefused(refused: { path: string; code: RefusalCode; at: number } | null): void;
   setOverlay(overlay: Overlay): void;
   /** Opens the upload sheet for `folder` (`/Work/projects`), with the files of a drop if there was one. */
   openUpload(folder: string, dropped?: Picked[]): void;
@@ -102,6 +106,7 @@ const initial = {
   recentPaths: [],
   beforeRead: null,
   draft: null,
+  refused: null as { path: string; code: RefusalCode; at: number } | null,
   scrollTarget: null,
   upload: null,
   noteTool: null as NoteTool,
@@ -130,6 +135,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, RECENT),
     })),
   setMode: (mode) => set(mode === "write" ? { mode, noteTool: null } : { mode }),
+  setRefused: (refused) => set({ refused }),
   endWrite: async () => {
     const guard = get().beforeRead;
     if (!guard || (await guard())) set({ mode: "read" });

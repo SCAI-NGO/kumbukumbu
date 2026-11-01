@@ -6,7 +6,7 @@ import { deviceOf } from "../api/activity";
 import { HttpError } from "../api/client";
 import { useVersionPoll, type NoteVersion } from "../api/history";
 import { noteUrl } from "../api/paths";
-import { ago, writerOf } from "./AgentBanner";
+import { ago, shownWriter } from "./AgentBanner";
 
 /**
  * A write of the open note made elsewhere (an agent, another tab or device): the server's version differs from the
@@ -58,16 +58,18 @@ const linkClass = "h-11 flex-none rounded-[8px] px-2.5 font-medium text-accent-t
 /**
  * "liz changed this note just now"; "You changed this note in Obsidian (Laptop) …" for a write by one of the user's
  * devices, and "You changed this note elsewhere …" for their own write in another tab. Which writes are the user's
- * the server says (`self`), never a comparison of names.
+ * the server says (`self`), never a comparison of names; another person's writer is named as the server shows her
+ * them. In Write mode (`write`), where the user's own text is on screen: "Bob saved a newer version".
  */
-export function ChangeText({ change }: { change: NoteVersion }) {
-  const writer = writerOf(change.lastWriter);
-  if (change.lastWriterKind === "device") return <>You changed this note in Obsidian ({deviceOf(writer)}) {ago(change.lastWriteAt)}</>;
-  return change.lastWriterKind === "self" ? (
-    <>You changed this note elsewhere {ago(change.lastWriteAt)}</>
-  ) : (
+export function ChangeText({ change, write = false }: { change: NoteVersion; write?: boolean }) {
+  const writer = shownWriter(change.lastWriter, change.lastWriterKind);
+  if (change.lastWriterKind === "device") {
+    return write ? <>You saved a newer version in Obsidian ({deviceOf(writer)})</> : <>You changed this note in Obsidian ({deviceOf(writer)}) {ago(change.lastWriteAt)}</>;
+  }
+  if (change.lastWriterKind === "self") return write ? <>You saved a newer version elsewhere</> : <>You changed this note elsewhere {ago(change.lastWriteAt)}</>;
+  return (
     <>
-      <code className="font-mono text-text">{writer}</code> changed this note {ago(change.lastWriteAt)}
+      <code className="font-mono text-text">{writer}</code> {write ? "saved a newer version" : `changed this note ${ago(change.lastWriteAt)}`}
     </>
   );
 }

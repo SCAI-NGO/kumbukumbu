@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, call } from "./client";
+import { api, call, type RefusalCode } from "./client";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
@@ -36,17 +36,29 @@ export const isStructural = (path: string) => inVault(path) === "Board/Board.md"
 export const mayChange = (level: Level, path: string) => atLeast(level, isStructural(path) || inVault(path) === "Board" ? "maintain" : "write");
 
 /**
- * Why the caller can't change `path` in `vault`, in the server's words (collab design §3.5, §9.3), or null if she can:
- * the vault is closing, its owner is deactivated, her level is below `write`, or the board's structure wants `maintain`.
+ * The sentence for a refusal's `code` (collab design §3.5, §9.3), in the server's words: the vault is closing, its
+ * owner is deactivated, the caller's level is below `write`, or the board's structure wants `maintain`.
  */
+export function refusalSentence(code: RefusalCode, vault: string): string {
+  switch (code) {
+    case "closing":
+      return `${vault} is read-only: its owner deleted their account, and it is closing.`;
+    case "owner-inactive":
+      return `${vault} is read-only while its owner's account is deactivated.`;
+    case "read-only":
+      return `You can only read ${vault}.`;
+    case "structural":
+      return `Only those who may maintain ${vault} can change its board's columns.`;
+  }
+}
+
+/** Why the caller can't change `path` in `vault`, from the vault list (`refusalSentence`), or null if she can. */
 export function refusalOf(vault: VaultView | undefined, path: string): string | null {
   const level = levelOf(vault);
   if (mayChange(level, path)) return null;
   const name = vault?.name ?? vaultOf(path);
-  if (vault?.closingAt) return `${name} is read-only: its owner deleted their account, and it is closing.`;
-  if (vault?.ownerInactive) return `${name} is read-only while its owner's account is deactivated.`;
-  if (!atLeast(level, "write")) return `You can only read ${name}.`;
-  return `Only those who may maintain ${name} can change its board's columns.`;
+  const code: RefusalCode = vault?.closingAt ? "closing" : vault?.ownerInactive ? "owner-inactive" : !atLeast(level, "write") ? "read-only" : "structural";
+  return refusalSentence(code, name);
 }
 
 /** Whether people other than the caller can write into `vault`: her own vault that she shares, or one shared with her that isn't read-only for everyone. */

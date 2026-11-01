@@ -5,31 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useVersionPoll } from "../api/history";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
+import { FakeSocket } from "../test/socket";
 import { useSyncSocket } from "./useSyncSocket";
-
-/** A WebSocket that only records: the test opens, sends into and drops it. */
-class FakeSocket {
-  static all: FakeSocket[] = [];
-  onopen: ((e: Event) => void) | null = null;
-  onmessage: ((e: MessageEvent) => void) | null = null;
-  onclose: ((e: CloseEvent) => void) | null = null;
-  closed = false;
-  constructor(readonly url: string) {
-    FakeSocket.all.push(this);
-  }
-  close() {
-    this.closed = true;
-  }
-  open() {
-    act(() => this.onopen?.(new Event("open")));
-  }
-  frame(body: unknown) {
-    act(() => this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(body) })));
-  }
-  drop(code = 1006) {
-    act(() => this.onclose?.(new CloseEvent("close", { code })));
-  }
-}
 
 const last = () => FakeSocket.all.at(-1)!;
 const ticketOf = (s: FakeSocket) => new URL(s.url).searchParams.get("ticket");
@@ -43,7 +20,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  useSyncStatus.setState({ connected: false });
+  useSyncStatus.setState({ connected: false, editors: {} });
 });
 
 /** The server: a new ticket for every request, and the vault list `vaults` holds now. */
