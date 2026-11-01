@@ -254,9 +254,15 @@ public sealed partial class VaultCatalog
             // An owner without a user document (deleted meanwhile) counts as inactive too: fails closed.
             var active = (await Users.Find(Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners) & Builders<Accounts.UserDocument>.Filter.Eq(u => u.Active, true))
                 .Project(u => u.Id).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+            // A vault whose owner is gone may be closing (collab design §7.3): read only then, so active owners pay nothing.
+            var gone = found.Where(m => !active.Contains(m.Owner)).Select(m => m.Vault).Distinct(StringComparer.Ordinal).ToList();
+            var closing = gone.Count == 0 ? new Dictionary<string, DateTime>()
+                : (await Vaults.Find(Builders<VaultDocument>.Filter.In(v => v.Id, gone) & Builders<VaultDocument>.Filter.Ne(v => v.ClosingAt, null))
+                    .Project(v => new { v.Id, v.ClosingAt }).ToListAsync(ct)).ToDictionary(v => v.Id, v => v.ClosingAt!.Value, StringComparer.Ordinal);
             foreach (var m in found)
             {
                 m.OwnerInactive = !active.Contains(m.Owner);
+                if (m.OwnerInactive && closing.TryGetValue(m.Vault, out var at)) m.ClosingAt = at;
                 OwnerActive(m.Vault, !m.OwnerInactive);
             }
         }
@@ -347,10 +353,15 @@ public sealed partial class VaultCatalog
     private static VaultAccess MemberAccess(UnlockedVault vault, byte[] vaultKey, string alias, MembershipDocument membership) =>
         ReadOnlyIfOwnerInactive(new(vault, alias, LevelOf(membership), membership, IsOwner: false) { WriterId = Memberships.WriterIdOf(membership, vaultKey, Memberships.SessionWriter) });
 
-    /// <summary>A member's access while the owner's account is deactivated (collab design §7.4): <c>Read</c>, whatever
-    /// her role and credential, with the reason for every refusal.</summary>
-    private static VaultAccess ReadOnlyIfOwnerInactive(VaultAccess access) =>
-        access.Membership is { OwnerInactive: true } ? access with { Level = Kumbu.Core.Notes.AccessLevel.Read, ReadOnlyCode = Kumbu.Core.Notes.Refusals.OwnerInactive } : access;
+    /// <summary>A member's access while the owner's account is deactivated (collab design §7.4), or gone and the vault
+    /// closing (§7.3): <c>Read</c>, whatever her role and credential, with the reason for every refusal.</summary>
+    private static VaultAccess ReadOnlyIfOwnerInactive(VaultAccess access) => access.Membership switch
+    {
+        // Her account deleted, and the vault closing (collab design §7.3): read-only to the end, exportable.
+        { OwnerInactive: true, ClosingAt: not null } => access with { Level = Kumbu.Core.Notes.AccessLevel.Read, ReadOnlyCode = Kumbu.Core.Notes.Refusals.Closing },
+        { OwnerInactive: true } => access with { Level = Kumbu.Core.Notes.AccessLevel.Read, ReadOnlyCode = Kumbu.Core.Notes.Refusals.OwnerInactive },
+        _ => access,
+    };
 
     /// <summary>A key's or a connection's access: the owner's, under the vault's name at its sealed level; a member's,
     /// under her alias, at most at her role, writing under the writer id recorded for <paramref name="credentialId"/>.</summary>

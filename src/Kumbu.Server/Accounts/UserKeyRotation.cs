@@ -60,6 +60,10 @@ public sealed record PreparedRotation(
 
     /// <summary>The member slots without a membership, deleted in the rotation's transaction.</summary>
     public IReadOnlyList<DamagedMemberSlot> DamagedMemberSlots { get; init; } = [];
+
+    /// <summary>Her notices of vaults deleted for everyone, their alias keys sealed again under the new user key (collab
+    /// design §14).</summary>
+    internal IReadOnlyList<Sharing.NoticeReseal> Notices { get; init; } = [];
 }
 
 /// <summary>Something the rotation was prepared from changed before it was applied; nothing was written.</summary>
@@ -143,6 +147,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             Keypair = keypair,
             MemberSlots = memberSlots,
             DamagedMemberSlots = damaged,
+            Notices = await Sharing.MemberNotices.PrepareResealAsync(db, userId, oldUserKey, newUserKey, ct),
         };
     }
 
@@ -246,6 +251,7 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
         // The lookups first, then the member slots' wrapping: the lookup's update is conditional on the old wrapping.
         await ApplyVaultSlotsAsync(session, rotation, ct);
         await ApplyMemberSlotsAsync(session, rotation, ct);
+        await Sharing.MemberNotices.ApplyResealAsync(db, session, userId, rotation.Notices, ct);
         await ApplyMetasAsync(session, Keys, rotation.ApiKeys, userId, ct);
         await ApplyMetasAsync(session, ConnectionDocs, rotation.Connections, userId, ct);
 

@@ -630,6 +630,21 @@ public sealed partial class Memberships(
         return f.Eq(m => m.Id, membershipId) & bound & status;
     }
 
+    /// <summary>
+    /// The sweep's part for closing periods (collab design §7.3): every vault whose <c>closingAt</c> has come is deleted
+    /// for good, with everything in it, its memberships and the slots its members reached it by. Idempotent: a vault
+    /// gone already is found no more, and a restored one whose time had passed goes on the next round. Returns how many.
+    /// </summary>
+    internal async Task<int> DeleteClosedVaultsAsync(CancellationToken ct)
+    {
+        var due = await catalog.Vaults.Find(v => v.ClosingAt != null && v.ClosingAt <= Now).Project(v => v.Id).ToListAsync(ct);
+        if (due.Count == 0) return 0;
+        var documents = await catalog.DeleteVaultsAsync(due, (_, _) => Task.CompletedTask, ct);
+        foreach (var id in due) log.LogInformation("Vault {VaultId} reached the end of its closing period and was deleted", id);
+        log.LogInformation("{Count} closed vaults deleted ({Documents} documents)", due.Count, documents);
+        return due.Count;
+    }
+
     internal const string LiveMemberIndex = "vault_1_member_1_live";
 
     /// <summary>Creates the indexes once per process; lazy, so the server starts before MongoDB is reachable.</summary>
@@ -681,6 +696,7 @@ public sealed partial class Memberships(
             ],
             ct);
         await VaultEvents.EnsureIndexAsync(db, ct);
+        await MemberNotices.EnsureIndexAsync(db, ct);
         _ready = true;
     }
 }

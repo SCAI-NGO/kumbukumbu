@@ -25,7 +25,7 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     public SlotDocument? DerivedSlot { get; init; }
 
     /// <summary>Why the vault is read-only for this caller whatever her role or credential (a <see cref="Refusals"/> code:
-    /// <c>owner-inactive</c>), or null. Her <see cref="Level"/> is <c>Read</c> then, and every write is refused with this
+    /// <c>owner-inactive</c>, <c>closing</c>), or null. Her <see cref="Level"/> is <c>Read</c> then, and every write is refused with this
     /// code (<see cref="VaultCatalog.CheckWritable(UnlockedVault, VaultAccess)"/>).</summary>
     public string? ReadOnlyCode { get; init; }
 
@@ -33,6 +33,7 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     public static string ReadOnlySentence(string code, string vault) => code switch
     {
         Refusals.OwnerInactive => $"vault {vault} is read-only while its owner's account is deactivated",
+        Refusals.Closing => $"vault {vault} is read-only: its owner deleted their account, and it is closing",
         _ => $"vault {vault} is read-only",
     };
 

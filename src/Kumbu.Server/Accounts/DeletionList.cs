@@ -21,9 +21,11 @@ public sealed class DeletionList(IOptions<KumbuOptions> options, ILogger<Deletio
 
     public bool Configured => Dir is not null;
 
-    /// <summary>Appends the id; false (and an error logged, never an exception) when the list isn't configured or
-    /// can't be written.</summary>
-    public async Task<bool> AddAsync(string userId, CancellationToken ct)
+    /// <summary>Appends the id, and after it a line per shared vault of the user's that was given a closing period
+    /// (collab design §7.3): <c>closing &lt;user id&gt; &lt;vault id&gt; &lt;closingAt, Unix milliseconds&gt;</c>, so that a
+    /// repeat after a restore applies the same choice. Ids and a time only. False (and an error logged, never an exception)
+    /// when the list isn't configured or can't be written.</summary>
+    public async Task<bool> AddAsync(string userId, CancellationToken ct, IReadOnlyDictionary<string, DateTime>? closing = null)
     {
         if (Dir is not { } dir)
         {
@@ -40,7 +42,15 @@ public sealed class DeletionList(IOptions<KumbuOptions> options, ILogger<Deletio
             var fileOptions = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write };
             if (!OperatingSystem.IsWindows()) fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             await using var stream = new FileStream(Path.Combine(dir, FileName), fileOptions);
-            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(userId + "\n"), ct);
+            var text = new System.Text.StringBuilder(userId).Append('\n');
+            foreach (var (vaultId, at) in closing ?? new Dictionary<string, DateTime>())
+            {
+                text.Append(ClosingTag).Append(' ').Append(userId).Append(' ').Append(vaultId).Append(' ')
+                    .Append(new DateTimeOffset(DateTime.SpecifyKind(at, DateTimeKind.Utc)).ToUnixTimeMilliseconds()).Append('\n');
+            }
+
+            // One write: the id and its closing periods arrive together.
+            await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(text.ToString()), ct);
             stream.Flush(flushToDisk: true);
             return true;
         }
@@ -76,6 +86,47 @@ public sealed class DeletionList(IOptions<KumbuOptions> options, ILogger<Deletio
         }
     }
 
-    /// <summary>32 lowercase hex digits, as <see cref="UserCatalog"/> makes user ids.</summary>
+    private const string ClosingTag = "closing";
+
+    /// <summary>
+    /// The closing periods recorded with the deletions (<see cref="AddAsync"/>): user id → (vault id → <c>closingAt</c>).
+    /// Lines that aren't of that shape are skipped; a vault recorded twice keeps its earliest time. Empty when the list
+    /// isn't configured, doesn't exist yet or can't be read.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, DateTime>>> ReadClosingAsync(CancellationToken ct)
+    {
+        var result = new Dictionary<string, Dictionary<string, DateTime>>(StringComparer.Ordinal);
+        if (Dir is not { } dir) return Frozen(result);
+        var file = Path.Combine(dir, FileName);
+        try
+        {
+            if (!File.Exists(file)) return Frozen(result);
+            foreach (var line in await File.ReadAllLinesAsync(file, ct))
+            {
+                var parts = line.Trim().Split(' ');
+                if (parts.Length != 4 || parts[0] != ClosingTag || !IsUserId(parts[1]) || !IsUserId(parts[2])
+                    || !long.TryParse(parts[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var ms)
+                    || ms > DateTimeOffset.MaxValue.ToUnixTimeMilliseconds())
+                {
+                    continue;
+                }
+
+                var at = DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime;
+                var vaults = result.TryGetValue(parts[1], out var v) ? v : result[parts[1]] = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+                vaults[parts[2]] = vaults.TryGetValue(parts[2], out var earlier) && earlier < at ? earlier : at;
+            }
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogError("The list of deleted users in {Dir} could not be read ({Error})", dir, e.Message);
+        }
+
+        return Frozen(result);
+
+        static IReadOnlyDictionary<string, IReadOnlyDictionary<string, DateTime>> Frozen(Dictionary<string, Dictionary<string, DateTime>> d) =>
+            d.ToDictionary(kv => kv.Key, kv => (IReadOnlyDictionary<string, DateTime>)kv.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>32 lowercase hex digits, as <see cref="UserCatalog"/> makes user ids (and the catalog vault ids).</summary>
     internal static bool IsUserId(string s) => s.Length == 32 && s.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

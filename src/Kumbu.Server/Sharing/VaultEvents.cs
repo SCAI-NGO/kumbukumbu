@@ -188,7 +188,8 @@ public static class VaultEvents
         (false, RoleChanged) => $"{person} changed your role to {role}.",
         (false, ProviderChanged) => $"{person} changed the embedding provider of {vault}.",
         (false, RekeyFinished) => $"{person} re-encrypted {vault}; your keys and apps for it were revoked.",
-        (false, ClosingStarted) => $"{person} deleted their account; {vault} will be deleted{Until(until)}. Export a copy to keep its notes.",
+        // The owner is gone: she isn't named.
+        (false, ClosingStarted) => $"The owner deleted their account; {vault} will be deleted{Until(until)}. Export a copy to keep its notes.",
         (false, OwnerInactive) => $"{person}'s account is deactivated; {vault} is read-only until it is active again.",
         _ => "Something changed in the sharing of this vault.",
     };

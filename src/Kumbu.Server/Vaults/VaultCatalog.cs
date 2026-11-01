@@ -686,7 +686,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// Returns how many documents went, slots included.
     /// </summary>
     internal async Task<long> DeleteVaultsAsync(
-        IReadOnlyCollection<string> vaultIds, Func<IClientSessionHandle, CancellationToken, Task> alsoDelete, CancellationToken ct)
+        IReadOnlyCollection<string> vaultIds, Func<IClientSessionHandle, CancellationToken, Task> alsoDelete, CancellationToken ct,
+        Func<IClientSessionHandle, CancellationToken, Task>? first = null)
     {
         await EnsureReadyAsync(ct);
         var ids = vaultIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
@@ -733,6 +734,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 deleted = await session.WithTransactionAsync(
                     async (s, token) =>
                     {
+                        // What must read the vaults before they go (the members' notices), in the same transaction.
+                        if (first is not null) await first(s, token);
                         var slot = Builders<SlotDocument>.Filter;
                         var keyIds = await (await Slots.DistinctAsync(
                             s, sl => sl.KeyId, slot.Eq(sl => sl.Kind, SlotDocument.ApiKey) & slot.In(sl => sl.Vault, ids) & slot.Exists(sl => sl.KeyId), cancellationToken: token))
@@ -749,6 +752,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         }
 
                         await Sharing.VaultEvents.DeleteAsync(db, s, ids, null, token);
+                        // Their memberships, tombstones included (collab design §2.1): nothing is left to reach or name.
+                        await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+                            .DeleteManyAsync(s, Builders<Sharing.MembershipDocument>.Filter.In(m => m.Vault, ids), cancellationToken: token);
                         await alsoDelete(s, token);
                         return count;
                     },

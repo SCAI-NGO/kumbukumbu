@@ -140,6 +140,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/vault-invitations/peek"] = Reading,
         ["GET /api/vaults/{vault}/memberships/{id}"] = Reading,
         ["GET /api/vault-events"] = Reading,
+        ["GET /api/member-notices"] = Reading,
+        ["DELETE /api/member-notices/{id}"] = CleaningUp,
         ["POST /api/vaults/{vault}/memberships/{id}/decline"] = "declining and withdrawing reduce access: never guarded",
         ["DELETE /api/vaults/{vault}/memberships/{id}"] = "declining and withdrawing reduce access: never guarded",
         ["POST /api/vaults/{vault}/memberships/{id}/revoke"] = "revoking and leaving reduce access: never guarded",

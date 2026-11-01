@@ -1309,10 +1309,11 @@ public sealed class AccountApiTests(KumbuAppFactory app)
     }
 
     /// <summary>An admin deletes <paramref name="target"/>; the receipt.</summary>
+    /// <summary>The admin deletes <paramref name="target"/>, her shared vaults for everyone at once (no closing period).</summary>
     private async Task<JsonNode> AdminDeletesAsync(RestClient target)
     {
         var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
-        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: admin);
+        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username, sharedVaults = "delete-now" }, session: admin);
         Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
         return JsonNode.Parse(await deleted.Content.ReadAsStringAsync(Ct))!;
     }

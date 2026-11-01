@@ -49,6 +49,10 @@ public sealed record ChangeRoleRequest(string Role);
 /// <summary><c>provider</c>: the embedding provider the member OKs, as the vault's <c>embeddings</c> named it.</summary>
 public sealed record ProviderSeenRequest(string Provider);
 
+/// <summary>A notice to the caller of a vault shared with her that is gone (collab design §7.3): <c>vault</c>, her name
+/// for it, or null where it can't be read any more; <c>text</c>, "The owner has deleted gartenarbeit.".</summary>
+public sealed record MemberNoticeView(string Id, string Kind, DateTime At, string? Vault, string Text);
+
 /// <summary>Sharing a vault (collab design §4): invitations and memberships.</summary>
 public static class SharingApi
 {
@@ -68,6 +72,8 @@ public static class SharingApi
         api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/memberships/{id}/provider-seen", ProviderSeenAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
+        api.MapGet("/member-notices", NoticesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
+        api.MapDelete("/member-notices/{id}", DismissNoticeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
 
@@ -238,6 +244,20 @@ public static class SharingApi
             memberships.Log.LogWarning(e, "The cleanup of membership {MembershipId} failed; the sweep finishes it", ended.Id);
         }
     }
+
+    /// <summary>The caller's notices of vaults deleted for everyone, newest first, each naming the vault by her alias,
+    /// opened with her user key; never the owner.</summary>
+    private static async Task<Ok<MemberNoticeView[]>> NoticesAsync(
+        RequestCaller caller, Memberships memberships, MongoDB.Driver.IMongoDatabase db, TimeProvider time, CancellationToken ct)
+    {
+        await memberships.EnsureReadyAsync(ct);
+        var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct);
+        return TypedResults.Ok(notices.Select(n => new MemberNoticeView(n.Notice.Id.ToString(), n.Notice.Kind, n.Notice.At, n.Alias, MemberNotices.TextFor(n.Alias))).ToArray());
+    }
+
+    /// <summary>Dismissing one of her own notices; any other id answers 404.</summary>
+    private static async Task<NoContent> DismissNoticeAsync(string id, RequestCaller caller, MongoDB.Driver.IMongoDatabase db, CancellationToken ct) =>
+        await MemberNotices.DismissAsync(db, caller.User!.Id, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such notice.");
 
     /// <summary>Withdrawing an open invitation needs no password window either.</summary>
     private static async Task<NoContent> WithdrawAsync(string vault, string id, RequestCaller caller, VaultCatalog catalog, Memberships memberships, CancellationToken ct)

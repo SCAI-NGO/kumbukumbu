@@ -81,11 +81,16 @@ public sealed record AdminUserView(
 /// acting admin's own.</summary>
 public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null);
 
-/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
-public sealed record DeleteAccountRequest(string Password, string Confirm);
+/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.
+/// <c>sharedVaults</c>: what becomes of her vaults shared with others (collab design §7.3): <c>give-members-7-days</c>
+/// (the default) keeps each read-only and exportable for its members for 7 days, then deletes it; <c>delete-now</c>
+/// deletes them at once, and each member is told.</summary>
+public sealed record DeleteAccountRequest(string Password, string Confirm, string? SharedVaults = null);
 
-/// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
-public sealed record DeleteUserRequest(string Password, string Confirm);
+/// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username
+/// typed out. <c>sharedVaults</c>: as for one's own account, once for all of the user's shared vaults (default
+/// <c>give-members-7-days</c>).</summary>
+public sealed record DeleteUserRequest(string Password, string Confirm, string? SharedVaults = null);
 
 /// <summary>A deleted user that a backup restore brought back.</summary>
 public sealed record RestoredUserView(string Id, string Username, string Display);
@@ -109,11 +114,13 @@ public sealed record RepeatDeletionsRequest(string Password);
 /// ended; <c>sharedVaultsClosed</c>: their own vaults that were shared with others and went for those members too
 /// (collab design §7.2), counted, never named. <c>sharedNotes</c>: with memberships ended, what became of the user's
 /// writes there, for the person: "Notes you wrote in vaults shared with you stay in those vaults; your name was removed
-/// from their history."; else null.
+/// from their history."; else null. <c>sharedVaultsScheduled</c>: for each of their shared vaults given a closing period
+/// instead, the time it will be deleted ("scheduled for deletion on …"); those aren't among <c>vaults</c>.
 /// </summary>
 public sealed record DeletionReceiptView(
     string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, long Attachments, int ApiKeys, int Connections, int Invitations,
-    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed, int Memberships = 0, int SharedVaultsClosed = 0, string? SharedNotes = null);
+    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed, int Memberships = 0, int SharedVaultsClosed = 0, string? SharedNotes = null,
+    IReadOnlyList<DateTime>? SharedVaultsScheduled = null);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -338,7 +345,8 @@ public static class AccountApi
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw new WrongPasswordException("The password is wrong.");
+        var shared = SharedVaultChoice(body.SharedVaults);
+        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct, shared)) throw new WrongPasswordException("The password is wrong.");
         pairings.DropAll(user.Id);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
@@ -403,7 +411,8 @@ public static class AccountApi
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // A wrong password throws; null is a right one and no such user.
-        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct);
+        var shared = SharedVaultChoice(body.SharedVaults);
+        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct, shared);
         await PasswordGivenAsync(http, sessions, ct);
         if (deleted is null) throw ApiErrors.NotFound("There is no such user.");
         pairings.DropAll(deleted.Id);
@@ -430,7 +439,11 @@ public static class AccountApi
         deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.Attachments, deleted.Summary.ApiKeys,
         deleted.Summary.Connections, deleted.Summary.Invitations, index.Providers.All.Where(p => p.External).Select(p => p.Label).ToArray(),
         string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed,
-        deleted.Summary.Memberships, deleted.Summary.SharedVaults, deleted.Summary.Memberships > 0 ? SharedNotesSentence : null);
+        deleted.Summary.Memberships, deleted.Summary.SharedVaults, deleted.Summary.Memberships > 0 ? SharedNotesSentence : null,
+        [.. (deleted.Summary.Closing?.Values ?? []).Order()]);
+
+    private static SharedVaultChoice SharedVaultChoice(string? text) => SharedVaultChoices.Parse(text)
+        ?? throw ApiErrors.BadRequest($"'sharedVaults' is '{SharedVaultChoices.GiveMembersTime}' or '{SharedVaultChoices.DeleteNow}'.");
 
     /// <summary>The concept's sentence (§9) on a member's writes after her account's deletion.</summary>
     internal const string SharedNotesSentence = "Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history.";

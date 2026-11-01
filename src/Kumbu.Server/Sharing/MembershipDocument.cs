@@ -125,6 +125,11 @@ public sealed class MembershipDocument
     [BsonIgnore]
     public bool OwnerInactive { get; set; }
 
+    /// <summary>Not stored: the vault's <c>closingAt</c> as read with the membership for a request, once its owner deleted
+    /// her account and gave the members time (collab design §7.3).</summary>
+    [BsonIgnore]
+    public DateTime? ClosingAt { get; set; }
+
     /// <summary>A sentinel for transactions that derive slots through the membership (design §3.4).</summary>
     [BsonElement("revision")]
     public int Revision { get; set; }
