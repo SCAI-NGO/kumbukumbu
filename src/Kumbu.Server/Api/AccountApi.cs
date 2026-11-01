@@ -4,6 +4,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
@@ -81,11 +82,16 @@ public sealed record AdminUserView(
 /// acting admin's own.</summary>
 public sealed record UpdateUserRequest(bool? Active = null, string? Role = null, string? Password = null);
 
-/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.</summary>
-public sealed record DeleteAccountRequest(string Password, string Confirm);
+/// <summary>Deleting one's own account: the current password, and <c>confirm</c>, the username typed out.
+/// <c>sharedVaults</c>: what becomes of her vaults shared with others (collab design §7.3): <c>give-members-7-days</c>
+/// (the default) keeps each read-only and exportable for its members for 7 days, then deletes it; <c>delete-now</c>
+/// deletes them at once, and each member is told.</summary>
+public sealed record DeleteAccountRequest(string Password, string Confirm, string? SharedVaults = null);
 
-/// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username typed out.</summary>
-public sealed record DeleteUserRequest(string Password, string Confirm);
+/// <summary>Deleting a user (active or not): the admin's own current password, and <c>confirm</c>, the user's username
+/// typed out. <c>sharedVaults</c>: as for one's own account, once for all of the user's shared vaults (default
+/// <c>give-members-7-days</c>).</summary>
+public sealed record DeleteUserRequest(string Password, string Confirm, string? SharedVaults = null);
 
 /// <summary>A deleted user that a backup restore brought back.</summary>
 public sealed record RestoredUserView(string Id, string Username, string Display);
@@ -105,11 +111,17 @@ public sealed record RepeatDeletionsRequest(string Password);
 /// users kept outside the database. <c>attachments</c>: files (PDFs, images) in the deleted vaults, as <c>notes</c>
 /// counts notes. <c>invitations</c>: invitations the user joined with whose note and link to the
 /// user were erased (the invitation itself stays as a used one). <c>apiKeys</c> and <c>connections</c> count every
-/// record removed, revoked ones included.
+/// record removed, revoked ones included. <c>memberships</c>: the user's memberships of vaults shared with them that
+/// ended; <c>sharedVaultsClosed</c>: their own vaults that were shared with others and went for those members too
+/// (collab design §7.2), counted, never named. <c>sharedNotes</c>: with memberships ended, what became of the user's
+/// writes there, for the person: "Notes you wrote in vaults shared with you stay in those vaults; your name was removed
+/// from their history."; else null. <c>sharedVaultsScheduled</c>: for each of their shared vaults given a closing period
+/// instead, the time it will be deleted ("scheduled for deletion on …"); those aren't among <c>vaults</c>.
 /// </summary>
 public sealed record DeletionReceiptView(
     string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, long Attachments, int ApiKeys, int Connections, int Invitations,
-    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed);
+    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed, int Memberships = 0, int SharedVaultsClosed = 0, string? SharedNotes = null,
+    IReadOnlyList<DateTime>? SharedVaultsScheduled = null);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -149,7 +161,7 @@ public static class AccountApi
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
-        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/account/reencrypt", ReencryptAsync).Errors(400, 401, 403, 409, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);
@@ -237,12 +249,13 @@ public static class AccountApi
     /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once. The user key
     /// is rotated in the recovery; the vaults are re-keyed in the background, after the answer, which never waits for them.</summary>
     private static async Task<Ok<RecoveryKeyView>> RecoverAsync(
-        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, Pairings pairings, CancellationToken ct)
+        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
@@ -276,16 +289,18 @@ public static class AccountApi
 
     private static ILogger Log(ILoggerFactory logs) => logs.CreateLogger(typeof(AccountApi).FullName!);
 
-    private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
+    private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         await sessions.EndAsync(http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct);
         pairings.DropAll(caller.User!.Id);
+        // Past the end: this tab's socket closes with it, rather than at the next check (collab design §9.1).
+        await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
     }
 
     private static async Task<Ok<PasswordChangedView>> ChangePasswordAsync(
-        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, CancellationToken ct)
+        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -295,6 +310,7 @@ public static class AccountApi
         }
 
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         ClearSessionCookie(http);
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));
     }
@@ -317,7 +333,7 @@ public static class AccountApi
     /// </summary>
     private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
         ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits, Pairings pairings,
-        CancellationToken ct)
+        SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -325,6 +341,7 @@ public static class AccountApi
             ?? throw new WrongPasswordException("The password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -334,17 +351,19 @@ public static class AccountApi
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
-        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct)) throw new WrongPasswordException("The password is wrong.");
+        var shared = SharedVaultChoice(body.SharedVaults);
+        if (!await deletion.DeleteOwnAccountAsync(user, caller.UserKey!, body.Password, body.Confirm, ct, shared)) throw new WrongPasswordException("The password is wrong.");
         pairings.DropAll(user.Id);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
     }
 
-    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
+    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
         // A code made by one of the sessions ended (perhaps the one that prompted this) goes with them.
         pairings.DropAll(caller.User!.Id);
+        await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }
 
@@ -399,7 +418,8 @@ public static class AccountApi
     {
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // A wrong password throws; null is a right one and no such user.
-        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct);
+        var shared = SharedVaultChoice(body.SharedVaults);
+        var deleted = await deletion.DeleteUserAsync(caller.User!, caller.UserKey!, body.Password, id, body.Confirm, ct, shared);
         await PasswordGivenAsync(http, sessions, ct);
         if (deleted is null) throw ApiErrors.NotFound("There is no such user.");
         pairings.DropAll(deleted.Id);
@@ -425,7 +445,15 @@ public static class AccountApi
     internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(
         deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.Attachments, deleted.Summary.ApiKeys,
         deleted.Summary.Connections, deleted.Summary.Invitations, index.Providers.All.Where(p => p.External).Select(p => p.Label).ToArray(),
-        string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed);
+        string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed,
+        deleted.Summary.Memberships, deleted.Summary.SharedVaults, deleted.Summary.Memberships > 0 ? SharedNotesSentence : null,
+        [.. (deleted.Summary.Closing?.Values ?? []).Order()]);
+
+    private static SharedVaultChoice SharedVaultChoice(string? text) => SharedVaultChoices.Parse(text)
+        ?? throw ApiErrors.BadRequest($"'sharedVaults' is '{SharedVaultChoices.GiveMembersTime}' or '{SharedVaultChoices.DeleteNow}'.");
+
+    /// <summary>The concept's sentence (§9) on a member's writes after her account's deletion.</summary>
+    internal const string SharedNotesSentence = "Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history.";
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());
@@ -463,7 +491,7 @@ public static class AccountApi
     private static async Task<NoContent> RevokeInvitationAsync(string id, RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         await invitations.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("There is no such open invitation.");
 
-    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>) by vault id; 400 for a vault the caller
+    /// <summary>A request's rights (vault name → <c>read</c>/<c>write</c>/<c>maintain</c>) by vault id; 400 for a vault the caller
     /// has no such name for or another right.</summary>
     internal static Dictionary<string, KeyRight> RightsByVaultId(IReadOnlyDictionary<string, string> requested, Dictionary<string, string> names)
     {
@@ -472,7 +500,7 @@ public static class AccountApi
         foreach (var (name, rightText) in requested)
         {
             var id = idsByName.GetValueOrDefault(name) ?? throw ApiErrors.BadRequest($"You have no vault named '{name}'.");
-            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read' or 'write', not '{rightText}'.");
+            vaults[id] = KeyRights.Parse(rightText) ?? throw ApiErrors.BadRequest($"A right is 'read', 'write' or 'maintain', not '{rightText}'.");
         }
 
         return vaults;

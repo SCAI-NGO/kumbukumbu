@@ -14,7 +14,7 @@ namespace Kumbu.Core.Sh.Commands;
 /// over the piped lines when it stands right of a pipe. With <c>pixels</c> it also reads the stored text of PDFs,
 /// page by page, after the notes.
 /// </summary>
-public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : ICommand
+public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, WriterMarks? marks = null) : ICommand
 {
     // The engine is linear in the input, so the timeout is a backstop, not the protection.
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
@@ -192,9 +192,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
             searched = carrying;
         }
 
-        var lines = NoteLines(search, options, searched);
+        var matched = new List<VaultPath>();
+        var lines = NoteLines(search, options, searched, matched);
         if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, ct);
         var result = ShellResult.Ok(Lines.Join(lines));
+        if (marks is not null && !options.Has("invert-match")) result = result with { Notice = await marks.NoticeAsync(matched, ct) };
         return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, searched.Select(n => n.Path)) };
     }
 
@@ -230,7 +232,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
     private static ShellResult SearchContents(Search search, Options options, IEnumerable<Note> found) =>
         ShellResult.Ok(Lines.Join(NoteLines(search, options, found)));
 
-    private static List<string> NoteLines(Search search, Options options, IEnumerable<Note> found)
+    private static List<string> NoteLines(Search search, Options options, IEnumerable<Note> found, List<VaultPath>? matched = null)
     {
         var lineNumbers = !options.Has("no-line-number");
         var output = new List<string>();
@@ -240,6 +242,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null) : IC
             var matches = search.Matches(lines);
             if (matches.Count == 0) continue;
 
+            matched?.Add(note.Path);
             var path = note.Path.Value;
             if (options.Has("files-with-matches")) output.Add(path);
             else if (options.Has("count")) output.Add($"{path}:{matches.Count}");

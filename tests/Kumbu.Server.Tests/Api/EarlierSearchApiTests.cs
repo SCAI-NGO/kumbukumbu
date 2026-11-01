@@ -32,7 +32,7 @@ public sealed class EarlierSearchApiTests(KumbuAppFactory app)
         var hit = Assert.Single((await JsonAsync(response)).AsArray());
         Assert.Equal(($"/{user.Vault}/plan.md", first, user.Username), (Text(hit, "path"), Text(hit, "version"), Text(hit, "writer")));
         Assert.Contains("Zebras first.", Text(hit, "snippet"));
-        Assert.Equal("user", Text(hit, "writerKind"));
+        Assert.Equal("self", Text(hit, "writerKind"));
         Assert.Empty((await JsonAsync(today)).AsArray());
     }
 

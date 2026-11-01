@@ -5,7 +5,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useId, useMemo, useRef, u
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useDeleteFile, useTree, type TreeFolder } from "../api/notes";
+import { useDeleteFile, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { fileKindOf, folderOf, titleOf, viewUrl, type LightboxState } from "../api/paths";
 import { folderOrder, textOrder } from "../api/textOrder";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -120,6 +120,8 @@ export default function GalleryPage() {
   const { vault = "" } = useParams();
   const navigate = useNavigate();
   const tree = useTree(vault);
+  // Below `write` nothing is uploaded, moved or deleted here (collab design §12): the gallery is for looking.
+  const writes = useMayChange(`/${vault}`, true);
   const [order, setOrder] = useState(storedOrder);
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const selection = useSelection();
@@ -209,9 +211,11 @@ export default function GalleryPage() {
             {selecting ? "Done" : "Select"}
           </button>
         )}
-        <button type="button" aria-label="Upload" onClick={upload} className={iconButtonClass}>
-          <Upload size={20} aria-hidden />
-        </button>
+        {writes && (
+          <button type="button" aria-label="Upload" onClick={upload} className={iconButtonClass}>
+            <Upload size={20} aria-hidden />
+          </button>
+        )}
       </header>
 
       <div role="radiogroup" aria-label="Order" className="mx-3 mt-2.5 mb-1 flex flex-none rounded-[9px] border border-line bg-surface p-0.5 sm:max-w-sm">
@@ -235,10 +239,14 @@ export default function GalleryPage() {
           <div className="mx-auto flex max-w-sm flex-col items-center gap-3 py-16 text-center">
             <ImageIcon size={36} aria-hidden className="text-dim" />
             <p className="text-lg font-bold text-text">No images or PDFs in {vault} yet.</p>
-            <p className="text-text-body">Upload screenshots, photos or PDFs, and they show here.</p>
-            <button type="button" onClick={upload} className={primaryButtonClass}>
-              Upload files
-            </button>
+            {writes && (
+              <>
+                <p className="text-text-body">Upload screenshots, photos or PDFs, and they show here.</p>
+                <button type="button" onClick={upload} className={primaryButtonClass}>
+                  Upload files
+                </button>
+              </>
+            )}
           </div>
         )}
         <ScrollRoot.Provider value={scroller}>
@@ -280,12 +288,16 @@ export default function GalleryPage() {
             <BarButton label="Download" disabled={asking || chosen.length === 0 || chosen.length > maxZipFiles} onClick={() => void download()}>
               <Download size={20} aria-hidden />
             </BarButton>
-            <BarButton label="Move" disabled={chosen.length === 0} onClick={() => setDialog({ kind: "move", files: chosen })}>
-              <FolderInput size={20} aria-hidden />
-            </BarButton>
-            <BarButton label="Delete" disabled={chosen.length === 0 || !versioned} onClick={() => setDialog({ kind: "delete", files: chosen })}>
-              <Trash2 size={20} aria-hidden />
-            </BarButton>
+            {writes && (
+              <>
+                <BarButton label="Move" disabled={chosen.length === 0} onClick={() => setDialog({ kind: "move", files: chosen })}>
+                  <FolderInput size={20} aria-hidden />
+                </BarButton>
+                <BarButton label="Delete" disabled={chosen.length === 0 || !versioned} onClick={() => setDialog({ kind: "delete", files: chosen })}>
+                  <Trash2 size={20} aria-hidden />
+                </BarButton>
+              </>
+            )}
           </div>
         </section>
       )}
@@ -297,7 +309,7 @@ export default function GalleryPage() {
       )}
       <ZipFrame onError={setProblem} />
 
-      {uploading && (
+      {uploading && writes && (
         <LoadBoundary fallback={<LoadFailedSheet onClose={() => setUploading(false)} />}>
           <Suspense>
             <UploadSheet folder={`/${vault}`} dropped={null} onClose={() => setUploading(false)} />

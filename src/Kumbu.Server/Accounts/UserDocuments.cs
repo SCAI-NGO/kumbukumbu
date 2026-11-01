@@ -42,6 +42,16 @@ public sealed class UserDocument
     [BsonElement("keyId")]
     public byte[] KeyId { get; set; } = [];
 
+    /// <summary>The public key of the user's keypair (collab design §5.1), an uncompressed P-256 point; null until it is
+    /// created. Never what a member slot is wrapped to: that comes from the private key, or a membership's pin.</summary>
+    [BsonElement("publicKey"), BsonIgnoreIfNull]
+    public byte[]? PublicKey { get; set; }
+
+    /// <summary>The private key, sealed under a key from the user key, bound to the user and <see cref="PublicKey"/>
+    /// (<see cref="Sharing.MemberKeys"/>).</summary>
+    [BsonElement("privateKey"), BsonIgnoreIfNull]
+    public byte[]? PrivateKey { get; set; }
+
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; }
 
@@ -84,6 +94,12 @@ public sealed class UserDocument
     /// (<see cref="Vaults.VaultCatalog.RequireVaultsAsync"/>).</summary>
     [BsonElement("vaultsDeleted")]
     public long VaultsDeleted { get; set; }
+
+    /// <summary>How many times the user was made a member of a vault; incremented in each acceptance's transaction,
+    /// conditioned on the user key's id, so that a concurrent deletion of the account or a rotation of the user key
+    /// conflicts with it (collab design §13 M8).</summary>
+    [BsonElement("membershipsAccepted")]
+    public long MembershipsAccepted { get; set; }
 
     /// <summary>How many sessions the user has started; incremented in each session's transaction, likewise.</summary>
     [BsonElement("sessionsStarted")]

@@ -15,3 +15,8 @@ const { window: dom } = (globalThis as unknown as { jsdom: { window: Window } })
 for (const name of ["localStorage", "sessionStorage"] as const) {
   Object.defineProperty(globalThis, name, { value: dom[name], configurable: true, writable: true });
 }
+
+// jsdom's WebSocket would try to reach a server: without one, the shell's sync socket stays down and the version
+// poll runs, as in a browser that lost its socket. Tests of the socket stub a fake with vi.stubGlobal, which their
+// vi.unstubAllGlobals() takes away again.
+Object.defineProperty(globalThis, "WebSocket", { value: undefined, configurable: true, writable: true });

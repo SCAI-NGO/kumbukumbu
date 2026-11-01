@@ -79,7 +79,7 @@ public class CallerTests
 
         foreach (var (command, result) in results)
         {
-            Assert.Equal(ShellResult.Error($"{command}: this key can only read vault Work"), result);
+            Assert.Equal(ShellResult.Error($"{command}: this key can only read vault Work") with { Code = Refusals.ReadOnly }, result);
         }
 
         Assert.Equal(before, await SnapshotAsync());
@@ -88,7 +88,7 @@ public class CallerTests
     [Fact]
     public async Task AReadOnlyCallerCanStillWriteWhereTheKeyAllowsIt()
     {
-        var result = await ShellFor(ReadsWork).RunAsync("mkcp /Home mine", Ct);
+        var result = await ShellFor(ReadsWork).RunAsync("mv /Home/a.md /Home/b.md", Ct);
 
         Assert.False(result.IsError);
     }
@@ -102,5 +102,32 @@ public class CallerTests
         Assert.False((await sh.RunAsync("ls /Work", Ct)).IsError);
         Assert.False((await sh.RunAsync("history /Work/plan.md", Ct)).IsError);
         Assert.False((await sh.RunAsync("lscp /Work", Ct)).IsError);
+    }
+
+    [Fact]
+    public async Task A_fixed_caller_reads_where_its_level_is_read()
+    {
+        ICaller caller = new FixedCaller("reader", LevelOf: vault => vault == "Work" ? AccessLevel.Read : AccessLevel.Write);
+        var writer = new NoteWriter(_store, _time, caller);
+
+        Assert.Equal(AccessLevel.Read, caller.Level("Work"));
+        Assert.False(caller.CanWrite("Work"));
+        Assert.True(caller.CanWrite("Home"));
+        Assert.True((await writer.WriteAsync("/Work/plan.md", "two\n", VersionToken.Of("one\n"), Ct)).IsError);
+        Assert.Equal("one\n", (await _store.GetAsync(P("/Work/plan.md"), Ct))!.Content);
+        // The older way of saying it: may write, or may only read.
+        Assert.Equal(AccessLevel.Read, ReadsWork.Level("Work"));
+        Assert.Equal(AccessLevel.Write, ReadsWork.Level("Home"));
+    }
+
+    [Fact]
+    public async Task A_fixed_caller_maintains_where_its_level_is_maintain()
+    {
+        ICaller caller = new FixedCaller("maintainer", LevelOf: _ => AccessLevel.Maintain);
+        var writer = new NoteWriter(_store, _time, caller);
+
+        Assert.Equal(AccessLevel.Maintain, caller.Level("Work"));
+        Assert.True(caller.CanWrite("Work"));
+        Assert.False((await writer.WriteAsync("/Work/plan.md", "two\n", VersionToken.Of("one\n"), Ct)).IsError);
     }
 }

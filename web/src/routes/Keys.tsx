@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useVaults, type VaultView } from "../api/notes";
 import { useId, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -10,13 +11,13 @@ import { useDialog } from "../hooks/useDialog";
 import Connections from "./Connections";
 import KeyReveal from "./KeyReveal";
 import NewKeyDialog from "./NewKeyDialog";
+import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const date = (iso: string) => day.format(new Date(iso));
-const rightText = (right: string) => (right === "write" ? "read and write" : right);
 
 /** The user's API keys for agents: made here, shown once, revoked here. */
 export default function Keys() {
@@ -28,6 +29,7 @@ export default function Keys() {
   // While a connector URL is shown, it has the page to itself, as a new key has.
   const [revealing, setRevealing] = useState(false);
   const [order, setOrder] = useState<UsageOrder>("created");
+  const vaults = useVaults();
 
   if (created) {
     return (
@@ -55,7 +57,7 @@ export default function Keys() {
           {keys.data && keys.data.length > 0 && (
             <ul className="flex flex-col gap-3">
               {inUsageOrder(keys.data, order).map((key) => (
-                <KeyItem key={key.id} apiKey={key} onRevoke={() => setRevoking(key)} />
+                <KeyItem key={key.id} apiKey={key} vaults={vaults.data} onRevoke={() => setRevoking(key)} />
               ))}
             </ul>
           )}
@@ -84,9 +86,10 @@ function expiryText(apiKey: ApiKey, expired: boolean) {
   return ` · ${expired ? "Expired" : "Expires"} ${date(apiKey.expiresAt)}`;
 }
 
-function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
+function KeyItem({ apiKey, vaults, onRevoke }: { apiKey: ApiKey; vaults: VaultView[] | undefined; onRevoke(): void }) {
   const revoked = apiKey.revokedAt !== null;
   const expired = apiKey.expiresAt !== null && new Date(apiKey.expiresAt).getTime() <= Date.now();
+  const mixed = !revoked && !expired ? mixedVault(vaults, Object.keys(apiKey.vaults)) : null;
   return (
     <li className={`flex flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${revoked || expired ? " opacity-75" : ""}`}>
       <div className="flex items-baseline justify-between gap-3">
@@ -99,10 +102,11 @@ function KeyItem({ apiKey, onRevoke }: { apiKey: ApiKey; onRevoke(): void }) {
       <ul className="flex flex-col text-sm text-text-body">
         {Object.entries(apiKey.vaults).map(([vault, right]) => (
           <li key={vault}>
-            {vault}: {rightText(right)}
+            {vault}: <CappedRight right={right} vault={vaults?.find((v) => v.name === vault)} />
           </li>
         ))}
       </ul>
+      {mixed && <MixedWarning vault={mixed} />}
       <p className="text-sm text-muted">
         Created {date(apiKey.createdAt)} · {apiKey.lastUsedAt ? `Last used ${timeText(apiKey.lastUsedAt)}` : "Never used"}
         {revoked && ` · Revoked ${date(apiKey.revokedAt!)}`}

@@ -15,7 +15,7 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-const textTokens = ["text", "textBody", "muted", "dim", "accentText"] as const satisfies readonly (keyof Tokens)[];
+const textTokens = ["text", "textBody", "muted", "dim", "accentText", "warning"] as const satisfies readonly (keyof Tokens)[];
 const grounds = ["bg", "surface", "surface2"] as const satisfies readonly (keyof Tokens)[];
 
 describe("colour schemes", () => {

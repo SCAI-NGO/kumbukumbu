@@ -62,7 +62,7 @@ public sealed class WelcomeVault(VaultCatalog catalog, IOptions<KumbuOptions> op
             foreach (var (name, content) in Texts())
             {
                 var filled = Fill(content, publicUrl);
-                if (!await store.TryCreateAsync(new StoredNote(VaultPath.Root.Child(Name).Child(name), filled, 1, Writers.Seed, now, [], filled), token))
+                if (!await store.TryCreateAsync(new StoredNote(VaultPath.Root.Child(Name).Child(name), filled, 1, Writers.Seed, now, [], filled, Ref: WriterRef.Server), token))
                 {
                     throw new InvalidOperationException("A welcome note exists already.");
                 }

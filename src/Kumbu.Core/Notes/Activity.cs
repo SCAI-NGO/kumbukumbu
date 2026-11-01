@@ -24,9 +24,12 @@ public sealed record ActivityFile(
 /// <summary>A changeset of a vault: what one writer did close together in time.</summary>
 /// <param name="Id">Null for writes that join no changeset (restore, seed) or moves/removals recorded before moves
 /// and trash records carried one; those of one writer at one instant (one commit) are one row.</param>
-/// <param name="Key">Tells rows apart, also rows that end at the same instant: the paging cursor is (<c>To</c>, <c>Key</c>).</param>
+/// <param name="Key">Tells rows apart, also rows that end at the same instant: the paging cursor is (<c>To</c>, <c>Key</c>).
+/// Opaque per viewer when <see cref="Activity.Rows"/> is given a row key (collab design §8.2).</param>
 /// <param name="Restore">The row is a restore (a version, a checkpoint).</param>
-public sealed record ActivityRow(string? Id, string Writer, DateTime From, DateTime To, IReadOnlyList<ActivityFile> Files, string Key = "", bool Restore = false);
+/// <param name="Ref">The reference of the row's writer, to render it for a viewer (<see cref="IWriterLabels"/>).</param>
+public sealed record ActivityRow(
+    string? Id, string Writer, DateTime From, DateTime To, IReadOnlyList<ActivityFile> Files, string Key = "", bool Restore = false, WriterRef? Ref = null);
 
 /// <summary>
 /// Folds a vault's note and attachment states (current and history, also of trashed ones), trash records and move
@@ -38,13 +41,14 @@ public static class Activity
     private const string RestoreSuffix = " (restore)";
 
     /// <summary>One state of a note or attachment, with the state before it in the same file (null: none kept).</summary>
-    private sealed record State(string Path, string Version, string Writer, DateTime At, Changeset? Changeset, string? Before, bool First, bool Lost, bool Trashed);
+    private sealed record State(
+        string Path, string Version, string Writer, DateTime At, Changeset? Changeset, string? Before, bool First, bool Lost, bool Trashed, WriterRef? Ref);
 
     /// <summary>A note or attachment going to the trash, with the version it had then.</summary>
-    private sealed record Removal(string Path, string Version, string DeletedBy, DateTime DeletedAt, Changeset? Changeset);
+    private sealed record Removal(string Path, string Version, string DeletedBy, DateTime DeletedAt, Changeset? Changeset, WriterRef? Ref);
 
     /// <param name="Path">Where the note is now (or was deleted): states, moves and removals of one note meet there.</param>
-    private sealed record Item(string? Id, string Label, DateTime At, string Path, State? State = null, MoveRecord? Move = null, Removal? Trash = null)
+    private sealed record Item(string? Id, string Label, WriterRef? Ref, DateTime At, string Path, State? State = null, MoveRecord? Move = null, Removal? Trash = null)
     {
         public string Writer => Writers.Identity(Label);
     }
@@ -53,9 +57,11 @@ public static class Activity
     /// ended earlier, or at that instant with a greater key. Without a key, rows that ended earlier.</param>
     /// <param name="attachments">The vault's attachments, folded with the notes; <paramref name="moves"/> holds their
     /// moves too.</param>
+    /// <param name="rowKey">Makes a row's key, from its changeset (or, without one, its commit), what the viewer gets:
+    /// opaque, so that the keys of another person's rows say nothing that groups them by writer.</param>
     public static IReadOnlyList<ActivityRow> Rows(
         IReadOnlyList<StoredNote> notes, IReadOnlyList<TrashedNote> trash, IReadOnlyList<MoveRecord> moves, DateTime? before, int limit, string? beforeKey = null,
-        IReadOnlyList<StoredAttachment>? attachments = null, IReadOnlyList<TrashedAttachment>? attachmentTrash = null)
+        IReadOnlyList<StoredAttachment>? attachments = null, IReadOnlyList<TrashedAttachment>? attachmentTrash = null, Func<string, string>? rowKey = null)
     {
         attachments ??= [];
         attachmentTrash ??= [];
@@ -64,27 +70,28 @@ public static class Activity
             .Concat(attachments.SelectMany(a => States(a, trashed: false)))
             .Concat(attachmentTrash.SelectMany(t => States(t.Attachment, trashed: true)))
             .ToList();
-        var removals = trash.Select(t => new Removal(t.Note.Path.Value, t.Note.Version, t.DeletedBy, t.DeletedAt, t.Changeset))
-            .Concat(attachmentTrash.Select(t => new Removal(t.Attachment.Path.Value, t.Attachment.Version, t.DeletedBy, t.DeletedAt, t.Changeset)))
+        var removals = trash.Select(t => new Removal(t.Note.Path.Value, t.Note.Version, t.DeletedBy, t.DeletedAt, t.Changeset, t.Ref))
+            .Concat(attachmentTrash.Select(t => new Removal(t.Attachment.Path.Value, t.Attachment.Version, t.DeletedBy, t.DeletedAt, t.Changeset, t.Ref)))
             .ToList();
         var statesByPath = states.ToLookup(s => s.Path, StringComparer.Ordinal);
         var where = new Whereabouts(moves, removals);
 
-        var items = states.Select(s => new Item(s.Changeset?.Id, s.Writer, s.At, s.Path, State: s))
-            .Concat(moves.Select(m => new Item(m.Changeset?.Id, m.MovedBy, m.MovedAt, where.After(m.To.Value, m.MovedAt), Move: m)))
-            .Concat(removals.Select(r => new Item(r.Changeset?.Id, r.DeletedBy, r.DeletedAt, r.Path, Trash: r)));
+        var items = states.Select(s => new Item(s.Changeset?.Id, s.Writer, s.Ref, s.At, s.Path, State: s))
+            .Concat(moves.Select(m => new Item(m.Changeset?.Id, m.MovedBy, m.Ref, m.MovedAt, where.After(m.To.Value, m.MovedAt), Move: m)))
+            .Concat(removals.Select(r => new Item(r.Changeset?.Id, r.DeletedBy, r.Ref, r.DeletedAt, r.Path, Trash: r)));
 
-        // By changeset; without one, by commit: one writer at one instant (a restore, an older folder mv).
+        // By changeset; without one, by commit: one writer at one instant (a restore, an older folder mv). The writer by
+        // its reference: members store no label, and two of them restoring at one instant are two rows.
         var groups = new Dictionary<string, List<Item>>(StringComparer.Ordinal);
         foreach (var item in items)
         {
-            var key = item.Id is { } id ? "c:" + id : $"w:{item.At.Ticks}:{item.Writer}";
+            var key = item.Id is { } id ? "c:" + id : $"w:{item.At.Ticks}:{item.Ref?.ChangesetKey(item.Label) ?? "label:" + item.Writer}";
             if (groups.TryGetValue(key, out var group)) group.Add(item);
             else groups[key] = [item];
         }
 
         return [.. groups
-            .Select(g => Row(g.Key, g.Value, statesByPath))
+            .Select(g => Row(rowKey is null ? g.Key : rowKey(g.Key), g.Value, statesByPath))
             .Where(r => before is null || r.To < before || (beforeKey is not null && r.To == before && string.CompareOrdinal(r.Key, beforeKey) > 0))
             .OrderByDescending(r => r.To)
             .ThenBy(r => r.Key, StringComparer.Ordinal)
@@ -95,8 +102,8 @@ public static class Activity
         States(
             note.Path.Value,
             [
-                .. note.History.Reverse().Select(h => (VersionToken.Of(h.Content), h.WrittenBy, h.WrittenAt, h.Changeset)),
-                (note.Version, note.LastWriter, note.LastWriteAt, note.Changeset),
+                .. note.History.Reverse().Select(h => (VersionToken.Of(h.Content), h.WrittenBy, h.WrittenAt, h.Changeset, h.Ref)),
+                (note.Version, note.LastWriter, note.LastWriteAt, note.Changeset, note.Ref),
             ],
             note.History.Count,
             trashed);
@@ -105,8 +112,8 @@ public static class Activity
         States(
             attachment.Path.Value,
             [
-                .. attachment.History.Reverse().Select(h => (h.State.Version, h.WrittenBy, h.WrittenAt, h.Changeset)),
-                (attachment.Version, attachment.LastWriter, attachment.LastWriteAt, attachment.Changeset),
+                .. attachment.History.Reverse().Select(h => (h.State.Version, h.WrittenBy, h.WrittenAt, h.Changeset, h.Ref)),
+                (attachment.Version, attachment.LastWriter, attachment.LastWriteAt, attachment.Changeset, attachment.Ref),
             ],
             attachment.History.Count,
             trashed);
@@ -114,14 +121,14 @@ public static class Activity
     /// <summary>A file's states oldest first (<paramref name="chain"/>: history, then the current state), each with its
     /// predecessor.</summary>
     private static IEnumerable<State> States(
-        string path, List<(string Version, string Writer, DateTime At, Changeset? Changeset)> chain, int history, bool trashed)
+        string path, List<(string Version, string Writer, DateTime At, Changeset? Changeset, WriterRef? Ref)> chain, int history, bool trashed)
     {
         // A full history may have dropped the states before its oldest.
         var lost = history >= NoteWriter.HistoryLimit;
         for (var i = 0; i < chain.Count; i++)
         {
-            var (version, writer, at, changeset) = chain[i];
-            yield return new State(path, version, writer, at, changeset, i == 0 ? null : chain[i - 1].Version, First: i == 0 && !lost, Lost: i == 0 && lost, trashed);
+            var (version, writer, at, changeset, reference) = chain[i];
+            yield return new State(path, version, writer, at, changeset, i == 0 ? null : chain[i - 1].Version, First: i == 0 && !lost, Lost: i == 0 && lost, trashed, reference);
         }
     }
 
@@ -157,7 +164,7 @@ public static class Activity
             .OrderBy(f => f.Path, TextOrder.Default)
             .ToList();
         var restore = group[0].Id is null && group.Any(i => i.Label.EndsWith(RestoreSuffix, StringComparison.Ordinal));
-        return new ActivityRow(group[0].Id, group[0].Writer, group.Min(i => i.At), group.Max(i => i.At), files, key, restore);
+        return new ActivityRow(group[0].Id, group[0].Writer, group.Min(i => i.At), group.Max(i => i.At), files, key, restore, group[0].Ref);
     }
 
     private static ActivityFile File(string path, List<Item> items, ILookup<string, State> statesByPath)

@@ -201,6 +201,9 @@ public sealed class VaultOptions
     /// <summary>Attachments' blobs read and decrypted at once, server-wide (each up to 15 MB, about twice that while it
     /// is decrypted); a further read waits for one to finish. Serving the bytes afterwards holds no slot.</summary>
     public int ConcurrentFileReads { get; set; } = 4;
+
+    /// <summary>People a vault is shared with at most, pending invitations included (collab design §2.1).</summary>
+    public int MemberLimit { get; set; } = 20;
 }
 
 public sealed class ProxyOptions

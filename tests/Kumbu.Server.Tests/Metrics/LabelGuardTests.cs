@@ -83,6 +83,40 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
         });
     }
 
+    [Fact]
+    public async Task Sharing_labels_take_no_vault_user_or_label_value()
+    {
+        var api = app.PublicApi;
+        var memberships = api.Services.GetRequiredService<Kumbu.Server.Sharing.Memberships>();
+        var alice = await Api.RestClient.NewAsync(api, vault: Marker + "-vault");
+        var bob = await Api.RestClient.NewAsync(api, vault: "Work");
+        var vaultId = await Kumbu.Server.Tests.Sharing.Share.VaultIdAsync(alice);
+        var id = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, Marker + "-alias", label: Marker + "-label");
+        await memberships.ChangeRoleAsync(alice.User.Id, alice.UserKey, vaultId, id, Kumbu.Server.Sharing.MemberRole.Read, () => { }, Ct);
+        await memberships.ChangeRoleAsync(alice.User.Id, alice.UserKey, vaultId, id, Kumbu.Server.Sharing.MemberRole.Maintain, () => { }, Ct);
+        var invite = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, Marker + "-invite", Kumbu.Server.Sharing.MemberRole.Read, TimeSpan.FromDays(7), false, Ct);
+        await memberships.WithdrawAsync(vaultId, invite.MembershipId, Ct);
+        await memberships.LeaveAsync(bob.User.Id, id, Ct);
+        // An acceptance refused (the alias is a vault name of hers already): counted by kind, never by its sentence.
+        var carol = await Api.RestClient.NewAsync(api, vault: Marker + "-carol");
+        var refused = await memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Carol", Kumbu.Server.Sharing.MemberRole.Read, TimeSpan.FromDays(7), false, Ct);
+        await Assert.ThrowsAsync<Kumbu.Server.Vaults.VaultNameTakenException>(() => memberships.AcceptAsync(carol.User.Id, carol.UserKey, refused.Secret, Marker + "-carol", Ct));
+
+        var text = await Scrape.TextAsync(app);
+
+        var values = text.Split('\n').Where(l => l.StartsWith("kumbu_invitations_total", StringComparison.Ordinal) || l.StartsWith("kumbu_membership", StringComparison.Ordinal))
+            .SelectMany(l => Pair().Matches(l).Select(m => m.Groups["value"].Value)).ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(
+            new HashSet<string> { "created", "accepted", "declined", "withdrawn", "expired", "refused", "revoked", "left", "role_raised", "role_lowered", "pending", "active" },
+            values);
+        foreach (var forbidden in new[] { vaultId, id, invite.MembershipId, alice.User.Id, bob.User.Id, alice.Username, bob.Username, Marker })
+        {
+            Assert.DoesNotContain(forbidden, text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.All(text.Split('\n').Where(l => l.StartsWith("kumbu_", StringComparison.Ordinal)), l => Assert.True(Accepts(l, Endpoints()), l));
+    }
+
     [GeneratedRegex("_(bucket|sum|count)$")]
     private static partial Regex HistogramSuffix();
 
@@ -99,6 +133,9 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
         Assert.False(Accepts("""kumbu_vault_locks_total{reason="timeout"} 0""", endpoints));
         Assert.False(Accepts("""kumbu_invented_total{tool="sh"} 0""", endpoints));
         Assert.False(Accepts("""kumbu_mcp_tool_calls_total{tool="sh",kind="page"} 0""", endpoints));
+        Assert.True(Accepts("""kumbu_membership_changes_total{event="role_raised"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_invitations_total{outcome="role_raised"} 0""", endpoints));
+        Assert.False(Accepts("""kumbu_memberships{status="closing"} 0""", endpoints));
     }
 
     [GeneratedRegex("^[1-5]xx$")]

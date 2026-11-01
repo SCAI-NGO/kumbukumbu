@@ -92,7 +92,7 @@ public class ReplacerTests
     {
         var plan = Plan(await Run("/Work", "Hecate", "Selene"));
         var b = (await _store.GetAsync(P("/Work/sub/b.md"), Ct))!;
-        await _store.TryReplaceAsync(b, NoteWriter.Next(b, "About Hecate, changed.\n", "other", _time.GetUtcNow().UtcDateTime), Ct);
+        await _store.TryReplaceAsync(b, NoteWriter.Next(b, "About Hecate, changed.\n", "other", WriterRef.Server, _time.GetUtcNow().UtcDateTime), Ct);
         await Run("/Work", "Hecate", "Selene", plan: plan);
 
         Assert.Equal(
@@ -192,7 +192,7 @@ public class ReplacerTests
     {
         var plan = Plan(await Run("/Work", "Hecate", "Selene"));
         var b = (await _store.GetAsync(P("/Work/sub/b.md"), Ct))!;
-        await _store.TryReplaceAsync(b, NoteWriter.Next(b, "About Hecate, changed.\n", "other", _time.GetUtcNow().UtcDateTime), Ct);
+        await _store.TryReplaceAsync(b, NoteWriter.Next(b, "About Hecate, changed.\n", "other", WriterRef.Server, _time.GetUtcNow().UtcDateTime), Ct);
 
         var applied = await Run("/Work", "Hecate", "Selene", plan: plan);
 
@@ -204,7 +204,7 @@ public class ReplacerTests
     public async Task ANoteRemovedSincePreviewStopsTheApply()
     {
         var plan = Plan(await Run("/Work", "Hecate", "Selene"));
-        await _store.TryTrashAsync((await _store.GetAsync(P("/Work/sub/b.md"), Ct))!, Writers.Dev, _time.GetUtcNow().UtcDateTime, Ct);
+        await _store.TryTrashAsync((await _store.GetAsync(P("/Work/sub/b.md"), Ct))!, Writers.Dev, WriterRef.Server, _time.GetUtcNow().UtcDateTime, Ct);
 
         Assert.True((await Run("/Work", "Hecate", "Selene", plan: plan)).IsError);
         Assert.StartsWith("Hecate", await Content("/Work/a.md"));
@@ -214,7 +214,7 @@ public class ReplacerTests
     public async Task ANoteAddedSincePreviewIsNotTouched()
     {
         var plan = Plan(await Run("/Work", "Hecate", "Selene"));
-        await _store.TryCreateAsync(new StoredNote(P("/Work/new.md"), "Hecate new\n", 1, Writers.Dev, InMemoryNoteStore.Seeded, []), Ct);
+        await _store.TryCreateAsync(new StoredNote(P("/Work/new.md"), "Hecate new\n", 1, Writers.Dev, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), Ct);
 
         Assert.Equal("replaced 4 occurrences in 2 notes", (await Run("/Work", "Hecate", "Selene", plan: plan)).Output);
         Assert.Equal("Hecate new\n", await Content("/Work/new.md"));

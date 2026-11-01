@@ -7,12 +7,16 @@ using Kumbu.Server.Vaults;
 namespace Kumbu.Server.Api;
 
 /// <summary>Every error the REST API returns: one sentence for a person to read. <c>type</c>, only on errors a client
-/// answers by itself: <c>password-required</c> (<see cref="ApiErrors.PasswordRequired"/>).</summary>
-public sealed record ApiError(string Error, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type = null);
+/// answers by itself: <c>password-required</c> (<see cref="ApiErrors.PasswordRequired"/>). <c>code</c>, only on a
+/// refused write: why it was refused (<see cref="Kumbu.Core.Notes.Refusals"/>: <c>read-only</c>, <c>structural</c>, …).</summary>
+public sealed record ApiError(
+    string Error,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Type = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Code = null);
 
 /// <summary>Thrown by a handler to answer with <see cref="Status"/> and an <see cref="ApiError"/>; turned into
 /// the response by <see cref="ApiErrors.Filter"/>, so handlers can keep their typed success results.</summary>
-public sealed class ApiException(int status, string message, TimeSpan? retryAfter = null, string? type = null) : Exception(message)
+public sealed class ApiException(int status, string message, TimeSpan? retryAfter = null, string? type = null, string? code = null) : Exception(message)
 {
     public int Status { get; } = status;
 
@@ -20,6 +24,9 @@ public sealed class ApiException(int status, string message, TimeSpan? retryAfte
 
     /// <summary>The <see cref="ApiError.Type"/> of the answer, if any.</summary>
     public string? Type { get; } = type;
+
+    /// <summary>The <see cref="ApiError.Code"/> of the answer, if any.</summary>
+    public string? Code { get; } = code;
 }
 
 public static class ApiErrors
@@ -49,7 +56,7 @@ public static class ApiErrors
         catch (ApiException e)
         {
             if (e.RetryAfter is { } retryAfter) SetRetryAfter(context.HttpContext, retryAfter);
-            return TypedResults.Json(new ApiError(e.Message, e.Type), statusCode: e.Status);
+            return TypedResults.Json(new ApiError(e.Message, e.Type, e.Code), statusCode: e.Status);
         }
         catch (CredentialsChangedException e)
         {
@@ -60,15 +67,28 @@ public static class ApiErrors
             return Result(StatusCodes.Status403Forbidden, e.Message);
         }
         catch (Exception e) when (e is UsernameTakenException or ApiKeyNameTakenException or ConnectionNameTakenException or PrimaryAdminExistsException or VaultNameTakenException
-            or RotationConflictException or RecoveryConflictException or PasswordConflictException)
+            or RotationConflictException or RecoveryConflictException or PasswordConflictException
+            or Sharing.MemberLimitException or Sharing.PendingLimitException or Sharing.AlreadyMemberException or RekeyRunningException)
         {
             return Result(StatusCodes.Status409Conflict, e.Message);
+        }
+        catch (Exception e) when (e is Sharing.InvitationNotFoundException or Sharing.MembershipNotFoundException)
+        {
+            return Result(StatusCodes.Status404NotFound, e.Message);
+        }
+        catch (Sharing.SharingRefusedException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status409Conflict);
         }
         catch (InvitationUnusableException e)
         {
             return Result(StatusCodes.Status400BadRequest, e.Message);
         }
-        catch (Kumbu.Server.Vaults.VaultDeletedException e)
+        catch (Kumbu.Server.Vaults.VaultReadOnlyException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
+        }
+                catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }

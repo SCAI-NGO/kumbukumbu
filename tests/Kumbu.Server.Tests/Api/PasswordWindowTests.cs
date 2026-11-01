@@ -111,6 +111,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         "POST /api/connections/",
         "POST /api/keys",
         "POST /api/vaults/{vault}/pairing",
+        "POST /api/vaults/{vault}/invitations",
+        "POST /api/vaults/{vault}/memberships/{id}/confirm",
         "PUT /api/connections/{id}/vaults",
     ];
 
@@ -135,6 +137,18 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/search/earlier"] = Reading,
         ["GET /api/changes"] = Reading,
         ["GET /api/vaults/{vault}/activity"] = Reading,
+        ["POST /api/vault-invitations/peek"] = Reading,
+        ["GET /api/vaults/{vault}/memberships/{id}"] = Reading,
+        ["GET /api/vault-events"] = Reading,
+        ["GET /api/member-notices"] = Reading,
+        ["DELETE /api/member-notices/{id}"] = CleaningUp,
+        ["POST /api/vaults/{vault}/memberships/{id}/decline"] = "declining and withdrawing reduce access: never guarded",
+        ["DELETE /api/vaults/{vault}/memberships/{id}"] = "declining and withdrawing reduce access: never guarded",
+        ["POST /api/vaults/{vault}/memberships/{id}/revoke"] = "revoking and leaving reduce access: never guarded",
+        ["POST /api/memberships/{id}/leave"] = "revoking and leaving reduce access: never guarded",
+        ["PUT /api/memberships/{id}/alias"] = "the member's own name for the vault, in her own namespace: it widens no access",
+        ["POST /api/memberships/{id}/provider-seen"] = "the member's own consent for her own searches: it widens no access to the vault",
+        ["POST /api/vault-invitations/accept"] = "the owner's secret is the grant: it gives the caller's credentials nothing",
         ["DELETE /api/session"] = CleaningUp,
         ["DELETE /api/keys/{id}"] = CleaningUp,
         ["DELETE /api/admin/invitations/{id}"] = CleaningUp,
@@ -158,6 +172,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["POST /api/oauth/requests/{id}/decision"] = GrantingInline,
         ["PATCH /api/admin/users/{id}"] = GrantingInline,
         ["POST /api/admin/invitations"] = GrantingInline,
+        ["PUT /api/vaults/{vault}/memberships/{id}/role"] = GrantingInline,
     };
 
     [Fact]
@@ -189,7 +204,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     public static TheoryData<string, bool> GuardedRequests()
     {
         var data = new TheoryData<string, bool>();
-        foreach (var request in new[] { "keys", "connections", "connection-vaults", "decision", "pairing", "invitation", "activation", "vault-export", "export", "checkpoint-export" })
+        foreach (var request in new[] { "keys", "connections", "connection-vaults", "decision", "pairing", "invitation", "vault-invitation", "activation", "vault-export", "export", "checkpoint-export" })
         {
             data.Add(request, false);
             data.Add(request, true);
@@ -243,6 +258,8 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "decision" => await flow!.DecideAsync(allow: true),
             "pairing" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/pairing", new { }),
             "invitation" => await user.SendAsync(HttpMethod.Post, "/api/admin/invitations", new { role = Roles.User }),
+            // Its password in the body doesn't stand in for the window (collab design §4.1).
+            "vault-invitation" => await user.SendAsync(HttpMethod.Post, "/api/vaults/Arbeit/invitations", new { password = RestClient.Password, label = "Bob", role = "write" }),
             "activation" => await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{deactivated!.Value.Id}", new { active = true }),
             _ => await user.GetAsync(url!),
         };
@@ -268,6 +285,9 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
                     // Other tests' admins share the list.
                     Assert.DoesNotContain(await ListAsync(user, "/api/admin/invitations"), i => i!["createdBy"]!.GetValue<string>() == user.User.Id);
                     break;
+                case "vault-invitation":
+                    Assert.Equal(0, await app.Database.GetCollection<Kumbu.Server.Sharing.MembershipDocument>("memberships").CountDocumentsAsync(m => m.Owner == user.User.Id, cancellationToken: Ct));
+                    break;
                 case "activation":
                     var listed = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == deactivated!.Value.Id)!;
                     Assert.False(listed["active"]!.GetValue<bool>());
@@ -279,7 +299,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
 
         switch (request)
         {
-            case "keys" or "connections" or "pairing" or "invitation":
+            case "keys" or "connections" or "pairing" or "invitation" or "vault-invitation":
                 Assert.Equal(HttpStatusCode.Created, response.StatusCode);
                 break;
             case "connection-vaults":
@@ -298,6 +318,34 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
                 Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
                 using (var exported = await user.GetAsync(WithTicket(url!, await TicketAsync(user)))) Assert.Equal(HttpStatusCode.OK, exported.StatusCode);
                 break;
+        }
+    }
+
+    [Theory]
+    [InlineData("maintain", false)]
+    [InlineData("maintain", true)]
+    [InlineData("read", false)]
+    public async Task A_members_role_is_raised_only_inside_the_window_and_lowered_any_time(string role, bool open)
+    {
+        await using var api = Timed();
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
+        var bob = await RestClient.NewAsync(api, vault: "Work");
+        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", Kumbu.Server.Sharing.MemberRole.Write);
+        CloseWindow();
+        if (open) await ConfirmAsync(alice);
+
+        using var response = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role });
+
+        var stored = (await Kumbu.Server.Tests.Sharing.Share.MembershipAsync(app.Database, membership)).Role;
+        if (role == "maintain" && !open)
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.Equal("write", stored);
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(role, stored);
         }
     }
 

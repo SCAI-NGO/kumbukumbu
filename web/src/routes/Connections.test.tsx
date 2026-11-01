@@ -168,6 +168,7 @@ describe("Connections", () => {
   it.each([
     ["revoked", "you revoked it"],
     ["vault_deleted", "its vaults were deleted"],
+    ["sharing_ended", "the vaults shared with you are no longer shared"],
     ["password_changed", "your password was changed"],
     ["recovery", "your account was recovered"],
     ["deactivated", "your account was deactivated"],
@@ -202,6 +203,23 @@ describe("Connections", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("shows maintain in the list, and keeps it when the rights are saved unchanged", async () => {
+    const bodies: unknown[] = [];
+    api([{ ...base, vaults: { Arbeit: "maintain", Home: "read" } }], { "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), noContent()) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Work")).closest("li")!;
+    expect(item).toHaveTextContent("Arbeit: read, write and maintain");
+    expect(within(item).getByText("read, write and maintain")).toHaveClass("text-warning");
+
+    await userEvent.click(within(item).getByRole("button", { name: "Change rights of Work" }));
+    const dialog = screen.getByRole("dialog", { name: "Change rights" });
+    expect(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Maintain")).toBeChecked();
+    expect(within(dialog).getByText("Can change the vault's structure: the board's columns, checkpoints.")).toHaveClass("text-warning");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "maintain", Home: "read" } }]));
+  });
+
   it("revoking asks first", async () => {
     let calls = 0;
     const fetch = api([base], { "DELETE /api/connections/c1": () => (calls++, noContent()) });
@@ -234,5 +252,19 @@ describe("Connections", () => {
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
     await waitFor(() => expect(queryClient.getMutationCache().getAll().filter((m) => m.state.data !== undefined)).toEqual([]));
+  });
+});
+
+describe("connections and vaults shared with the user", () => {
+  it("shows a capped connection as acts as read, and warns that it also reaches a private vault", async () => {
+    const shared = [
+      { name: "Arbeit", notes: 3, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false },
+      { name: "Gartenarbeit", notes: 2, embeddings: "internal", pending: false, canWrite: false, level: "read", owner: '"Alice"', shared: true, membership: "m1" },
+    ];
+    api([{ ...base, vaults: { Arbeit: "write", Gartenarbeit: "write" } }], { "GET /api/vaults": () => json(200, shared) });
+    renderApp("/keys");
+    const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
+    expect(item).toHaveTextContent("Others can write into Gartenarbeit.");
   });
 });

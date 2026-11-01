@@ -15,7 +15,8 @@ public sealed class Ls(INoteReader notes) : ICommand
 
     public string Help => """
         ls [path]
-          List a directory. Directories end with '/'. Without a path, list the vaults.
+          List a directory. Directories end with '/'. Without a path, list the vaults; a vault shared
+          with you shows its owner and what you may do in it: garten/ (shared by "Alice", read).
           A note's path lists just that path. An attachment (an image or a PDF) is listed with its
           kind, pixel size and file size: shot.png  image 1440×3120 412 KB.
 
@@ -25,6 +26,8 @@ public sealed class Ls(INoteReader notes) : ICommand
         """;
 
     public bool ReadsInput => false;
+
+    private static string LevelText(AccessLevel level) => level.ToString().ToLowerInvariant();
 
     public async Task<ShellResult> RunAsync(IReadOnlyList<string> args, string? input, CancellationToken ct)
     {
@@ -42,7 +45,13 @@ public sealed class Ls(INoteReader notes) : ICommand
         {
             // Vaults exist on their own, so an empty one is listed too. Saying what is missing keeps an
             // agent from mistaking locked or damaged data for an empty memory and starting from scratch.
-            var lines = (await notes.ListVaultsAsync(ct)).Order(TextOrder.Default).Select(v => v + "/").ToList();
+            var lines = new List<string>();
+            foreach (var vault in (await notes.ListVaultsAsync(ct)).Order(TextOrder.Default))
+            {
+                // The caller's effective level, so an agent knows before it tries to write.
+                lines.Add(await notes.VaultInfoAsync(vault, ct) is { Owner: { } owner } info ? $"{vault}/ (shared by {owner}, {LevelText(info.Level)})" : vault + "/");
+            }
+
             if (lines.Count == 0) lines.Add("(no vaults)");
             if (await notes.CountLockedVaultsAsync(ct) is var locked and > 0)
             {

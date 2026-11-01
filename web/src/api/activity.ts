@@ -50,12 +50,13 @@ export function deviceOf(writer: string): string {
 }
 
 /**
- * Who wrote, for a person: "You", "You in Obsidian (Laptop)" (the device the key was paired from), "Agent liz",
- * or the writer's name as it is (the server, or a key that no longer exists).
+ * Who wrote, for a person: "You" (the server's kind `self`, never a name compared here), "You in Obsidian (Laptop)"
+ * (the device the key was paired from), "Agent liz", or the writer as the server renders it (the server, another
+ * user, or a key that no longer exists).
  */
 export function writerText({ writer, writerKind }: Pick<ActivityRow, "writer" | "writerKind">): string {
   switch (writerKind) {
-    case "user":
+    case "self":
       return "You";
     case "device":
       return `You in Obsidian (${deviceOf(writer)})`;

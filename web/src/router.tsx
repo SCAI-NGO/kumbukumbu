@@ -99,6 +99,8 @@ export const routes: RouteObject[] = [
     HydrateFallback: () => null,
     children: [
       { path: "/join", lazy: lazyPage(() => import("./routes/Join")) },
+      // Signed in or not: without a session it says what to do first, and keeps the link's secret through sign-in.
+      { path: "/share", lazy: lazyPage(() => import("./routes/Share")) },
       { path: "/signin", element: <SignIn /> },
       { path: "/forgot", element: <ForgotPassword /> },
       { path: "/consent", element: <ConsentRoute /> },

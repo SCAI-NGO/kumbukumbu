@@ -15,6 +15,7 @@ using Kumbu.Server.Metrics;
 using Kumbu.Server.Notes;
 using Kumbu.Server.OAuth;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -64,6 +65,7 @@ builder.Services.AddSingleton(sp =>
     sp.GetRequiredService<IMongoClient>().GetDatabase(sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Mongo.Database));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<VaultCatalog>();
+builder.Services.AddSingleton<Memberships>();
 builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 // The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address
@@ -85,6 +87,8 @@ builder.Services.AddSingleton<SearchIndex>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SearchIndex>());
 builder.Services.AddHostedService<Seeder>();
 builder.Services.AddHostedService<VaultSweeper>();
+builder.Services.AddSingleton<MembershipSweeper>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MembershipSweeper>());
 // Re-keys vaults in the background, one at a time; a hosted service so that it is there to hear of pending vaults.
 builder.Services.AddSingleton<RekeyRunner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RekeyRunner>());
@@ -117,6 +121,7 @@ builder.Services.AddSingleton<SyncTickets>();
 builder.Services.AddSingleton<ExportTickets>();
 builder.Services.AddSingleton<Pairings>();
 builder.Services.AddSingleton<SyncHub>();
+builder.Services.AddSingleton<Notices>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
@@ -136,7 +141,8 @@ builder.Services.AddScoped(RequestCaller.Current);
 builder.Services.AddScoped<ICaller>(sp => sp.GetRequiredService<RequestCaller>());
 builder.Services.AddScoped(sp => sp.GetRequiredService<RequestCaller>().Credential);
 builder.Services.AddScoped<EncryptedNoteStore>();
-builder.Services.AddScoped<WriterKinds>();
+builder.Services.AddScoped<WriterLabels>();
+builder.Services.AddScoped<IWriterLabels>(sp => sp.GetRequiredService<WriterLabels>());
 builder.Services.AddScoped<INoteStore>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<ISearchIndex>(sp => sp.GetRequiredService<EncryptedNoteStore>());
 builder.Services.AddScoped<NoteWriter>();
@@ -145,7 +151,7 @@ builder.Services.AddScoped<Replacer>();
 builder.Services.AddScoped<BoardService>();
 builder.Services.AddScoped(sp => new Checkpoints(
     sp.GetRequiredService<INoteStore>(), sp.GetRequiredService<NoteWriter>(), sp.GetRequiredService<Plans>(),
-    sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit));
+    sp.GetRequiredService<IOptions<KumbuOptions>>().Value.Vaults.CheckpointLimit, sp.GetRequiredService<IWriterLabels>()));
 builder.Services.AddScoped<IAttachmentPixels, AttachmentPixels>();
 builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<Shell>(sp, BuildVersion.Full));
 
@@ -158,12 +164,13 @@ builder.Services.AddMcpServer(o =>
         o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
+        o.Filters.Request.CallToolFilters.Add(Notices.Filter);
     })
     .WithHttpTransport()
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
 
 var app = builder.Build();
-if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>());
+if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>(), app.Services.GetRequiredService<Kumbu.Server.Sharing.Memberships>());
 
 if (bootstrapCommand)
 {
@@ -254,6 +261,7 @@ app.MapFileApi();
 app.MapSyncApi();
 app.MapPairingApi();
 app.MapExportApi();
+app.MapSharingApi();
 
 // An unknown /api or /mcp path is a JSON 404, never the web app. These are the more specific fallbacks, so they
 // win over the web app's; and they are not anonymous: CallerMiddleware still asks for a caller first.

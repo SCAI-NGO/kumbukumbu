@@ -78,7 +78,8 @@ export default function NewConnectionDialog({ onClose, onCreated }: { onClose():
         </div>
 
         <RightsPicker vaults={vaults} chosen={chosen} onChange={setChosen}>
-          A connection needs a name and at least one vault it may read.
+          A connection needs a name and at least one vault it may read. Read and write is enough for most apps; choose Maintain only for one you
+          trust with the vault's structure.
         </RightsPicker>
 
         <ExpiryPicker value={expiresInDays} onChange={setExpiresInDays}>

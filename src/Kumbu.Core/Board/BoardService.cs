@@ -42,7 +42,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board add", vaultPath) is { } refused) return refused;
         if (!TryTags(tags, out var tagList, out error)) return error;
         title = title.Normalize(NormalizationForm.FormC);
         var folder = BoardPaths.Folder(vaultPath.Name);
@@ -75,12 +75,12 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (!TryOwnedKeys(path, content, changes, out var written, out error)) return error;
 
             var changeset = await writer.ChangesetAsync(path, ct);
-            var note = new StoredNote(path, written, 1, caller.Writer, writer.Now, [], Changeset: changeset);
+            var note = new StoredNote(path, written, 1, caller.WriterIn(path.Segments[0]), writer.Now, [], Changeset: changeset, Ref: caller.ReferenceIn(path.Segments[0]));
             var batch = new NoteBatch { Changeset = changeset, Creates = { note } };
             var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
             if (refusal is not null) return refusal;
             if (!ready) continue;
-            if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
+            if ((await store.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), writer.Now, ct)).Count > 0) continue;
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, note, ct);
             return Written($"added '{title}' to {target.Name} ({index + 1} of {lane.Count + 1}){Respread(respread, target, lane.Count + 1)}{archived}", kept);
@@ -92,7 +92,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> MoveAsync(string vault, string card, string column, string? position, string? reason, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board move", vaultPath) is { } refused) return refused;
         reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
         if (reason is { Length: > MaxReason }) return Error($"a reason has at most {MaxReason} characters; this one has {reason.Length}");
 
@@ -121,7 +121,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             else if (!target.NeedsReason && entering && values.ContainsKey("reason")) changes.Add(("reason", null));
             if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
             var changeset = await writer.ChangesetAsync(current.Path, ct);
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset);
+            var next = NoteWriter.Next(current, content, caller.WriterIn(current.Path.Segments[0]), caller.ReferenceIn(current.Path.Segments[0]), writer.Now, changeset);
 
             if (respread.Count == 0)
             {
@@ -133,7 +133,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 var (ready, refusal) = await AddRespreadAsync(batch, respread, changeset, ct);
                 if (refusal is not null) return refusal;
                 if (!ready) continue;
-                if ((await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct)).Count > 0) continue;
+                if ((await store.TryCommitAsync(batch, caller.WriterIn(current.Path.Segments[0]), caller.ReferenceIn(current.Path.Segments[0]), writer.Now, ct)).Count > 0) continue;
             }
 
             var (archived, kept) = await ArchiveAsync(vaultPath.Name, target, next, ct);
@@ -148,7 +148,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         string vault, string card, Optional<DateOnly?> due, Optional<IReadOnlyList<string>?> tags, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board update", vaultPath) is { } refused) return refused;
         if (!due.IsGiven && !tags.IsGiven) return Error("update needs at least one of due or tags, to set or remove (given as null, it removes)");
         IReadOnlyList<string>? tagList = null;
         if (tags.IsGiven && !TryTags(tags.Value, out tagList, out error)) return error;
@@ -175,7 +175,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             if (current is null) return cardError!;
 
             if (!TryOwnedKeys(current.Path, current.Content, changes, out var content, out error)) return error;
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(current.Path, ct));
+            var next = NoteWriter.Next(current, content, caller.WriterIn(current.Path.Segments[0]), caller.ReferenceIn(current.Path.Segments[0]), writer.Now, await writer.ChangesetAsync(current.Path, ct));
             if (!await store.TryReplaceAsync(current, next, ct)) continue;
             return Written($"updated '{TitleOf(current.Path)}': {string.Join(", ", said)}", next);
         }
@@ -188,7 +188,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> RenameColumnAsync(string vault, string from, string to, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board rename_column", vaultPath) is { } refused) return refused;
         var (board, boardError) = await ReadBoardAsync(vaultPath.Name, ct);
         if (board is null) return boardError!;
         if (!TryColumn(board, from, out var column, out error)) return error;
@@ -227,14 +227,14 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
                 changes.Add(("moved", Renamed(moved, column.Name, name)));
             if (changes.Count == 0) continue;
             if (!TryOwnedKeys(card.Path, card.Content, changes, out var renamed, out error)) return error;
-            batch.Replaces.Add((card, NoteWriter.Next(card, renamed, caller.Writer, writer.Now, changeset)));
+            batch.Replaces.Add((card, NoteWriter.Next(card, renamed, caller.WriterIn(card.Path.Segments[0]), caller.ReferenceIn(card.Path.Segments[0]), writer.Now, changeset)));
         }
 
         var cards = batch.Replaces.Count;
         var content = Frontmatter.Set(definition.Content, [("columns", FlowList(columns.Select(ColumnYaml), quote: false))]);
-        batch.Replaces.Add((definition, NoteWriter.Next(definition, content, caller.Writer, writer.Now, changeset)));
+        batch.Replaces.Add((definition, NoteWriter.Next(definition, content, caller.WriterIn(definition.Path.Segments[0]), caller.ReferenceIn(definition.Path.Segments[0]), writer.Now, changeset)));
 
-        var conflicts = await store.TryCommitAsync(batch, caller.Writer, writer.Now, ct);
+        var conflicts = await store.TryCommitAsync(batch, caller.WriterIn(definition.Path.Segments[0]), caller.ReferenceIn(definition.Path.Segments[0]), writer.Now, ct);
         if (conflicts.Count > 0)
             return Error($"{string.Join(", ", conflicts.Select(c => c.Value))} changed meanwhile, so nothing was renamed; try again", ShellErrorKind.Conflict);
         // The Instructions are the user's text: the rename leaves them alone, but says when they name the old column.
@@ -253,11 +253,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     public async Task<ShellResult> CreateAsync(string vault, CancellationToken ct)
     {
         if (!TryVault(vault, out var vaultPath, out var error)) return error;
-        if (caller.Refuse(Tool, vaultPath) is { } refused) return refused with { Kind = ShellErrorKind.Refused };
+        if (Refuse("board create", vaultPath) is { } refused) return refused;
         var path = BoardPaths.Definition(vaultPath.Name);
         if (await store.GetAsync(path, ct) is not null) return Error($"{path.Value} exists already; 'board {Quote(vaultPath)}' shows it", ShellErrorKind.Conflict);
 
-        var result = await writer.WriteAsync(path.Value, BoardTemplate.Text(vaultPath.Name), null, ct);
+        var result = await writer.WriteAsync(path.Value, BoardTemplate.Text(), null, ct);
         if (result.IsError) return Error(result.Output.StartsWith("write: ", StringComparison.Ordinal) ? result.Output["write: ".Length..] : result.Output, ShellErrorKind.Conflict);
         return ShellResult.Ok($"board: created {path.Value} from the template; 'board {Quote(vaultPath)}' shows it") with { Version = result.Version };
     }
@@ -471,7 +471,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
             var current = await store.GetAsync(card.Path, ct);
             if (current is null || Frontmatter.Read(current.Content).Problem is not null) return (false, null);
             if (!TryOwnedKeys(current.Path, current.Content, [("rank", Scalar(rank))], out var content, out var error)) return (false, error);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, caller.Writer, writer.Now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, caller.WriterIn(current.Path.Segments[0]), caller.ReferenceIn(current.Path.Segments[0]), writer.Now, changeset)));
         }
 
         return (true, null);
@@ -534,7 +534,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         foreach (var card in candidates)
         {
             var target = await ArchivePathAsync(vault, card.Title, ct);
-            var result = await mover.MoveAsync(card.Path, target, rewriteLinks: true, ct);
+            var result = await mover.MoveCardAsync(card.Path, target, ct);
             if (result.IsError)
             {
                 stopped = $"; archiving stopped at '{card.Title}': {result.Output}";
@@ -574,7 +574,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         {
             if (await store.GetAsync(path, ct) is not { } current || Frontmatter.Read(current.Content).Problem is not null) return null;
             if (!TryOwnedKeys(path, current.Content, [("archived", Day(Today))], out var content, out _)) return null;
-            var next = NoteWriter.Next(current, content, caller.Writer, writer.Now, await writer.ChangesetAsync(path, ct));
+            var next = NoteWriter.Next(current, content, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), writer.Now, await writer.ChangesetAsync(path, ct));
             if (await store.TryReplaceAsync(current, next, ct)) return next;
         }
 
@@ -685,6 +685,11 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
     }
 
     private static string Quote(VaultPath path) => path.Value.Contains(' ') ? $"\"{path.Value}\"" : path.Value;
+
+    /// <summary>The caller's refusal of <paramref name="operation"/> (<c>board create</c>, <c>board add</c>, …): named
+    /// apart, since creating a board and renaming its columns change the vault's structure, the cards don't.</summary>
+    private ShellResult? Refuse(string operation, VaultPath vaultPath) =>
+        caller.Refuse(operation, vaultPath) is { } refused ? refused with { Kind = ShellErrorKind.Refused } : null;
 
     private static ShellResult Error(string message, ShellErrorKind kind = ShellErrorKind.Invalid) =>
         ShellResult.Error($"{Tool}: {message}") with { Kind = kind };

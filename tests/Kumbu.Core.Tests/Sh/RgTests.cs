@@ -246,4 +246,17 @@ public class RgTests
 
         Assert.StartsWith("no match in the text; 2 note names match: /Test/Der große Meister.md", await NameOk("rg --checkpoint cp Meister /Test"));
     }
+
+    [Fact]
+    public async Task A_match_in_a_note_last_written_by_another_user_is_marked()
+    {
+        var bob = SharedVaults.AsBob(SharedVaults.SharedGarten(asMember: true));
+
+        var result = await bob.RunAsync("rg -l Beete /Garten", CancellationToken.None);
+
+        Assert.Equal("[last written by another user: /Garten/beet.md, /Garten/plan.md]\n/Garten/beet.md\n/Garten/own.md\n/Garten/plan.md", result.Output);
+        // Only notes that matched are named.
+        Assert.Equal("[/Garten/plan.md: last written by another user]\n/Garten/plan.md:1:Beete planen", (await bob.RunAsync("rg planen /Garten", CancellationToken.None)).Output);
+        Assert.Equal("/Garten/own.md:1:Beete jäten", (await bob.RunAsync("rg jäten /Garten", CancellationToken.None)).Output);
+    }
 }

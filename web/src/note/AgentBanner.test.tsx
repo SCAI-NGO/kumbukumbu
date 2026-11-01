@@ -25,13 +25,25 @@ describe("lastSeen", () => {
       entry("v1", "2026-10-26T09:00:00Z", "liz", "agent"),
     ];
 
-    expect(lastSeen(history, since, "ada")).toBe("v2");
+    expect(lastSeen(history, since)).toBe("v2");
+  });
+
+  it("counts the user's own write by the server's kind, not by a writer that bears their name", () => {
+    const since = "2026-10-26T08:00:00Z";
+    const history = [
+      entry("v4", "2026-10-26T10:00:00Z", "liz", "agent", true),
+      entry("v3", "2026-10-26T09:45:00Z", "ada", "agent"),
+      entry("v2", "2026-10-26T09:30:00Z", "Ada (edit)", "self"),
+      entry("v1", "2026-10-26T09:00:00Z", "liz", "agent"),
+    ];
+
+    expect(lastSeen(history, since)).toBe("v2");
   });
 
   it("goes back past agents' writes to one before the previous sign-in", () => {
     const history = [entry("v2", "2026-10-26T10:00:00Z", "liz", "agent", true), entry("v1", "2026-10-25T10:00:00Z", "liz", "agent")];
 
-    expect(lastSeen(history, "2026-10-26T08:00:00Z", "ada")).toBe("v1");
+    expect(lastSeen(history, "2026-10-26T08:00:00Z")).toBe("v1");
   });
 
   it("does not take a device back after a long pause for the user", () => {
@@ -51,8 +63,8 @@ describe("lastSeen", () => {
       resumedAt: "2026-10-26T09:50:00Z",
     };
 
-    expect(lastSeen(history, "2026-10-26T08:00:00Z", "ada", change)).toBe("v1");
-    expect(lastSeen(history, "2026-10-26T08:00:00Z", "ada")).toBe("v2");
+    expect(lastSeen(history, "2026-10-26T08:00:00Z", change)).toBe("v1");
+    expect(lastSeen(history, "2026-10-26T08:00:00Z")).toBe("v2");
   });
 });
 

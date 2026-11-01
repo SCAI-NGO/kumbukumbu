@@ -162,6 +162,6 @@ public static class BoardApi
         };
         if (status == StatusCodes.Status409Conflict) KumbuMetrics.WriteConflict(KumbuMetrics.WriteVia.Api);
         const string prefix = "board: ";
-        throw new ApiException(status, result.Output.StartsWith(prefix, StringComparison.Ordinal) ? result.Output[prefix.Length..] : result.Output);
+        throw new ApiException(status, result.Output.StartsWith(prefix, StringComparison.Ordinal) ? result.Output[prefix.Length..] : result.Output, code: result.Code);
     }
 }

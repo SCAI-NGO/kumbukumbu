@@ -34,7 +34,7 @@ public class NoteWriterTests
     [Fact]
     public async Task CreatingANoteSaysWhichLinksItMakesAmbiguous()
     {
-        await _store.TryCreateAsync(new StoredNote(P("/Work/links.md"), "[[deep]] and [[sub/deep]] and [[plan]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), Ct);
+        await _store.TryCreateAsync(new StoredNote(P("/Work/links.md"), "[[deep]] and [[sub/deep]] and [[plan]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), Ct);
 
         var result = await Write("/Work/other/sub/deep.md", "x\n", null);
 
@@ -105,7 +105,7 @@ public class NoteWriterTests
         var note = await Get("/Work/plan.md");
         Assert.Equal("new\n", note.Content);
         var entry = Assert.Single(note.History);
-        Assert.Equal(new HistoryEntry(Plan, Writers.Seed, InMemoryNoteStore.Seeded), entry);
+        Assert.Equal(new HistoryEntry(Plan, Writers.Seed, InMemoryNoteStore.Seeded, Ref: WriterRef.Server), entry);
         Assert.Equal(Plan, note.SeedContent);
     }
 
@@ -224,7 +224,7 @@ public class NoteWriterTests
         var v1 = (await Edit("/Work/plan.md", V(Plan), null, "a")).Version!.Token;
         _time.Advance(TimeSpan.FromMinutes(10));
         var v2 = (await Edit("/Work/plan.md", v1, null, "b")).Version!.Token;
-        await new NoteWriter(_store, _time, new FixedCaller("other")).EditAsync("/Work/plan.md", v2, null, "c", Ct);
+        await new NoteWriter(_store, _time, new FixedCaller("other") { Reference = WriterRef.ForOwner(WriterRef.Agent, "other") }).EditAsync("/Work/plan.md", v2, null, "c", Ct);
 
         var note = await Get("/Work/plan.md");
         Assert.Equal([Plan + "a\nb", Plan + "a", Plan], note.History.Select(h => h.Content));
@@ -399,8 +399,8 @@ public class NoteWriterTests
     [Fact]
     public void AStateAlreadyOnTopOfTheHistoryIsNotStoredTwice()
     {
-        var note = new StoredNote(P("/Work/a.md"), "x", 3, "other", InMemoryNoteStore.Seeded, [new HistoryEntry("x", "seed", InMemoryNoteStore.Seeded)]);
-        var next = NoteWriter.Next(note, "y", Writers.Dev, InMemoryNoteStore.Seeded.AddDays(1));
+        var note = new StoredNote(P("/Work/a.md"), "x", 3, "other", InMemoryNoteStore.Seeded, [new HistoryEntry("x", "seed", InMemoryNoteStore.Seeded)], Ref: WriterRef.Server);
+        var next = NoteWriter.Next(note, "y", Writers.Dev, WriterRef.Server, InMemoryNoteStore.Seeded.AddDays(1));
         Assert.Equal(["x"], next.History.Select(h => h.Content));
     }
 }

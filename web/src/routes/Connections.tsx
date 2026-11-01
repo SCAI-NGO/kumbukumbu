@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useVaults } from "../api/notes";
+import { useVaults, type VaultView } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { timeText } from "../components/Sheet";
@@ -12,18 +12,19 @@ import { useDialog } from "../hooks/useDialog";
 import ConnectorReveal from "./ConnectorReveal";
 import NewConnectionDialog from "./NewConnectionDialog";
 import { grant, RightsPicker, type Right } from "./NewKeyDialog";
+import { CappedRight, MixedWarning, mixedVault } from "./rights";
 import { inUsageOrder, UsageOrderSwitch, type UsageOrder } from "./usageOrder";
 
 type Connection = components["schemas"]["ConnectionView"];
 
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 const date = (iso: string) => day.format(new Date(iso));
-const rightText = (right: string) => (right === "write" ? "read and write" : right);
 
 /** Why the server ended or interrupted a connection, in the words the user would use. */
 const reasons: Record<string, string> = {
   revoked: "you revoked it",
   vault_deleted: "its vaults were deleted",
+  sharing_ended: "the vaults shared with you are no longer shared",
   password_changed: "your password was changed",
   recovery: "your account was recovered",
   deactivated: "your account was deactivated",
@@ -63,6 +64,7 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
   const [changing, setChanging] = useState<Connection | null>(null);
   const [revoking, setRevoking] = useState<Connection | null>(null);
   const [order, setOrder] = useState<UsageOrder>("created");
+  const vaults = useVaults();
 
   const reveal = (c: Connection | null) => {
     setCreated(c);
@@ -74,7 +76,7 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
   const live = inUsageOrder(connections.data?.filter((c) => !isOver(c)) ?? [], order);
   const over = inUsageOrder(connections.data?.filter(isOver) ?? [], order);
 
-  const item = (c: Connection) => <ConnectionItem key={c.id} connection={c} onChange={() => setChanging(c)} onRevoke={() => setRevoking(c)} />;
+  const item = (c: Connection) => <ConnectionItem key={c.id} connection={c} vaults={vaults.data} onChange={() => setChanging(c)} onRevoke={() => setRevoking(c)} />;
 
   return (
     <section aria-labelledby="connections-title" className="flex min-w-0 flex-col gap-6">
@@ -114,8 +116,9 @@ export default function Connections({ onRevealChange }: { onRevealChange?(reveal
   );
 }
 
-function ConnectionItem({ connection: c, onChange, onRevoke }: { connection: Connection; onChange(): void; onRevoke(): void }) {
+function ConnectionItem({ connection: c, vaults, onChange, onRevoke }: { connection: Connection; vaults: VaultView[] | undefined; onChange(): void; onRevoke(): void }) {
   const over = isOver(c);
+  const mixed = over ? null : mixedVault(vaults, Object.keys(c.vaults));
   const expiry = c.expiresAt ? `${c.state === "expired" ? "Expired" : "Expires"} ${date(c.expiresAt)}` : "Doesn't expire";
   return (
     <li className={`flex min-w-0 flex-col gap-2 rounded-[12px] border border-line bg-surface p-4${over ? " opacity-75" : ""}`}>
@@ -136,10 +139,11 @@ function ConnectionItem({ connection: c, onChange, onRevoke }: { connection: Con
       <ul className="flex flex-col text-sm text-text-body">
         {Object.entries(c.vaults).map(([vault, right]) => (
           <li key={vault} className="break-words">
-            {vault}: {rightText(right)}
+            {vault}: <CappedRight right={right} vault={vaults?.find((v) => v.name === vault)} />
           </li>
         ))}
       </ul>
+      {mixed && <MixedWarning vault={mixed} />}
       <p className="text-sm text-muted">
         Created {date(c.createdAt)} · {c.lastUsedAt ? `Last used ${timeText(c.lastUsedAt)}` : "Never used"} · {expiry}
       </p>

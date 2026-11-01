@@ -31,7 +31,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var catalog = world.Catalog();
         await catalog.CreateAsync("Work", Token, (_, _) => Task.CompletedTask, Ct);
         var store = Store(catalog);
-        var vault = (await store.UnlockedVaultsAsync(Ct)).Single();
+        var vault = (await store.UnlockedVaultsAsync(Ct)).Single().Vault;
         var blobId = Convert.FromBase64String(await store.PutBlobAsync("Work", Encoding.ASCII.GetBytes(pdf), Ct));
         return new World(world, catalog, vault, new PdfAnalyses(catalog, NullLogger<PdfAnalyses>.Instance), blobId);
     }
@@ -136,7 +136,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var w = await WorldAsync();
         await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(60, PageText), Ct);
         await w.Catalog.CreateAsync("Other", Token, (_, _) => Task.CompletedTask, Ct);
-        var other = (await Store(w.Catalog).UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Other");
+        var other = (await Store(w.Catalog).UnlockedVaultsAsync(Ct)).Single(v => v.Name == "Other").Vault;
         // The documents copied under the other vault's id, as someone with the database could.
         var docs = await w.Parts.Find(new BsonDocument("vault", w.Vault.Id)).ToListAsync(Ct);
         foreach (var d in docs)
@@ -275,7 +275,7 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
         var bytes = Encoding.ASCII.GetBytes("%PDF-1.7 the paper");
         var state = new AttachmentState("application/pdf", bytes.Length, null, null, Kumbu.Core.Notes.VersionToken.Of(bytes), Convert.ToBase64String(w.BlobId));
         Assert.Empty(await Store(w.Catalog).TryCommitAsync(
-            new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { new StoredAttachment(P("/Work/paper.pdf"), state, 1, "lea", DateTime.UtcNow, [], null) } }, "lea", DateTime.UtcNow, Ct));
+            new Kumbu.Core.Notes.NoteBatch { AttachmentCreates = { new StoredAttachment(P("/Work/paper.pdf"), state, 1, "lea", DateTime.UtcNow, [], null, Ref: Kumbu.Core.Notes.WriterRef.Server) } }, "lea", Kumbu.Core.Notes.WriterRef.Server, DateTime.UtcNow, Ct));
 
         // A sweep within the grace period leaves them (a store may be under way in another process), later it doesn't.
         var sweep = new BlobSweep(w.Catalog, NullLogger.Instance);

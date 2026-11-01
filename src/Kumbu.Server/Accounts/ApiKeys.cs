@@ -10,21 +10,47 @@ using MongoDB.Driver;
 
 namespace Kumbu.Server.Accounts;
 
+/// <summary>A credential's right on a vault, sealed into its slot; ordered, so that a higher right includes the lower.</summary>
 public enum KeyRight
 {
     Read,
     Write,
+    Maintain,
 }
 
 public static class KeyRights
 {
-    public static string ToText(KeyRight right) => right == KeyRight.Write ? "write" : "read";
+    public static string ToText(KeyRight right) => right switch
+    {
+        KeyRight.Read => "read",
+        KeyRight.Write => "write",
+        KeyRight.Maintain => "maintain",
+        _ => throw new ArgumentOutOfRangeException(nameof(right)),
+    };
 
     public static KeyRight? Parse(string text) => text switch
     {
         "read" => KeyRight.Read,
         "write" => KeyRight.Write,
+        "maintain" => KeyRight.Maintain,
         _ => null,
+    };
+
+    /// <summary>The version of everything that seals a right from 0.3.0 on: slot payloads and the key and connection
+    /// metas (<c>v</c>). Absent before (collab design §3.3).</summary>
+    public const int SealedVersion = 2;
+
+    /// <summary>A right as sealed with <paramref name="version"/>: a <c>write</c> sealed before 0.3.0 (no version) had
+    /// <c>maintain</c>'s reach, and keeps it. Null for an unknown right.</summary>
+    public static KeyRight? ParseSealed(string text, int? version) =>
+        Parse(text) is KeyRight.Write && version is null ? KeyRight.Maintain : Parse(text);
+
+    public static Kumbu.Core.Notes.AccessLevel ToLevel(KeyRight right) => right switch
+    {
+        KeyRight.Read => Kumbu.Core.Notes.AccessLevel.Read,
+        KeyRight.Write => Kumbu.Core.Notes.AccessLevel.Write,
+        KeyRight.Maintain => Kumbu.Core.Notes.AccessLevel.Maintain,
+        _ => throw new ArgumentOutOfRangeException(nameof(right)),
     };
 }
 
@@ -87,11 +113,13 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     /// user's credentials changed at or after <paramref name="credentialReadAt"/> (when the session's password was
     /// read) or the user is inactive. With <paramref name="expiresInDays"/> (one of <see cref="ExpiryDays"/>, else
     /// <see cref="ArgumentException"/>) the key is refused from that moment on, like a revoked one. The
-    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards.
+    /// <paramref name="kind"/> is sealed into the meta, so it can't be changed afterwards. On a vault shared with the
+    /// user, the key is derived through her membership, which records <paramref name="writerName"/> (the device's part
+    /// of a device key's name; the name itself if null) as the key's display name.
     /// </summary>
     public async Task<(string Key, ApiKeyInfo Info)> CreateAsync(
         User user, byte[] userKey, DateTime credentialReadAt, string name, IReadOnlyDictionary<string, KeyRight> vaults, CancellationToken ct,
-        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent)
+        int? expiresInDays = null, ApiKeyKind kind = ApiKeyKind.Agent, string? writerName = null)
     {
         var clean = WriterNames.Check(user, name, "An API key");
         if (vaults.Count == 0) throw new ArgumentException("An API key needs at least one vault.", nameof(vaults));
@@ -106,7 +134,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         var key = Secrets.New(KeyPrefix);
         var (slots, vaultKeys) = await catalog.ApiKeySlotsAsync(user.Id, userKey, id, key, vaults, ct);
         // Written for devices only: an agent key's meta stays what every key's was before kinds existed.
-        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null);
+        var meta = new ApiKeyMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), kind == ApiKeyKind.Device ? DeviceKind : null, KeyRights.SealedVersion);
         // Whole milliseconds, as MongoDB keeps them: the time is bound into the writer seal and must read back equal.
         var expiresAt = expiresInDays is { } d ? Milliseconds(Now.AddDays(d)) : (DateTime?)null;
         // The meta and name id are sealed under this user key: it must still be the one in force (UserKeyRotation).
@@ -152,7 +180,14 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
                         // A re-keying of a vault that started or finished since its key was opened: the slot would
                         // carry the old key. Its start and finish write the user document (a rise of vaultsRekeyed),
                         // which conflicts with the rise of keysCreated above, so a retry reads them.
-                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys, token);
+                        await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, vaultKeys.ToDictionary(v => v.Key, v => v.Value.Key), token);
+                        // A vault shared with the user: its membership must still be active, and records the key's name.
+                        foreach (var (vaultId, grant) in vaultKeys)
+                        {
+                            if (grant.Membership is { } membership)
+                                await Sharing.Memberships.RecordCredentialAsync(db, s, membership, vaultId, id, writerName ?? clean, grant.Key, "An API key", token);
+                        }
+
                         await RetireExpiredAsync(s, user.Id, token);
                         await Keys.InsertOneAsync(s, doc, cancellationToken: token);
                         await catalog.Slots.InsertManyAsync(s, slots, cancellationToken: token);
@@ -380,7 +415,7 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
         doc.Id,
         meta.Name,
         doc.Prefix,
-        meta.Vaults.Where(v => KeyRights.Parse(v.Value) is not null).ToDictionary(v => v.Key, v => KeyRights.Parse(v.Value)!.Value),
+        meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
         doc.CreatedAt,
         doc.LastUsedAt,
         doc.RevokedAt,
@@ -468,7 +503,8 @@ public sealed class ApiKeys(IMongoDatabase db, VaultCatalog catalog, TimeProvide
     private sealed record ApiKeyMeta(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
-        [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null);
+        [property: JsonPropertyName("kind"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
+        [property: JsonPropertyName("v")] int? V = null);
 
     /// <summary>A key that wrote nothing for longer than this and writes again has resumed (<see cref="RecordWriteAsync"/>).</summary>
     public static readonly TimeSpan LongPause = TimeSpan.FromDays(14);

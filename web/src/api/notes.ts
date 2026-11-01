@@ -1,14 +1,120 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, call } from "./client";
+import { api, call, type RefusalCode } from "./client";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
+import { textOrder } from "./textOrder";
 import type { components } from "./schema";
 
 export type TreeFolder = components["schemas"]["TreeFolder"];
 export type TreeView = components["schemas"]["TreeView"];
 export type NoteView = components["schemas"]["NoteView"];
 export type EmbeddingProvider = components["schemas"]["EmbeddingProviderView"];
+
+export type VaultView = components["schemas"]["VaultView"];
+
+/** What the caller may do in a vault, in rising order (collab design §3.3): a member's role, or the owner's own vault. */
+export type Level = "read" | "write" | "maintain" | "owner";
+const levels: readonly Level[] = ["read", "write", "maintain", "owner"];
+
+/**
+ * The caller's level in `vault`. An answer without one (an older server) is her own vault unless it can't be written;
+ * a vault not in the list (yet) is read: no write action shows before its level is known.
+ */
+export function levelOf(vault: VaultView | undefined): Level {
+  if (!vault) return "read";
+  if (levels.includes(vault.level as Level)) return vault.level as Level;
+  return vault.canWrite === false ? "read" : "owner";
+}
+
+export const atLeast = (level: Level, least: Level) => levels.indexOf(level) >= levels.indexOf(least);
+
+/** The vault's structure (`/Work/Board/Board.md`, the board's columns), which takes `maintain` to change, as the server says. */
+export const isStructural = (path: string) => inVault(path) === "Board/Board.md";
+
+/** Whether the level lets the caller change `path` (a note, or a folder holding the board). */
+export const mayChange = (level: Level, path: string) => atLeast(level, isStructural(path) || inVault(path) === "Board" ? "maintain" : "write");
+
+/**
+ * The sentence for a refusal's `code` (collab design §3.5, §9.3), in the server's words: the vault is closing, its
+ * owner is deactivated, the caller's level is below `write`, or the board's structure wants `maintain`.
+ */
+export function refusalSentence(code: RefusalCode, vault: string): string {
+  switch (code) {
+    case "closing":
+      return `${vault} is read-only: its owner deleted their account, and it is closing.`;
+    case "owner-inactive":
+      return `${vault} is read-only while its owner's account is deactivated.`;
+    case "read-only":
+      return `You can only read ${vault}.`;
+    case "structural":
+      return `Only those who may maintain ${vault} can change its board's columns.`;
+  }
+}
+
+/** Why the caller can't change `path` in `vault`, from the vault list (`refusalSentence`), or null if she can. */
+export function refusalOf(vault: VaultView | undefined, path: string): string | null {
+  const level = levelOf(vault);
+  if (mayChange(level, path)) return null;
+  const name = vault?.name ?? vaultOf(path);
+  const code: RefusalCode = vault?.closingAt ? "closing" : vault?.ownerInactive ? "owner-inactive" : !atLeast(level, "write") ? "read-only" : "structural";
+  return refusalSentence(code, name);
+}
+
+/** Whether people other than the caller can write into `vault`: her own vault that she shares, or one shared with her that isn't read-only for everyone. */
+export const othersWrite = (vault: VaultView) => (vault.owner == null ? vault.shared : !vault.closingAt && !vault.ownerInactive);
+
+/** Her own vault that nobody else reaches. */
+export const isPrivate = (vault: VaultView) => vault.owner == null && !vault.shared;
+
+/** The caller's level in the vault named `vault`, from the vault list. */
+export function useLevel(vault: string | null): Level {
+  const vaults = useVaults();
+  return levelOf(vaults.data?.find((v) => v.name === vault));
+}
+
+/**
+ * Whether the caller may change `path` (a file, or with `vaultWide` anything in its vault, as an upload into it), from
+ * the vault list. While the list is unknown (or couldn't be read) the controls stay: the server refuses below the level
+ * either way, and they would flash out of sight on every page otherwise.
+ */
+export function useMayChange(path: string, vaultWide = false) {
+  const vaults = useVaults();
+  if (!vaults.data) return true;
+  const level = levelOf(vaults.data.find((v) => v.name === vaultOf(path)));
+  return vaultWide ? atLeast(level, "write") : mayChange(level, path);
+}
+
+/**
+ * Who shares `vault` with the caller, as she is shown it: the owner's display name (free text, quoted by the server)
+ * with her username beside it, which tells two owners of one display name apart.
+ */
+export const ownerLabel = (vault: Pick<VaultView, "owner" | "ownerUsername">) =>
+  vault.ownerUsername ? `${vault.owner ?? ""} (${vault.ownerUsername})` : (vault.owner ?? "");
+
+/** What the server names an owner whose account is gone (a closing vault): no display name is left to show. */
+export const goneOwner = "the owner";
+
+/** The owner as a sentence begins with her: her quoted display name, or "The owner" once her account is gone. */
+export const ownerAtStart = (vault: Pick<VaultView, "owner">) => (vault.owner === goneOwner ? "The owner" : (vault.owner ?? ""));
+
+/**
+ * The caller's own vaults, and those shared with her grouped by owner: by the owner's username, never by her display
+ * name, which anyone may choose; in text order of what is shown.
+ */
+export function groupVaults(vaults: VaultView[]) {
+  const own = vaults.filter((v) => v.owner == null);
+  const byOwner = new Map<string, VaultView[]>();
+  for (const v of vaults) {
+    if (v.owner == null) continue;
+    const key = v.ownerUsername ?? `display:${v.owner}`;
+    byOwner.set(key, [...(byOwner.get(key) ?? []), v]);
+  }
+  const shared = [...byOwner]
+    .map(([key, list]) => ({ key, owner: ownerLabel(list[0]), vaults: list }))
+    .sort((a, b) => textOrder(a.owner, b.owner));
+  return { own, shared };
+}
 
 /** `{ vault, path }` of the `/api/…/{vault}/{path}` endpoints for a note path (`/Work/plan.md`). */
 const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(path) } });

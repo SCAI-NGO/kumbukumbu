@@ -51,7 +51,7 @@ public sealed class ChangeRecordTests(KumbuAppFactory app) : IDisposable
     private async Task<World> WorldAsync()
     {
         var user = await RestClient.NewAsync(Api);
-        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await Catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var hints = new ConcurrentQueue<string>();
         Action<string> handler = id =>
         {

@@ -84,7 +84,11 @@ internal static class ToolResult
         {
             return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Unavailable);
         }
-        catch (VaultDeletedException e)
+        catch (VaultReadOnlyException e)
+        {
+            return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Refused);
+        }
+                catch (VaultDeletedException e)
         {
             return (ShellResult.Error(e.Message), KumbuMetrics.ToolError.Unavailable);
         }

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -32,7 +33,7 @@ public sealed class AdminTests(MongoFixture fixture)
 
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), new SyncHub(Catalog(), Keys(), Sessions(), _time, NullLogger<SyncHub>.Instance), _time, NullLogger<Admin>.Instance);
 
     private async Task<User> UserAsync(string username, string role)
     {
@@ -58,7 +59,7 @@ public sealed class AdminTests(MongoFixture fixture)
         await catalog.CreateForUserAsync("Tagebuch", lea.Id, key, Ct);
         var store = new EncryptedNoteStore(catalog, new UserCredential(lea.Id, key));
         Assert.True(await store.TryCreateAsync(
-            new StoredNote(P("/Geheimprojekt/Plan.md"), "Wir kaufen die Firma Acme.", 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct));
+            new StoredNote(P("/Geheimprojekt/Plan.md"), "Wir kaufen die Firma Acme.", 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: WriterRef.Server), Ct));
         // A dev-token vault belongs to nobody and counts for nobody.
         await catalog.CreateAsync("Dev", Token, null, Ct);
 
@@ -94,7 +95,7 @@ public sealed class AdminTests(MongoFixture fixture)
         var before = (await Admin().ListUsersAsync(admin, Ct)).Single(u => u.Username == "lea").BytesStored;
 
         var store = new EncryptedNoteStore(catalog, new UserCredential(lea.Id, key));
-        await store.TryCreateAsync(new StoredNote(P("/Notes/a.md"), new string('x', 10_000), 1, "lea", _time.GetUtcNow().UtcDateTime, []), Ct);
+        await store.TryCreateAsync(new StoredNote(P("/Notes/a.md"), new string('x', 10_000), 1, "lea", _time.GetUtcNow().UtcDateTime, [], Ref: WriterRef.Server), Ct);
 
         var after = (await Admin().ListUsersAsync(admin, Ct)).Single(u => u.Username == "lea").BytesStored;
         Assert.True(after - before >= 10_000, $"{before} → {after}");

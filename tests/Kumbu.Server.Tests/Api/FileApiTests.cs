@@ -57,7 +57,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
 
     private async Task<long> BlobCountAsync(RestClient user)
     {
-        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         // A sweep with the grace period long over: only blobs something references are left.
         await new BlobSweep(Api.Services.GetRequiredService<VaultCatalog>(), NullLogger.Instance).RunAsync(vault, DateTime.UtcNow.AddHours(1), Ct);
         return await Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("blobs")
@@ -527,5 +527,118 @@ public sealed class FileApiTests(KumbuAppFactory app)
         Assert.Equal("The content of /Arbeit/shot.png is no longer stored (it was removed meanwhile); nothing was written. Try again.", await RestClient.ErrorAsync(restore));
         using var none = await user.GetAsync(user.Url("shot.png", "files"));
         Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+    }
+
+    /// <summary>Alice's "Gartenarbeit" with beet.png, shared with Carol as "garten" to read; Carol's key on it sealed write.</summary>
+    private async Task<(RestClient Alice, RestClient Carol, string Key, string Version)> ReadMemberAsync()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var version = await alice.CreateFileAsync("beet.png", Png(4, 4));
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, carol, "garten", Kumbu.Server.Sharing.MemberRole.Read);
+        var vaultId = await Kumbu.Server.Tests.Sharing.Share.VaultIdAsync(alice);
+        var key = (await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            carol.User, carol.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct)).Key;
+        return (alice, carol, key, version);
+    }
+
+    private static HttpContent Bytes(byte[] bytes) => new ByteArrayContent(bytes) { Headers = { ContentType = new MediaTypeHeaderValue("application/octet-stream") } };
+
+    private static async Task AssertReadOnlyAsync(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(Kumbu.Core.Notes.Refusals.ReadOnly, (await JsonAsync(response))["code"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("view")]
+    [InlineData("upload")]
+    [InlineData("replace")]
+    [InlineData("delete")]
+    [InlineData("restore")]
+    public async Task A_read_member_may_view_but_not_upload_replace_or_delete_files(string action)
+    {
+        var (alice, carol, key, version) = await ReadMemberAsync();
+
+        foreach (var bearer in new[] { (string?)null, key })
+        {
+            switch (action)
+            {
+                case "view":
+                    using (var r = await carol.GetAsync("/api/files/garten/beet.png", bearer))
+                    {
+                        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+                        Assert.Equal(Png(4, 4), await r.Content.ReadAsByteArrayAsync(Ct));
+                    }
+
+                    using (var tree = await carol.GetAsync("/api/vaults/garten/tree", bearer)) Assert.Contains("beet.png", await tree.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+                    using (var history = await carol.GetAsync("/api/history/garten/beet.png", bearer)) Assert.Equal(HttpStatusCode.OK, history.StatusCode);
+                    using (var at = await carol.GetAsync($"/api/files/garten/beet.png?version={Uri.EscapeDataString(version)}", bearer)) Assert.Equal(HttpStatusCode.OK, at.StatusCode);
+                    break;
+                case "upload":
+                    using (var r = await carol.SendContentAsync(HttpMethod.Put, "/api/files/garten/neu.png", Bytes(Png(2, 2)), bearer)) await AssertReadOnlyAsync(r);
+                    break;
+                case "replace":
+                    using (var r = await carol.SendContentAsync(HttpMethod.Put, $"/api/files/garten/beet.png?version={Uri.EscapeDataString(version)}", Bytes(Png(8, 8)), bearer))
+                    {
+                        await AssertReadOnlyAsync(r);
+                    }
+
+                    // Refused before the body is looked at: bytes that aren't a PNG get the same answer, not a 400.
+                    using (var r = await carol.SendContentAsync(HttpMethod.Put, $"/api/files/garten/beet.png?version={Uri.EscapeDataString(version)}", Bytes("kein Bild"u8.ToArray()), bearer))
+                    {
+                        await AssertReadOnlyAsync(r);
+                    }
+
+                    break;
+                case "delete":
+                    using (var r = await carol.SendAsync(HttpMethod.Delete, "/api/files/garten/beet.png", bearer: bearer)) await AssertReadOnlyAsync(r);
+                    break;
+                case "restore":
+                    using (var r = await carol.SendAsync(HttpMethod.Post, "/api/restore/garten/beet.png", new { version }, bearer)) await AssertReadOnlyAsync(r);
+                    break;
+            }
+        }
+
+        // Nothing changed.
+        using var file = await alice.GetAsync("/api/history/Gartenarbeit/beet.png");
+        Assert.Single((await JsonAsync(file)).AsArray());
+        using var none = await alice.GetAsync("/api/files/Gartenarbeit/neu.png");
+        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+    }
+
+    [Fact]
+    public async Task Attachment_history_shows_another_member_as_another_user()
+    {
+        var (alice, carol, _, version) = await ReadMemberAsync();
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "beete", Kumbu.Server.Sharing.MemberRole.Write);
+        var vaultId = await Kumbu.Server.Tests.Sharing.Share.VaultIdAsync(alice);
+        var bobsKey = (await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Bobs-Agent", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct)).Key;
+        string replaced;
+        using (var r = await bob.SendContentAsync(HttpMethod.Put, $"/api/files/beete/beet.png?version={Uri.EscapeDataString(version)}", Bytes(Png(8, 8)), bobsKey))
+        {
+            Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+            var state = await JsonAsync(r);
+            replaced = state["version"]!.GetValue<string>();
+            Assert.Equal("Bobs-Agent", state["writtenBy"]!.GetValue<string>());
+        }
+
+        using var history = await carol.GetAsync("/api/history/garten/beet.png");
+        var text = await history.Content.ReadAsStringAsync(Ct);
+        var entries = JsonNode.Parse(text)!.AsArray();
+
+        var bobs = entries.Single(e => e!["version"]!.GetValue<string>() == replaced)!;
+        Assert.Equal(("another user", "agent"), (bobs["writer"]!.GetValue<string>(), bobs["writerKind"]?.GetValue<string>()));
+        var alices = entries.Single(e => e!["version"]!.GetValue<string>() == version)!;
+        Assert.Equal($"\"{alice.User.Display}\"", alices["writer"]!.GetValue<string>());
+        foreach (var name in new[] { "Bobs-Agent", bob.Username, bob.User.Display }) Assert.DoesNotContain(name, text, StringComparison.Ordinal);
+        // The file's version view says the same.
+        using var current = await carol.GetAsync("/api/version/garten/beet.png");
+        Assert.Equal("another user", (await JsonAsync(current))["lastWriter"]!.GetValue<string>());
+        // To Bob himself, his own agent by its name.
+        using var own = await bob.GetAsync("/api/history/beete/beet.png");
+        Assert.Equal("Bobs-Agent", (await JsonAsync(own)).AsArray().Single(e => e!["version"]!.GetValue<string>() == replaced)!["writer"]!.GetValue<string>());
     }
 }

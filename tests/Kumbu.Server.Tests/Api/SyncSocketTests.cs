@@ -3,13 +3,17 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
+using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Driver;
 using static Kumbu.Server.Tests.Api.RestClient;
 
 namespace Kumbu.Server.Tests.Api;
@@ -145,15 +149,166 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Only_api_keys_get_tickets()
+    public async Task Only_api_keys_and_sessions_get_tickets()
     {
         var user = await NewAsync(Api);
 
         using var asSession = await user.SendAsync(HttpMethod.Post, "/api/ws-ticket");
         using var asDev = await user.SendAsync(HttpMethod.Post, "/api/ws-ticket", bearer: KumbuAppFactory.Token);
 
-        Assert.Equal(HttpStatusCode.Forbidden, asSession.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, asSession.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, asDev.StatusCode);
+    }
+
+    private SyncHub Hub => Api.Services.GetRequiredService<SyncHub>();
+
+    /// <summary>Alice's "Gartenarbeit", shared with Bob (who has his own "Work") as "garten".</summary>
+    private async Task<(RestClient Alice, RestClient Bob, string VaultId, string Membership)> SharedAsync(MemberRole role = MemberRole.Write)
+    {
+        var alice = await NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await NewAsync(Api, vault: "Work");
+        var membership = await alice.ShareWithAsync(bob, "garten", role);
+        return (alice, bob, await alice.VaultIdAsync(), membership);
+    }
+
+    /// <summary>The vaults the hub holds for <paramref name="user"/>'s sessions, by their names, with the levels.</summary>
+    private IReadOnlyList<(string Name, AccessLevel Level)> SessionVaults(RestClient user) =>
+        [.. Hub.Held.Where(h => h.Subject.Kind == SubjectKind.Session && h.Subject.User == user.User.Id).Select(h => (h.Name, h.Level)).Distinct().OrderBy(h => h.Name, StringComparer.Ordinal)];
+
+    [Fact]
+    public async Task A_session_gets_a_ticket_and_hears_hints_under_its_names()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Equal(Changed("garten"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+        await bob.CreateAsync("eigen.md", "y\n");
+        Assert.Equal(Changed("Work"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+        Assert.Equal([("Work", AccessLevel.Owner), ("garten", AccessLevel.Write)], SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task A_fifth_tab_replaces_the_oldest_of_that_session()
+    {
+        var user = await NewAsync(Api);
+        var sockets = new List<WebSocket>();
+        for (var i = 0; i <= SyncHub.MaxPerKey; i++) sockets.Add(await SyncSockets.OpenAsync(Api, user));
+
+        Assert.Equal("close 4409", await ReceiveAsync(sockets[0], TimeSpan.FromSeconds(2)));
+        await user.CreateAsync("plan.md", "x\n");
+        foreach (var socket in sockets.Skip(1)) Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
+        foreach (var socket in sockets) socket.Dispose();
+    }
+
+    [Fact]
+    public async Task Two_sessions_of_one_user_are_two_subjects()
+    {
+        var user = await NewAsync(Api);
+        var second = await user.SignInAgainAsync();
+        var key = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        var sockets = new List<WebSocket>();
+        for (var i = 0; i < SyncHub.MaxPerKey; i++) sockets.Add(await SyncSockets.OpenAsync(Api, user));
+        using var others = await SyncSockets.OpenAsync(Api, second);
+        using var keys = await SyncSockets.OpenAsync(Api, user, key);
+
+        // Six connections of one person: none is replaced, each subject holds its own four.
+        await user.CreateAsync("plan.md", "x\n");
+        foreach (var socket in sockets.Append(others).Append(keys)) Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
+        Assert.Equal(SyncHub.MaxPerKey + 2, Hub.Held.Count(h => h.Subject.User == user.User.Id));
+
+        // A fifth tab of the first session replaces that session's oldest, not the other session's.
+        using var fifth = await SyncSockets.OpenAsync(Api, user);
+        Assert.Equal("close 4409", await ReceiveAsync(sockets[0], TimeSpan.FromSeconds(2)));
+        Assert.Null(await ReceiveAsync(others, TimeSpan.FromMilliseconds(300)));
+        foreach (var socket in sockets) socket.Dispose();
+    }
+
+    [Fact]
+    public async Task A_ticket_of_a_session_ended_since_opens_nothing()
+    {
+        var user = await NewAsync(Api);
+        var ticket = await SyncSockets.TicketAsync(user);
+        using (var signedOut = await user.SendAsync(HttpMethod.Delete, "/api/session")) Assert.True(signedOut.IsSuccessStatusCode);
+
+        var refused = await Assert.ThrowsAnyAsync<Exception>(() => ConnectAsync(ticket));
+
+        Assert.Contains("401", refused.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_check_drops_a_vault_whose_membership_was_revoked_behind_the_servers_back()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+
+        await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Revoked);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
+        await bob.CreateAsync("eigen.md", "y\n");
+        Assert.Equal(Changed("Work"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task The_check_follows_a_role_changed_behind_the_servers_back()
+    {
+        var (_, bob, _, membership) = await SharedAsync(MemberRole.Read);
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+
+        await Share.SetRoleAsync(app.Database, membership, MemberRole.Maintain);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Contains(("garten", AccessLevel.Maintain), SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task The_check_closes_a_members_key_socket_left_with_no_vault()
+    {
+        var (_, bob, vaultId, membership) = await SharedAsync();
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "garten – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        using var socket = await SyncSockets.OpenAsync(Api, bob, key);
+
+        await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Left);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    private IMongoCollection<UserSlotDocument> UserSlots => app.Database.GetCollection<UserSlotDocument>("user_slots");
+
+    [Fact]
+    public async Task An_open_tab_does_not_keep_its_session_alive()
+    {
+        var user = await NewAsync(Api);
+        using var socket = await SyncSockets.OpenAsync(Api, user);
+        var usedAt = (await UserSlots.Find(s => s.User == user.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct)).LastUsedAt;
+
+        _time.Advance(TimeSpan.FromMinutes(29));
+        await Hub.CheckAsync(Ct);
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromMilliseconds(300)));
+        Assert.Equal(usedAt, (await UserSlots.Find(s => s.User == user.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct)).LastUsedAt);
+
+        // The session's idle time is up: the socket closes with it.
+        _time.Advance(TimeSpan.FromMinutes(2));
+        await Hub.CheckAsync(Ct);
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_deactivated_users_session_socket_closes_with_4401()
+    {
+        var user = await NewAsync(Api);
+        using var socket = await SyncSockets.OpenAsync(Api, user);
+
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == user.User.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
     }
 
     [Fact]
@@ -309,7 +464,10 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         var keys = Api.Services.GetRequiredService<ApiKeys>();
         var listed = await keys.ListAsync(user.User, user.UserKey, Ct);
         var stuck = new StuckSocket();
-        var running = hub.RunAsync(stuck, new TicketGrant(listed.Single(k => k.Name.EndsWith("Stuck", StringComparison.Ordinal)).Id, [(vault.Id, vault.Name)]), Ct);
+        var grant = new TicketGrant(
+            new Subject(SubjectKind.Key, listed.Single(k => k.Name.EndsWith("Stuck", StringComparison.Ordinal)).Id, user.User.Id),
+            [new TicketVault(vault.Id, vault.Name, null, Kumbu.Core.Notes.AccessLevel.Write)]);
+        var running = hub.RunAsync(stuck, grant, Ct);
         catalog.RaiseNotesChanged(vault.Id);
         await stuck.SendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         Assert.Equal(Changed("Arbeit"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
@@ -337,8 +495,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
 
         using var deleted = await user.SendAsync(HttpMethod.Post, "/api/vaults/Privat/delete", new { password = Password, confirm = "Privat" });
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
-        Assert.Equal(Changed("Privat"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
-        await Api.Services.GetRequiredService<SyncHub>().CheckAsync(Ct);
+        // Dropped with the answer, not at the next check: not even the deletion's own change is hinted.
         catalog.RaiseNotesChanged(privat.Id);
 
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
@@ -364,5 +521,103 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         var error = await Assert.ThrowsAnyAsync<Exception>(() => ConnectAsync("kumbu_wst_" + new string('A', 43)));
 
         Assert.Contains("401", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Revoking_drops_the_vault_from_Bobs_tab_before_the_answer()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Hub.BeforeAccessChange = () => gate.Task;
+        try
+        {
+            var revoking = alice.SendAsync(HttpMethod.Post, $"/api/vaults/Gartenarbeit/memberships/{membership}/revoke");
+
+            // The answer waits for the hub.
+            Assert.NotSame(revoking, await Task.WhenAny(revoking, Task.Delay(500, Ct)));
+            Assert.Contains(("garten", AccessLevel.Write), SessionVaults(bob));
+            gate.SetResult();
+            using var revoked = await revoking;
+            Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        }
+        finally
+        {
+            Hub.BeforeAccessChange = null;
+        }
+
+        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
+    }
+
+    [Fact]
+    public async Task Lowering_to_read_stops_Bobs_presence_frames_at_once()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var alices = await SyncSockets.OpenAsync(Api, alice);
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        await SyncSockets.EditingAsync(bobs, "garten", "plan.md", on: true);
+        Assert.Equal([bob.Username], SyncSockets.Editors((await SyncSockets.PresenceAsync(alices, TimeSpan.FromSeconds(3)))!));
+
+        using (var lowered = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role = "read" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        }
+
+        // Gone with the answer, and nothing new from him.
+        Assert.Empty(SyncSockets.Editors((await SyncSockets.PresenceAsync(alices, TimeSpan.FromMilliseconds(300)))!));
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+        await SyncSockets.EditingAsync(bobs, "garten", "beete.md", on: true);
+        Assert.Null(await SyncSockets.PresenceAsync(alices, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task Deactivating_the_owner_re_levels_members_to_read()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+        var carol = await NewAsync(Api, vault: "Notizen");
+        await alice.ShareWithAsync(carol, "beete");
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        using var carols = await SyncSockets.OpenAsync(Api, carol);
+        await SyncSockets.EditingAsync(bobs, "garten", "plan.md", on: true);
+        Assert.Equal([Kumbu.Server.Api.WriterLabels.AnotherUser], SyncSockets.Editors((await SyncSockets.PresenceAsync(carols, TimeSpan.FromSeconds(3)))!));
+        var admin = await NewAsync(Api, vault: "Admin", role: Roles.Admin);
+
+        using (var deactivated = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{alice.User.Id}", new { active = false }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deactivated.StatusCode);
+        }
+
+        Assert.Empty(SyncSockets.Editors((await SyncSockets.PresenceAsync(carols, TimeSpan.FromMilliseconds(300)))!));
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+        Assert.Contains(("beete", AccessLevel.Read), SessionVaults(carol));
+        // Her own sockets went with her sessions; reactivated, the members are at their roles again.
+        Assert.DoesNotContain(Hub.Held, h => h.Subject.User == alice.User.Id);
+        using (var reactivated = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{alice.User.Id}", new { active = true }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, reactivated.StatusCode);
+        }
+
+        Assert.Contains(("garten", AccessLevel.Write), SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task A_renamed_alias_names_the_hints_at_once()
+    {
+        var (alice, bob, vaultId, membership) = await SharedAsync();
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "garten – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        using var tab = await SyncSockets.OpenAsync(Api, bob);
+        using var device = await SyncSockets.OpenAsync(Api, bob, key);
+
+        using (var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = "Beet" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Equal(Changed("Beet"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Beet"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
     }
 }

@@ -74,8 +74,9 @@ public sealed partial class VaultCatalog
     /// the runner resumes it.</summary>
     public event Action<string, string, byte[]>? RekeyPendingFound;
 
-    /// <summary>For tests: awaited at <c>"after-start"</c>, <c>"after-batch"</c>, <c>"inside-finish"</c> and
-    /// <c>"after-finish"</c>; a throw there is a crash at that point.</summary>
+    /// <summary>For tests: awaited at <c>"inside-start"</c>, <c>"after-start"</c>, <c>"after-batch"</c>, <c>"before-finish"</c>
+    /// (before each attempt of the finish transaction), <c>"inside-finish"</c> and <c>"after-finish"</c>; a throw there
+    /// is a crash at that point.</summary>
     internal Func<string, Task>? RekeyFaultAt { get; set; }
 
     /// <summary>For tests: called after each batch of a run commits, with the vault id, its documents and sealed bytes.</summary>
@@ -127,8 +128,23 @@ public sealed partial class VaultCatalog
         if (!HasCurrentKey(vault)) throw VaultBusyException.Just();
     }
 
-    /// <summary>The condition of <see cref="CheckWritable"/>, for indexing, which does nothing rather than throw.</summary>
-    internal bool MayIndex(UnlockedVault vault) =>
+    /// <summary>
+    /// <see cref="CheckWritable(UnlockedVault)"/> for a write through <paramref name="access"/>, the caller's own record
+    /// of the vault on this request: a vault read-only for her whatever her level (collab design §7.4, its owner's
+    /// account deactivated; later §7.3, closing) refuses the write here, on every route, REST and MCP alike, with the
+    /// reason's code (<see cref="VaultReadOnlyException"/>). Every write passes here.
+    /// </summary>
+    internal void CheckWritable(UnlockedVault vault, VaultAccess? access)
+    {
+        CheckWritable(vault);
+        if (access?.ReadOnlyCode is { } code) throw new VaultReadOnlyException(code, VaultAccess.ReadOnlySentence(code, access.Name));
+    }
+
+    /// <summary>The condition of <see cref="CheckWritable(UnlockedVault)"/>, for indexing, which does nothing rather than
+    /// throw; and nothing is indexed of a shared vault whose owner's account is deactivated (collab design §7.4).</summary>
+    internal bool MayIndex(UnlockedVault vault) => IsCurrentObject(vault) && !_ownerInactive.ContainsKey(vault.Id);
+
+    private bool IsCurrentObject(UnlockedVault vault) =>
         !vault.Pending && !vault.Deleted && !IsDeleted(vault.Id) && !IsBusy(vault.Id) && HasCurrentKey(vault);
 
     /// <summary>
@@ -136,7 +152,26 @@ public sealed partial class VaultCatalog
     /// a run or its two-key period). What was meant for an older object of the vault goes to this one.
     /// </summary>
     internal UnlockedVault? Current(string vaultId) =>
-        _open.TryGetValue(vaultId, out var vault) && MayIndex(vault) ? vault : null;
+        _open.TryGetValue(vaultId, out var vault) && IsCurrentObject(vault) ? vault : null;
+
+    /// <summary>The shared vaults whose owner's account was found deactivated, in this process: not indexed. Set and
+    /// cleared by every opening method that reads the owner's flag with a membership, and by the admin's change of it.</summary>
+    private readonly ConcurrentDictionary<string, byte> _ownerInactive = new();
+
+    /// <summary>
+    /// Records whether the owner of <paramref name="vaultId"/> is active (collab design §7.4). Back to active, a vault in
+    /// memory catches up on what its indexing left while it stood still, as at an unlock.
+    /// </summary>
+    internal void OwnerActive(string vaultId, bool active)
+    {
+        if (!active)
+        {
+            _ownerInactive[vaultId] = 0;
+            return;
+        }
+
+        if (_ownerInactive.TryRemove(vaultId, out _) && Current(vaultId) is { } vault) Unlocked?.Invoke(vault);
+    }
 
     /// <summary>
     /// Inside the transaction that stores slots wrapping <paramref name="wrapped"/> (vault id → the vault key wrapped,
@@ -158,12 +193,28 @@ public sealed partial class VaultCatalog
         }
 
         var f = Builders<SlotDocument>.Filter;
-        var slots = await Slots.Find(session, f.Eq(sl => sl.Kind, SlotDocument.User) & f.Eq(sl => sl.Lookup, UserLookup(userKey, userId)) & f.In(sl => sl.Vault, ids)).ToListAsync(ct);
+        // A member's credential carries the key of her member slot (UserVaultKeysAsync).
+        var slots = await Slots.Find(session, f.In(sl => sl.Kind, [SlotDocument.User, SlotDocument.Member]) & f.Eq(sl => sl.Lookup, UserLookup(userKey, userId)) & f.In(sl => sl.Vault, ids)).ToListAsync(ct);
+        using var memberPrivate = slots.Any(sl => sl.Kind == SlotDocument.Member) ? await MemberPrivateKeyAsync(session, userId, userKey, ct) : null;
         foreach (var (vaultId, key) in wrapped)
         {
-            if (!slots.Any(sl => sl.Vault == vaultId && OpenUserSlot(userKey, sl) is { } current && CryptographicOperations.FixedTimeEquals(current, key)))
+            if (!slots.Any(sl => sl.Vault == vaultId && OpenAnySlot(sl) is { } current && CryptographicOperations.FixedTimeEquals(current, key)))
             {
                 throw VaultBusyException.Just();
+            }
+        }
+
+        byte[]? OpenAnySlot(SlotDocument slot)
+        {
+            if (slot.Kind != SlotDocument.Member) return OpenUserSlot(userKey, slot);
+            if (memberPrivate is null) return null;
+            try
+            {
+                return OpenMemberSlot(memberPrivate, slot);
+            }
+            catch (CryptographicException)
+            {
+                return null;
             }
         }
     }
@@ -220,7 +271,8 @@ public sealed partial class VaultCatalog
     /// <summary>
     /// Re-keys the vault, or resumes a run that stopped in its two-key period (rekeying design §3). Only with a user slot
     /// of <paramref name="userId"/> on the vault that opens with <paramref name="userKey"/>, the user key in force, else
-    /// <see cref="VaultNotRekeyableException"/>. <see cref="VaultDeletedException"/> for a vault deleted, or being deleted
+    /// <see cref="VaultNotRekeyableException"/>. A shared vault's members keep it (collab design §7.1).
+    /// <see cref="VaultDeletedException"/> for a vault deleted, or being deleted
     /// (a deletion wins within one batch); <see cref="VaultBusyException"/> while another run holds it, or when the finish
     /// finds something changed: the vault then stays in its two-key period, for the next run to resume.
     /// </summary>
@@ -251,10 +303,13 @@ public sealed partial class VaultCatalog
         }
     }
 
-    /// <summary>What the start transaction found or made.</summary>
+    /// <summary>What the start transaction found or made; <c>Members</c> what it did to the vault's memberships.</summary>
     private sealed record RekeyStart(
         byte[] OldKey, byte[] NewKey, ObjectId UserSlotId, byte[] UserSlotWrapped, ObjectId NextSlotId, bool Resumed,
-        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected);
+        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected, Sharing.StartedRekey Members, MembersCredentials MembersRevoked);
+
+    /// <summary>The members' API keys and connections a start revoked, since this vault was their last.</summary>
+    private sealed record MembersCredentials(IReadOnlyList<string> ApiKeys, IReadOnlyList<string> Connections);
 
     private async Task<RekeySummary> RunRekeyAsync(string id, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -287,6 +342,10 @@ public sealed partial class VaultCatalog
             _loading.Release();
         }
 
+        foreach (var membershipId in start.Members.Withdrawn) log.LogInformation("The invitation of membership {MembershipId} to vault {VaultId}, which is re-keyed, is withdrawn", membershipId, id);
+        foreach (var membershipId in start.Members.Declined) log.LogInformation("The redemption of membership {MembershipId} of vault {VaultId}, which is re-keyed, is declined", membershipId, id);
+        foreach (var keyId in start.MembersRevoked.ApiKeys) log.LogInformation("A member's API key {KeyId} has no vault left after vault {VaultId} is re-keyed, and is revoked", keyId, id);
+        foreach (var connectionId in start.MembersRevoked.Connections) log.LogInformation("A member's connection {ConnectionId} has no vault left after vault {VaultId} is re-keyed, and is revoked", connectionId, id);
         foreach (var keyId in start.RevokedApiKeys) log.LogInformation("API key {KeyId} had a slot on vault {VaultId}, which is re-keyed; it is revoked", keyId, id);
         foreach (var connectionId in start.Disconnected) log.LogInformation("Connection {ConnectionId} lists vault {VaultId}, which is re-keyed; it needs a reconnect", connectionId, id);
         log.LogInformation(start.Resumed ? "Resuming the re-keying of vault {VaultId}" : "Re-keying vault {VaultId}", id);
@@ -297,23 +356,42 @@ public sealed partial class VaultCatalog
         var next = new UnlockedVault(id, "", start.NewKey, Now, locks);
         var (documents, damaged) = await RekeyPassesAsync(old, next, ct);
 
-        await _loading.WaitAsync(ct);
-        try
+        // The active memberships as the start left them; a revocation, departure, role change or a member's rotation
+        // since then makes the finish conflict, and it is tried again with them as they are now.
+        var members = start.Members.Active;
+        for (var attempt = 1; ; attempt++)
         {
-            using (var session = await StartSessionAsync(ct))
+            await FaultAsync("before-finish");
+            await _loading.WaitAsync(ct);
+            try
             {
-                await session.WithTransactionAsync((s, token) => FinishRekeyAsync(s, id, userId, userKey, start, old, next, token), cancellationToken: ct);
-            }
+                using (var session = await StartSessionAsync(ct))
+                {
+                    await session.WithTransactionAsync((s, token) => FinishRekeyAsync(s, id, userId, userKey, start, members, token), cancellationToken: ct);
+                }
 
-            // Under _loading, so a load after this sees K′ current, and an object made with K is refused from now on.
-            _keyIds[id] = next.KeyId;
-            _rekeyed[id] = 0;
-            _open.TryRemove(id, out _);
-            _pending.TryRemove(id, out _);
-        }
-        finally
-        {
-            _loading.Release();
+                // Under _loading, so a load after this sees K′ current, and an object made with K is refused from now on.
+                _keyIds[id] = next.KeyId;
+                _rekeyed[id] = 0;
+                _open.TryRemove(id, out _);
+                _pending.TryRemove(id, out _);
+                break;
+            }
+            catch (Sharing.MembershipsChangedException)
+            {
+                if (attempt >= MaxFinishAttempts)
+                {
+                    log.LogWarning("The memberships of vault {VaultId} kept changing during the finish of its re-keying; the vault stays pending", id);
+                    throw VaultBusyException.Being();
+                }
+
+                log.LogInformation("The memberships of vault {VaultId} changed during its re-keying; the finish reads them again", id);
+                members = await ActiveMembershipRevisionsAsync(id, ct);
+            }
+            finally
+            {
+                _loading.Release();
+            }
         }
 
         log.LogInformation(
@@ -325,10 +403,23 @@ public sealed partial class VaultCatalog
 
     private Task FaultAsync(string point) => RekeyFaultAt?.Invoke(point) ?? Task.CompletedTask;
 
+    /// <summary>A finish whose memberships keep changing is tried this many times before the run gives up.</summary>
+    private const int MaxFinishAttempts = 5;
+
+    /// <summary>The active memberships of the vault with their revisions, for a finish tried again.</summary>
+    private async Task<IReadOnlyDictionary<string, int>> ActiveMembershipRevisionsAsync(string vaultId, CancellationToken ct) =>
+        (await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+            .Find(m => m.Vault == vaultId && m.Status == Sharing.MembershipStatus.Active).Project(m => new { m.Id, m.Revision }).ToListAsync(ct))
+        .ToDictionary(m => m.Id, m => m.Revision, StringComparer.Ordinal);
+
     /// <summary>
     /// The start transaction: a new key in a <c>user-next</c> slot, <c>rekeyStartedAt</c> on the vault, every API key
-    /// with a slot on it revoked whole, every connection listing it disconnected (<see cref="Accounts.ConnectionReasons.Rekeyed"/>),
-    /// and the vault pending for its owner. A vault that has a <c>user-next</c> slot is resumed with that slot's key.
+    /// of the owner with a slot on it revoked whole, every connection of hers listing it disconnected
+    /// (<see cref="Accounts.ConnectionReasons.Rekeyed"/>), and the vault pending for her. Of a shared vault (collab
+    /// design §7.1) the members' slots stay, for the finish to wrap again; invitations are withdrawn and unconfirmed
+    /// redemptions declined (<see cref="Sharing.Memberships.StartRekeyAsync"/>); the members' own keys and connections
+    /// lose only this vault (<see cref="EndMembersCredentialsAsync"/>). A vault that has a <c>user-next</c> slot is
+    /// resumed with that slot's key.
     /// </summary>
     private async Task<RekeyStart> StartRekeyAsync(IClientSessionHandle s, string id, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -339,6 +430,8 @@ public sealed partial class VaultCatalog
             ?? throw new VaultNotRekeyableException();
         var oldKey = OpenUserSlot(userKey, userSlot) ?? throw new VaultNotRekeyableException();
 
+        await FaultAsync("inside-start");
+
         // A real write to the owner's document, and only with the user key in force: a rotation of it or a creation
         // at the same time conflicts, and a key a rotation replaced can't start a run.
         var owner = await Users.UpdateOneAsync(
@@ -348,6 +441,11 @@ public sealed partial class VaultCatalog
             cancellationToken: ct);
         if (owner.MatchedCount == 0) throw new VaultNotRekeyableException();
 
+        // A grant or an acceptance at the same time conflicts with the vault document's write below (§13 M8); one that
+        // committed first is among these.
+        var members = await Sharing.Memberships.StartRekeyAsync(db, s, id, Now, ct);
+        var membersRevoked = await EndMembersCredentialsAsync(s, id, userId, ct);
+
         if (await Slots.Find(s, f.Eq(sl => sl.Vault, id) & f.Eq(sl => sl.Kind, SlotDocument.UserNext)).FirstOrDefaultAsync(ct) is { } nextSlot)
         {
             if (nextSlot.Lookup is null || !CryptographicOperations.FixedTimeEquals(nextSlot.Lookup, lookup) || OpenUserSlot(userKey, nextSlot) is not { } resumedKey)
@@ -356,7 +454,7 @@ public sealed partial class VaultCatalog
             }
 
             if (doc.RekeyStartedAt is null) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, Now), cancellationToken: ct);
-            return new RekeyStart(oldKey, resumedKey, userSlot.Id, userSlot.Wrapped, nextSlot.Id, Resumed: true, [], []);
+            return new RekeyStart(oldKey, resumedKey, userSlot.Id, userSlot.Wrapped, nextSlot.Id, Resumed: true, [], [], members, membersRevoked);
         }
 
         var newKey = VaultCrypto.NewKey();
@@ -372,10 +470,12 @@ public sealed partial class VaultCatalog
         await Slots.InsertOneAsync(s, next, cancellationToken: ct);
         await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, Now), cancellationToken: ct);
 
-        // The server can't wrap K′ for an API key without the key (Ruling 20): each one with a slot here goes whole,
-        // as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted.
+        // The server can't wrap K′ for an API key without the key (Ruling 20): each one of the owner's with a slot here
+        // goes whole, as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted. The
+        // members' slots here went above.
         var keyIds = (await (await Slots.DistinctAsync(
-            s, sl => sl.KeyId, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Eq(sl => sl.Vault, id) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct))
+            s, sl => sl.KeyId, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Eq(sl => sl.Vault, id) & f.Exists(sl => sl.KeyId) & f.Eq(sl => sl.GrantedVia, null),
+            cancellationToken: ct)).ToListAsync(ct))
             .OfType<string>().ToList();
         var keys = db.GetCollection<Accounts.ApiKeyDocument>(Accounts.ApiKeys.CollectionName);
         var revoked = keyIds.Count == 0 ? [] : await keys.Find(s, k => keyIds.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
@@ -390,28 +490,55 @@ public sealed partial class VaultCatalog
         // Its tokens become tombstones, so a revoked token stays recognised (Ruling 12); the app reconnects.
         var connections = db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName);
         var c = Builders<Accounts.ConnectionDocument>.Filter;
-        var disconnected = await connections.Find(s, c.AnyEq(x => x.Vaults, id) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
+        var disconnected = await connections.Find(s, c.AnyEq(x => x.Vaults, id) & c.Eq(x => x.User, userId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
         if (disconnected.Count > 0)
         {
             await Accounts.ConnectionRevocation.RevokeTokensAsync(db, s, c.In(x => x.Id, disconnected), Accounts.ConnectionReasons.Rekeyed, Now, ct);
             await connections.UpdateManyAsync(s, c.In(x => x.Id, disconnected), Builders<Accounts.ConnectionDocument>.Update.Inc(x => x.Wraps, 1), cancellationToken: ct);
         }
 
-        // Nothing but the owner's slots may wrap K from here on.
-        var others = await Slots.DeleteManyAsync(s, f.Eq(sl => sl.Vault, id) & f.Nin(sl => sl.Kind, [SlotDocument.User, SlotDocument.UserNext]), cancellationToken: ct);
-        if (others.DeletedCount > 0) log.LogWarning("Vault {VaultId} had {Count} more slots besides its owner's; they were deleted with its re-keying", id, others.DeletedCount);
+        // Nothing but the owner's slots and the active members' may wrap K from here on.
+        var others = await Slots.DeleteManyAsync(s, f.Eq(sl => sl.Vault, id) & f.Nin(sl => sl.Kind, [SlotDocument.User, SlotDocument.UserNext, SlotDocument.Member]), cancellationToken: ct);
+        if (others.DeletedCount > 0) log.LogWarning("Vault {VaultId} had {Count} more slots besides its owner's and members'; they were deleted with its re-keying", id, others.DeletedCount);
 
-        return new RekeyStart(oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)]);
+        return new RekeyStart(
+            oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)], members, membersRevoked);
+    }
+
+    /// <summary>
+    /// Inside the start transaction, the members' keys and connections on the vault (collab design §7.1, §13 L9): only
+    /// their slots on this vault (<c>grantedVia</c>) go, an API key left with no vault is revoked, and a connection
+    /// loses the vault, revoked if it was its last. The owner's re-key doesn't reach into the members' own vaults; they
+    /// give their agents this vault again.
+    /// </summary>
+    private async Task<MembersCredentials> EndMembersCredentialsAsync(IClientSessionHandle s, string id, string ownerId, CancellationToken ct)
+    {
+        var f = Builders<SlotDocument>.Filter;
+        var derived = f.Eq(sl => sl.Vault, id) & f.Ne(sl => sl.GrantedVia, null);
+        var keyIds = await (await Slots.DistinctAsync(s, sl => sl.KeyId, derived & f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct);
+        await Slots.DeleteManyAsync(s, derived, cancellationToken: ct);
+        var keys = await RevokeKeysWithoutVaultsAsync(s, keyIds, ct);
+
+        var c = Builders<Accounts.ConnectionDocument>.Filter;
+        var theirs = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
+            .Find(s, c.AnyEq(x => x.Vaults, id) & c.Ne(x => x.User, ownerId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
+        var connections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, [id], Now, ct, reason: Accounts.ConnectionReasons.Rekeyed, only: theirs);
+        // Each is told at its next tool call once the run is done, if it still has a vault to call with (§8.4).
+        var ended = keyIds.OfType<string>().Concat(theirs).ToList();
+        if (ended.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEnded, ended), cancellationToken: ct);
+        return new MembersCredentials(keys, connections);
     }
 
     /// <summary>
     /// The finish transaction: the user slot wraps K′ (if it still wraps what the run started from), the <c>user-next</c>
     /// slot goes, the vault's meta is sealed under K′ without <c>rekeyStartedAt</c>, and the vault is no longer pending.
     /// The three slot and vault writes must each match exactly one document: otherwise the transaction aborts and the
-    /// vault stays in its two-key period.
+    /// vault stays in its two-key period. In the same transaction each active member's slot is wrapped to K′ through
+    /// her pin, and the memberships are sealed again under K′ (<see cref="Sharing.Memberships.FinishRekeyAsync"/>): a
+    /// membership other than <paramref name="members"/> says aborts it with <see cref="Sharing.MembershipsChangedException"/>.
     /// </summary>
     private async Task<bool> FinishRekeyAsync(
-        IClientSessionHandle s, string id, string userId, byte[] userKey, RekeyStart start, UnlockedVault old, UnlockedVault next, CancellationToken ct)
+        IClientSessionHandle s, string id, string userId, byte[] userKey, RekeyStart start, IReadOnlyDictionary<string, int> members, CancellationToken ct)
     {
         var doc = await Vaults.Find(s, v => v.Id == id).FirstOrDefaultAsync(ct) ?? throw new VaultDeletedException();
         var f = Builders<SlotDocument>.Filter;
@@ -440,9 +567,18 @@ public sealed partial class VaultCatalog
             Builders<VaultDocument>.Filter.Eq(v => v.Id, id) & Builders<VaultDocument>.Filter.Eq(v => v.Meta, doc.Meta),
             Builders<VaultDocument>.Update
                 .Set(v => v.Meta, VaultCrypto.Seal(VaultCrypto.Derive(start.NewKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(meta), $"vault:{id}"))
-                .Unset(v => v.RekeyStartedAt),
+                .Unset(v => v.RekeyStartedAt).Unset(v => v.RekeyEnded),
             cancellationToken: ct);
         if (vault.MatchedCount != 1) throw Mismatch("the vault document");
+        // Wrapped to the keys pinned under K, never to a key the database names (HARD RULE 3).
+        await Sharing.Memberships.FinishRekeyAsync(db, log, s, id, start.OldKey, start.NewKey, members, ct);
+        // The members are told, and so are their keys and apps that lost the vault (collab design §8.3, §8.4); for the
+        // owner it ends the offer of a re-encryption after a member left (§6.4). Only of a vault ever shared.
+        if (members.Count > 0 || doc.RekeyEnded is { Count: > 0 }
+            || await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName).Find(s, m => m.Vault == id).AnyAsync(ct))
+        {
+            await Sharing.VaultEvents.RecordAsync(db, s, id, Sharing.VaultEvents.RekeyFinished, null, Now, null, ct, credentials: doc.RekeyEnded);
+        }
 
         await Users.UpdateOneAsync(
             s,

@@ -6,7 +6,7 @@ import Thumbnail from "../attachments/Thumbnail";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useRestoreNote } from "../api/history";
-import { useHistory, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
+import { useHistory, useMayChange, useNote, useNoteVersion, type HistoryEntry } from "../api/notes";
 import { isAttachment, titleOf, vaultOf, viewUrl, type LightboxState } from "../api/paths";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { Sheet, sizeText, timeText } from "../components/Sheet";
@@ -170,6 +170,8 @@ function RestoreBar({
 }) {
   const queryClient = useQueryClient();
   const restore = useRestoreNote();
+  // Restoring is a write: none below the level (for the board's definition, `maintain`).
+  const writes = useMayChange(path);
   return (
     <>
       {restore.isError && (
@@ -179,7 +181,7 @@ function RestoreBar({
             : errorText(restore.error)}
         </FormError>
       )}
-      {!entry.current && (
+      {!entry.current && writes && (
         <div className="sticky bottom-0 flex flex-col gap-2 bg-surface pt-1">
           <p className="text-sm text-text-body">Restoring makes {what} the current version. Nothing is lost: the version it replaces stays in the history.</p>
           <div className="flex gap-2.5">

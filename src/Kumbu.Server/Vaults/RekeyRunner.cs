@@ -33,6 +33,9 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
     private readonly CancellationTokenSource _stop = CancellationTokenSource.CreateLinkedTokenSource(life.ApplicationStopping);
     private Task? _worker;
 
+    /// <summary>For tests: called with the vault id and the user id whenever a trigger reaches the runner.</summary>
+    internal Action<string, string>? Triggered { get; set; }
+
     /// <summary>How long one attempt may take before it counts as failed (tests set it lower).</summary>
     internal TimeSpan AttemptTimeout { get; set; } = TimeSpan.FromMinutes(30);
 
@@ -102,6 +105,7 @@ public sealed class RekeyRunner(VaultCatalog catalog, IHostApplicationLifetime l
 
     private Entry Upsert(string vaultId, string userId, byte[] userKey, bool endBackoff)
     {
+        Triggered?.Invoke(vaultId, userId);
         if (!_entries.TryGetValue(vaultId, out var entry))
         {
             entry = new Entry(vaultId, userId, userKey);

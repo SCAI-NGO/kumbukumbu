@@ -30,6 +30,9 @@ public sealed partial record Checkpoint(
     /// <summary>The attachments it holds, by path; none in checkpoints made before attachments existed.</summary>
     public IReadOnlyList<CheckpointAttachment> Attachments { get; init; } = [];
 
+    /// <summary>The reference sealed beside <see cref="CreatedBy"/>.</summary>
+    public WriterRef? Ref { get; init; }
+
     public string Vault => Path.Segments[0];
 
     /// <summary>The path as it is shown: a folder or vault ends in '/'.</summary>

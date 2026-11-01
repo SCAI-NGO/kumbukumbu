@@ -18,6 +18,8 @@ const receipt: Receipt = {
   externalProviders: ["OpenAI"],
   privacyContact: null,
   listed: true,
+  memberships: 0,
+  sharedVaultsClosed: 0,
 };
 
 afterEach(() => {

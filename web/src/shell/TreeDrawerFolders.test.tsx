@@ -266,3 +266,32 @@ describe("removing a folder", () => {
     expect(within(drawer()).queryByRole("alert")).not.toBeInTheDocument();
   });
 });
+
+describe("folders of a vault shared with the user", () => {
+  const shared = (level: string) =>
+    api({ "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal", canWrite: level !== "read", level, owner: '"Alice"', shared: true }]) });
+
+  it("a reader gets no folder actions, not even Remove folder on an empty one, and the dock makes nothing", async () => {
+    shared("read");
+    await openDrawer();
+    await userEvent.click(folderRow("A"));
+    await within(drawer()).findByText("B");
+    for (const name of ["A", "B", "Drafts"]) expect(within(drawer()).queryByRole("button", { name: `Actions for ${name}` })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "New" }));
+    expect(screen.getByRole("menuitem", { name: "New folder…" })).toBeDisabled();
+  });
+
+  it.each([
+    ["write", ["New note here", "New folder…", "Upload here"]],
+    ["maintain", ["New note here", "New folder…", "Upload here", "Rename or move", "Remove folder"]],
+  ])("the board's folder moves or goes only from maintain (%s)", async (level, items) => {
+    shared(level);
+    root.folders.push(folder("/Work/Board"));
+    await openDrawer();
+    expect(await menuOf("Board")).toEqual(items);
+    await userEvent.keyboard("{Escape}");
+    // Any other folder is a writer's to move.
+    expect(await menuOf("Drafts")).toContain("Rename or move");
+  });
+});

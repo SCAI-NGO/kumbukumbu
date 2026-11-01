@@ -58,6 +58,15 @@ describe("Consent", () => {
     expect(screen.queryByText(/^Expires/)).not.toBeInTheDocument();
   });
 
+  it("shows maintain, in the warning colour", async () => {
+    api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, connection: { ...view.connection, vaults: { Arbeit: "maintain", Privat: "read" } } }) });
+    renderApp("/consent?request=r1");
+    const maintain = await screen.findByText("read, write and maintain");
+    expect(maintain).toHaveClass("text-warning");
+    expect(maintain.closest("li")).toHaveTextContent("Arbeit: read, write and maintain");
+    expect(screen.getByText("Privat: read")).toBeInTheDocument();
+  });
+
   it("warns about an app that registered itself and shows the expiry", async () => {
     api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, client: { ...view.client, verified: false }, connection: { ...view.connection, expiresAt: "2026-12-01T09:00:00Z" } }) });
     renderApp("/consent?request=r1");

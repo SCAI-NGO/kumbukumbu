@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { api, call } from "./client";
 import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
+import { useSyncStatus } from "../state/sync";
 
 export type TrashEntry = components["schemas"]["TrashEntryView"];
 export type CheckpointEntry = components["schemas"]["CheckpointEntryView"];
@@ -17,15 +18,23 @@ const params = (path: string) => ({ path: { vault: vaultOf(path), path: inVault(
 /**
  * Every note of the vault may read differently now: its tree, notes, links, history and search are asked again.
  * `notes: false` after one note's restore: the other notes' text is as it was, and reading the open one again
- * would replace its text on screen.
+ * would replace its text on screen. `versions`: the open note's version too, which tells the editor of a write.
+ * `search: false` leaves an open search as it is.
  */
-function vaultChanged(queryClient: QueryClient, vault: string, { notes = true } = {}) {
+function vaultChanged(queryClient: QueryClient, vault: string, { notes = true, versions = false, search = true } = {}) {
   const inIt = (k: unknown) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`));
-  for (const key of ["tree", ...(notes ? ["note"] : []), "links", "backlinks", "history", "trash", "checkpoints"]) {
+  for (const key of ["tree", ...(notes ? ["note"] : []), ...(versions ? ["version"] : []), "links", "backlinks", "history", "trash", "checkpoints"]) {
     void queryClient.invalidateQueries({ queryKey: [key], predicate: (q) => q.queryKey.some(inIt) });
   }
-  for (const key of ["vaults", "changes", "search"]) void queryClient.invalidateQueries({ queryKey: [key] });
+  for (const key of ["vaults", "changes", ...(search ? ["search"] : [])]) void queryClient.invalidateQueries({ queryKey: [key] });
 }
+
+/**
+ * The sync socket's hint that `vault` (the caller's name for it) changed (collab design §9.1). Not the notes' text:
+ * the open note's version says whether it changed, and the editor offers the new text. Not an open search either,
+ * which a hint every half second while someone writes would send again and again.
+ */
+export const vaultHinted = (queryClient: QueryClient, vault: string) => vaultChanged(queryClient, vault, { notes: false, versions: true, search: false });
 
 /**
  * Restores a note (`restore <path> [version]`): an existing note goes back to `version` of its history, as a new
@@ -51,18 +60,21 @@ export function useRestoreNote() {
 
 /**
  * The open note's version and last writer, without its text: asked every few seconds while the page is visible,
- * at once when it becomes visible again, and not at all while it is hidden (the query's focus handling).
+ * at once when it becomes visible again, and not at all while it is hidden (the query's focus handling). Only while
+ * the sync socket is down: while it is up, its hints have the version asked again (collab design §9.1).
  */
-export const useVersionPoll = (path: string, enabled: boolean, interval = 5_000) =>
-  useQuery({
+export function useVersionPoll(path: string, enabled: boolean, interval = 5_000) {
+  const connected = useSyncStatus((s) => s.connected);
+  return useQuery({
     queryKey: ["version", path],
     queryFn: () => call(api.GET("/api/version/{vault}/{path}", { params: params(path) })),
     enabled,
-    refetchInterval: interval,
+    refetchInterval: connected ? false : interval,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: "always",
     retry: false,
   });
+}
 
 export const useTrash = (vault: string) =>
   useQuery({ queryKey: ["trash", vault], queryFn: () => call(api.GET("/api/vaults/{vault}/trash", { params: { path: { vault } } })) });

@@ -63,6 +63,11 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             .OrderBy(x => x.Note.Path.Value, TextOrder.Default)
             .ToList();
         if (affected.Count == 0) return ShellResult.Ok($"no occurrences of \"{oldText}\" {Where(path, notes.Count)}");
+        // A folder's replace may reach a structural file (the board's Board.md) the path itself doesn't name.
+        foreach (var (note, _) in affected)
+        {
+            if (caller.Refuse(tool, note.Path) is { } refused) return refused;
+        }
 
         var total = affected.Sum(x => x.Matches.Count);
         var output = new List<string> { $"{Count(total, "occurrence")} of \"{oldText}\" in {Count(affected.Count, "note")} {Where(path, notes.Count)}, to become \"{newText}\":" };
@@ -176,7 +181,8 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
 
     private async Task<ShellResult> ApplyAsync(VaultPath path, string oldText, string newText, bool word, string token, CancellationToken ct)
     {
-        var writer = caller.Writer;
+        var writer = caller.WriterIn(path.Segments[0]);
+        var reference = caller.ReferenceIn(path.Segments[0]);
         var now = time.GetUtcNow().UtcDateTime;
         if (plans.Take<ReplacePlan>(token, now) is not { } plan) return ShellResult.Error(plans.Unavailable("replace", token, now));
 
@@ -186,8 +192,13 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             return ShellResult.Error("replace: this plan was made for a call with another path, old_text, new_text or word; make the same call as the preview");
         }
 
+        foreach (var (notePath, _) in plan.Notes)
+        {
+            if (caller.Refuse("replace", notePath) is { } refused) return refused;
+        }
+
         var batch = new NoteBatch();
-        var changeset = await Changeset.ForAsync(store, path.Segments[0], writer, caller.ChangesetIdle, now, ct);
+        var changeset = await Changeset.ForAsync(store, path.Segments[0], reference, writer, caller.ChangesetIdle, now, ct);
         var changed = new List<string>();
         var total = 0;
         foreach (var (notePath, version) in plan.Notes)
@@ -210,12 +221,12 @@ public sealed class Replacer(INoteStore store, TimeProvider time, Plans plans, I
             }
 
             // Part of the writer's changeset, like any write: a series of replaces keeps the state before them.
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, $"{writer} (replace)", now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, Writers.Marked(writer, "replace"), reference, now, changeset)));
         }
 
         if (changed.Count == 0)
         {
-            var conflicts = await store.TryCommitAsync(batch, writer, now, ct);
+            var conflicts = await store.TryCommitAsync(batch, writer, reference, now, ct);
             changed.AddRange(conflicts.Select(c => c.Value));
         }
 

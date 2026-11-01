@@ -84,7 +84,7 @@ describe("the vault's activity", () => {
   it("says_you_in_obsidian_for_a_device_row", async () => {
     api(() =>
       json(200, {
-        rows: [row("Work – Obsidian My Obsidian Laptop", "device", [{ path: "/Work/plan.md", kind: "changed" }]), row("ada", "user", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z")],
+        rows: [row("Work – Obsidian My Obsidian Laptop", "device", [{ path: "/Work/plan.md", kind: "changed" }]), row("ada", "self", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z")],
         more: false,
       }),
     );
@@ -93,6 +93,23 @@ describe("the vault's activity", () => {
     const [device, own] = await rowsOf(dialog);
     expect(device).toHaveTextContent("You in Obsidian (My Obsidian Laptop)");
     expect(own).toHaveTextContent(/^You/);
+  });
+
+  it("takes you from the server's kind, not the name: another user and an agent named as the user are not you", async () => {
+    api(() =>
+      json(200, {
+        rows: [
+          row("another user", "user", [{ path: "/Work/plan.md", kind: "changed" }]),
+          row("ada", "agent", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z"),
+        ],
+        more: false,
+      }),
+    );
+    const dialog = await openActivity();
+
+    const [other, agent] = await rowsOf(dialog);
+    expect(other).toHaveTextContent(/^another user/);
+    expect(agent).toHaveTextContent(/^Agent ada/);
   });
 
   it("expands_a_row_into_its_files", async () => {
@@ -123,7 +140,7 @@ describe("the vault's activity", () => {
   it("loads_more_with_before", async () => {
     const fetch = api((r) =>
       new URL(r.url).searchParams.get("before")
-        ? json(200, { rows: [row("ada", "user", [{ path: "/Work/old.md", kind: "added", before: null }], "2026-10-20T09:00:00Z", "2026-10-20T09:00:00Z")], more: false })
+        ? json(200, { rows: [row("ada", "self", [{ path: "/Work/old.md", kind: "added", before: null }], "2026-10-20T09:00:00Z", "2026-10-20T09:00:00Z")], more: false })
         : json(200, { rows: [row("liz", "agent", [{ path: "/Work/plan.md", kind: "changed" }], "2026-10-26T09:10:00Z")], more: true }),
     );
     const dialog = await openActivity();
@@ -188,7 +205,7 @@ describe("the vault's activity", () => {
   });
 
   it("marks a restore", async () => {
-    api(() => json(200, { rows: [row("ada", "user", [{ path: "/Work/plan.md", kind: "changed" }], undefined, undefined, true)], more: false }));
+    api(() => json(200, { rows: [row("ada", "self", [{ path: "/Work/plan.md", kind: "changed" }], undefined, undefined, true)], more: false }));
     const dialog = await openActivity();
 
     const [first] = await rowsOf(dialog);
@@ -258,7 +275,7 @@ describe("the vault's activity", () => {
     api(() =>
       json(200, {
         rows: [
-          row("ada", "user", [
+          row("ada", "self", [
             { path: "/Work/Drafts/.vaultkeep", kind: "added", fileKind: "folder", before: null },
             { path: "/Work/Old/.vaultkeep", kind: "deleted", fileKind: "folder", version: null },
             { path: "/Work/New/.vaultkeep", kind: "renamed", fileKind: "folder", from: "/Work/Old/.vaultkeep", to: "/Work/New/.vaultkeep" },
@@ -288,7 +305,7 @@ describe("the vault's activity", () => {
   });
 
   it("counts folders apart from notes", async () => {
-    api(() => json(200, { rows: [row("ada", "user", [{ path: "/Work/A/.vaultkeep", kind: "added", fileKind: "folder", before: null }, { path: "/Work/B/.vaultkeep", kind: "added", fileKind: "folder", before: null }])], more: false }));
+    api(() => json(200, { rows: [row("ada", "self", [{ path: "/Work/A/.vaultkeep", kind: "added", fileKind: "folder", before: null }, { path: "/Work/B/.vaultkeep", kind: "added", fileKind: "folder", before: null }])], more: false }));
     const dialog = await openActivity();
     expect((await rowsOf(dialog))[0]).toHaveTextContent("2 folders");
   });

@@ -24,8 +24,8 @@ public sealed class RequestCaller : ICaller
     private readonly bool _human;
 
     private RequestCaller(
-        CallerKind kind, User? user, string writer, ICredential credential, VaultCatalog catalog, byte[]? userKey = null, DateTime? credentialReadAt = null,
-        bool device = false, bool passwordWindowOpen = false)
+        CallerKind kind, User? user, string writer, WriterRef reference, ICredential credential, VaultCatalog catalog, byte[]? userKey = null,
+        DateTime? credentialReadAt = null, bool device = false, bool passwordWindowOpen = false)
     {
         Kind = kind;
         _human = kind == CallerKind.Session || device;
@@ -34,6 +34,7 @@ public sealed class RequestCaller : ICaller
         PasswordWindowOpen = passwordWindowOpen;
         User = user;
         Writer = writer;
+        Reference = reference;
         Credential = credential;
         _catalog = catalog;
     }
@@ -44,6 +45,36 @@ public sealed class RequestCaller : ICaller
     public User? User { get; }
 
     public string Writer { get; }
+
+    /// <summary>Always the owner's in phase 0: a session (no id), a key (its id; a device's kind is its own), a
+    /// connection (its id), the dev token (the server's).</summary>
+    public WriterRef Reference { get; }
+
+    /// <summary>
+    /// The label the caller's writes to <paramref name="vault"/> store (collab design §8.1): on a vault shared with the
+    /// caller none, <c>""</c>, so nothing in the vault names her; else <see cref="Writer"/>. Fails closed: a credential
+    /// without an access record of the vault on this request gets none, not the owner's.
+    /// </summary>
+    public string WriterIn(string vault) => MemberAccess(vault) is null ? Writer : "";
+
+    /// <summary>
+    /// The reference the caller's writes to <paramref name="vault"/> store: on a shared vault only her writer id there
+    /// (her sessions', or this credential's) and the kind, no user id and no credential id; a member without a writer
+    /// id writes nothing (fails closed). Else <see cref="Reference"/>; none without an access record, as for the label.
+    /// </summary>
+    public WriterRef ReferenceIn(string vault) =>
+        MemberAccess(vault) is not { } access ? Reference
+        : access.WriterId is { } writerId ? WriterRef.ForMember(writerId, Reference.Kind)
+        : throw new InvalidOperationException("A member's write without a writer id");
+
+    /// <summary>The caller's access to <paramref name="vault"/> if it is a member's, as it was opened on this request;
+    /// null for the owner's. Throws for a credential with access records that has none for the vault.</summary>
+    private VaultAccess? MemberAccess(string vault)
+    {
+        if (Credential is not IRightsCredential rights) return null;
+        var access = rights.Access(vault) ?? throw new InvalidOperationException("A write to a vault this request didn't open");
+        return access.Membership is null ? null : access;
+    }
 
     /// <summary>A person (the session, an Obsidian device key) gets the shorter changeset; agents, connections and the dev token the agent's.</summary>
     public TimeSpan ChangesetIdle => _human ? Changeset.HumanIdle : Changeset.Idle;
@@ -62,24 +93,40 @@ public sealed class RequestCaller : ICaller
     /// <summary>How this caller opens vaults; what <see cref="EncryptedNoteStore"/> uses.</summary>
     public ICredential Credential { get; }
 
-    /// <summary>Sessions and the dev token may write to every vault they open; an API key or a connection only where
-    /// its slot says so. Fails closed: every credential with rights is asked.</summary>
-    public bool CanWrite(string vault) => Credential is not IRightsCredential rights || rights.CanWrite(vault);
+    /// <summary>The level of the caller's access record for the vault (collab design §3.3): a session is owner of its own
+    /// vaults and at its role on a shared one; an API key or a connection has the level its slot seals, at most the role
+    /// on a shared vault; the dev token is owner of every vault it opens. Fails closed: every credential with records is
+    /// asked, and has none before its vaults were opened.</summary>
+    public AccessLevel? Level(string vault) => Credential is IRightsCredential rights ? rights.Level(vault) : AccessLevel.Owner;
 
-    public Task<IReadOnlyList<UnlockedVault>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
+    public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
+
+    /// <summary>A person's session isn't a key (planner's decision 4). A vault read-only for every member (its owner
+    /// deactivated) says so instead.</summary>
+    public string ReadOnlySentence(string vault) =>
+        ReadOnlyCode(vault) is { } code ? VaultAccess.ReadOnlySentence(code, vault)
+        : Kind == CallerKind.Session ? $"you can only read vault {vault}" : $"this key can only read vault {vault}";
+
+    /// <summary>From the caller's access record of the vault on this request (collab design §7.4).</summary>
+    public string? ReadOnlyCode(string vault) => (Credential as IRightsCredential)?.Access(vault)?.ReadOnlyCode;
+
+    /// <summary>The caller's vaults, each under the caller's name for it (collab design §3.2).</summary>
+    public Task<IReadOnlyList<VaultAccess>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);
 
     internal static RequestCaller ForDevToken(string devToken, VaultCatalog catalog) =>
-        new(CallerKind.DevToken, null, Writers.Dev, new FixedCredential(devToken), catalog);
+        new(CallerKind.DevToken, null, Writers.Dev, WriterRef.Server, new FixedCredential(devToken), catalog);
 
     internal static RequestCaller ForSession(User user, byte[] userKey, DateTime credentialReadAt, bool windowOpen, VaultCatalog catalog) =>
-        new(CallerKind.Session, user, user.Username, new UserCredential(user.Id, userKey), catalog, userKey, credentialReadAt, passwordWindowOpen: windowOpen);
+        new(CallerKind.Session, user, user.Username, WriterRef.ForOwner(WriterRef.Session, null), new UserCredential(user.Id, userKey), catalog, userKey,
+            credentialReadAt, passwordWindowOpen: windowOpen);
 
-    /// <summary>An API key, its vaults already opened: <see cref="CanWrite"/> is asked before the store opens anything.</summary>
+    /// <summary>An API key, its vaults already opened: <see cref="Level"/> is asked before the store opens anything.</summary>
     internal static async Task<RequestCaller> ForApiKeyAsync(ResolvedApiKey key, string apiKey, VaultCatalog catalog, CancellationToken ct)
     {
         var credential = new ApiKeyCredential(key.Id, apiKey);
-        await credential.OpenWithRightsAsync(catalog, ct);
-        return new(CallerKind.ApiKey, key.User, key.Name, credential, catalog, device: key.Kind == ApiKeyKind.Device);
+        await credential.OpenAsync(catalog, ct);
+        var reference = WriterRef.ForOwner(key.Kind == ApiKeyKind.Device ? WriterRef.Device : WriterRef.Agent, key.Id);
+        return new(CallerKind.ApiKey, key.User, key.Name, reference, credential, catalog, device: key.Kind == ApiKeyKind.Device);
     }
 
     /// <summary>A connection's access token, its vaults already opened: null if it opens none (its slots were deleted
@@ -87,8 +134,8 @@ public sealed class RequestCaller : ICaller
     internal static async Task<RequestCaller?> ForConnectionAsync(ResolvedConnection connection, string token, VaultCatalog catalog, CancellationToken ct)
     {
         var credential = new ConnectionCredential(connection.ConnectionId, connection.TokenId, token);
-        if ((await credential.OpenWithRightsAsync(catalog, ct)).Count == 0) return null;
-        return new(CallerKind.Connection, connection.User, connection.Name, credential, catalog);
+        if ((await credential.OpenAsync(catalog, ct)).Count == 0) return null;
+        return new(CallerKind.Connection, connection.User, connection.Name, WriterRef.ForOwner(WriterRef.Agent, connection.ConnectionId), credential, catalog);
     }
 
     /// <summary>The caller of the current request. Fails closed: a service asking on a request without a

@@ -21,7 +21,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     private static readonly DateTime T0 = new(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
 
-    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, []);
+    private static StoredNote New(string path, string content) => new(P(path), content, 1, Writers.Dev, T0, [], Ref: WriterRef.Server);
 
     private sealed record Setup(VaultWorld World, VaultCatalog Catalog, SearchIndex Index, EncryptedNoteStore Store, FakeEmbedder Embedder);
 
@@ -88,11 +88,11 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         Assert.Equal(3, s.Embedder.Embedded);
 
         var current = (await s.Store.GetAsync(note.Path, Ct))!;
-        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, T0), Ct);
+        await s.Store.TryReplaceAsync(current, NoteWriter.Next(current, "# A\nalpha\n# B\nbeta changed\n# C\ngamma\n", Writers.Dev, WriterRef.Server, T0), Ct);
         await IdleAsync(s);
         Assert.Equal(4, s.Embedder.Embedded);
 
-        await s.Store.TryTrashAsync((await s.Store.GetAsync(note.Path, Ct))!, Writers.Dev, T0, Ct);
+        await s.Store.TryTrashAsync((await s.Store.GetAsync(note.Path, Ct))!, Writers.Dev, WriterRef.Server, T0, Ct);
         await IdleAsync(s);
         Assert.Empty((await s.Store.SearchAsync(P("/Work"), "beta", 10, Ct)).Hits);
         Assert.Equal(0, await s.World.Db.GetCollection<BsonDocument>("embeddings").CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: Ct));
@@ -127,7 +127,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
 
     private static async Task<List<NoteEmbeddings>> StoredEmbeddingsAsync(Setup s, string name = "Work")
     {
-        var vault = (await s.Catalog.OpenAsync(Token, Ct)).Single(v => v.Name == name);
+        var vault = (await s.Catalog.OpenAsync(Token, Ct)).Single(v => v.Name == name).Vault;
         var docs = await s.World.Db.GetCollection<SealedDocument>("embeddings").Find(d => d.Vault == vault.Id).ToListAsync(Ct);
         return [.. docs.Select(d => vault.OpenEmbeddings(d).Embeddings)];
     }
@@ -163,7 +163,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         // The index doesn't run: the catch-up stays queued, and only a.md is embedded with arctic-l. The two
         // fakes' vectors differ in length, so a dot product across models would throw.
         var later = await StartAsync(s.World, new FakeEmbedder(model: "arctic-l"), start: false);
-        var vault = Assert.Single(await later.Catalog.OpenAsync(Token, Ct));
+        var vault = Assert.Single(await later.Catalog.OpenAsync(Token, Ct)).Vault;
         await later.Index.IndexAsync(vault, P("/Work/a.md"), Ct);
 
         var result = await later.Store.SearchAsync(P("/Work"), "alpha", 10, Ct);
@@ -235,7 +235,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         Assert.All(s.Embedder.Seen, t => Assert.DoesNotContain("eggs", t.Text));
 
         var stored = await s.World.Db.GetCollection<SealedDocument>("embeddings").Find(FilterDefinition<SealedDocument>.Empty).ToListAsync(Ct);
-        var vaults = (await s.Catalog.OpenAsync(Token, Ct)).ToDictionary(v => v.Id);
+        var vaults = (await s.Catalog.OpenAsync(Token, Ct)).ToDictionary(v => v.Id, v => v.Vault);
         Assert.Equal(
             ["Private remote:qwen3@64", "Work arctic-m"],
             stored.Select(d => $"{vaults[d.Vault].Name} {vaults[d.Vault].OpenEmbeddings(d).Embeddings.Model}").Order(StringComparer.Ordinal));
@@ -291,7 +291,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
     public async Task Switching_a_vault_to_another_provider_embeds_it_again_and_survives_a_restart()
     {
         var (s, remote) = await TwoProvidersAsync();
-        var work = (await s.Catalog.OpenAsync(Token, Ct)).Single(v => v.Name == "Work");
+        var work = (await s.Catalog.OpenAsync(Token, Ct)).Single(v => v.Name == "Work").Vault;
         var seen = remote.Seen.Count;
 
         await s.Catalog.SetEmbeddingProviderAsync(work, "remote", Ct);
@@ -304,7 +304,7 @@ public sealed class SearchIndexTests(MongoFixture fixture)
         // The choice is sealed in the vault's meta: a restart opens it with the same provider, and nothing is embedded again.
         var later = await StartAsync(s.World, external: [Remote(new FakeEmbedder(model: "remote:qwen3@64"))]);
         await IdleAsync(later);
-        Assert.Equal(["remote", "remote"], (await later.Catalog.OpenAsync(Token, Ct)).Select(v => v.EmbeddingProvider));
+        Assert.Equal(["remote", "remote"], (await later.Catalog.OpenAsync(Token, Ct)).Select(v => v.Vault.EmbeddingProvider));
         Assert.Equal(0, later.Embedder.Embedded);
     }
 

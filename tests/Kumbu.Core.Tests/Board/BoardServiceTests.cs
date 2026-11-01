@@ -255,11 +255,52 @@ public class BoardServiceTests
         var result = await service.CreateAsync("Work", Ct);
 
         Assert.Equal("board: created /Work/Board/Board.md from the template; 'board /Work' shows it", result.Output);
-        Assert.Equal(BoardTemplate.Text("Work"), await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(BoardTemplate.Text(), await Content(store, "/Work/Board/Board.md"));
 
         var again = await service.CreateAsync("/Work", Ct);
         Assert.Equal("board: /Work/Board/Board.md exists already; 'board /Work' shows it", again.Output);
         Assert.True((await service.CreateAsync("Nowhere", Ct)).IsError);
+    }
+
+    private static ICaller WriteLevel => new FixedCaller("bob", LevelOf: _ => AccessLevel.Write);
+
+    [Fact]
+    public async Task A_writer_may_add_move_and_update_cards()
+    {
+        var store = Store(("/Work/Board/X.md", Card("Ideas", "V")));
+        var service = Service(store, WriteLevel);
+
+        var added = await service.AddAsync("Work", "Y", "Ideas", null, null, null, null, Ct);
+        var moved = await service.MoveAsync("Work", "X", "Doing", null, null, Ct);
+        var updated = await service.UpdateAsync("Work", "X", new DateOnly(2026, 11, 3), default, Ct);
+
+        Assert.False(added.IsError, added.Output);
+        Assert.False(moved.IsError, moved.Output);
+        Assert.False(updated.IsError, updated.Output);
+        Assert.Equal("Doing", (await CardOf(store, "X")).Column);
+        Assert.Equal(Definition, await Content(store, "/Work/Board/Board.md"));
+    }
+
+    [Fact]
+    public async Task A_writer_may_not_create_a_board_or_rename_a_column()
+    {
+        var store = Store(("/Work/Board/X.md", Card("Doing", "V")));
+        var empty = new InMemoryNoteStore(("/Work/plan.md", "Plan\n"));
+
+        var renamed = await Service(store, WriteLevel).RenameColumnAsync("Work", "Doing", "In progress", Ct);
+        var created = await Service(empty, WriteLevel).CreateAsync("Work", Ct);
+
+        foreach (var result in new[] { renamed, created })
+        {
+            Assert.True(result.IsError);
+            Assert.Equal(ShellErrorKind.Refused, result.Kind);
+            Assert.Equal(Refusals.Structural, result.Code);
+            Assert.Equal("board: Only those who may maintain *Work* can change its board's columns.", result.Output);
+        }
+
+        Assert.Equal(Definition, await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal("Doing", (await CardOf(store, "X")).Column);
+        Assert.Null(await Content(empty, "/Work/Board/Board.md"));
     }
 
     [Fact]
@@ -357,6 +398,25 @@ public class BoardServiceTests
         Assert.Equal("board: added 'Y' to Done (42 of 42)", result.Output);
         Assert.Equal(42, (await Lane(store, "Done")).Count());
         Assert.Empty(await store.ListNotesUnderAsync(P("/Work/Board/Archive"), Ct));
+    }
+
+    [Fact]
+    public async Task A_writer_archives_a_card_that_Board_md_links_to()
+    {
+        const string definition = "---\nkumbu-board: 1\ncolumns: [Doing, { Done: [archivable] }]\narchive: { after: 1, minDays: 14 }\n---\nSee [[Board/A]].\n";
+        var store = new InMemoryNoteStore(
+            ("/Work/Board/Board.md", definition),
+            ("/Work/Board/A.md", Aged("Done", "H", new DateOnly(2026, 9, 1))),
+            ("/Work/Board/X.md", Card("Doing", "V")));
+        var service = Service(store, WriteLevel);
+
+        var result = await service.MoveAsync("Work", "X", "Done", "top", null, Ct);
+
+        // A card operation is write (concept §7), the link the board rewrites in its own Board.md included.
+        Assert.Equal("board: moved 'X' to Done (1 of 2); archived 'A' to /Work/Board/Archive/", result.Output);
+        var board = await Content(store, "/Work/Board/Board.md");
+        Assert.DoesNotContain("[[Board/A]]", board);
+        Assert.Contains("Archive/A]]", board);
     }
 
     [Fact]

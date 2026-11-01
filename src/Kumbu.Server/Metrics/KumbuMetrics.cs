@@ -54,6 +54,9 @@ public static class KumbuMetrics
         foreach (var reason in Enum.GetValues<LockReason>()) VaultLocks.WithLabels(Label(reason));
         foreach (var outcome in Enum.GetValues<Outcome>()) SignIns.WithLabels(Label(outcome));
         foreach (var grant in Enum.GetValues<Grant>()) OAuthTokens.WithLabels(Label(grant));
+        foreach (var outcome in Enum.GetValues<InvitationOutcome>()) Invitations.WithLabels(Label(outcome));
+        foreach (var change in Enum.GetValues<MembershipChange>()) MembershipChanges.WithLabels(Label(change));
+        foreach (var status in MembershipStatuses) Memberships.WithLabels(status);
 
         foreach (var type in Enum.GetValues<PageKind>())
         {
@@ -140,38 +143,142 @@ public static class KumbuMetrics
     private static readonly Counter OAuthTokens = Prometheus.Metrics.CreateCounter(
         "kumbu_oauth_tokens_issued_total", "Token pairs issued by the OAuth token endpoint, by grant.", new CounterConfiguration { LabelNames = ["grant"] });
 
+    /// <summary>What became of a vault invitation (collab design §12): <c>Refused</c> is an acceptance the server
+    /// refused (the owner inactive, the vault closing, the alias taken, a limit), never a link that isn't one.</summary>
+    public enum InvitationOutcome { Created, Accepted, Declined, Withdrawn, Expired, Refused }
+
+    /// <summary>A change to an active membership: removed by the owner, left by the member, a role raised or lowered.</summary>
+    public enum MembershipChange { Revoked, Left, RoleRaised, RoleLowered }
+
+    /// <summary>The statuses a membership can have, the only values of <c>kumbu_memberships{status}</c>.</summary>
+    private static readonly string[] MembershipStatuses =
+        [Sharing.MembershipStatus.Pending, Sharing.MembershipStatus.Active, Sharing.MembershipStatus.Revoked, Sharing.MembershipStatus.Left];
+
+    private static readonly Counter Invitations = Prometheus.Metrics.CreateCounter(
+        "kumbu_invitations_total", "Vault invitations, by outcome.", new CounterConfiguration { LabelNames = ["outcome"] });
+
+    private static readonly Counter MembershipChanges = Prometheus.Metrics.CreateCounter(
+        "kumbu_membership_changes_total", "Changes to active memberships, by event.", new CounterConfiguration { LabelNames = ["event"] });
+
+    private static readonly Gauge SharedVaults = Prometheus.Metrics.CreateGauge(
+        "kumbu_shared_vaults", "Vaults with at least one active member now.");
+
+    private static readonly Gauge Memberships = Prometheus.Metrics.CreateGauge(
+        "kumbu_memberships", "Memberships of shared vaults now, by status.", new GaugeConfiguration { LabelNames = ["status"] });
+
+    public static void Invitation(InvitationOutcome outcome) => Invitations.WithLabels(Label(outcome)).Inc();
+
+    public static void MembershipChanged(MembershipChange change) => MembershipChanges.WithLabels(Label(change)).Inc();
+
+    private static string Label(InvitationOutcome outcome) => outcome switch
+    {
+        InvitationOutcome.Created => "created",
+        InvitationOutcome.Accepted => "accepted",
+        InvitationOutcome.Declined => "declined",
+        InvitationOutcome.Withdrawn => "withdrawn",
+        InvitationOutcome.Expired => "expired",
+        _ => "refused",
+    };
+
+    private static string Label(MembershipChange change) => change switch
+    {
+        MembershipChange.Revoked => "revoked",
+        MembershipChange.Left => "left",
+        MembershipChange.RoleRaised => "role_raised",
+        _ => "role_lowered",
+    };
+
     // A test process builds many hosts: each is held weakly, so that a disposed host can be collected, and the gauges
     // add up the live ones.
-    private static readonly List<(WeakReference<SearchIndex> Index, WeakReference<VaultCatalog> Catalog)> Hosts = [];
+    private static readonly List<(WeakReference<SearchIndex> Index, WeakReference<VaultCatalog> Catalog, WeakReference<Sharing.Memberships>? Memberships)> Hosts = [];
     private static bool _scrapeHooked;
 
-    /// <summary>The gauges of this process's search index and vault catalog are read at each scrape. The callback is registered once;
-    /// each call (another host in one process) adds the host to what it sums.</summary>
-    public static void ReadOnScrape(SearchIndex index, VaultCatalog catalog)
+    /// <summary>The gauges of this process's search index and vault catalog are read at each scrape, and the sharing gauges
+    /// from the database behind <paramref name="memberships"/> (counts only, by status). The callback is registered once;
+    /// each call (another host in one process) adds the host to what it sums; hosts on the same database count it once.</summary>
+    public static void ReadOnScrape(SearchIndex index, VaultCatalog catalog, Sharing.Memberships? memberships = null)
     {
         lock (Hosts)
         {
-            Hosts.Add((new WeakReference<SearchIndex>(index), new WeakReference<VaultCatalog>(catalog)));
+            Hosts.Add((new WeakReference<SearchIndex>(index), new WeakReference<VaultCatalog>(catalog), memberships is null ? null : new WeakReference<Sharing.Memberships>(memberships)));
             if (_scrapeHooked) return;
             _scrapeHooked = true;
         }
 
-        Prometheus.Metrics.DefaultRegistry.AddBeforeCollectCallback(() =>
+        Prometheus.Metrics.DefaultRegistry.AddBeforeCollectCallback(async ct =>
         {
             double backlog = 0, unlocked = 0;
+            var databases = new Dictionary<string, List<Sharing.Memberships>>(StringComparer.Ordinal);
             lock (Hosts)
             {
                 Hosts.RemoveAll(h => !h.Index.TryGetTarget(out _) && !h.Catalog.TryGetTarget(out _));
-                foreach (var (i, c) in Hosts)
+                foreach (var (i, c, m) in Hosts)
                 {
                     if (i.TryGetTarget(out var idx)) backlog += idx.Queued;
                     if (c.TryGetTarget(out var cat)) unlocked += cat.UnlockedCount;
+                    if (m is not null && m.TryGetTarget(out var ms))
+                    {
+                        // The newest host first: an older one may be disposed already, and its database client with it.
+                        if (!databases.TryGetValue(ms.DatabaseName, out var hosts)) databases[ms.DatabaseName] = hosts = [];
+                        hosts.Insert(0, ms);
+                    }
                 }
             }
 
             EmbeddingBacklog.Set(backlog);
             VaultsUnlocked.Set(unlocked);
+            if (databases.Count == 0) return;
+            double shared = 0;
+            var byStatus = MembershipStatuses.ToDictionary(s => s, _ => 0.0, StringComparer.Ordinal);
+            foreach (var (name, hosts) in databases)
+            {
+                // A database that doesn't answer in time counts as it did last: one away (a test host's, say) holds
+                // up neither the scrape nor the others' figures.
+                if (await CountsOfAsync(hosts, ct) is { } fresh) LastCounts[name] = fresh;
+                if (!LastCounts.TryGetValue(name, out var counts)) continue;
+                shared += counts.SharedVaults;
+                foreach (var (status, n) in counts.ByStatus)
+                {
+                    // A status outside the fixed set (written to the database by hand) is no label value.
+                    if (byStatus.ContainsKey(status)) byStatus[status] += n;
+                }
+            }
+
+            SharedVaults.Set(shared);
+            foreach (var (status, n) in byStatus) Memberships.WithLabels(status).Set(n);
         });
+    }
+
+    /// <summary>The sharing counts last read from each database, by its name.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long SharedVaults, IReadOnlyDictionary<string, long> ByStatus)> LastCounts =
+        new(StringComparer.Ordinal);
+
+    /// <summary>How long a scrape waits for one database's sharing counts.</summary>
+    private static readonly TimeSpan CountsTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>One database's sharing counts, from the first of its hosts that answers within <see cref="CountsTimeout"/>;
+    /// null if none does (the database away).</summary>
+    private static async Task<(long SharedVaults, IReadOnlyDictionary<string, long> ByStatus)?> CountsOfAsync(List<Sharing.Memberships> hosts, CancellationToken ct)
+    {
+        foreach (var host in hosts)
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(CountsTimeout);
+            try
+            {
+                return await host.CountsAsync(limit.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Too slow: the next host of the same database, or the last figures.
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                // The next host of the same database.
+            }
+        }
+
+        return null;
     }
 
     public enum RenderKind { Page, Image }
@@ -468,6 +575,10 @@ public static class KumbuMetrics
         Metric("kumbu_vault_locks_total", ("reason", Values<LockReason>(Label)));
         Metric("kumbu_sign_ins_total", ("outcome", Values<Outcome>(Label)));
         Metric("kumbu_oauth_tokens_issued_total", ("grant", Values<Grant>(Label)));
+        Metric("kumbu_invitations_total", ("outcome", Values<InvitationOutcome>(Label)));
+        Metric("kumbu_membership_changes_total", ("event", Values<MembershipChange>(Label)));
+        Metric("kumbu_shared_vaults");
+        Metric("kumbu_memberships", ("status", new HashSet<string>(MembershipStatuses, StringComparer.Ordinal)));
         Metric("kumbu_pdf_pages_analysed_total", ("type", analysed));
         Metric("kumbu_pdf_page_text_coverage_ratio");
         Metric("kumbu_pdf_page_image_coverage_ratio");

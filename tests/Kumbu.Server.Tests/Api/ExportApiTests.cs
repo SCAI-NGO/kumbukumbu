@@ -270,7 +270,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     private async Task DamageNoteAsync(RestClient user, string path)
     {
         var catalog = Api.Services.GetRequiredService<VaultCatalog>();
-        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
         var notes = Api.Services.GetRequiredService<IMongoDatabase>().GetCollection<BsonDocument>("notes");
         Assert.True(Kumbu.Core.Paths.VaultPath.TryParse($"/{user.Vault}/{path}", out var notePath));
         var filter = Builders<BsonDocument>.Filter.Eq("vault", vault.Id) & Builders<BsonDocument>.Filter.Eq("pid", new BsonBinaryData(vault.PathId(notePath)));
@@ -444,7 +444,7 @@ public sealed class ExportApiTests(KumbuAppFactory app)
     public async Task A_folder_checkpoint_exports_with_the_vault_folder_on_top()
     {
         var user = await RestClient.NewAsync(Api);
-        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        var write = await user.KeyAsync("w" + Guid.NewGuid().ToString("N")[..6], KeyRight.Maintain);
         await user.CreateAsync("a.md", "a\n");
         await user.CreateAsync("p/b.md", "b\n");
         var made = await user.ShAsync("mkcp /Arbeit/p cp", write);
@@ -840,5 +840,96 @@ public sealed class ExportApiTests(KumbuAppFactory app)
 
         Assert.Contains(log.Lines, l => l.Contains("A ZIP download was cut off", StringComparison.Ordinal));
         Assert.DoesNotContain(log.Lines, l => l.Contains($"User {user.User.Id} downloaded", StringComparison.Ordinal));
+    }
+
+    /// <summary>Alice's "Gartenarbeit" (a note, a picture, a checkpoint) shared with Bob as "garten", to read.</summary>
+    private async Task<(RestClient Alice, RestClient Bob)> SharedAsync()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "Beete planen\n");
+        await alice.CreateFileAsync("Bilder/beet.png", Png(4, 3));
+        await MakeCheckpointAsync(alice, "cp");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await Sharing.Share.ShareWithAsync(alice, bob, "garten", Kumbu.Server.Sharing.MemberRole.Read, label: "Bob");
+        return (alice, bob);
+    }
+
+    private static string RouteUrl(string route, string vault) => route switch
+    {
+        "vault" => $"/api/vaults/{vault}/export",
+        "checkpoint" => $"/api/vaults/{vault}/checkpoints/cp/export",
+        "files" => $"/api/files/{vault}/zip?path=Bilder/beet.png",
+        _ => throw new ArgumentException(route),
+    };
+
+    private static async Task<string[]> EventTextsAsync(RestClient owner)
+    {
+        using var response = await owner.GetAsync($"/api/vaults/{owner.Vault}/activity");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return [.. (await RestClient.JsonAsync(response))["events"]!.AsArray().Select(e => e!["text"]!.GetValue<string>())];
+    }
+
+    /// <summary>The entries below the vault's folder, whatever the caller calls the vault.</summary>
+    private static async Task<string[]> EntriesAsync(HttpResponseMessage response, string vault)
+    {
+        using var zip = await ZipAsync(response);
+        return [.. zip.Entries.Select(e => e.FullName.StartsWith(vault + "/", StringComparison.Ordinal) ? e.FullName[(vault.Length + 1)..] : e.FullName).Order(StringComparer.Ordinal)];
+    }
+
+    [Theory]
+    [InlineData("vault")]
+    [InlineData("checkpoint")]
+    [InlineData("files")]
+    public async Task The_three_export_routes_treat_a_member_like_the_owner(string route)
+    {
+        var (alice, bob) = await SharedAsync();
+
+        using var hers = await ExportAsync(alice, RouteUrl(route, "Gartenarbeit"));
+        using var his = await ExportAsync(bob, RouteUrl(route, "garten"));
+
+        Assert.Equal(await EntriesAsync(hers, "Gartenarbeit"), await EntriesAsync(his, "garten"));
+    }
+
+    [Fact]
+    public async Task A_member_export_is_an_event_for_the_owner()
+    {
+        var (alice, bob) = await SharedAsync();
+        // Her own exports are no event.
+        foreach (var route in new[] { "vault", "checkpoint", "files" }) using (var hers = await ExportAsync(alice, RouteUrl(route, "Gartenarbeit"))) Assert.Equal(HttpStatusCode.OK, hers.StatusCode);
+        Assert.DoesNotContain(await EventTextsAsync(alice), t => t.Contains("exported", StringComparison.Ordinal));
+
+        foreach (var route in new[] { "vault", "checkpoint", "files" })
+        {
+            var before = (await EventTextsAsync(alice)).Count(t => t == "Bob exported Gartenarbeit.");
+            using var his = await ExportAsync(bob, RouteUrl(route, "garten"));
+            Assert.Equal(HttpStatusCode.OK, his.StatusCode);
+            Assert.Equal(before + 1, (await EventTextsAsync(alice)).Count(t => t == "Bob exported Gartenarbeit."));
+        }
+
+        // Several vaults at once: an event for the shared one only.
+        using var several = await ExportAsync(bob, "/api/export?vault=garten&vault=Work");
+        Assert.Equal(HttpStatusCode.OK, several.StatusCode);
+        Assert.Equal(4, (await EventTextsAsync(alice)).Count(t => t == "Bob exported Gartenarbeit."));
+        // The member doesn't see it among his own.
+        using var bobs = await bob.GetAsync("/api/vaults/garten/activity");
+        Assert.DoesNotContain((await RestClient.JsonAsync(bobs))["events"]!.AsArray(), e => e!["text"]!.GetValue<string>().Contains("exported", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_member_export_needs_the_password_ticket()
+    {
+        var (alice, bob) = await SharedAsync();
+        var alicesTicket = await TicketAsync(alice);
+
+        foreach (var route in new[] { "vault", "checkpoint", "files" })
+        {
+            var url = RouteUrl(route, "garten");
+            using var without = await bob.GetAsync(url);
+            using var withHers = await bob.GetAsync(url + (url.Contains('?') ? "&" : "?") + "ticket=" + Uri.EscapeDataString(alicesTicket));
+            Assert.Equal(HttpStatusCode.Forbidden, without.StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, withHers.StatusCode);
+        }
+
+        Assert.DoesNotContain(await EventTextsAsync(alice), t => t.Contains("exported", StringComparison.Ordinal));
     }
 }

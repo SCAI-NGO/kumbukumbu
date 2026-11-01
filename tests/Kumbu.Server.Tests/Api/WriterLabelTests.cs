@@ -16,9 +16,10 @@ using static Kumbu.Server.Tests.Api.RestClient;
 
 namespace Kumbu.Server.Tests.Api;
 
-/// <summary>Writer kinds (spec §5a): the session's views tell the user's own writes, their devices', their agents' and the server's apart.</summary>
+/// <summary>Writers as the viewer is shown them (collab design §8.2) and their kinds (spec §5a): the session's views tell
+/// the user's own writes, their devices', their agents' and the server's apart.</summary>
 [Collection("app")]
-public sealed class WriterKindTests(KumbuAppFactory app)
+public sealed class WriterLabelTests(KumbuAppFactory app)
 {
     private const string Callback = "https://client.example/callback";
 
@@ -97,15 +98,15 @@ public sealed class WriterKindTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_users_own_write_is_user_and_seed_is_server()
+    public async Task The_viewers_own_writes_have_kind_self()
     {
         var user = await NewAsync(Api);
         await user.CreateAsync("mine.md", "mine\n");
         var store = new EncryptedNoteStore(Api.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey));
         var seeded = VaultPath.Root.Child(user.Vault).Child("seeded.md");
-        Assert.True(await store.TryCreateAsync(new StoredNote(seeded, "seeded\n", 1, Writers.Seed, DateTime.UtcNow, []), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(seeded, "seeded\n", 1, Writers.Seed, DateTime.UtcNow, [], Ref: WriterRef.Server), Ct));
 
-        Assert.Equal(("user", "user", "user"), await KindsAsync(user, "mine.md"));
+        Assert.Equal(("self", "self", "self"), await KindsAsync(user, "mine.md"));
         Assert.Equal(("server", "server", "server"), await KindsAsync(user, "seeded.md"));
     }
 
@@ -229,5 +230,132 @@ public sealed class WriterKindTests(KumbuAppFactory app)
         Assert.Equal("agent", change["writerKind"]!.GetValue<string>());
         Assert.Null(change["quietSince"]);
         Assert.Null(change["resumedAt"]);
+    }
+
+    /// <summary>A note and a removed one by <paramref name="user"/>'s session, then sealed again behind the server's back
+    /// with <c>v: 2</c> and no reference, as a damaged or mistaken write would leave them (no write path may store
+    /// one); the server reads the vault afresh.</summary>
+    private async Task UnreferencedAsync(RestClient user)
+    {
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var store = new EncryptedNoteStore(catalog, new UserCredential(user.User.Id, user.UserKey));
+        var root = VaultPath.Root.Child(user.Vault);
+        var session = WriterRef.ForOwner(WriterRef.Session, null);
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("orphan.md"), "orphan\n", 1, user.Username, DateTime.UtcNow, [], Ref: session), Ct));
+        Assert.True(await store.TryCreateAsync(new StoredNote(root.Child("gone.md"), "gone\n", 1, user.Username, DateTime.UtcNow, [], Ref: session), Ct));
+        Assert.True(await store.TryTrashAsync((await store.GetAsync(root.Child("gone.md"), Ct))!, user.Username, session, DateTime.UtcNow, Ct));
+
+        var vault = (await catalog.OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault).Vault;
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "notes", p => p["Path"]!.GetValue<string>().EndsWith("/orphan.md", StringComparison.Ordinal), p => p.Remove("ref"), Ct);
+        await Vaults.SealedPayloads.RewriteAsync(app.Database, vault.Id, key, "trash", _ => true, p => { p.Remove("ref"); p["Note"]!.AsObject().Remove("ref"); }, Ct);
+        catalog.Forget(vault, new InvalidOperationException("rewritten by a test"));
+    }
+
+    [Fact]
+    public async Task A_post_0_3_0_entry_without_reference_shows_as_unknown()
+    {
+        var user = await NewAsync(Api);
+        await UnreferencedAsync(user);
+
+        // As sealed: a payload version, no reference.
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        var sealedNote = (await Vaults.SealedPayloads.OpenAllAsync(app.Database, vault.Id, key, "notes", Ct)).Single();
+        Assert.Equal(2, (int)sealedNote["v"]!);
+        Assert.False(sealedNote.ContainsKey("ref"));
+
+        using var history = await user.GetAsync(user.Url("orphan.md", "history"));
+        var entry = (await JsonAsync(history)).AsArray().Single()!;
+        Assert.Equal("unknown", entry["writer"]!.GetValue<string>());
+        Assert.Null(entry["writerKind"]);
+        using var note = await user.GetAsync(user.Url("orphan.md"));
+        Assert.Equal("unknown", (await JsonAsync(note))["lastWriter"]!.GetValue<string>());
+        using var version = await user.GetAsync(user.Url("orphan.md", "version"));
+        Assert.Equal("unknown", (await JsonAsync(version))["lastWriter"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task History_and_activity_and_trash_render_through_one_service()
+    {
+        var user = await NewAsync(Api);
+        await UnreferencedAsync(user);
+        var agent = await user.KeyAsync("liz", KeyRight.Write);
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "agent.md", "x\n", agent));
+
+        using var history = await user.GetAsync(user.Url("orphan.md", "history"));
+        using var agentHistory = await user.GetAsync(user.Url("agent.md", "history"));
+        using var activity = await user.GetAsync($"/api/vaults/{Uri.EscapeDataString(user.Vault)}/activity");
+        using var trash = await user.GetAsync($"/api/vaults/{Uri.EscapeDataString(user.Vault)}/trash");
+        var rows = (await JsonAsync(activity))["rows"]!.AsArray();
+        string Row(string path, string field) =>
+            rows.Single(r => r!["files"]!.AsArray().Any(f => f!["path"]!.GetValue<string>() == path))![field]?.GetValue<string>() ?? "(none)";
+
+        // Not the owner's name anywhere: the same display, from the same service, in all three.
+        Assert.Equal("unknown", (await JsonAsync(history)).AsArray().Single()!["writer"]!.GetValue<string>());
+        Assert.Equal(("unknown", "(none)"), (Row($"/{user.Vault}/orphan.md", "writer"), Row($"/{user.Vault}/orphan.md", "writerKind")));
+        Assert.Equal("unknown", (await JsonAsync(trash))["notes"]!.AsArray().Single()!["deletedBy"]!.GetValue<string>());
+
+        // And an owner's writer the same way in history and activity.
+        var written = (await JsonAsync(agentHistory)).AsArray().Single()!;
+        Assert.Equal(("liz", "agent"), (written["writer"]!.GetValue<string>(), written["writerKind"]!.GetValue<string>()));
+        Assert.Equal(("liz", "agent"), (Row($"/{user.Vault}/agent.md", "writer"), Row($"/{user.Vault}/agent.md", "writerKind")));
+    }
+
+    /// <summary>The reference sealed with the note at <paramref name="name"/> in <paramref name="user"/>'s vault, from MongoDB.</summary>
+    private async Task<JsonObject?> SealedRefAsync(RestClient user, string name)
+    {
+        var vault = (await Api.Services.GetRequiredService<VaultCatalog>().OpenForUserAsync(user.User.Id, user.UserKey, Ct)).Single(v => v.Name == user.Vault);
+        var key = await Vaults.SealedPayloads.KeyOfUserVaultAsync(app.Database, vault.Id, user.UserKey, Ct);
+        var note = (await Vaults.SealedPayloads.OpenAllAsync(app.Database, vault.Id, key, "notes", Ct))
+            .Single(p => p["Path"]!.GetValue<string>() == $"/{user.Vault}/{name}");
+        Assert.Equal(2, (int)note["v"]!);
+        return note["ref"]?.AsObject();
+    }
+
+    private static (bool Owner, string Kind, string? Id) Parts(JsonObject? reference) =>
+        (reference!["owner"]!.GetValue<bool>(), reference["kind"]!.GetValue<string>(), reference["id"]?.GetValue<string>());
+
+    /// <summary>What each caller seals (collab design §8.1): the owner's reference with the kind of credential and its
+    /// id, so two keys or connections never share a changeset.</summary>
+    [Fact]
+    public async Task Each_caller_seals_the_owners_reference_with_its_kind_and_id()
+    {
+        var user = await NewAsync(Api);
+        var agent = await user.KeyAsync("laptop", KeyRight.Write);
+        var device = await user.KeyAsync("Arbeit – Obsidian Laptop", KeyRight.Write, ApiKeyKind.Device);
+        await user.CreateAsync("by-session.md", "s\n");
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "by-agent.md", "a\n", agent));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "by-device.md", "d\n", device));
+        await using var connection = await ConnectionClientAsync(user, "claude.ai");
+        var written = await connection.CallToolAsync("write", new Dictionary<string, object?> { ["path"] = $"/{user.Vault}/by-connection.md", ["content"] = "c\n" }, cancellationToken: Ct);
+        Assert.NotEqual(true, written.IsError);
+
+        var keys = await Api.Services.GetRequiredService<ApiKeys>().ListAsync(user.User, user.UserKey, Ct);
+        var connections = await Api.Services.GetRequiredService<Connections>().ListAsync(user.User, user.UserKey, Ct);
+        Assert.Equal((true, "session", null), Parts(await SealedRefAsync(user, "by-session.md")));
+        Assert.Equal((true, "agent", keys.Single(k => k.Name == "laptop").Id), Parts(await SealedRefAsync(user, "by-agent.md")));
+        Assert.Equal((true, "device", keys.Single(k => k.Kind == ApiKeyKind.Device).Id), Parts(await SealedRefAsync(user, "by-device.md")));
+        Assert.Equal((true, "agent", connections.Single().Id), Parts(await SealedRefAsync(user, "by-connection.md")));
+    }
+
+    [Fact]
+    public async Task Two_agent_keys_of_one_owner_write_in_two_changesets()
+    {
+        var user = await NewAsync(Api);
+        var first = await user.KeyAsync("laptop", KeyRight.Write);
+        var second = await user.KeyAsync("desktop", KeyRight.Write);
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "a.md", "a\n", first));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "b.md", "b\n", second));
+        Assert.Equal(HttpStatusCode.Created, await PutAsync(user, "c.md", "c\n", first));
+
+        async Task<string> ChangesetAsync(string name)
+        {
+            using var history = await user.GetAsync(user.Url(name, "history"));
+            return (await JsonAsync(history)).AsArray().Single()!["changeset"]!.GetValue<string>();
+        }
+
+        Assert.NotEqual(await ChangesetAsync("a.md"), await ChangesetAsync("b.md"));
+        Assert.Equal(await ChangesetAsync("a.md"), await ChangesetAsync("c.md"));
     }
 }

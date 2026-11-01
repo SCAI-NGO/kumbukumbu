@@ -6,13 +6,13 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AuthScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useSession } from "../state/session";
+import { RightText } from "./rights";
 
 type View = components["schemas"]["ConsentView"];
 
 const day = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
 // Big targets for the thumb: the same height as the primary button.
 const bigSecondary = secondaryButtonClass.replace("min-h-11", "min-h-12");
-const rightText = (right: string) => (right === "write" ? "read and write" : right);
 
 /** What the server found wrong with the request, in words for the user. The few that cannot be answered by Allow. */
 const problems: Record<string, string> = {
@@ -131,7 +131,7 @@ export default function Consent() {
       <ul className="flex flex-col divide-y divide-line rounded-[12px] border border-line bg-surface">
         {Object.entries(connection.vaults).map(([vault, right]) => (
           <li key={vault} className="px-4 py-3 break-words text-text">
-            {vault}: {rightText(right)}
+            {vault}: <RightText right={right} />
           </li>
         ))}
       </ul>

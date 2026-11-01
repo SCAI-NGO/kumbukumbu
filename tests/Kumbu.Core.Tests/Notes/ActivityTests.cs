@@ -39,8 +39,8 @@ public class ActivityTests
             // Moved without a new text: the note keeps its state.
             Note("/W/d.md", "c", seeded, null),
         };
-        var trash = new[] { new TrashedNote(Note("/W/e.md", "e", seeded, null), "liz", at, X) };
-        var moves = new[] { new MoveRecord(P("/W/c.md"), P("/W/d.md"), "liz", at, X) };
+        var trash = new[] { new TrashedNote(Note("/W/e.md", "e", seeded, null), "liz", at, X, Ref: WriterRef.Server) };
+        var moves = new[] { new MoveRecord(P("/W/c.md"), P("/W/d.md"), "liz", at, X, Ref: WriterRef.Server) };
 
         var row = Rows(notes, trash, moves).First(r => r.Id == X.Id);
 
@@ -60,7 +60,7 @@ public class ActivityTests
     {
         var at = T0.AddMinutes(5);
         var notes = new[] { Note("/W/plan.md", "new text", at, X, H("old text", T0.AddDays(-1))) };
-        var moves = new[] { new MoveRecord(P("/W/old.md"), P("/W/plan.md"), "liz", at, X) };
+        var moves = new[] { new MoveRecord(P("/W/old.md"), P("/W/plan.md"), "liz", at, X, Ref: WriterRef.Server) };
 
         var row = Assert.Single(Rows(notes, moves: moves), r => r.Id == X.Id);
 
@@ -73,7 +73,7 @@ public class ActivityTests
     public void Edits_of_a_note_deleted_later_still_show()
     {
         var trashed = Note("/W/a.md", "a2", T0.AddMinutes(1), X, H("a1", T0.AddDays(-1)));
-        var trash = new[] { new TrashedNote(trashed, "liz", Y.Started, Y) };
+        var trash = new[] { new TrashedNote(trashed, "liz", Y.Started, Y, Ref: WriterRef.Server) };
 
         var rows = Rows([], trash);
 
@@ -138,7 +138,7 @@ public class ActivityTests
     public void A_pure_rename_compares_the_unchanged_text()
     {
         var notes = new[] { Note("/W/d.md", "c", T0.AddDays(-1), null) };
-        var moves = new[] { new MoveRecord(P("/W/c.md"), P("/W/d.md"), "liz", T0, X) };
+        var moves = new[] { new MoveRecord(P("/W/c.md"), P("/W/d.md"), "liz", T0, X, Ref: WriterRef.Server) };
 
         var file = Assert.Single(Assert.Single(Rows(notes, moves: moves), r => r.Id == X.Id).Files);
 
@@ -151,10 +151,10 @@ public class ActivityTests
         var moves = new[]
         {
             // One folder mv from before moves carried a changeset: one writer, one instant.
-            new MoveRecord(P("/W/a.md"), P("/W/x/a.md"), "liz", T0),
-            new MoveRecord(P("/W/c.md"), P("/W/x/c.md"), "liz", T0),
+            new MoveRecord(P("/W/a.md"), P("/W/x/a.md"), "liz", T0, Ref: WriterRef.Server),
+            new MoveRecord(P("/W/c.md"), P("/W/x/c.md"), "liz", T0, Ref: WriterRef.Server),
             // Another commit.
-            new MoveRecord(P("/W/e.md"), P("/W/f.md"), "liz", T0.AddMinutes(1)),
+            new MoveRecord(P("/W/e.md"), P("/W/f.md"), "liz", T0.AddMinutes(1), Ref: WriterRef.Server),
         };
 
         var rows = Rows([], moves: moves);
@@ -208,8 +208,8 @@ public class ActivityTests
         var notes = new[] { Note("/W/final.md", "new text", at, X, H("old text", T0.AddDays(-1))) };
         var moves = new[]
         {
-            new MoveRecord(P("/W/old.md"), P("/W/plan.md"), "liz", at, X),
-            new MoveRecord(P("/W/plan.md"), P("/W/final.md"), "liz", Y.Started, Y),
+            new MoveRecord(P("/W/old.md"), P("/W/plan.md"), "liz", at, X, Ref: WriterRef.Server),
+            new MoveRecord(P("/W/plan.md"), P("/W/final.md"), "liz", Y.Started, Y, Ref: WriterRef.Server),
         };
 
         var rows = Rows(notes, moves: moves);
@@ -227,11 +227,11 @@ public class ActivityTests
         // a.md is renamed to b.md, b.md deleted; a new b.md is made and moved to c.md.
         var trashed = Note("/W/b.md", "first", T0, null);
         var notes = new[] { Note("/W/c.md", "second", T0.AddHours(2), null) };
-        var trash = new[] { new TrashedNote(trashed, "liz", T0.AddHours(1), Y) };
+        var trash = new[] { new TrashedNote(trashed, "liz", T0.AddHours(1), Y, Ref: WriterRef.Server) };
         var moves = new[]
         {
-            new MoveRecord(P("/W/a.md"), P("/W/b.md"), "liz", T0.AddMinutes(1), X),
-            new MoveRecord(P("/W/b.md"), P("/W/c.md"), "liz", T0.AddHours(3)),
+            new MoveRecord(P("/W/a.md"), P("/W/b.md"), "liz", T0.AddMinutes(1), X, Ref: WriterRef.Server),
+            new MoveRecord(P("/W/b.md"), P("/W/c.md"), "liz", T0.AddHours(3), Ref: WriterRef.Server),
         };
 
         var file = Assert.Single(Assert.Single(Rows(notes, trash, moves), r => r.Id == X.Id).Files);

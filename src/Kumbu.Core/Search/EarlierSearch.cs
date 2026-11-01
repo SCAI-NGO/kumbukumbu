@@ -8,7 +8,8 @@ namespace Kumbu.Core.Search;
 /// <param name="Before">The version before that one, for a comparison; null when there was none or it is no longer
 /// kept (<paramref name="BeforeLost"/>).</param>
 public sealed record EarlierHit(
-    VaultPath Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before = null, bool BeforeLost = false);
+    VaultPath Path, string Version, DateTime WrittenAt, string Writer, int StartLine, int EndLine, string Snippet, string? Before = null, bool BeforeLost = false,
+    WriterRef? Ref = null);
 
 /// <summary>
 /// Search in earlier versions ("what did it say about X before?"): words only, no embeddings, over the history the
@@ -63,7 +64,7 @@ public static class EarlierSearch
             var lost = older is null && note.History.Count >= NoteWriter.HistoryLimit;
             hits.Add(new EarlierHit(
                 note.Path, Token(note, i), entry.WrittenAt, Writers.Identity(entry.WrittenBy), chunk.StartLine, chunk.EndLine,
-                SectionSearch.Snippet(chunk, query), older, lost));
+                SectionSearch.Snippet(chunk, query), older, lost, entry.Ref));
         }
 
         return hits;

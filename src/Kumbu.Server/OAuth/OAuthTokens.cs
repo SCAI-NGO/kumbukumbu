@@ -140,7 +140,7 @@ public sealed class OAuthTokens(
         // Whole milliseconds, as MongoDB keeps them, so the slots' expiry reads back equal to the record's.
         var expiresAt = Milliseconds(now + CodeLifetime);
         IReadOnlyList<SlotDocument> slots;
-        IReadOnlyDictionary<string, byte[]> vaultKeys;
+        IReadOnlyDictionary<string, VaultCatalog.VaultKeyGrant> vaultKeys;
         try
         {
             (slots, vaultKeys) = await catalog.ConnectionSlotsFromUserAsync(user.Id, userKey, connectionId, tokenId, code, rights, expiresAt, ct);
@@ -178,7 +178,7 @@ public sealed class OAuthTokens(
                 // and the retry sees the other.
                 var current = await ConnectionDocs.Find(s, c => c.Id == connectionId).FirstOrDefaultAsync(token);
                 if (current is null || !IsLive(current, user.Id, Now)) throw new ConnectionUnavailableException("This connection is revoked or expired.");
-                if (connections.OpenMeta(user, userKey, current) is not { } currentMeta || !SameRights(currentMeta.Vaults, meta.Vaults))
+                if (connections.OpenMeta(user, userKey, current) is not { } currentMeta || !SameRights(currentMeta, meta))
                     throw new ConnectionUnavailableException("This connection's rights changed; start the connection again in the app.");
                 // A password change, recovery or deactivation stamps the user first and then revokes the tokens of
                 // every connection: before the stamp this code is found by the revocation, after it it's refused here.
@@ -194,7 +194,22 @@ public sealed class OAuthTokens(
                 // A re-keying of a vault that started or finished since its key was opened: the slot would carry the
                 // old key. Its start and finish raise the wraps of every connection that lists the vault, as the
                 // write below does, so one of the two conflicts and the retry reads the other.
-                await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, kept.Select(k => k.Vault).Distinct().ToDictionary(v => v, v => vaultKeys[v]), token);
+                await catalog.RequireSameVaultKeysAsync(s, user.Id, userKey, kept.Select(k => k.Vault).Distinct().ToDictionary(v => v, v => vaultKeys[v].Key), token);
+                // A vault shared with the user: its membership must still be active, and records the connection's name
+                // (collab design §3.4). Beside the wraps below, as the same kind of sentinel.
+                foreach (var vault in kept.Select(k => k.Vault).Distinct())
+                {
+                    if (vaultKeys[vault].Membership is not { } membership) continue;
+                    try
+                    {
+                        await Sharing.Memberships.RecordCredentialAsync(db, s, membership, vault, connectionId, meta.Name, vaultKeys[vault].Key, "A connection", token);
+                    }
+                    catch (ArgumentException)
+                    {
+                        throw new ConnectionUnavailableException("A vault of this connection is no longer shared with you; make a new connection in Kumbu².");
+                    }
+                }
+
                 await Docs.InsertOneAsync(s, record, cancellationToken: token);
                 await catalog.Slots.InsertManyAsync(s, kept, cancellationToken: token);
                 await connections.SetClientAsync(s, user, userKey, connectionId, connected, token);
@@ -731,11 +746,12 @@ public sealed class OAuthTokens(
     /// since: gone from the connection's clear list of vaults, though not from its sealed meta.</summary>
     internal static Dictionary<string, KeyRight> Rights(ConnectionDocument doc, Connections.ConnectionMeta meta, bool readOnly) =>
         meta.Vaults
-            .Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key))
-            .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.Parse(v.Value)!.Value, StringComparer.Ordinal);
+            .Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key))
+            .ToDictionary(v => v.Key, v => readOnly ? KeyRight.Read : KeyRights.ParseSealed(v.Value, meta.V)!.Value, StringComparer.Ordinal);
 
-    private static bool SameRights(Dictionary<string, string> a, Dictionary<string, string> b) =>
-        a.Count == b.Count && a.All(v => b.TryGetValue(v.Key, out var right) && right == v.Value);
+    // The version too: a legacy "write" (maintain) and a new one are different rights in the same words.
+    private static bool SameRights(Connections.ConnectionMeta a, Connections.ConnectionMeta b) =>
+        a.V == b.V && a.Vaults.Count == b.Vaults.Count && a.Vaults.All(v => b.Vaults.TryGetValue(v.Key, out var right) && right == v.Value);
 
     /// <summary>16 random bytes in hex, as API key ids.</summary>
     private static string NewTokenId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));

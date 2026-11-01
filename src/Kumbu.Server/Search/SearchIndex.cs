@@ -292,7 +292,8 @@ public sealed class SearchIndex : BackgroundService
     private bool MayIndex(UnlockedVault vault, VaultPath path)
     {
         if (_catalog.MayIndex(vault)) return true;
-        if (_catalog.Current(vault.Id) is { } current) Enqueue(current, [path]);
+        // Not the same object again: one that may not be indexed (its owner deactivated) would go round for ever.
+        if (_catalog.Current(vault.Id) is { } current && !ReferenceEquals(current, vault)) Enqueue(current, [path]);
         return false;
     }
 

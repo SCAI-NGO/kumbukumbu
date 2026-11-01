@@ -47,7 +47,7 @@ public static class UploadApi
             .Errors(400, 401, 403, 404, 409, 413, 503);
     }
 
-    private static async Task<Ok<UploadResultView>> UploadAsync(
+    internal static async Task<Ok<UploadResultView>> UploadAsync(
         string vault, string? folder, UploadRequest body, RequestCaller caller, INoteStore store, NoteWriter writer, CancellationToken ct)
     {
         if (body.OnConflict is not ("ask" or "replace" or "skip")) throw ApiErrors.BadRequest("onConflict is 'ask', 'replace' or 'skip'.");
@@ -75,6 +75,8 @@ public static class UploadApi
                 continue;
             }
 
+            // Each note on its own as well: a folder may be open to the caller while a file in it (Board.md) is not.
+            NoteApi.Refuse(caller, "upload", target);
             var content = file.Content.Replace("\r\n", "\n", StringComparison.Ordinal);
             if (await ProblemAsync(store, target, content, creates.Keys.Concat(existing.Keys), ct) is { } problem)
             {
@@ -93,18 +95,19 @@ public static class UploadApi
 
         var now = writer.Now;
         var changeset = await writer.ChangesetAsync(dir, ct);
+        var (label, reference) = (caller.WriterIn(dir.Segments[0]), caller.ReferenceIn(dir.Segments[0]));
         var batch = new NoteBatch();
-        foreach (var (path, (_, content)) in creates) batch.Creates.Add(new StoredNote(path, content, 1, caller.Writer, now, [], Changeset: changeset));
+        foreach (var (path, (_, content)) in creates) batch.Creates.Add(new StoredNote(path, content, 1, label, now, [], Changeset: changeset, Ref: reference));
         foreach (var (_, (file, content, note)) in existing)
         {
             if (body.OnConflict == "skip") skipped.Add(new SkippedView(file.Path, "a note exists at this path"));
             else if (note.Content == content) skipped.Add(new SkippedView(file.Path, "the note has this content already"));
             // The replaced state goes into the history even if it is of the same changeset (written a moment ago
             // in the web app): replacing on upload must stay undoable.
-            else batch.Replaces.Add((note, NoteWriter.Next(note, content, caller.Writer, now, changeset, keepCurrent: true)));
+            else batch.Replaces.Add((note, NoteWriter.Next(note, content, label, reference, now, changeset, keepCurrent: true)));
         }
 
-        if (await store.TryCommitAsync(batch, caller.Writer, now, ct) is { Count: > 0 } changed)
+        if (await store.TryCommitAsync(batch, label, reference, now, ct) is { Count: > 0 } changed)
         {
             throw new ApiException(StatusCodes.Status409Conflict,
                 $"Nothing was uploaded: {string.Join(", ", changed.Select(c => c.Value))} changed meanwhile; try again.");

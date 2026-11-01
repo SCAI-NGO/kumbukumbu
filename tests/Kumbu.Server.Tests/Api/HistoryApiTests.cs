@@ -293,6 +293,31 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_whole_restore_preview_refuses_a_changed_board_for_a_write_key()
+    {
+        var user = await UserAsync();
+        var board = "---\nkumbu-board: 1\ncolumns: [Ideas, Doing]\n---\n";
+        var version = await user.CreateAsync("Board/Board.md", board);
+        await user.CreateAsync("plan.md", "then\n");
+        using var _ = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints", new { name = "cp" });
+        using var __ = await user.SendAsync(HttpMethod.Put, user.Url("Board/Board.md"), new { content = board.Replace("Doing", "Active"), version });
+        var key = await user.KeyAsync("writer", KeyRight.Write);
+
+        using var preview = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/cp/preview", bearer: key);
+        using var restore = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/checkpoints/cp/restore", new { plan = "0123" }, bearer: key);
+
+        foreach (var refused in new[] { preview, restore })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+            var body = await JsonAsync(refused);
+            Assert.Equal("structural", Text(body, "code"));
+            Assert.Equal("restore: This checkpoint changes the board's structure; only those who may maintain *Arbeit* can restore it.", Text(body, "error"));
+        }
+
+        Assert.Contains("Active", Text(await user.ReadAsync("Board/Board.md"), "content"), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_read_only_key_lists_the_trash_and_checkpoints_but_changes_nothing()
     {
         var user = await UserAsync();
@@ -338,6 +363,22 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_version_names_the_kind_of_its_last_writer()
+    {
+        var user = await UserAsync();
+        var first = await user.CreateAsync("plan.md", "# Plan\n");
+        using var own = await user.GetAsync(user.Url("plan.md", "version"));
+
+        var agent = await user.KeyAsync("agent" + Guid.NewGuid().ToString("N")[..6], KeyRight.Write);
+        using var byAgent = await user.SendAsync(HttpMethod.Put, user.Url("plan.md"), new { content = "# Plan\n\nLions.\n", version = first }, bearer: agent);
+        Assert.Equal(HttpStatusCode.OK, byAgent.StatusCode);
+        using var agents = await user.GetAsync(user.Url("plan.md", "version"));
+
+        Assert.Equal("self", Text(await JsonAsync(own), "lastWriterKind"));
+        Assert.Equal("agent", Text(await JsonAsync(agents), "lastWriterKind"));
+    }
+
+    [Fact]
     public void Polling_the_version_and_the_board_does_not_count_as_the_sessions_activity()
     {
         var endpoints = Api.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>().Endpoints
@@ -346,7 +387,7 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             .Select(e => e.RoutePattern.RawText)
             .Order(StringComparer.Ordinal);
 
-        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}"], endpoints);
+        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}", "/api/ws-ticket"], endpoints);
     }
 
     [Fact]

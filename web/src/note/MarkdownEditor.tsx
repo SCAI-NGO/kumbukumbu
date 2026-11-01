@@ -2,7 +2,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useBlocker, useNavigate, type BlockerFunction } from "react-router-dom";
-import { api } from "../api/client";
+import { api, isRefusal } from "../api/client";
 import { useSaveNote, type NoteView } from "../api/notes";
 import { folderOf, inVault, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { useEditor } from "../state/editor";
@@ -41,7 +41,14 @@ export default function MarkdownEditor({
   const autosave = useAutosave(
     note,
     // Without a session a save can only fail (401); what is unsaved is kept as a draft instead (below).
-    (content, version, options) => (useSession.getState().user ? save.mutateAsync({ content, version, ...options }) : Promise.reject(new Error("Signed out"))),
+    (content, version, options) =>
+      useSession.getState().user
+        ? save.mutateAsync({ content, version, ...options }).catch((e: unknown) => {
+            // Refused for the level (a role lowered, the board's structure, the vault closing): by its code, never its text.
+            if (isRefusal(e)) useEditor.getState().setRefused({ path, code: e.code, at: Date.now() });
+            throw e;
+          })
+        : Promise.reject(new Error("Signed out")),
     draft,
   );
   const { value, status, conflict, change, saveNow, flush, keepMine, reload, offer, stop, resume, release, retry, unresolved, unsaved } = autosave;
@@ -200,7 +207,7 @@ export default function MarkdownEditor({
             </>
           }
         >
-          <ChangeText change={newer} />
+          <ChangeText change={newer} write />
         </ElsewhereBar>
       )}
       <label htmlFor="markdown-source" className="sr-only">

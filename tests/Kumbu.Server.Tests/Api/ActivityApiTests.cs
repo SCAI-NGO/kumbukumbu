@@ -65,14 +65,14 @@ public sealed class ActivityApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
-    public async Task The_users_own_writes_are_user()
+    public async Task The_users_own_writes_are_self()
     {
         var user = await NewAsync(Api);
         await user.CreateAsync("plan.md", "x\n");
 
         var row = (await ActivityAsync(user))["rows"]!.AsArray().Single(r => r!["files"]!.AsArray().Any(f => Text(f, "path") == "/Arbeit/plan.md"))!;
 
-        Assert.Equal(("user", user.Username), (Text(row, "writerKind"), Text(row, "writer")));
+        Assert.Equal(("self", user.Username), (Text(row, "writerKind"), Text(row, "writer")));
     }
 
     [Fact]

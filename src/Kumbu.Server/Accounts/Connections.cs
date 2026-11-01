@@ -30,6 +30,9 @@ public static class ConnectionReasons
 {
     public const string Revoked = "revoked";
     public const string VaultDeleted = "vault_deleted";
+
+    /// <summary>Its only vaults were shared with the user, and the sharing ended (revoked, or the user left).</summary>
+    public const string SharingEnded = "sharing_ended";
     public const string PasswordChanged = "password_changed";
     public const string Recovery = "recovery";
     public const string Deactivated = "deactivated";
@@ -105,7 +108,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         await catalog.UserVaultKeysAsync(user.Id, userKey, [.. vaults.Keys], Noun, ct);
 
         var id = NewId();
-        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null);
+        var meta = new ConnectionMeta(clean, vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), null, KeyRights.SealedVersion);
         // Sealed under this user key: it must still be the one in force (UserKeyRotation).
         var keyId = UserCatalog.KeyId(userKey, user.Id);
         var now = Now;
@@ -230,7 +233,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
                     var now = Now;
                     var doc = await Docs.Find(s, c => c.Id == id && c.User == user.Id).FirstOrDefaultAsync(token);
                     if (doc is null || doc.RevokedAt is not null || now >= doc.ExpiresAt || OpenMeta(user, userKey, doc) is not { } meta) return false;
-                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)) };
+                    var next = meta with { Vaults = vaults.ToDictionary(v => v.Key, v => KeyRights.ToText(v.Value)), V = KeyRights.SealedVersion };
                     // As at creation: the user document is checked and written here, so a credentials change, a
                     // deactivation or a rotation of the user key can't slip in between; a vault deleted since the check
                     // above is seen here, or its deletion conflicts on the user document.
@@ -400,7 +403,7 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
             doc.Id,
             meta.Name,
             // A vault deleted since is gone from the clear list, not from the sealed meta: it isn't listed.
-            meta.Vaults.Where(v => KeyRights.Parse(v.Value) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.Parse(v.Value)!.Value),
+            meta.Vaults.Where(v => KeyRights.ParseSealed(v.Value, meta.V) is not null && doc.Vaults.Contains(v.Key)).ToDictionary(v => v.Key, v => KeyRights.ParseSealed(v.Value, meta.V)!.Value),
             doc.CreatedAt,
             doc.LastUsedAt,
             doc.ExpiresAt,
@@ -471,12 +474,13 @@ public sealed class Connections(IMongoDatabase db, VaultCatalog catalog, TimePro
         return result;
     }
 
-    /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>) and,
-    /// once authorised, the client.</summary>
+    /// <summary>What is sealed under the user key: the name, the rights (vault id → <c>read</c>/<c>write</c>/<c>maintain</c>,
+    /// read with <see cref="KeyRights.ParseSealed"/>) and, once authorised, the client.</summary>
     internal sealed record ConnectionMeta(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("vaults")] Dictionary<string, string> Vaults,
-        [property: JsonPropertyName("client"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectedClient? Client);
+        [property: JsonPropertyName("client"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ConnectedClient? Client,
+        [property: JsonPropertyName("v")] int? V = null);
 }
 
 /// <summary>
@@ -525,13 +529,24 @@ internal static class ConnectionRevocation
     /// retried, wraps no slot for a deleted vault (<c>OAuthTokens</c>). A connection left with no vault is revoked for
     /// good, as by its owner (Ruling 2): <see cref="ConnectionReasons.VaultDeleted"/>, name freed, its tokens revoked.
     /// Its slots on the deleted vaults are deleted by the caller, with every slot on them. Returns the revoked ones' ids.
+    /// With <paramref name="user"/>, only that user's connections (a membership's cleanup, collab design §6.2: the
+    /// member's, never the owner's), revoked for <paramref name="reason"/>; with <paramref name="only"/>, only those
+    /// connections (the ones the membership granted the vault, not those of a later membership of the same person).
     /// </summary>
     internal static async Task<IReadOnlyList<string>> RemoveVaultsAsync(
-        IMongoDatabase db, IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct)
+        IMongoDatabase db, IClientSessionHandle session, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct,
+        string? user = null, string reason = ConnectionReasons.VaultDeleted, IReadOnlyCollection<string>? only = null)
     {
         var connections = db.GetCollection<ConnectionDocument>(Connections.CollectionName);
         var f = Builders<ConnectionDocument>.Filter;
-        var having = await connections.Find(session, f.AnyIn(c => c.Vaults, vaultIds)).Project(c => c.Id).ToListAsync(ct);
+        var which = f.AnyIn(c => c.Vaults, vaultIds);
+        if (user is not null) which &= f.Eq(c => c.User, user);
+        if (only is not null)
+        {
+            if (only.Count == 0) return [];
+            which &= f.In(c => c.Id, only);
+        }
+        var having = await connections.Find(session, which).Project(c => c.Id).ToListAsync(ct);
         if (having.Count == 0) return [];
         await connections.UpdateManyAsync(session, f.In(c => c.Id, having), Builders<ConnectionDocument>.Update.PullAll(c => c.Vaults, vaultIds), cancellationToken: ct);
         var left = await connections.Find(session, f.In(c => c.Id, having) & f.Size(c => c.Vaults, 0) & f.Eq(c => c.RevokedAt, null)).Project(c => c.Id).ToListAsync(ct);
@@ -539,9 +554,9 @@ internal static class ConnectionRevocation
         await connections.UpdateManyAsync(
             session,
             f.In(c => c.Id, left),
-            Builders<ConnectionDocument>.Update.Set(c => c.RevokedAt, now).Set(c => c.RevokedReason, ConnectionReasons.VaultDeleted).Unset(c => c.NameId),
+            Builders<ConnectionDocument>.Update.Set(c => c.RevokedAt, now).Set(c => c.RevokedReason, reason).Unset(c => c.NameId),
             cancellationToken: ct);
-        await RevokeTokensAsync(db, session, f.In(c => c.Id, left), ConnectionReasons.VaultDeleted, now, ct);
+        await RevokeTokensAsync(db, session, f.In(c => c.Id, left), reason, now, ct);
         return left;
     }
 

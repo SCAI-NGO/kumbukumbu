@@ -68,6 +68,27 @@ public sealed class DeletionListTests : IDisposable
     }
 
     [Fact]
+    public async Task Closing_periods_are_recorded_with_the_id_and_read_back()
+    {
+        const string V1 = "11111111111111111111111111111111";
+        const string V2 = "22222222222222222222222222222222";
+        var at1 = new DateTime(2026, 11, 8, 9, 30, 0, 123, DateTimeKind.Utc);
+        var at2 = at1.AddDays(5);
+        var list = List(_root);
+
+        Assert.True(await list.AddAsync(A, Ct, new Dictionary<string, DateTime> { [V1] = at1, [V2] = at2 }));
+        Assert.True(await list.AddAsync(B, Ct));
+        await File.AppendAllTextAsync(Path.Combine(_root, "deleted-users"), $"closing {B} not-a-vault 1\nclosing {B} {V1} -5\nclosing {B} {V1}\nclosing {B} {V2} 99999999999999999999\n", Ct);
+
+        // The ids read as before, the closing lines aren't taken for one.
+        Assert.Equal(new HashSet<string> { A, B }, await List(_root).ReadAsync(Ct));
+        var closing = await List(_root).ReadClosingAsync(Ct);
+        Assert.Equal([A], closing.Keys);
+        Assert.Equal(new Dictionary<string, DateTime> { [V1] = at1, [V2] = at2 }, closing[A]);
+        Assert.Empty(await List(null).ReadClosingAsync(Ct));
+    }
+
+    [Fact]
     public async Task Without_a_path_nothing_is_written()
     {
         var list = List(null);

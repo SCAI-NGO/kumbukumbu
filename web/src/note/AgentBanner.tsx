@@ -39,16 +39,24 @@ export function useAgentChange(path: string): Change | undefined {
 export const writerOf = (label: string) => label.split(" (")[0];
 
 /**
+ * Who wrote, as the user is shown it: her own writers without the tool ("liz"), another person's as the server
+ * rendered them for her (collab design §8.2: "Bob · Claude", "Bob (left)", the owner's quoted name, "another user"),
+ * which carry no tool and may hold " (" themselves.
+ */
+export const shownWriter = (label: string, kind?: string | null) =>
+  kind === "user" || label.startsWith('"') || label.includes(" · ") ? label : writerOf(label);
+
+/**
  * The version the user last saw, roughly: the newest one before the agents' writes since the previous visit,
- * i.e. written before it, by the user, or by one of their devices (Obsidian). Null when there is none: an agent
+ * i.e. written before it, by the user (the server's kind `self`), or by one of their devices (Obsidian). Null when there is none: an agent
  * wrote the note from the start. A device back after a long pause (`change`) is not taken for the user: its writes
  * since then are what the banner asks about.
  */
-export function lastSeen(history: HistoryEntry[], since: string, username: string, change?: Change): string | null {
+export function lastSeen(history: HistoryEntry[], since: string, change?: Change): string | null {
   const from = Date.parse(since);
   const back = change?.writerKind === "device" && change.quietSince ? { writer: change.writer, after: Date.parse(change.quietSince) } : null;
   const seenDevice = (v: HistoryEntry) => v.writerKind === "device" && !(back && writerOf(v.writer) === back.writer && Date.parse(v.writtenAt) > back.after);
-  return history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || writerOf(v.writer) === username || seenDevice(v)))?.version ?? null;
+  return history.find((v) => !v.current && (Date.parse(v.writtenAt) <= from || v.writerKind === "self" || seenDevice(v)))?.version ?? null;
 }
 
 /** The writer a highlight names: a device as "Obsidian (Pixel 9)", not by its key's whole name. */
@@ -61,10 +69,9 @@ const highlightWriter = (change: Change) => (change.writerKind === "device" ? `O
 export function useAgentHighlight(path: string, change: Change | undefined, content: string | undefined): Highlight | null {
   const show = useEditor((s) => s.showAgentHighlights);
   const since = useSession((s) => s.previousSignInAt);
-  const username = useSession((s) => s.user?.username);
   const on = show && !!change && since !== null && content !== undefined;
   const history = useHistory(path, on);
-  const base = on && history.data && username ? lastSeen(history.data, since!, username, change) : null;
+  const base = on && history.data ? lastSeen(history.data, since!, change) : null;
   const earlier = useNoteVersion(path, base);
 
   return useMemo(() => {

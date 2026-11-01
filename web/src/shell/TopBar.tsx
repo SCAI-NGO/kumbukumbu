@@ -10,9 +10,19 @@ export const sidebarToggleId = "file-tree-toggle";
 
 /**
  * Orientation: the tree button, where the note is and its title (a tap opens the tree), its outline, and Read / Write.
- * With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
+ * Write only where the caller may change the note (`writable`); `refusal` says why not. With `sidebar` (desktop widths), the tree button collapses and expands the docked sidebar instead of opening the drawer.
  */
-export default function TopBar({ path, sidebar }: { path: string | null; sidebar: { expanded: boolean; toggle(): void } | null }) {
+export default function TopBar({
+  path,
+  writable,
+  refusal,
+  sidebar,
+}: {
+  path: string | null;
+  writable: boolean;
+  refusal?: string | null;
+  sidebar: { expanded: boolean; toggle(): void } | null;
+}) {
   const openTree = () => useEditor.getState().setOverlay("tree");
   const mode = useEditor((s) => s.mode);
   const buttonClass = "flex size-11 flex-none items-center justify-center rounded-[10px] text-text-body focus-visible:outline-2 focus-visible:outline-accent";
@@ -57,7 +67,7 @@ export default function TopBar({ path, sidebar }: { path: string | null; sidebar
           <ListTree size={21} strokeWidth={1.8} aria-hidden />
         </button>
       )}
-      {path && <ModeToggle />}
+      {path && <ModeToggle writable={writable} refusal={refusal} />}
     </header>
   );
 }

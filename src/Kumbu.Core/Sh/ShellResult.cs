@@ -31,11 +31,20 @@ public sealed record ShellResult(string Output, bool IsError)
     /// <summary>Why an error happened, where the command says; null otherwise.</summary>
     public ShellErrorKind? Kind { get; init; }
 
+    /// <summary>A refusal's machine-readable code (<see cref="Notes.Refusals"/>); null for every other result.</summary>
+    public string? Code { get; init; }
+
     /// <summary>
     /// A line for an empty result, shown only when the command stands alone: right of a pipe or on the left of one,
     /// the next command reads the output, and a hint would be taken for data.
     /// </summary>
     public string? NoMatchHint { get; init; }
+
+    /// <summary>
+    /// A line about what the command read, put above the pipeline's output once it has run, never passed down the
+    /// pipe: "last written by another user" (collab design §10.3).
+    /// </summary>
+    public string? Notice { get; init; }
 
     /// <summary>
     /// Text and images in the order the model should see them; then <see cref="Output"/> is the parts' text joined

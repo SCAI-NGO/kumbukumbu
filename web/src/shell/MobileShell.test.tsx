@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api, call } from "../api/client";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -53,6 +54,7 @@ function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
+    "GET /api/member-notices": () => json(200, []),
     ...extra,
   });
 }
@@ -506,5 +508,204 @@ describe("the shell", () => {
     expect(screen.queryByRole("dialog", { name: "New vault" })).not.toBeInTheDocument();
     expect(drawer()).toBeInTheDocument();
     expect(chip).toHaveFocus();
+  });
+});
+
+describe("vaults shared with the user", () => {
+  const vault = (name: string, extra: Record<string, unknown> = {}) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false, ...extra });
+  const sharedVaults = [
+    vault("Home"),
+    // Her own vault, shared with others: still hers.
+    vault("Work", { shared: true, members: 2 }),
+    vault("Rezepte", { owner: '"Carol"', level: "read", canWrite: false, shared: true, membership: "m3" }),
+    vault("garten", { owner: '"Alice"', level: "write", shared: true, membership: "m1" }),
+    vault("Beete", { owner: '"Alice"', level: "maintain", shared: true, membership: "m2" }),
+  ];
+  const tree = (name: string, notes: string[], folders: { name: string; notes: string[] }[] = []) => ({
+    damaged: 0,
+    root: {
+      name,
+      path: `/${name}`,
+      folders: folders.map((f) => ({ name: f.name, path: `/${name}/${f.name}`, folders: [], notes: f.notes.map((n) => note(`/${name}/${f.name}/${n}`)) })),
+      notes: notes.map((n) => note(`/${name}/${n}`)),
+    },
+  });
+  const sharedApi = () =>
+    signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/Rezepte/tree": () => json(200, tree("Rezepte", ["soup.md"], [{ name: "Sweets", notes: ["cake.md"] }])),
+      "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"], [{ name: "Board", notes: ["Board.md"] }])),
+      "GET /api/vaults/Beete/tree": () => json(200, tree("Beete", ["plan.md"], [{ name: "Board", notes: ["Board.md"] }])),
+    });
+  const names = (list: HTMLElement) => within(list).getAllByRole("button").map((b) => b.textContent?.replace(/\d+ notes?$|Read only$/, ""));
+  const menuItems = async (label: string, at = 0) => {
+    await userEvent.click(within(drawer()).getAllByRole("button", { name: label })[at]);
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    await userEvent.keyboard("{Escape}");
+    return items;
+  };
+
+  it("groups shared vaults under 'Shared with me' by owner", async () => {
+    sharedApi();
+    renderApp("/");
+    expect(names(await screen.findByRole("list", { name: "Your vaults" }))).toEqual(["Home", "Work"]);
+    expect(screen.getByRole("heading", { name: "Shared with me" })).toBeInTheDocument();
+    expect(names(screen.getByRole("list", { name: 'Shared by "Alice"' }))).toEqual(["garten", "Beete"]);
+    expect(names(screen.getByRole("list", { name: 'Shared by "Carol"' }))).toEqual(["Rezepte"]);
+    expect(within(screen.getByRole("list", { name: 'Shared by "Carol"' })).getByRole("button")).toHaveTextContent("Read only");
+
+    // The drawer's switcher: her own first, then each owner's.
+    await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
+    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
+    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "New vault"]);
+    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice"' })).toHaveTextContent("garten");
+    expect(within(drawer()).getByText('Shared by "Alice"', { selector: "p" })).toBeInTheDocument();
+  });
+
+  it("keeps two owners of one display name apart by their usernames", async () => {
+    signedInApi({
+      "GET /api/vaults": () =>
+        json(200, [
+          vault("Home"),
+          vault("garten", { owner: '"Alice"', ownerUsername: "alice", level: "write", shared: true, membership: "m1" }),
+          vault("Beete", { owner: '"Alice"', ownerUsername: "mallory", level: "write", shared: true, membership: "m2" }),
+        ]),
+      "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+    });
+    renderApp("/");
+    expect(names(await screen.findByRole("list", { name: 'Shared by "Alice" (alice)' }))).toEqual(["garten"]);
+    expect(names(screen.getByRole("list", { name: 'Shared by "Alice" (mallory)' }))).toEqual(["Beete"]);
+
+    await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
+    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
+    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (alice)' })).toHaveTextContent("garten");
+    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (mallory)' })).toHaveTextContent("Beete");
+    expect(within(drawer()).getByText('Shared by "Alice" (alice)', { selector: "p" })).toBeInTheDocument();
+  });
+
+  it("opens a read-only shared vault without write actions", async () => {
+    sharedApi();
+    renderApp("/notes/Rezepte/soup.md");
+    expect(await screen.findByRole("heading", { name: "soup" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(screen.getByText("You can only read Rezepte.")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "New" }));
+    for (const item of screen.getAllByRole("menuitem")) expect(item).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+
+    await openDrawer();
+    await within(drawer()).findByText("Sweets");
+    // Reading, the trash, activity, checkpoints, the gallery, her side of the sharing and the export stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Shared with you…", "Export as ZIP…"]);
+    expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
+    expect(within(drawer()).queryByRole("button", { name: "Actions for soup" })).not.toBeInTheDocument();
+  });
+
+  it("shows Board.md read-only below maintain", async () => {
+    sharedApi();
+    renderApp("/notes/garten/Board/Board.md");
+    expect(await screen.findByRole("heading", { name: "Board" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    // Refused with the server's sentence (collab design §9.3), on the button and above the note.
+    const sentence = "Only those who may maintain garten can change its board's columns.";
+    expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
+    await userEvent.keyboard("{Escape}");
+
+    await openDrawer();
+    await within(drawer()).findByRole("button", { name: "Board" });
+    // A note beside it can be changed; the board's definition and its folder can't.
+    expect(await menuItems("Actions for plan")).toEqual(["Rename or move", "Delete note"]);
+    expect(within(drawer()).getAllByRole("button", { name: "Actions for Board" })).toHaveLength(1);
+    expect(await menuItems("Actions for Board")).toEqual(["New note here", "New folder…", "Upload here"]);
+    expect(await menuItems("Actions for garten")).toEqual(
+      expect.arrayContaining(["New note here", "New folder…", "Upload here", "Trash", "Board", "Export as ZIP…"]),
+    );
+  });
+
+  it("refuses Write mode on Board.md for a write member with the structural sentence, by the refused save's code", async () => {
+    // The list still says maintain: her role was lowered to write since it was read, and the list read again hangs.
+    let reads = 0;
+    signedInApi({
+      "GET /api/vaults": () => (++reads === 1 ? json(200, sharedVaults) : new Promise<Response>(() => {})),
+      "GET /api/vaults/Beete/tree": () => json(200, tree("Beete", ["plan.md"], [{ name: "Board", notes: ["Board.md"] }])),
+      "GET /api/version/*": () => json(200, { path: "/Beete/Board/Board.md", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      // Whatever the text says, the code is what counts.
+      "PUT /api/notes/Beete/Board/Board.md": () => json(403, { error: "Refused.", code: "structural" }),
+    });
+    renderApp("/notes/Beete/Board/Board.md");
+    const write = await screen.findByRole("button", { name: "Write" });
+    await waitFor(() => expect(write).toBeEnabled());
+    await userEvent.click(write);
+    await userEvent.type(await screen.findByRole("textbox", { name: "Markdown source" }), " more");
+    fireEvent.blur(screen.getByRole("textbox", { name: "Markdown source" }));
+
+    const sentence = "Only those who may maintain Beete can change its board's columns.";
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Read" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+  });
+
+  it("reads the vault list again when the server refuses a write for the level", async () => {
+    const fetch = signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+      // Her role was lowered meanwhile.
+      "PUT /api/notes/garten/plan.md": () => json(403, { error: "you can only read vault garten", code: "read-only" }),
+    });
+    renderApp("/notes/garten/plan.md");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+    const vaultReads = () => fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === "/api/vaults").length;
+    const before = vaultReads();
+    // Any refused write, wherever it came from.
+    await expect(call(api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault: "garten", path: "plan.md" } }, body: { content: "x" } }))).rejects.toMatchObject({
+      status: 403,
+      code: "read-only",
+    });
+    await waitFor(() => expect(vaultReads()).toBeGreaterThan(before));
+  });
+
+  it("offers the owner Share…, which lists who has access", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/Work/access": () =>
+        json(200, { apiKeys: [], connections: [], members: [{ id: "m9", label: "Bob", role: "write", status: "active", confirm: false, acceptedAt: null, redeemedAt: null, expiresAt: null, credentials: [] }] }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await within(drawer()).findByText("zeta");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Share…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Who has access to Work" });
+    expect(await within(dialog).findByRole("listitem", { name: "Bob" })).toBeInTheDocument();
+  });
+
+  it("lets a maintainer change Board.md, and keeps the owner's choices for the owner", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/Beete/tree": () => json(200, tree("Beete", ["plan.md"], [{ name: "Board", notes: ["Board.md"] }])),
+      "GET /api/embeddings": () => json(200, [internalProvider, tensorx]),
+    });
+    renderApp("/notes/Beete/Board/Board.md");
+    expect(await screen.findByRole("heading", { name: "Board" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+    await openDrawer();
+    await within(drawer()).findByRole("button", { name: "Board" });
+    // The folder's menu, then the note's.
+    expect(await menuItems("Actions for Board")).toContain("Rename or move");
+    expect(await menuItems("Actions for Board", 1)).toEqual(["Rename or move", "Delete note"]);
+    const items = await menuItems("Actions for Beete");
+    expect(items).toContain("Board");
+    // Pairing a shared vault and its embedding provider stay the owner's.
+    expect(items).not.toContain("Connect Obsidian…");
+    expect(items).not.toContain("Share…");
+    expect(items).not.toContain("Search by meaning…");
   });
 });

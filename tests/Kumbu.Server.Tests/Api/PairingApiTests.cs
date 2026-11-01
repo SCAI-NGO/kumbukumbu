@@ -5,6 +5,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Api;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
+using Kumbu.Server.Vaults;
+using MongoDB.Driver;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -45,11 +49,12 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     /// <summary>As Obsidian sends it: no Origin, no cookie, no bearer; from <paramref name="address"/>.</summary>
-    private async Task<HttpResponseMessage> RedeemAsync(string code, string device, string? address = null)
+    private async Task<HttpResponseMessage> RedeemAsync(string code, string device, string? address = null, string? plugin = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/pairing/redeem")
         {
-            Content = new StringContent(JsonSerializer.Serialize(new { code, device }), Encoding.UTF8, "application/json"),
+            Content = new StringContent(
+                plugin is null ? JsonSerializer.Serialize(new { code, device }) : JsonSerializer.Serialize(new { code, device, plugin }), Encoding.UTF8, "application/json"),
         };
         request.Headers.Add("X-Forwarded-For", address ?? $"198.29.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}");
         using var client = Api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
@@ -137,6 +142,36 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, versions.StatusCode);
         Assert.Equal("/Arbeit/plan.md", (await JsonAsync(versions))["notes"]![0]!["path"]!.GetValue<string>());
         Assert.Equal("device", Assert.Single((await JsonAsync(keys)).AsArray())!["kind"]!.GetValue<string>());
+    }
+
+    // Green before task 0.5 too: from then on the board's definition is refused below maintain, and this guards that a
+    // device paired to an own vault keeps changing it (collab design §10.2).
+    [Fact]
+    public async Task A_device_paired_to_an_own_vault_may_change_the_board()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var version = await user.CreateAsync("Board/Board.md", "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n  - Done\n---\n");
+        using var redeemed = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        var key = (await JsonAsync(redeemed))["key"]!.GetValue<string>();
+
+        using var put = await user.SendAsync(
+            HttpMethod.Put, user.Url("Board/Board.md"), new { content = "---\nkumbu-board: 1\ncolumns:\n  - Ideas\n  - Doing\n  - Done\n---\n", version }, bearer: key);
+
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_device_paired_to_an_own_vault_key_is_listed_as_maintain()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        using var redeemed = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+
+        using var keys = await user.GetAsync("/api/keys");
+
+        var device = Assert.Single((await JsonAsync(keys)).AsArray())!;
+        Assert.Equal("device", device["kind"]!.GetValue<string>());
+        Assert.Equal("maintain", device["vaults"]!["Gartenarbeit"]!.GetValue<string>());
     }
 
     [Fact]
@@ -307,5 +342,126 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         }
 
         Assert.Equal(50, refused);
+    }
+
+    /// <summary>Alice's "Gartenarbeit", shared with Bob (who has his own "Work") as "garten".</summary>
+    private async Task<(RestClient Alice, RestClient Bob, string VaultId, string MembershipId)> SharedAsync()
+    {
+        var alice = await NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await NewAsync(Api, vault: "Work");
+        var membership = await alice.ShareWithAsync(bob, "garten", MemberRole.Write);
+        return (alice, bob, await alice.VaultIdAsync(), membership);
+    }
+
+    private static async Task<string> CodeForAsync(RestClient user, string vault)
+    {
+        using var response = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{Uri.EscapeDataString(vault)}/pairing", new { });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return (await JsonAsync(response))["code"]!.GetValue<string>();
+    }
+
+    private bool IsOpen(string code) => Api.Services.GetRequiredService<Pairings>().IsOpen(code);
+
+    private async Task RefusedAsTooOldAsync(string code, string? plugin)
+    {
+        using var refused = await RedeemAsync(code, "Laptop", plugin: plugin);
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.Equal("Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault.", await ErrorAsync(refused));
+        Assert.True(IsOpen(code), plugin);
+    }
+
+    [Fact]
+    public async Task Pairing_a_shared_vault_without_a_plugin_version_is_refused_and_the_code_stays_usable()
+    {
+        var (_, bob, _, _) = await SharedAsync();
+        var code = await CodeForAsync(bob, "garten");
+
+        await RefusedAsTooOldAsync(code, null);
+
+        // The updated plugin redeems the same code.
+        using var redeemed = await RedeemAsync(code, "Laptop", plugin: "0.2.0");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        Assert.False(IsOpen(code));
+    }
+
+    [Fact]
+    public async Task Pairing_a_shared_vault_with_plugin_0_1_9_is_refused()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+
+        // The owner's device as much as a member's.
+        await RefusedAsTooOldAsync(await CodeForAsync(alice, "Gartenarbeit"), "0.1.9");
+        await RefusedAsTooOldAsync(await CodeForAsync(bob, "garten"), "0.1.9");
+    }
+
+    [Fact]
+    public async Task Pairing_a_shared_vault_with_plugin_0_2_0_pairs_with_GrantedVia()
+    {
+        var (alice, bob, vaultId, membership) = await SharedAsync();
+
+        using var redeemed = await RedeemAsync(await CodeForAsync(bob, "garten"), "Laptop", plugin: "0.2.0");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        var body = await JsonAsync(redeemed);
+        Assert.Equal("garten", body["vault"]!.GetValue<string>());
+        var slot = await app.Database.GetCollection<SlotDocument>("slots").Find(s => s.Vault == vaultId && s.Kind == SlotDocument.ApiKey).SingleAsync(Ct);
+        Assert.Equal(membership, slot.GrantedVia);
+        using (var versions = await bob.GetAsync("/api/vaults/garten/versions", body["key"]!.GetValue<string>()))
+        {
+            Assert.Equal(HttpStatusCode.OK, versions.StatusCode);
+        }
+
+        // Versions are numbers: 0.10.0 is after 0.2.0.
+        using var owners = await RedeemAsync(await CodeForAsync(alice, "Gartenarbeit"), "Desk", plugin: "0.10.0");
+        Assert.Equal(HttpStatusCode.Created, owners.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_write_members_device_may_write_notes_but_not_the_board()
+    {
+        var (_, bob, _, _) = await SharedAsync();
+        using var redeemed = await RedeemAsync(await CodeForAsync(bob, "garten"), "Laptop", plugin: "0.2.0");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        var key = (await JsonAsync(redeemed))["key"]!.GetValue<string>();
+        // Sealed at maintain, as every device key is; capped at his role through its membership.
+        using (var keys = await bob.GetAsync("/api/keys"))
+        {
+            Assert.Equal("maintain", Assert.Single((await JsonAsync(keys)).AsArray())!["vaults"]!["garten"]!.GetValue<string>());
+        }
+
+        using (var note = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/a.md", new { content = "Beete\n" }, bearer: key))
+        {
+            Assert.Equal(HttpStatusCode.Created, note.StatusCode);
+        }
+
+        using var board = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/Board/Board.md", new { content = "---\nkumbu-board: 1\ncolumns: [Ideas]\n---\n" }, bearer: key);
+        Assert.Equal(HttpStatusCode.Forbidden, board.StatusCode);
+        Assert.Equal("structural", (await JsonAsync(board))["code"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task An_own_vault_pairs_without_a_plugin_version()
+    {
+        var (_, bob, _, _) = await SharedAsync();
+
+        using var redeemed = await RedeemAsync(await CodeForAsync(bob, "Work"), "Laptop");
+
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        using var keys = await bob.GetAsync("/api/keys");
+        Assert.Equal("maintain", Assert.Single((await JsonAsync(keys)).AsArray())!["vaults"]!["Work"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_malformed_plugin_version_is_refused_as_too_old()
+    {
+        var (_, bob, _, _) = await SharedAsync();
+        var code = await CodeForAsync(bob, "garten");
+
+        foreach (var plugin in new[] { "", "0.2", "v0.2.0", "0.2.0.1", "latest", "0.2.0-beta.1", " 0.2.0", new string('9', 70) })
+        {
+            await RefusedAsTooOldAsync(code, plugin);
+        }
+
+        using var redeemed = await RedeemAsync(code, "Laptop", plugin: "0.2.1-beta.1+build.7");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
     }
 }

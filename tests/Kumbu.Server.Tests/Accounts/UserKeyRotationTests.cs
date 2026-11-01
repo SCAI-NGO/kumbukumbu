@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Security.Cryptography;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Vaults;
@@ -546,4 +547,289 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
         Assert.Equal(account.Vaults.Values.Order(), pending.Order());
         Assert.Equal(account.Vaults.Values.ToHashSet(), await OpenIdsAsync(account, recovered.UserKey));
     }
+
+    private Kumbu.Server.Sharing.Memberships Memberships() =>
+        new(_db, Catalog(), new ServerSecret(_db), Options.Create(new KumbuOptions()), _time, NullLogger<Kumbu.Server.Sharing.Memberships>.Instance);
+
+    /// <summary>Alice's "Gartenarbeit", shared with Bob (who has his own "Work") under his alias "garten".</summary>
+    private async Task<(Account Bob, string VaultId, string MembershipId)> SharedAsync()
+    {
+        var (_, bob, vaultId, membershipId) = await SharedByAliceAsync();
+        return (bob, vaultId, membershipId);
+    }
+
+    private async Task<(Account Alice, Account Bob, string VaultId, string MembershipId)> SharedByAliceAsync()
+    {
+        var alice = await AccountAsync("Gartenarbeit");
+        var bob = await AccountAsync("Work");
+        var vaultId = alice.Vaults["Gartenarbeit"];
+        var membershipId = await Memberships().GrantAsync(
+            alice.User.Id, alice.Key, vaultId, bob.User.Id, bob.Key, "garten", "Bob", Kumbu.Server.Sharing.MemberRole.Write, Ct);
+        return (alice, bob, vaultId, membershipId);
+    }
+
+    private async Task<Dictionary<string, string>> NamesAsync(Account account, byte[] key) =>
+        (await Catalog().OpenForUserAsync(account.User.Id, key, Ct)).ToDictionary(v => v.Id, v => v.Name);
+
+    [Fact]
+    public async Task A_members_password_change_keeps_the_shared_vault_under_its_alias()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+        var (key, info) = await Keys().CreateAsync(bob.User, bob.Key, bob.ReadAt, "claude", Grant(vaultId), Ct);
+
+        Assert.True(await Users().ChangePasswordAsync(bob.User, bob.Key, Password, NewPassword, revokeApiKeys: false, Ct));
+        // And "Re-encrypt my vaults", which gives him a new user key.
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, NewPassword, null, Ct))!;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        var (_, signedIn, _) = (await Users().TrySignInAsync(bob.User.Username, NewPassword, Ct))!.Value;
+        Assert.Equal(rotation.NewUserKey, signedIn);
+        Assert.Equal("garten", (await NamesAsync(bob, signedIn))[vaultId]);
+        Assert.Equal("Work", (await NamesAsync(bob, signedIn))[bob.Vaults["Work"]]);
+        Assert.Empty(await Catalog().OpenForUserAsync(bob.User.Id, bob.Key, Ct));
+        // The member slot moved to the new lookup, its alias key with it; his key still reads the alias.
+        var slot = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        Assert.Equal(VaultCatalog.UserSlotLookup(signedIn, bob.User.Id), slot.Lookup);
+        Assert.Equal("garten", VaultCatalog.OpenAlias(signedIn, slot));
+        Assert.Equal("garten", Assert.Single(await Catalog().OpenForApiKeyAsync(info.Id, key, Ct)).Name);
+    }
+
+    [Fact]
+    public async Task A_members_recovery_keeps_the_shared_vault()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+
+        var recovered = (await Users().RecoverWithKeyAsync(bob.User.Username, bob.RecoveryKey, NewPassword, Ct))!.Value;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.NotEqual(bob.Key, recovered.UserKey);
+        var names = await NamesAsync(bob, recovered.UserKey);
+        Assert.Equal("garten", names[vaultId]);
+        Assert.Equal(2, names.Count);
+        // The shared vault is the owner's to re-key, not his.
+        var pending = (await UserDocs.Find(new BsonDocument("_id", bob.User.Id)).FirstAsync(Ct))["rekeyPending"].AsBsonArray.Select(v => v.AsString);
+        Assert.Equal([bob.Vaults["Work"]], pending);
+    }
+
+    [Fact]
+    public async Task After_a_members_rotation_the_alias_still_blocks_an_own_vault_of_that_name()
+    {
+        var (bob, vaultId, membershipId) = await SharedAsync();
+
+        var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().CreateForUserAsync("GARTEN", bob.User.Id, key, Ct, Now));
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().RenameAliasAsync(bob.User.Id, key, membershipId, "work", Ct));
+        // Renamed under the new key, the old name is free and the new one taken.
+        await Catalog().RenameAliasAsync(bob.User.Id, key, membershipId, "Beet", Ct);
+        Assert.Equal("Beet", (await NamesAsync(bob, key))[vaultId]);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().CreateForUserAsync("beet", bob.User.Id, key, Ct, Now));
+        await Catalog().CreateForUserAsync("garten", bob.User.Id, key, Ct, Now);
+    }
+
+    [Fact]
+    public async Task A_rename_between_prepare_and_apply_makes_apply_fail()
+    {
+        var (bob, _, membershipId) = await SharedAsync();
+        var prepared = await Rotation().PrepareAsync(bob.User, bob.Key, Password, null, null, Ct);
+
+        await Catalog().RenameAliasAsync(bob.User.Id, bob.Key, membershipId, "Beet", Ct);
+
+        await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
+    }
+
+    [Fact]
+    public async Task A_member_slot_whose_alias_does_not_open_is_left_as_it_is()
+    {
+        var (bob, vaultId, _) = await SharedAsync();
+        var before = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        await Slots.UpdateOneAsync(s => s.Id == before.Id, Builders<SlotDocument>.Update.Set(s => s.Alias, (byte[])[.. before.Alias!.Take(before.Alias!.Length - 1), 0]), cancellationToken: Ct);
+
+        Assert.NotNull(await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct));
+
+        // Still in the name index under its old lookup, rather than rewrapped without its hash.
+        var after = await Slots.Find(s => s.Id == before.Id).SingleAsync(Ct);
+        Assert.Equal(before.Lookup, after.Lookup);
+        Assert.Equal(before.NameId, after.NameId);
+        Assert.Equal(before.AliasKey, after.AliasKey);
+    }
+
+    private Task<UserDocument> UserDocAsync(Account account) => _db.GetCollection<UserDocument>("users").Find(u => u.Id == account.User.Id).SingleAsync(Ct);
+
+    private Task<Kumbu.Server.Sharing.MembershipDocument> MembershipAsync(string id) =>
+        _db.GetCollection<Kumbu.Server.Sharing.MembershipDocument>(Kumbu.Server.Sharing.Memberships.CollectionName).Find(m => m.Id == id).SingleAsync(Ct);
+
+    /// <summary>
+    /// After a rotation of Bob's user key to <paramref name="newKey"/>: he has a keypair other than <paramref name="oldPublic"/>,
+    /// whose private key opens with the new key; the membership's pin names its public key, with <c>revision</c> at
+    /// <paramref name="revision"/>; his member slot opens with it to the vault's key, and the vault opens under his alias in
+    /// a new process.
+    /// </summary>
+    private async Task AssertRotatedKeypairAsync(Account alice, Account bob, byte[] newKey, byte[] oldPublic, string vaultId, string membershipId, int revision)
+    {
+        var doc = await UserDocAsync(bob);
+        Assert.NotEqual(oldPublic, doc.PublicKey);
+        using var privateKey = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(doc, newKey);
+        var newPublic = Kumbu.Server.Sharing.MemberKeys.PublicFromPrivate(privateKey);
+        Assert.Equal(newPublic, doc.PublicKey);
+
+        var vaultKey = await Catalog().OwnerVaultKeyAsync(alice.User.Id, alice.Key, vaultId, Ct);
+        var membership = await MembershipAsync(membershipId);
+        Assert.Equal(revision, membership.Revision);
+        Assert.Equal(newPublic, Kumbu.Server.Sharing.Memberships.PinnedKey(membership, vaultKey));
+        var slot = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Membership == membershipId).SingleAsync(Ct);
+        Assert.Equal(vaultKey, VaultCatalog.OpenMemberSlot(privateKey, slot));
+
+        var fresh = new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance);
+        Assert.Equal("garten", (await fresh.OpenForUserAsync(bob.User.Id, newKey, Ct)).Single(v => v.Id == vaultId).Name);
+    }
+
+    [Fact]
+    public async Task A_password_change_makes_a_new_keypair_and_the_shared_vault_still_opens()
+    {
+        var (alice, bob, vaultId, membershipId) = await SharedByAliceAsync();
+        var oldPublic = (await UserDocAsync(bob)).PublicKey!;
+        var revision = (await MembershipAsync(membershipId)).Revision;
+
+        // A password change with "re-encrypt": the new password, then a new user key under it.
+        Assert.True(await Users().ChangePasswordAsync(bob.User, bob.Key, Password, NewPassword, revokeApiKeys: false, Ct));
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, NewPassword, null, Ct))!;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await AssertRotatedKeypairAsync(alice, bob, rotation.NewUserKey, oldPublic, vaultId, membershipId, revision + 1);
+        // Alice still opens her vault, and nothing of it changed for her.
+        Assert.Contains(vaultId, await OpenIdsAsync(alice, alice.Key));
+    }
+
+    [Fact]
+    public async Task After_a_rotation_the_old_private_key_opens_no_member_slot()
+    {
+        var (alice, bob, vaultId, _) = await SharedByAliceAsync();
+        var carol = await AccountAsync("Arbeit");
+        await Memberships().GrantAsync(carol.User.Id, carol.Key, carol.Vaults["Arbeit"], bob.User.Id, bob.Key, "arbeit", "Bob", Kumbu.Server.Sharing.MemberRole.Read, Ct);
+        // What a leak gives: his old private key, from an old backup and an old password.
+        using var oldPrivate = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(await UserDocAsync(bob), bob.Key);
+        var before = await Slots.Find(s => s.Kind == SlotDocument.Member).ToListAsync(Ct);
+        Assert.Equal(2, before.Count);
+        Assert.All(before, s => VaultCatalog.OpenMemberSlot(oldPrivate, s));
+
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!;
+
+        var after = await Slots.Find(s => s.Kind == SlotDocument.Member).ToListAsync(Ct);
+        Assert.Equal(before.Select(s => s.Id).Order(), after.Select(s => s.Id).Order());
+        Assert.All(after, s => Assert.ThrowsAny<CryptographicException>(() => VaultCatalog.OpenMemberSlot(oldPrivate, s)));
+        // And the new one opens both.
+        using var newPrivate = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(await UserDocAsync(bob), rotation.NewUserKey);
+        Assert.All(after, s => VaultCatalog.OpenMemberSlot(newPrivate, s));
+        Assert.Equal(["Work", "arbeit", "garten"], (await NamesAsync(bob, rotation.NewUserKey)).Values.Order(StringComparer.Ordinal));
+        Assert.Contains(vaultId, await OpenIdsAsync(alice, alice.Key));
+    }
+
+    [Fact]
+    public async Task Recovery_and_re_encrypt_my_vaults_rotate_the_keypair_too()
+    {
+        var (alice, bob, vaultId, membershipId) = await SharedByAliceAsync();
+        var first = (await UserDocAsync(bob)).PublicKey!;
+        var revision = (await MembershipAsync(membershipId)).Revision;
+
+        var recovered = (await Users().RecoverWithKeyAsync(bob.User.Username, bob.RecoveryKey, NewPassword, Ct))!.Value;
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await AssertRotatedKeypairAsync(alice, bob, recovered.UserKey, first, vaultId, membershipId, revision + 1);
+
+        var second = (await UserDocAsync(bob)).PublicKey!;
+        var rotation = (await Rotation().RotateAsync(bob.User, recovered.UserKey, NewPassword, null, Ct))!;
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await AssertRotatedKeypairAsync(alice, bob, rotation.NewUserKey, second, vaultId, membershipId, revision + 2);
+        Assert.NotEqual(first, (await UserDocAsync(bob)).PublicKey);
+    }
+
+    [Fact]
+    public async Task A_rotation_racing_a_role_change_conflicts()
+    {
+        var (alice, bob, vaultId, membershipId) = await SharedByAliceAsync();
+        var oldPublic = (await UserDocAsync(bob)).PublicKey!;
+
+        // Prepared, then the owner lowers his role: the pin the rotation would write is from before it.
+        var prepared = await Rotation().PrepareAsync(bob.User, bob.Key, Password, null, null, Ct);
+        await Kumbu.Server.Tests.Sharing.Share.SetRoleAsync(_db, membershipId, Kumbu.Server.Sharing.MemberRole.Read);
+        await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
+        Assert.Equal(oldPublic, (await UserDocAsync(bob)).PublicKey);
+        Assert.Equal(1, (await MembershipAsync(membershipId)).Revision);
+        Assert.Equal(["Work", "garten"], (await NamesAsync(bob, bob.Key)).Values.Order(StringComparer.Ordinal));
+
+        // Through RotateAsync the conflict is prepared again, and the second attempt gets through.
+        var raced = false;
+        Rotation().FaultAt = async at =>
+        {
+            if (at != "before-apply" || raced) return;
+            raced = true;
+            await Kumbu.Server.Tests.Sharing.Share.SetRoleAsync(_db, membershipId, Kumbu.Server.Sharing.MemberRole.Maintain);
+        };
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!;
+        Rotation().FaultAt = null;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.Single(_log.Lines, l => l.Contains("met a concurrent change", StringComparison.Ordinal));
+        Assert.Equal("maintain", (await MembershipAsync(membershipId)).Role);
+        await AssertRotatedKeypairAsync(alice, bob, rotation.NewUserKey, oldPublic, vaultId, membershipId, 3);
+    }
+
+    [Fact]
+    public async Task A_member_slot_without_a_membership_is_deleted_as_damaged()
+    {
+        var (_, bob, vaultId, membershipId) = await SharedByAliceAsync();
+        using var oldPrivate = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(await UserDocAsync(bob), bob.Key);
+        // Its membership gone behind the server's back: a slot without a pin, which the old private key still opens.
+        await _db.GetCollection<Kumbu.Server.Sharing.MembershipDocument>(Kumbu.Server.Sharing.Memberships.CollectionName).DeleteOneAsync(m => m.Id == membershipId, Ct);
+        var orphan = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).SingleAsync(Ct);
+        VaultCatalog.OpenMemberSlot(oldPrivate, orphan);
+
+        var rotation = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!;
+
+        // No member slot is left that the old private key opens: this one is gone.
+        Assert.Empty(await Slots.Find(s => s.Kind == SlotDocument.Member).ToListAsync(Ct));
+        Assert.Single(_log.Lines, l => l.Contains("has no membership: damaged", StringComparison.Ordinal));
+        Assert.Equal(["Work"], (await NamesAsync(bob, rotation.NewUserKey)).Values);
+    }
+
+    [Fact]
+    public async Task A_grant_racing_the_members_rotation_never_commits_a_slot_under_the_old_key()
+    {
+        var alice = await AccountAsync("Gartenarbeit");
+        var bob = await AccountAsync("Work");
+        using var oldPrivate = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(await UserDocAsync(bob), bob.Key);
+        var memberships = Memberships();
+        Task<PreparedRotation?>? rotating = null;
+        memberships.FaultAt = async at =>
+        {
+            if (at != "inside-grant" || rotating is not null) return;
+            // His rotation runs while the grant's writes wait uncommitted: it must not commit past them unseen.
+            rotating = Task.Run(() => Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct));
+            await Task.WhenAny(rotating, Task.Delay(TimeSpan.FromSeconds(2), Ct));
+        };
+
+        string? membershipId = null;
+        try
+        {
+            membershipId = await memberships.GrantAsync(
+                alice.User.Id, alice.Key, alice.Vaults["Gartenarbeit"], bob.User.Id, bob.Key, "garten", "Bob", Kumbu.Server.Sharing.MemberRole.Write, Ct);
+        }
+        catch (CredentialsChangedException)
+        {
+            // The rotation came first: the grant is refused, which is fine too.
+        }
+
+        var rotation = (await rotating!)!;
+        var slots = await Slots.Find(s => s.Kind == SlotDocument.Member).ToListAsync(Ct);
+        Assert.All(slots, s => Assert.ThrowsAny<CryptographicException>(() => VaultCatalog.OpenMemberSlot(oldPrivate, s)));
+        Assert.All(slots, s => Assert.Equal(VaultCatalog.UserSlotLookup(rotation.NewUserKey, bob.User.Id), s.Lookup));
+        if (membershipId is not null)
+        {
+            using var newPrivate = Kumbu.Server.Sharing.MemberKeys.OpenPrivate(await UserDocAsync(bob), rotation.NewUserKey);
+            VaultCatalog.OpenMemberSlot(newPrivate, Assert.Single(slots));
+            Assert.Equal("garten", (await NamesAsync(bob, rotation.NewUserKey))[alice.Vaults["Gartenarbeit"]]);
+        }
+    }
 }
+

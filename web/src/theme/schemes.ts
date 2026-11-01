@@ -16,6 +16,8 @@ export interface Tokens {
   accentText: string;
   /** Text on an `accent` fill. */
   onAccent: string;
+  /** Text that warns (the level `maintain`): amber on dark schemes, a dark ochre on light ones. */
+  warning: string;
 }
 
 export interface Scheme {
@@ -28,6 +30,8 @@ export interface Scheme {
 // Values per concepts/MOBILE_EDITOR_v1.md section 6; the other schemes are Kumbu variants of their published palettes (source named per scheme). index.css repeats them as custom properties;
 // schemes.test.ts keeps the two in step, contrast.test.ts holds every text token to 4.5:1.
 // Kumbu's `dim` is #8f8c86, not the spec's #8a8781: that one is 4.4:1 on `surface-2`, which the test rejects.
+// `warning` is each palette's orange or yellow, lightened (dark schemes) or darkened (light ones) to 4.5:1 where it fell short;
+// Kumbu's is a coral, as its accent is already amber.
 export const schemes: readonly Scheme[] = [
   {
     id: "kumbu",
@@ -45,6 +49,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#f0a848",
       accentText: "#f0a848",
       onAccent: "#17110a",
+      warning: "#ff9466",
     },
   },
   {
@@ -65,6 +70,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#cba6f7",
       accentText: "#cba6f7",
       onAccent: "#0c0c13",
+      warning: "#fab387",
     },
   },
   {
@@ -84,6 +90,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#8839ef",
       accentText: "#7a2fd6",
       onAccent: "#ffffff",
+      warning: "#a64107",
     },
   },
   {
@@ -104,6 +111,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#7aa2f7",
       accentText: "#7aa2f7",
       onAccent: "#0d0e13",
+      warning: "#ff9e64",
     },
   },
   {
@@ -124,6 +132,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#2b74d9",
       accentText: "#1e529a",
       onAccent: "#ffffff",
+      warning: "#804300",
     },
   },
   {
@@ -144,6 +153,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#fabd2f",
       accentText: "#fabd2f",
       onAccent: "#141414",
+      warning: "#feaa64",
     },
   },
   {
@@ -164,6 +174,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#c3550d",
       accentText: "#893c09",
       onAccent: "#ffffff",
+      warning: "#923003",
     },
   },
   {
@@ -184,6 +195,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#88c0d0",
       accentText: "#8fc4d3",
       onAccent: "#171a20",
+      warning: "#ebcb8b",
     },
   },
   {
@@ -204,6 +216,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#bd93f9",
       accentText: "#be95f9",
       onAccent: "#14151b",
+      warning: "#ffb86c",
     },
   },
   {
@@ -224,6 +237,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#268bd2",
       accentText: "#72b4e2",
       onAccent: "#00161b",
+      warning: "#ccad4e",
     },
   },
   {
@@ -244,6 +258,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#217ab9",
       accentText: "#1b6497",
       onAccent: "#ffffff",
+      warning: "#765a00",
     },
   },
   {
@@ -264,6 +279,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#a7c080",
       accentText: "#a7c080",
       onAccent: "#171b1e",
+      warning: "#eaa788",
     },
   },
   {
@@ -284,6 +300,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#6e7e01",
       accentText: "#5d6a01",
       onAccent: "#ffffff",
+      warning: "#974d17",
     },
   },
   {
@@ -304,6 +321,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#c4a7e7",
       accentText: "#c4a7e7",
       onAccent: "#0d0c12",
+      warning: "#f6c177",
     },
   },
   {
@@ -324,6 +342,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#826e98",
       accentText: "#736287",
       onAccent: "#ffffff",
+      warning: "#8d5f1f",
     },
   },
   {
@@ -345,6 +364,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#61afef",
       accentText: "#63b0ef",
       onAccent: "#14161a",
+      warning: "#e5c07b",
     },
   },
   {
@@ -365,6 +385,7 @@ export const schemes: readonly Scheme[] = [
       accent: "#3c71e3",
       accentText: "#3461c4",
       onAccent: "#ffffff",
+      warning: "#865c01",
     },
   },
 ];

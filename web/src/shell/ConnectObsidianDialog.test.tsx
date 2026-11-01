@@ -17,6 +17,8 @@ let gate: Promise<void> | null = null;
 /** The server's clock against the browser's, in ms. */
 let skew = 0;
 
+let shared = false;
+
 function api() {
   codes = 0;
   bodies = [];
@@ -26,7 +28,7 @@ function api() {
   skew = 0;
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
-    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: true }]),
+    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: true, ...(shared ? { shared: true, members: 1 } : {}) }]),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => json(200, workTree),
     "GET /api/notes/*": (r) =>
@@ -53,6 +55,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   useSession.getState().reset();
   useEditor.getState().reset();
+  shared = false;
 });
 
 async function openDialog() {
@@ -65,6 +68,15 @@ async function openDialog() {
 }
 
 describe("Connect Obsidian", () => {
+  it("asks no code for a vault she shares, and says why", async () => {
+    api();
+    shared = true;
+    const { dialog } = await openDialog();
+    expect(dialog).toHaveTextContent("Work is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.");
+    expect(within(dialog).getByRole("button", { name: "New code" })).toBeDisabled();
+    expect(codes).toBe(0);
+  });
+
   it("opens from the vault menu with the plugin, the server, the expiry and a code", async () => {
     api();
     const { dialog } = await openDialog();
@@ -80,6 +92,15 @@ describe("Connect Obsidian", () => {
     expect(dialog).toHaveTextContent('Each device gets its own key, named "Work – Obsidian <device>". You can revoke it under API keys.');
     expect(dialog).toHaveTextContent("Re-encrypting this vault disconnects its Obsidian devices; connect them again afterwards.");
     expect(bodies).toEqual([{ expiresInDays: null }]);
+  });
+
+  it("says the device may maintain the vault, in the warning colour with its sentence", async () => {
+    api();
+    const { dialog } = await openDialog();
+
+    const level = within(dialog).getByText("The device may read, write and maintain this vault.", { exact: false });
+    expect(level).toHaveTextContent("The device may read, write and maintain this vault. Can change the vault's structure: the board's columns, checkpoints.");
+    expect(level).toHaveClass("text-warning");
   });
 
   it("counts down, and at 0:00 offers only a new code", async () => {

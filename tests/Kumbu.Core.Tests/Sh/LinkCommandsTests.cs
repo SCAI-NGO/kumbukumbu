@@ -178,7 +178,7 @@ public class LinkCommandsTests
     [Fact]
     public async Task MvRewritesTheMovedNotesOwnRelativeLinks()
     {
-        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/projects/rel.md", out var p) ? p : null!, "[[./kumbu]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/projects/rel.md", out var p) ? p : null!, "[[./kumbu]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
         await Run("mv /Demo/projects/rel.md /Demo/rel.md");
 
@@ -310,7 +310,7 @@ public class LinkCommandsTests
     [Fact]
     public async Task ABadNameCanBeRepaired()
     {
-        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/a?b.md", out var p) ? p : null!, "x", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+        await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/a?b.md", out var p) ? p : null!, "x", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
         Assert.False((await Run("mv \"/Demo/a?b.md\" /Demo/a-b.md")).IsError);
     }
 
@@ -318,7 +318,7 @@ public class LinkCommandsTests
     public async Task APathKeepsItsLengthAndAMoveBackRestoresTheOriginal()
     {
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/paths.md", out var p) ? p : null!,
-            "[[projects/kumbu]] [[/projects/kumbu]] [[kumbu.md]] [[Kumbu]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+            "[[projects/kumbu]] [[/projects/kumbu]] [[kumbu.md]] [[Kumbu]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
         await Run("mv /Demo/projects/kumbu.md /Demo/archive/old/kumbu-v1.md");
         Assert.Equal("[[old/kumbu-v1]] [[/archive/old/kumbu-v1]] [[kumbu-v1.md]] [[kumbu-v1]]\n", await Content("/Demo/paths.md"));
@@ -333,9 +333,9 @@ public class LinkCommandsTests
     {
         // A second "plan" exists in /Demo/b; the bare name would be ambiguous from welcome.md.
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/x/memo.md", out var p) ? p : null!,
-            "m", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+            "m", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/links.md", out var q) ? q : null!,
-            "[[memo]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+            "[[memo]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
         await Run("mv /Demo/x/memo.md /Demo/x/plan.md");
 
@@ -380,7 +380,7 @@ public class LinkCommandsTests
     public async Task LinksOfOneSection()
     {
         await _store.TryCreateAsync(new StoredNote(VaultPath.TryParse("/Demo/s.md", out var p) ? p : null!,
-            "# A\n[[kumbu]]\n# B\n[[welcome]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, []), CancellationToken.None);
+            "# A\n[[kumbu]]\n# B\n[[welcome]]\n", 1, Writers.Seed, InMemoryNoteStore.Seeded, [], Ref: WriterRef.Server), CancellationToken.None);
 
         Assert.Equal("4: [[welcome]] → /Demo/welcome.md", (await Run("links /Demo/s.md#B")).Output);
         Assert.Equal("cat: /Demo/s.md#Nope: no such section ('outline /Demo/s.md' lists them)".Replace("cat:", "links:"), (await Run("links /Demo/s.md#Nope")).Output);

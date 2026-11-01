@@ -12,9 +12,19 @@ namespace Kumbu.Core.Notes;
 /// </summary>
 public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller caller)
 {
-    public async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
+    public Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct) =>
+        MoveAsync(source, target, rewriteLinks, card: false, ct);
+
+    /// <summary>A card's move by the board (to its archive): a card operation, so it needs <c>write</c> only, even where
+    /// the move rewrites a link in <c>Board.md</c> (decided by the controller, after concept §7). A person's own
+    /// <c>mv</c> that rewrites such a link is structural.</summary>
+    internal Task<ShellResult> MoveCardAsync(VaultPath source, VaultPath target, CancellationToken ct) =>
+        MoveAsync(source, target, rewriteLinks: true, card: true, ct);
+
+    private async Task<ShellResult> MoveAsync(VaultPath source, VaultPath target, bool rewriteLinks, bool card, CancellationToken ct)
     {
-        if (caller.Refuse("mv", source) is { } refused) return refused;
+        // As a folder: a folder named without its '/' is refused below as one, but a structural refusal comes first.
+        if (caller.RefuseFolder("mv", source) is { } refused) return refused;
         var existing = await store.GetAsync(source, ct);
         if (existing is null && await StoreAttachments.GetAsync(store, source, ct) is null)
         {
@@ -31,17 +41,18 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         }
 
         if (target == source) return ShellResult.Error($"mv: {source.Value} and {target.Value} are the same {(existing is null ? "attachment" : "note")}");
+        if (caller.Refuse("mv", target) is { } refusedTarget) return refusedTarget;
         if (await CheckTargetAsync(source, target, [], ct) is { } problem) return problem;
 
         return await CommitAsync(new Dictionary<VaultPath, VaultPath> { [source] = target }, rewriteLinks,
-            $"moved {source.Value} to {target.Value}", ct);
+            $"moved {source.Value} to {target.Value}", ct, card);
     }
 
     /// <summary>Moves every note and attachment below <paramref name="source"/>, keeping the structure below it. Like
     /// Unix mv, into <paramref name="target"/> if that folder exists, otherwise as <paramref name="target"/>.</summary>
     public async Task<ShellResult> MoveFolderAsync(VaultPath source, VaultPath target, bool rewriteLinks, CancellationToken ct)
     {
-        if (caller.Refuse("mv", source) is { } refused) return refused;
+        if (caller.RefuseFolder("mv", source) is { } refused) return refused;
         if (source.Segments.Count < 2) return ShellResult.Error($"mv: {source.Value}/ is a vault; a vault can't be moved");
         var notes = await store.ListNotesUnderAsync(source, ct);
         var attachments = (await StoreAttachments.UnderAsync(store, source, ct)).Select(a => a.Path).ToList();
@@ -67,6 +78,12 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
         if (await ExistsAsync(target, ct)) return ShellResult.Error($"mv: {target.Value}: Not a directory");
 
         var map = notes.Concat(attachments).ToDictionary(p => p, p => Rebase(p, source, target));
+        // Each path on its own: a folder can carry a Board.md into the place of the board's.
+        foreach (var path in map.Keys.Concat(map.Values))
+        {
+            if (caller.Refuse("mv", path) is { } refusedPath) return refusedPath;
+        }
+
         foreach (var (from, to) in map)
         {
             if (await CheckTargetAsync(from, to, map.Keys.ToHashSet(), ct) is { } problem) return problem;
@@ -136,17 +153,18 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
     /// all other notes. A move changes no text, so a note or attachment without rewrites keeps its writer; rewritten
     /// notes get their own history entry, marked "(mv)".</summary>
     private async Task<ShellResult> CommitAsync(
-        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct)
+        Dictionary<VaultPath, VaultPath> map, bool rewriteLinks, string message, CancellationToken ct, bool card = false)
     {
         var source = map.Keys.First();
         var vault = VaultPath.Root.Child(source.Segments[0]);
         var notes = await store.ReadNotesUnderAsync(vault, ct);
         var rewrites = rewriteLinks ? Rewrites(notes, map, await StoreAttachments.PathsUnderAsync(store, vault, ct)) : [];
         var now = time.GetUtcNow().UtcDateTime;
-        var writer = caller.Writer;
-        var marked = $"{writer} (mv)";
+        var writer = caller.WriterIn(vault.Segments[0]);
+        var reference = caller.ReferenceIn(vault.Segments[0]);
+        var marked = Writers.Marked(writer, "mv");
         // Link rewrites join the writer's changeset like any write.
-        var changeset = await Changeset.ForAsync(store, vault.Segments[0], writer, caller.ChangesetIdle, now, ct);
+        var changeset = await Changeset.ForAsync(store, vault.Segments[0], reference, writer, caller.ChangesetIdle, now, ct);
         var batch = new NoteBatch { Changeset = changeset };
         var links = 0;
         var changed = new List<VaultPath>();
@@ -167,7 +185,7 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
             if (rewrites.TryGetValue(to, out var own))
             {
                 if (Apply(current.Content, own) is not { } content) return Changed(from);
-                moved = NoteWriter.Next(current, content, marked, now, changeset) with { Path = to };
+                moved = NoteWriter.Next(current, content, marked, reference, now, changeset) with { Path = to };
                 links += own.Count;
                 changed.Add(to);
             }
@@ -178,14 +196,17 @@ public sealed class NoteMover(INoteStore store, TimeProvider time, ICaller calle
 
         foreach (var (path, list) in rewrites.Where(r => !map.ContainsValue(r.Key)))
         {
+            // Rewriting a link is a write too: in a structural file only for those who may maintain the vault, unless
+            // the board moves one of its cards.
+            if (!card && caller.Refuse("mv", path) is { } refused) return refused;
             if (await store.GetAsync(path, ct) is not { } current) return Changed(path);
             if (Apply(current.Content, list) is not { } content) return Changed(path);
-            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, now, changeset)));
+            batch.Replaces.Add((current, NoteWriter.Next(current, content, marked, reference, now, changeset)));
             links += list.Count;
             changed.Add(path);
         }
 
-        var conflicts = await store.TryCommitAsync(batch, writer, now, ct);
+        var conflicts = await store.TryCommitAsync(batch, writer, reference, now, ct);
         if (conflicts.Count > 0)
         {
             return ShellResult.Error(

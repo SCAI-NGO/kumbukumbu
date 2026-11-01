@@ -7,16 +7,16 @@ import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
-import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
-import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
+import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
+import { crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
 import { useEditor } from "../state/editor";
-import { useSession } from "../state/session";
 import TagChip from "../tags/TagChip";
 import { frontmatterTags } from "../tags/tags";
-import AgentBanner, { useAgentChange, useAgentHighlight, writerOf } from "./AgentBanner";
+import PresenceLine, { useEditingPresence } from "./PresenceLine";
+import AgentBanner, { ago, shownWriter, useAgentChange, useAgentHighlight } from "./AgentBanner";
 import { storedAutoRefresh } from "./autoRefresh";
 import { BarButton, ChangeText, ElsewhereBar, GoneText, useChangedElsewhere, useTimeout } from "./ChangedElsewhere";
 import { changedLines } from "./lineDiff";
@@ -77,6 +77,11 @@ export default function NoteView({ path }: { path: string }) {
   // Every save is a new version; the links are only asked for once they are shown again.
   const links = useLinks(path, mode === "read" ? note.data?.version : undefined);
   const save = useSaveNote(path);
+  // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
+  const vaults = useVaults();
+  const changes = !vaults.data || mayChange(levelOf(vaults.data.find((v) => v.name === vaultOf(path))), path);
+  // Files dropped on the note are an upload into its folder: none below `write`.
+  const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
   const openNote = useEditor((s) => s.openNote);
   const navigate = useNavigate();
@@ -86,11 +91,10 @@ export default function NoteView({ path }: { path: string }) {
   const change = useAgentChange(path);
   const agentHighlight = useAgentHighlight(path, change, note.data?.content);
   const elsewhere = useChangedElsewhere(path, note.data);
-  const username = useSession((s) => s.user?.username);
   // What a refresh brought, tinted as the agent banner tints: for the version it brought only.
   const [refreshed, setRefreshed] = useState<(Highlight & { version: string }) | null>(null);
-  // A writer's name, or the user's own device (Obsidian) by its name.
-  const [updatedBy, setUpdatedBy] = useState<string | { device: string } | null>(null);
+  // A writer's name, the user's own device (Obsidian) by its name, or the user themself (the server's kind `self`).
+  const [updatedBy, setUpdatedBy] = useState<{ writer: string; at: string } | { device: string } | { self: true } | null>(null);
   // The version (`version@lastWriteAt`) whose read failed: the bar stays, says so, and offers Refresh again.
   const [refreshFailed, setRefreshFailed] = useState<string | null>(null);
   useTimeout(updatedBy !== null, 6_000, () => setUpdatedBy(null));
@@ -120,8 +124,9 @@ export default function NoteView({ path }: { path: string }) {
     async (newer: NoteVersion, auto: boolean) => {
       if (refreshing.current || !note.data) return;
       refreshing.current = true;
-      const writer = writerOf(newer.lastWriter);
+      const writer = shownWriter(newer.lastWriter, newer.lastWriterKind);
       const device = newer.lastWriterKind === "device";
+      const self = newer.lastWriterKind === "self";
       const before = note.data.content;
       const top = scroller.current?.scrollTop ?? 0;
       for (const embedded of new Set(links.data?.filter((l) => l.raw.startsWith("!") && l.kind === "note" && l.path && l.path !== path).map((l) => l.path!))) {
@@ -136,7 +141,7 @@ export default function NoteView({ path }: { path: string }) {
       keepScroll.current = top;
       // The tint names who wrote, as the bar does: the user's own device is "you", not the key's name.
       setRefreshed({ lines: changedLines(before, fresh.data.content), writer: device ? `you, in Obsidian (${deviceOf(writer)})` : writer, version: fresh.data.version });
-      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : writer) : null);
+      setUpdatedBy(auto ? (device ? { device: deviceOf(writer) } : self ? { self: true } : { writer, at: newer.lastWriteAt }) : null);
     },
     [note, links.data, path, queryClient],
   );
@@ -175,6 +180,8 @@ export default function NoteView({ path }: { path: string }) {
 
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();
+  // Others with the vault see who is editing it (collab design §9.2).
+  useEditingPresence(path, mode === "write" && !!note.data);
   const newer = elsewhere.change;
   // Each new version is taken once: a read that fails is not repeated on every render, only for the next version.
   const tried = useRef(new Set<string>());
@@ -247,15 +254,18 @@ export default function NoteView({ path }: { path: string }) {
   if (mode === "write") {
     if (note.data) {
       return (
-        <LoadBoundary fallback={<EditorLoadFailed />}>
-          {LoadedEditor ? (
-            <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
-          ) : (
-            <Suspense fallback={<div className="flex-1" />}>
-              <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
-            </Suspense>
-          )}
-        </LoadBoundary>
+        <>
+          <PresenceLine path={path} />
+          <LoadBoundary fallback={<EditorLoadFailed />}>
+            {LoadedEditor ? (
+              <LoadedEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
+            ) : (
+              <Suspense fallback={<div className="flex-1" />}>
+                <LazyEditor path={path} note={note.data} elsewhere={elsewhere} takeScrollTop={takeEditorScroll} />
+              </Suspense>
+            )}
+          </LoadBoundary>
+        </>
       );
     }
     return <div className="flex-1 px-[22px] pt-[22px]">{note.isError && <p className="text-text-body">{errorText(note.error)}</p>}</div>;
@@ -264,7 +274,7 @@ export default function NoteView({ path }: { path: string }) {
   // Files dropped on the note go into its folder, by way of the upload sheet (which asks before sending).
   const dropTarget = {
     onDragOver: (e: DragEvent) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
+      if (!uploads || !e.dataTransfer.types.includes("Files")) return;
       e.preventDefault();
       setDropping(true);
     },
@@ -272,7 +282,7 @@ export default function NoteView({ path }: { path: string }) {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
     },
     onDrop: (e: DragEvent) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
+      if (!uploads || !e.dataTransfer.types.includes("Files")) return;
       e.preventDefault();
       setDropping(false);
       void collectFromDrop(e.dataTransfer.items).then((picked) => useEditor.getState().openUpload(folderOf(path), picked));
@@ -306,11 +316,11 @@ export default function NoteView({ path }: { path: string }) {
         updatedBy &&
         !(note.data && sameWrite(note.data)) && (
           <p role="status" aria-label="Updated" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-[13px] text-muted">
-            {typeof updatedBy === "object"
-              ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
-              : updatedBy === username
-                ? "Updated: you changed this note elsewhere"
-                : `Updated by ${updatedBy}`}
+            {"writer" in updatedBy
+              ? `Updated by ${updatedBy.writer} ${ago(updatedBy.at)}`
+              : "device" in updatedBy
+                ? `Updated: you changed this note in Obsidian (${updatedBy.device})`
+                : "Updated: you changed this note elsewhere"}
           </p>
         )
       )}
@@ -332,7 +342,7 @@ export default function NoteView({ path }: { path: string }) {
             <MarkdownView
               source={parts.body}
               links={links.data}
-              tasksDisabled={save.isPending}
+              tasksDisabled={save.isPending || !changes}
               onToggleTask={toggleTask}
               onCreateMissing={createMissing}
               highlight={highlight}
