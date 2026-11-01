@@ -27,7 +27,9 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
           --crop x,y,w,h    look at a part at full resolution instead: x and y from the top left, all four in
                             pixels of the original image (as 'cat' reports its size, rotation by the camera
                             applied). The part is then scaled to the step like a whole image.
-          A very tall or wide image is reduced a lot to fit a step; the text then suggests a crop.
+          An image reduced to under 75 % of its width says so: small text and digits may be misread then,
+          so look at them in a crop before quoting them. A GIF is shown as a still, its first frame only.
+          Transparent areas are shown on white.
           One call delivers one image, and img stands alone, not in a pipeline.
           A client may drop images; if none follows the text, say so to the user rather than guess.
           For the pages of a PDF see 'help pdf'; 'cat <path>' says what an attachment is.
@@ -96,7 +98,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
 
         var head = $"{path.Value} (version {state.Version})";
         var original = $"image ({AttachmentText.FormatName(state)}), original {picture.OriginalWidth:0}×{picture.OriginalHeight:0} px";
-        var text = PictureText.For(head, original, step, crop, picture);
+        var text = PictureText.ForImage(head, original, step, crop, picture, gif: state.MediaType == "image/gif");
         return ShellResult.Ok(text) with { Parts = [new TextPart(text), new ImagePart(picture.Data, picture.MediaType)] };
     }
 

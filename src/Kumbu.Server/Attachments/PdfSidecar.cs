@@ -227,7 +227,8 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         if (Math.Max(w, h) > target.LongEdge + 1) throw Invalid("The image is larger than the size step");
         // Likewise its pixel budget, give or take a row and a column of rounding.
         if ((long)w * h > target.Pixels + w + h) throw Invalid("The image has more pixels than the size step");
-        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight));
+        var transparent = response.Headers.TryGetValues("X-Kumbu-Transparent", out var values) && values.Contains("1");
+        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight), transparent);
     }
 
     private static int Whole(HttpResponseMessage response, string header) =>

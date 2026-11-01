@@ -127,33 +127,25 @@ describe("encode", () => {
     ctx.fillRect(0, 0, 400, 300);
     ctx.fillStyle = "#000";
     ctx.fillRect(50, 50, 100, 10);
-    const r = await encode(canvas, 150 * KB, true);
+    const r = await encode(canvas, 150 * KB);
     expect(r).toMatchObject({ mediaType: "image/png", width: 400, height: 300 });
   });
 
   it("chooses JPEG when the PNG does not fit, at the highest quality that does", async () => {
     const canvas = noiseCanvas(500, 400, 1);
     const q85 = await canvas.encode("jpeg", 85);
-    const r = await encode(canvas, q85.length, true);
+    const r = await encode(canvas, q85.length);
     expect(r.mediaType).toBe("image/jpeg");
     expect(r.data.length).toBe(q85.length);
     const q75 = await canvas.encode("jpeg", 75);
-    expect((await encode(canvas, q75.length + 1, true)).data.length).toBe(q75.length);
+    expect((await encode(canvas, q75.length + 1)).data.length).toBe(q75.length);
   });
 
   it("sends the quality 60 JPEG when nothing fits", async () => {
     const canvas = noiseCanvas(500, 400, 1);
-    const r = await encode(canvas, 1000, true);
+    const r = await encode(canvas, 1000);
     expect(r.mediaType).toBe("image/jpeg");
     expect(r.data.length).toBe((await canvas.encode("jpeg", 60)).length);
   });
 
-  it("draws a transparent image on white for JPEG", async () => {
-    const canvas = noiseCanvas(300, 300);
-    canvas.getContext("2d").clearRect(0, 0, 100, 100);
-    const r = await encode(canvas, 1000, false);
-    expect(r.mediaType).toBe("image/jpeg");
-    const [red, green, blue] = await pixel(r.data, 50, 50);
-    for (const c of [red, green, blue]) expect(c).toBeGreaterThan(245);
-  });
 });

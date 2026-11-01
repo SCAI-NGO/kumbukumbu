@@ -73,6 +73,9 @@ public class ImgTests
 
     private const string Dropped = "If no image follows, your client dropped it: tell the user so instead of guessing what it shows.";
 
+    private static string Reduced(int percent, string part = "a part") =>
+        $"Reduced to {percent} %: small text and digits may be misread; look at {part} with --crop x,y,w,h before quoting them.";
+
     [Fact]
     public async Task The_image_follows_a_text_block_that_says_what_it_is()
     {
@@ -83,7 +86,7 @@ public class ImgTests
 
         Assert.False(result.IsError, result.Output);
         Assert.Equal(2, result.Parts!.Count);
-        Assert.Equal($"/Work/Screens/shot.png (version {version}): image (PNG), original 1440×3120 px; medium: 724×1568 px PNG, 312 KB\n{Dropped}", Text(result));
+        Assert.Equal($"/Work/Screens/shot.png (version {version}): image (PNG), original 1440×3120 px; medium: 724×1568 px PNG, 312 KB\n{Reduced(50)}\n{Dropped}", Text(result));
         var image = Assert.IsType<ImagePart>(result.Parts[1]);
         Assert.Equal("image/png", image.MediaType);
         Assert.Equal(312 * 1024, image.Data.Length);
@@ -132,19 +135,60 @@ public class ImgTests
     }
 
     [Theory]
-    [InlineData(1440, 6000, 376, 1568, "Very tall/wide: details may be too small to read; look at a part with --crop x,y,w,h.")]
-    [InlineData(6000, 1440, 1568, 376, "Very tall/wide: details may be too small to read; look at a part with --crop x,y,w,h.")]
-    [InlineData(1440, 3120, 724, 1568, null)]
-    public async Task A_very_tall_or_wide_picture_gets_a_hint_to_crop(int ow, int oh, int w, int h, string? hint)
+    [InlineData(1440, 6000, 376, 1568, 26)]
+    [InlineData(6000, 1440, 1568, 376, 26)]
+    [InlineData(1440, 3120, 723, 1568, 50)]
+    [InlineData(1000, 1000, 749, 749, 75)]
+    [InlineData(1000, 1000, 750, 750, null)]
+    [InlineData(800, 600, 800, 600, null)]
+    public async Task An_image_reduced_a_lot_warns_about_small_text(int ow, int oh, int w, int h, int? percent)
     {
         await Upload("/Work/Screens/long.png", Png(1000), (ow, oh));
         _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", w, h, ow, oh);
 
         var lines = Text(await Run("img /Work/Screens/long.png")).Split('\n');
 
-        Assert.Equal(hint is null ? 2 : 3, lines.Length);
-        if (hint is not null) Assert.Equal(hint, lines[1]);
+        Assert.Equal(percent is null ? 2 : 3, lines.Length);
+        if (percent is { } shown) Assert.Equal(Reduced(shown), lines[1]);
         Assert.Equal(Dropped, lines[^1]);
+    }
+
+    [Fact]
+    public async Task A_narrow_crop_at_full_size_gets_no_warning_but_a_reduced_one_does()
+    {
+        await Upload("/Work/Screens/shot.png", Png(1000), (1440, 3120));
+
+        _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", 1000, 70, 1440, 3120);
+        var full = Text(await Run("img /Work/Screens/shot.png --crop 0,2060,1000,70"));
+        _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", 500, 500, 1440, 3120);
+        var reduced = Text(await Run("img /Work/Screens/shot.png --crop 0,0,1000,1000"));
+
+        Assert.Equal(2, full.Split('\n').Length);
+        Assert.Equal(Reduced(50, "a smaller part"), reduced.Split('\n')[1]);
+    }
+
+    [Fact]
+    public async Task A_gif_says_it_is_shown_as_a_still_and_another_image_does_not()
+    {
+        byte[] gif = [.. "GIF89a"u8.ToArray(), .. new byte[100]];
+        await Upload("/Work/Screens/moving.gif", gif, (600, 400));
+        await Upload("/Work/Screens/still.png", Png(1000), (600, 400));
+        _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", 600, 400, 600, 400);
+
+        Assert.Contains("A GIF is shown as a still: if it is animated, only its first frame.", Text(await Run("img /Work/Screens/moving.gif")));
+        Assert.DoesNotContain("GIF", Text(await Run("img /Work/Screens/still.png")));
+    }
+
+    [Fact]
+    public async Task A_transparent_image_says_it_is_shown_on_white()
+    {
+        await Upload("/Work/Screens/logo.png", Png(1000), (600, 400));
+
+        _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", 600, 400, 600, 400, Transparent: true);
+        Assert.Contains("Transparent areas are shown on white, so a white shape on them can't be seen.", Text(await Run("img /Work/Screens/logo.png")));
+
+        _pixels.Answer = (_, _, _) => new Picture(new byte[10_000], "image/png", 600, 400, 600, 400);
+        Assert.DoesNotContain("Transparent", Text(await Run("img /Work/Screens/logo.png")));
     }
 
     [Fact]

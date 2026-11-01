@@ -252,3 +252,28 @@ Open for the next round:
 4. Grok `small`; Claude Desktop, Cursor, VS Code, Codex not tested yet.
 5. Whether `help img` should mention that a client may scale the image again (crop coordinates).
 6. Uploading the probes through the Obsidian plugin: the attachment sync is merged in the plugin's repository but not released (0.1.1 keeps text only).
+
+### 6.2 Results, 2026-11-01 (second round)
+
+Server: `0.3.0-pre.1` on the reference instance. Method: [`test-playbook-attachments.md`](test-playbook-attachments.md), with fresh probes from `tools/attachment-probes/` and three private PDFs: a mixed document (flow chart drawn by hand, a blurred photo of a book page, a sheet photographed sideways, photos, a chart with a deliberate error), vector charts from a spreadsheet with a table whose visible value contradicts its chart and whose original is covered up but still in the text layer, and a page with a poor OCR layer. Each client got an open question first ("summarise this", "do the numbers hold up?"), then 20 exact ones against a key. All of it is one run per client, and what a client says about its own path is unverified.
+
+| Client | Open question | The 20 questions | Way of working |
+|---|---|---|---|
+| Claude Code (Opus 5.5, medium) | passed | all right | exact crops, 27 images in all; clearly separated what it saw from what it inferred |
+| claude.ai (Opus 5.5, medium) | passed, one slip in a summary | all right | fast, with narrow crops; separated seen, estimated and guessed |
+| Muse | passed | all right | no image channel of its own: a client script in a sandbox, images read from files, so it could measure pixels and rotate; slow |
+| ChatGPT | passed | right but for two parts | thorough, slow; two tool calls blocked in the client with no prompt shown, cause unknown |
+| Grok | half: ignored the "Continue with" line, so the last page's charts went unmentioned | several wrong or half right | very fast; "certain" on wrong answers too; skipped a calculation; saw nothing wrong with the broken chart |
+
+What follows:
+
+- **All five see images**, a picture without any text and hand-writing included, which settles item 1 of §6.1 for ChatGPT as far as its answers can. [M, I] Le Chat was left out (§6.1).
+- **`--crop` and the regions of `pdf info` work.** Crops computed from a scaled picture hit on the first try in most cases, on Claude Code too with its own scaling (item 5 of §6.1). The "Continue with" line and the nudge to `--images=all` on text pages were followed by all but Grok's one miss. [M]
+- **Transparency depended on the client.** A black shape on a transparent ground vanished on ChatGPT, Grok and Muse, which show it on black, not on the two Claude clients, which show it on white. Now always delivered on white, and the text says so. [M]
+- **The hint about small text was tied to the wrong thing.** A phone screenshot (about 2.2:1) got none, and digits were misread at medium; a narrow crop at full size did get one. It now depends on the reduction, under 75 %. [M]
+- **Text and picture disagree in both directions.** OCR changed and dropped words, so `rg` missed a word that stands on the page; covered text was still delivered as if visible. Picture pages with a text layer now warn, `rg` says so when it finds nothing in a PDF with such pages, and `help pdf` explains both. A mark on hidden text itself is still open (below). [M]
+- **A GIF arrives as its first frame**, and now says so. [M]
+- **A crop can't add detail to a photo in a PDF**; `help pdf` no longer promises full sharpness. [M]
+- **A page full of charts can be a `text` page**: their labels and legends are text and don't count towards the 25 %, as a page at 24.5 % ("≈ 25 %") showed. The nudge caught it on every client that was tested for it, so the threshold stays. [M]
+
+Asked for by clients, for after 0.3.0 (0.3.5 or 0.4.0): `--rotate` (every client read the sideways sheet, but all called it awkward, and only Muse could turn it); marking text that isn't visible on the page, perhaps by checking the rendered picture at each text box, untested; coordinates of matches in a PDF, ready for `--crop`; regions that include a figure's legend and labels; `--frame N` for GIFs. Naming what a region shows ("pie chart") stays out: it would need image recognition on the server, a non-goal of [the design](superpowers/specs/2026-10-28-attachments-model-reading-design.md).

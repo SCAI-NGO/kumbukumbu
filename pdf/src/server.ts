@@ -95,7 +95,7 @@ const ROUTES: Record<string, Route> = {
     const [t, c] = [target(q), crop(q)];
     return async (body, slot) => {
       const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c }, ms.renderMs);
-      return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight });
+      return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight, "X-Kumbu-Transparent": r.transparent ? 1 : 0 });
     };
   },
 };

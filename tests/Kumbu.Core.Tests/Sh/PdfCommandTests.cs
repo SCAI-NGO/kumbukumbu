@@ -30,6 +30,9 @@ public class PdfCommandTests
         /// <summary>The exception a page's render throws, or null to render it.</summary>
         public Func<int, Exception?> PageFails { get; set; } = _ => null;
 
+        /// <summary>The picture every page renders to; null for a page-sized one.</summary>
+        public Picture? PagePicture { get; set; }
+
         public List<(int Page, SizeStep Step, Crop? Crop)> PageRequests { get; } = [];
 
         public List<bool> AnalysisRequests { get; } = [];
@@ -40,7 +43,7 @@ public class PdfCommandTests
         {
             PageRequests.Add((page, step, crop));
             if (PageFails(page) is { } e) throw e;
-            return Task.FromResult(new Picture(new byte[1024 + page], "image/png", 1109, 1568, 595, 842));
+            return Task.FromResult(PagePicture ?? new Picture(new byte[1024 + page], "image/png", 1109, 1568, 595, 842));
         }
 
         public Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct)
@@ -197,6 +200,26 @@ public class PdfCommandTests
 
         Assert.Equal("--- Page 7 of 12: image (no text layer; one image covers the page) — add --images to see it ---", (await Run("pdf /Papers/b.pdf 7")).Output);
         Assert.Equal("--- Page 1 of 1: text (empty) ---", (await Run("pdf /Papers/e.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_picture_page_with_a_text_layer_warns_that_it_may_be_ocr()
+    {
+        await Upload("/Papers/o.pdf", new PdfAnalysis("a", 1, 1, null, null, [Scan(1) with { Chars = 900 }]));
+
+        Assert.StartsWith(
+            "--- Page 1 of 1: image (text layer, perhaps OCR: words may be wrong or missing, check the image; one image covers the page) — add --images to see it ---",
+            (await Run("pdf /Papers/o.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_very_long_page_gets_a_hint_to_crop_but_a_narrow_crop_does_not()
+    {
+        await Upload("/Papers/a.pdf", Twelve());
+        _pixels.PagePicture = new Picture(new byte[1024], "image/png", 1500, 60, 595, 842);
+
+        Assert.Contains("Very tall/wide", Texts(await Run("pdf /Papers/a.pdf 1 --images=all"))[0]);
+        Assert.DoesNotContain("Very tall/wide", Texts(await Run("pdf /Papers/a.pdf 1 --crop 0,36,399,14"))[0]);
     }
 
     [Fact]

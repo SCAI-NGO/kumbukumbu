@@ -32,6 +32,30 @@ async function pixel(data: Uint8Array, x: number, y: number) {
 const isRed = ([r, g, b]: number[]) => r! > 200 && g! < 60 && b! < 60;
 
 describe("renderImage", () => {
+  it("delivers a transparent image on white, whichever format it ends up in, and says it was transparent", async () => {
+    const canvas = createCanvas(300, 300);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(200, 200, 100, 100);
+    const webp = await canvas.encode("webp", 100);
+
+    for (const t of [MEDIUM, { ...MEDIUM, bytes: 1 }]) {
+      const r = await renderImage(webp, t);
+      expect(r.transparent).toBe(true);
+      expect(r.mediaType).toBe(t.bytes === 1 ? "image/jpeg" : "image/png");
+      const [red, green, blue, alpha] = await pixel(r.data, 50, 50);
+      for (const c of [red, green, blue]) expect(c).toBeGreaterThan(245);
+      expect(alpha).toBe(255);
+      const [black] = await pixel(r.data, 250, 250);
+      expect(black).toBeLessThan(10);
+    }
+  });
+
+  it("calls an opaque image not transparent", async () => {
+    const r = await renderImage(await solid(100, 100).encode("png"), MEDIUM);
+    expect(r.transparent).toBe(false);
+  });
+
   it("scales a large image to the pixel budget, keeping its aspect", async () => {
     const r = await renderImage(solid(4000, 3000).toBuffer("image/png"), MEDIUM);
     // √(1.2e6 / 1.2e7) ≈ 0.316: 1264 × 948.

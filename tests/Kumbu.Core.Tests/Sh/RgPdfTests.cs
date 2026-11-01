@@ -224,6 +224,34 @@ public class RgPdfTests
         Assert.Equal("/V/plan.md\n/V/paper.pdf", result.Output);
     }
 
+    private async Task Scanned(string path, params PageType[] types)
+    {
+        await Upload(path, types.Length, _ => "ocr text");
+        _pixels.Analyses[path] = new PdfAnalysis("a", types.Length, types.Length, null, null, [.. types.Select((t, i) =>
+            new PdfPage(i + 1, 595, 842, 0, t, t == PageType.Mixed ? 0 : 100, 0.3, 0.9, 0, 1, []))]);
+    }
+
+    [Fact]
+    public async Task Nothing_found_in_a_pdf_with_scans_is_not_taken_for_proof()
+    {
+        await Scanned("/V/scan.pdf", PageType.Image, PageType.Mixed, PageType.Text);
+
+        Assert.Equal(
+            "no match in the text, but pages that are scans or photos may hold it, as their text is missing or may be wrong: /V/scan.pdf (2 pages) (pdf info shows which; pdf <path> --images shows them)",
+            (await Run("rg zzz /V/scan.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_match_or_a_pipe_or_a_pdf_of_text_pages_gets_no_hint_about_scans()
+    {
+        await Scanned("/V/scan.pdf", PageType.Image);
+        await Paper();
+
+        Assert.Equal("/V/scan.pdf:p1: ocr text", (await Run("rg ocr /V/scan.pdf")).Output);
+        Assert.Equal("", (await Run("rg zzz /V/paper.pdf")).Output);
+        Assert.Equal("", (await Run("cat /V/plan.md | rg zzz")).Output);
+    }
+
     [Fact]
     public async Task Pages_without_text_have_nothing_to_find_not_even_by_inversion()
     {

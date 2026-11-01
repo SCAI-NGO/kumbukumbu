@@ -79,6 +79,7 @@ describe("server", () => {
     expect(r.headers.get("x-kumbu-width")).toBe("1264");
     expect(r.headers.get("x-kumbu-original-width")).toBe("4000");
     expect(r.headers.get("x-kumbu-original-height")).toBe("3000");
+    expect(r.headers.get("x-kumbu-transparent")).toBe("1");
   });
 
   it("maps errors to their status", async () => {

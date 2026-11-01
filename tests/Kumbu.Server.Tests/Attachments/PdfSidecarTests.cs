@@ -304,6 +304,18 @@ public sealed class PdfSidecarTests
 
         Assert.Equal("http://pdf.test:8090/render/image?longEdge=1568&pixels=1200000&bytes=409600", Assert.Single(stub.Seen).Request.RequestUri!.ToString());
         Assert.Equal(("image/jpeg", 724, 1568, 1440d, 3120d), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
+        Assert.False(picture.Transparent);
+    }
+
+    [Fact]
+    public async Task An_image_that_was_transparent_says_so()
+    {
+        var jpeg = Jpeg(724, 1568);
+        var stub = new Stub((_, _) => Image(jpeg, "image/jpeg", 724, 1568, ("X-Kumbu-Original-Width", "1440"), ("X-Kumbu-Original-Height", "3120"), ("X-Kumbu-Transparent", "1")));
+
+        var picture = await Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(1440, 3120), Medium, null, Ct);
+
+        Assert.True(picture.Transparent);
     }
 
     public static TheoryData<string, byte[], string, int, int> Wrong() => new()

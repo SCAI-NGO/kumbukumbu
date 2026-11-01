@@ -28,7 +28,7 @@ export async function renderPage(pdf: Uint8Array, page: number, t: Target, crop?
       const viewport = p.getViewport({ scale, offsetX: -region.x * scale, offsetY: -region.y * scale });
       const canvas = createCanvas(width, height);
       await p.render({ canvas: canvas as never, canvasContext: canvas.getContext("2d") as never, viewport }).promise;
-      return { ...(await encode(canvas, t.bytes, true)), pageWidth: round1(shown.width), pageHeight: round1(shown.height) };
+      return { ...(await encode(canvas, t.bytes)), pageWidth: round1(shown.width), pageHeight: round1(shown.height) };
     } finally {
       p.cleanup();
     }
