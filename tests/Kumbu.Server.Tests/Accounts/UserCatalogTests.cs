@@ -333,7 +333,10 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         var settings = MongoClientSettings.FromConnectionString(fixture.ConnectionString);
         settings.ClusterConfigurator = b => b.Subscribe<CommandStartedEvent>(e =>
         {
-            if (recording && e.CommandName == "find") lock (found) found.Add(e.Command["find"].AsString);
+            lock (found)
+            {
+                if (recording && e.CommandName == "find") found.Add(e.Command["find"].AsString);
+            }
         });
         var db = new MongoClient(settings).GetDatabase("t" + Guid.NewGuid().ToString("N"));
         var users = Catalog(db);
@@ -344,11 +347,18 @@ public sealed class UserCatalogTests(MongoFixture fixture)
 
         async Task<List<string>> LookupsAsync(Func<Task> action)
         {
-            lock (found) found.Clear();
-            recording = true;
+            lock (found)
+            {
+                found.Clear();
+                recording = true;
+            }
+
             await action();
-            recording = false;
-            lock (found) return [.. found];
+            lock (found)
+            {
+                recording = false;
+                return [.. found];
+            }
         }
 
         var signIn = await LookupsAsync(() => users.TrySignInAsync("nobody", "not the password at all", Ct));
