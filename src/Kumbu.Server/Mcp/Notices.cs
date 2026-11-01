@@ -48,8 +48,13 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
         if (caller.Kind is not (CallerKind.ApiKey or CallerKind.Connection) || caller.Reference.Id is not { } credentialId) return result;
         var shared = (await caller.OpenVaultsAsync(ct)).Where(a => a.Membership is not null).ToList();
         var pending = shared.Count == 0 ? [] : await PendingAsync(credentialId, shared, ct);
-        var lost = await LostAsync(credentialId, ct);
-        if (pending.Count == 0 && lost.Count == 0) return result;
+        var (lost, ownerless) = await LostAsync(credentialId, ct);
+        // Nobody to name: marked unshown, or each call would look them up again for the rest of the window.
+        if (pending.Count == 0 && lost.Count == 0)
+        {
+            if (ownerless.Count > 0) await MarkAsync(credentialId, ownerless, ct);
+            return result;
+        }
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (e, access) in pending)
         {
@@ -64,7 +69,7 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
         }
 
         if (FaultBeforeMark is { } fault) await fault();
-        await MarkAsync(credentialId, pending.Select(p => p.Event.Id).Concat(lost.Select(l => l.Event.Id)), ct);
+        await MarkAsync(credentialId, pending.Select(p => p.Event.Id).Concat(lost.Select(l => l.Event.Id)).Concat(ownerless), ct);
         return result;
 
         async Task<string> OwnerShownAsync(string owner)
@@ -76,23 +81,24 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
 
     /// <summary>The finished re-keyings, within <see cref="Window"/>, of vaults whose start took the credential's slot
     /// (collab design §7.1): it no longer reaches the vault and is told so once, with the vault's owner (its
-    /// membership's, which the event's vault names).</summary>
-    private async Task<IReadOnlyList<(VaultEventDocument Event, string Owner)>> LostAsync(string credentialId, CancellationToken ct)
+    /// membership's, which the event's vault names). With them the ids of those whose vault has no membership left to
+    /// name its owner (every member deleted her account): never told, but marked like the rest.</summary>
+    private async Task<(IReadOnlyList<(VaultEventDocument Event, string Owner)> Lost, IReadOnlyList<ObjectId> Ownerless)> LostAsync(string credentialId, CancellationToken ct)
     {
         var f = Builders<VaultEventDocument>.Filter;
         var since = time.GetUtcNow().UtcDateTime - Window;
         var mine = f.Eq(e => e.Kind, VaultEvents.RekeyFinished) & f.AnyEq(e => e.Credentials, credentialId) & f.Gt(e => e.At, since);
-        if (!await VaultEvents.Docs(db).Find(mine).AnyAsync(ct)) return [];
+        if (!await VaultEvents.Docs(db).Find(mine).AnyAsync(ct)) return ([], []);
         await EnsureReadyAsync(ct);
         var m = Builders<NoticeMarkDocument>.Filter;
         var given = await Marks.Find(m.Eq(x => x.Credential, credentialId) & m.Gt(x => x.At, since)).Project(x => x.Event).ToListAsync(ct);
         var events = await VaultEvents.Docs(db).Find(mine & f.Nin(e => e.Id, given)).SortBy(e => e.At).Limit(20).ToListAsync(ct);
         var vaults = events.Select(e => e.Vault).Distinct().ToList();
-        if (vaults.Count == 0) return [];
+        if (vaults.Count == 0) return ([], []);
         // Every membership of a vault names its one owner.
         var owners = (await db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(x => vaults.Contains(x.Vault)).Project(x => new { x.Vault, x.Owner }).ToListAsync(ct))
             .GroupBy(x => x.Vault).ToDictionary(g => g.Key, g => g.First().Owner);
-        return [.. events.Where(e => owners.ContainsKey(e.Vault)).Select(e => (e, owners[e.Vault]))];
+        return ([.. events.Where(e => owners.ContainsKey(e.Vault)).Select(e => (e, owners[e.Vault]))], [.. events.Where(e => !owners.ContainsKey(e.Vault)).Select(e => e.Id)]);
     }
 
     /// <summary>The events of the shared vaults <paramref name="shared"/> the credential hasn't been told, oldest first:

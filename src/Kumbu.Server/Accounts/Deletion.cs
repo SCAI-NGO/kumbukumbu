@@ -209,20 +209,43 @@ public sealed class Deletion(
     /// <see cref="SharedVaultChoice.DeleteNow"/> it goes with the others, and each member is left a notice
     /// (<see cref="Sharing.MemberNotices"/>). <paramref name="recorded"/>, for a repeat after a restore: the closing periods
     /// recorded at the deletion, by vault id, which replace the choice: a vault whose time hasn't come closes again until
-    /// then, any other goes now.
+    /// then, any other goes now. An admin's deletion (not <paramref name="ownRuns"/>) gives no closing period to a vault
+    /// in a re-keying run: it goes now (collab design §7.1).
     /// </para>
     /// </summary>
     private async Task<DeletionSummary?> DeleteAccountAsync(
         string userId, FilterDefinition<UserDocument> stillDeletable, SharedVaultChoice choice, IReadOnlyDictionary<string, DateTime>? recorded, CancellationToken ct,
         bool ownRuns = false)
     {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await DeleteAccountOnceAsync(userId, stillDeletable, choice, recorded, ownRuns, ct);
+            }
+            catch (RunStartedException) when (attempt < 3)
+            {
+                // A run of a vault given a closing period started meanwhile: decided again, it goes now.
+            }
+        }
+    }
+
+    private async Task<DeletionSummary?> DeleteAccountOnceAsync(
+        string userId, FilterDefinition<UserDocument> stillDeletable, SharedVaultChoice choice, IReadOnlyDictionary<string, DateTime>? recorded, bool ownRuns,
+        CancellationToken ct)
+    {
         var now = time.GetUtcNow().UtcDateTime;
         var owned = await OwnedVaultsAsync(userId, ct);
         if (ownRuns) await RequireNoSharedRunAsync(null, owned, ct);
         var withMembers = await WithActiveMembersAsync(owned, ct);
+        // An admin's deletion isn't refused during a run (a privacy request can't wait for an owner who never comes
+        // back), but a vault in its run can't be given a closing period: the new key's only copy is the owner's slot,
+        // which goes, so the run could never finish and the members couldn't even export. It goes now, with their notices.
+        HashSet<string> running = ownRuns ? new(StringComparer.Ordinal) : (await SharedRunsAsync(null, withMembers, ct)).ToHashSet(StringComparer.Ordinal);
         var closing = new Dictionary<string, DateTime>(StringComparer.Ordinal);
         foreach (var vaultId in withMembers)
         {
+            if (running.Contains(vaultId)) continue;
             if (recorded is not null)
             {
                 if (recorded.TryGetValue(vaultId, out var at) && at > now) closing[vaultId] = at;
@@ -277,6 +300,7 @@ public sealed class Deletion(
                 first: async (s, token) =>
                 {
                     if (ownRuns) await RequireNoSharedRunAsync(s, owned, token);
+                    else if ((await SharedRunsAsync(s, [.. closing.Keys], token)).Count > 0) throw new RunStartedException();
                     noticeCount = await Sharing.MemberNotices.LeaveForDeletedAsync(db, s, deletedShared, now, token);
                 });
         }
@@ -357,18 +381,27 @@ public sealed class Deletion(
     /// </summary>
     private async Task RequireNoSharedRunAsync(IClientSessionHandle? session, IReadOnlyList<string> vaults, CancellationToken ct)
     {
-        if (vaults.Count == 0) return;
+        if ((await SharedRunsAsync(session, vaults, ct)).Count > 0) throw new RekeyRunningException();
+    }
+
+    /// <summary>Of these vaults, those with an active member that a re-keying run holds or that are in their two-key
+    /// period; inside <paramref name="session"/>'s transaction if given.</summary>
+    private async Task<IReadOnlyList<string>> SharedRunsAsync(IClientSessionHandle? session, IReadOnlyList<string> vaults, CancellationToken ct)
+    {
+        if (vaults.Count == 0) return [];
         var v = Builders<VaultDocument>.Filter;
         var started = v.In(x => x.Id, vaults) & v.Ne(x => x.RekeyStartedAt, null);
         var running = vaults.Where(catalog.IsRekeying).Concat(
             session is null
                 ? await catalog.Vaults.Find(started).Project(x => x.Id).ToListAsync(ct)
                 : await catalog.Vaults.Find(session, started).Project(x => x.Id).ToListAsync(ct)).Distinct().ToList();
-        if (running.Count == 0) return;
+        if (running.Count == 0) return [];
         var f = Builders<Sharing.MembershipDocument>.Filter;
         var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
         var shared = f.In(m => m.Vault, running) & f.Eq(m => m.Status, Sharing.MembershipStatus.Active);
-        if (session is null ? await docs.Find(shared).AnyAsync(ct) : await docs.Find(session, shared).AnyAsync(ct)) throw new RekeyRunningException();
+        return session is null
+            ? await docs.Distinct(m => m.Vault, shared, cancellationToken: ct).ToListAsync(ct)
+            : await docs.Distinct(session, m => m.Vault, shared, cancellationToken: ct).ToListAsync(ct);
     }
 
     /// <summary>Which of these vaults have an active member now: those a closing period applies to.</summary>
@@ -402,6 +435,8 @@ public sealed class Deletion(
             .ToListAsync(ct);
 
     private sealed class UserChangedException() : Exception("The user changed during the deletion.");
+
+    private sealed class RunStartedException() : Exception("A re-keying run of a vault to be closed started during the deletion.");
 }
 
 /// <summary>A shared vault, or the account of its owner, can't be deleted while a re-keying of the vault is under way

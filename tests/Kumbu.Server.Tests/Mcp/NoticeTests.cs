@@ -170,4 +170,23 @@ public sealed class NoticeTests(KumbuAppFactory app)
         Assert.Equal(0, Lost(await bob.ShBlocksAsync("ls /", bobsOwn)));
         Assert.DoesNotContain(await alice.ShBlocksAsync("ls /", hers), b => b.Contains("Notice:", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task A_finished_re_keying_whose_vault_has_no_membership_left_is_marked_untold()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "garten", MemberRole.Write);
+        var vaultId = await alice.VaultIdAsync();
+        var bobs = await KeyAsync(bob, "Claude", vaultId, await bob.VaultIdAsync());
+        await Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>().RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+        // Every membership gone (each member deleted her account, say): nobody is left to name the owner.
+        await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).DeleteManyAsync(m => m.Vault == vaultId, Ct);
+        var finished = await VaultEvents.Docs(app.Database).Find(e => e.Vault == vaultId && e.Kind == VaultEvents.RekeyFinished).SingleAsync(Ct);
+
+        Assert.DoesNotContain(await bob.ShBlocksAsync("ls /", bobs), b => b.Contains("Notice:", StringComparison.Ordinal));
+
+        // Marked, so later calls don't look it up again for the rest of the window.
+        Assert.Equal(1, await app.Database.GetCollection<NoticeMarkDocument>(Notices.CollectionName).CountDocumentsAsync(m => m.Event == finished.Id, cancellationToken: Ct));
+    }
 }

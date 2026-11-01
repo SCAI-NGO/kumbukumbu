@@ -620,4 +620,28 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         using var read = await bob.GetAsync("/api/notes/garten/plan.md");
         Assert.Equal(HttpStatusCode.OK, read.StatusCode);
     }
+
+    [Fact]
+    public async Task An_admins_deletion_during_a_run_deletes_the_shared_vault_now_whatever_the_choice()
+    {
+        var (alice, bob, vaultId, _) = await SharedAsync();
+        await StopAfterStartAsync(alice, vaultId);
+        var admin = await RestClient.NewAsync(Api, vault: "Admin", role: Roles.Admin);
+
+        using var response = await admin.SendAsync(
+            HttpMethod.Post, $"/api/admin/users/{alice.User.Id}/delete",
+            new { password = RestClient.Password, confirm = alice.Username, sharedVaults = SharedVaultChoices.GiveMembersTime });
+
+        // No closing period: the only copy of the new key was the owner's, and the members couldn't even export.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipt = await RestClient.JsonAsync(response);
+        Assert.Equal((1, 1), (receipt["vaults"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
+        Assert.Empty(receipt["sharedVaultsScheduled"]!.AsArray());
+        Assert.False(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId).AnyAsync(Ct));
+        Assert.Equal(0, await Slots.CountDocumentsAsync(s => s.Vault == vaultId, cancellationToken: Ct));
+        using (var gone = await bob.GetAsync("/api/notes/garten/plan.md")) Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        using var notices = await bob.GetAsync("/api/member-notices");
+        Assert.Equal(HttpStatusCode.OK, notices.StatusCode);
+        Assert.Equal("The owner has deleted garten.", (await RestClient.JsonAsync(notices)).AsArray().Single()!["text"]!.GetValue<string>());
+    }
 }
