@@ -19,7 +19,7 @@ namespace Kumbu.Server.Tests.Sharing;
 /// HARD RULE 4: members' writes store no names (collab design §8.1). On a vault shared with her, every entry a
 /// member writes, through every write path, as a session, a key or a device, has the label <c>""</c> and the reference
 /// <c>{writer, kind}</c>, the writer id being her membership's for that session or credential, and nothing in it names
-/// her: no username, user id, key id, key or device name. The owner's own writes keep their label. Never weakened for
+/// her: no username, user id, key id, key or device name, nor her alias. The owner's own writes keep their label. Never weakened for
 /// another test.
 /// </summary>
 [Collection("mongo")]
@@ -31,6 +31,7 @@ public sealed class NoNamesTests(MongoFixture fixture)
     private const string KeyName = "Bobs.Agent-7x";
     private const string DeviceName = "Bobs.Laptop-9q";
     private const string DeviceKeyName = "garten – Obsidian " + DeviceName;
+    private const string Alias = "garten";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -183,6 +184,8 @@ public sealed class NoNamesTests(MongoFixture fixture)
         {
             var json = payload.ToJsonString();
             foreach (var name in forbidden) Assert.False(json.Contains(name, StringComparison.OrdinalIgnoreCase), $"{where} names Bob ({name}): {json}");
+            // His alias is his alone (§2.3): no text the server writes for him, such as a new board's title, carries it.
+            Assert.False(json.Contains(Alias, StringComparison.Ordinal), $"{where} holds Bob's alias: {json}");
             AssertNoName(where, payload, writerId, expectedKind);
         }
     }

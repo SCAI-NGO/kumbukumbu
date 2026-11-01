@@ -24,7 +24,7 @@ public class BoardReaderTests
     [Fact]
     public void Parses_the_template()
     {
-        var (definition, problem) = BoardDefinition.Parse(BoardTemplate.Text("Work"));
+        var (definition, problem) = BoardDefinition.Parse(BoardTemplate.Text());
 
         Assert.Null(problem);
         Assert.NotNull(definition);
@@ -32,10 +32,10 @@ public class BoardReaderTests
         Assert.Equal(["Done", "Rejected"], definition.Columns.Where(c => c.Archivable).Select(c => c.Name));
         Assert.Equal(["Rejected"], definition.Columns.Where(c => c.NeedsReason).Select(c => c.Name));
         Assert.Equal(new ArchiveRule(30, 14), definition.Archive);
-        Assert.Equal("Work", definition.Title);
+        Assert.Equal("Board", definition.Title);
         Assert.StartsWith("Don't let ideas go stale", definition.Instructions);
         Assert.EndsWith("Today is what comes next, not literally today.", definition.Instructions);
-        Assert.Contains("Kanban board for Work.", BoardTemplate.Text("Work"));
+        Assert.Contains("Kanban board of this vault.", BoardTemplate.Text());
     }
 
     [Fact]

@@ -17,8 +17,8 @@ namespace Kumbu.Server.Tests.Sharing;
 /// HARD RULE 5, the marker test (collab design §8.2): a label written by member A never reaches member B, in any REST
 /// answer, shell output or socket message. Carol names her key and her device with a marker and works on Alice's
 /// "Gartenarbeit" through every kind of write; Bob, a member too, then reads everything that carries writers or text
-/// of the vault, and finds neither the marker nor anything else of Carol's: her username, user id or key ids. (Her alias
-/// is no writer label; text she writes, such as a board's default title, may hold it, as any text she writes.)
+/// of the vault, and finds neither the marker nor anything else of Carol's: her username, user id, key ids or her alias
+/// "Beete", which is hers alone (§2.3): no text the server writes for her, such as a new board's title, may carry it.
 /// Phase 3 adds events and notices to it, phase 5 the socket's further messages. Never weakened for another test.
 /// </summary>
 [Collection("app")]
@@ -27,6 +27,7 @@ public sealed class MarkerTests(KumbuAppFactory app)
     private const string Marker = "MARKER";
     private const string KeyName = "MARKER-c4f1";
     private const string DeviceName = "MARKER-dev";
+    private const string CarolsAlias = "Beete";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -48,11 +49,11 @@ public sealed class MarkerTests(KumbuAppFactory app)
     private async Task<World> WorldAsync()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
-        await alice.CreateAsync("plan.md", "Beete planen\n");
+        await alice.CreateAsync("plan.md", "Gemüse planen\n");
         var bob = await RestClient.NewAsync(Api, vault: "Work");
         var carol = await RestClient.NewAsync(Api, vault: "Privat");
         await alice.ShareWithAsync(bob, "garten", MemberRole.Maintain);
-        var carols = await alice.ShareWithAsync(carol, "Beete", MemberRole.Maintain);
+        var carols = await alice.ShareWithAsync(carol, CarolsAlias, MemberRole.Maintain);
         var vaultId = await alice.VaultIdAsync();
 
         var (key, keyId) = await KeyAsync(carol, KeyName, vaultId, KeyRight.Maintain);
@@ -94,7 +95,7 @@ public sealed class MarkerTests(KumbuAppFactory app)
         // Her writer ids too: nothing Bob gets may group her writes, such as an activity row's key.
         var writerIds = Memberships.OpenWriterIds(await Share.MembershipAsync(app.Database, carols), await alice.VaultKeyAsync()).Keys;
         Assert.Equal(3, writerIds.Count());
-        return new(alice, bob, carol, vaultId, bobKey, bobReadKey, [Marker, carol.Username, carol.User.Id, keyId, deviceId, .. writerIds]);
+        return new(alice, bob, carol, vaultId, bobKey, bobReadKey, [Marker, carol.Username, carol.User.Id, keyId, deviceId, CarolsAlias, .. writerIds]);
     }
 
     private static async Task<string?> PutAsync(RestClient user, string path, object body, string? bearer)
@@ -310,10 +311,37 @@ public sealed class MarkerTests(KumbuAppFactory app)
                 var json = payload.ToJsonString();
                 Assert.DoesNotContain(Marker, json, StringComparison.OrdinalIgnoreCase);
                 Assert.DoesNotContain(w.Carol.Username, json, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(CarolsAlias, json, StringComparison.OrdinalIgnoreCase);
             }
         }
 
         Assert.NotEmpty(await SealedPayloads.OpenAllAsync(app.Database, w.VaultId, vaultKey, "checkpoint_texts", Ct));
+    }
+
+    [Fact]
+    public async Task A_members_alias_never_reaches_the_owner()
+    {
+        var w = await WorldAsync();
+        var answers = new List<(string What, string Text)>();
+        foreach (var path in new[]
+        {
+            "/api/vaults", "/api/vaults/Gartenarbeit/tree", "/api/notes/Gartenarbeit/Board/Board.md", "/api/history/Gartenarbeit/Board/Board.md",
+            "/api/vaults/Gartenarbeit/board", "/api/vaults/Gartenarbeit/activity", "/api/vault-events", "/api/vaults/Gartenarbeit/access",
+        })
+        {
+            using var response = await w.Alice.GetAsync(path);
+            Assert.True(response.IsSuccessStatusCode, $"{path}: {response.StatusCode}");
+            answers.Add((path, await response.Content.ReadAsStringAsync(Ct)));
+        }
+
+        var key = await w.Alice.KeyAsync("Claude", KeyRight.Read);
+        foreach (var command in new[] { "cat /Gartenarbeit/Board/Board.md", "history /Gartenarbeit", "rg -i beete /" })
+        {
+            answers.Add((command, string.Join("\n", await w.Alice.ShBlocksAsync(command, key))));
+        }
+
+        Assert.Contains(answers, a => a.What == "/api/notes/Gartenarbeit/Board/Board.md" && a.Text.Contains("kumbu-board", StringComparison.Ordinal));
+        foreach (var (what, text) in answers) Assert.False(text.Contains(CarolsAlias, StringComparison.OrdinalIgnoreCase), $"{what} holds Carol's alias: {text}");
     }
 
     [Fact]

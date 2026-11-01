@@ -12,7 +12,7 @@ namespace Kumbu.Core.Tests.Notes;
 /// <summary>A vault's structure (its <c>Board.md</c>, its checkpoints) changes only for those who may maintain it.</summary>
 public class StructuralTests
 {
-    private static readonly string Board = BoardTemplate.Text("Work");
+    private static readonly string Board = BoardTemplate.Text();
 
     private readonly InMemoryNoteStore _store = new(
         ("/Work/Board/Board.md", Board), ("/Work/Board/card.md", "a card\n"), ("/Work/Old/Board/Board.md", "an old board\n"),

@@ -257,7 +257,7 @@ public sealed class BoardService(INoteStore store, NoteWriter writer, NoteMover 
         var path = BoardPaths.Definition(vaultPath.Name);
         if (await store.GetAsync(path, ct) is not null) return Error($"{path.Value} exists already; 'board {Quote(vaultPath)}' shows it", ShellErrorKind.Conflict);
 
-        var result = await writer.WriteAsync(path.Value, BoardTemplate.Text(vaultPath.Name), null, ct);
+        var result = await writer.WriteAsync(path.Value, BoardTemplate.Text(), null, ct);
         if (result.IsError) return Error(result.Output.StartsWith("write: ", StringComparison.Ordinal) ? result.Output["write: ".Length..] : result.Output, ShellErrorKind.Conflict);
         return ShellResult.Ok($"board: created {path.Value} from the template; 'board {Quote(vaultPath)}' shows it") with { Version = result.Version };
     }

@@ -547,7 +547,7 @@ public class CheckpointTests
         await Boards().CreateAsync("Demo", CancellationToken.None);
 
         await AssertRefusedAsync();
-        Assert.Equal(BoardTemplate.Text("Demo"), await Content(BoardPath));
+        Assert.Equal(BoardTemplate.Text(), await Content(BoardPath));
     }
 
     [Fact]
@@ -569,7 +569,7 @@ public class CheckpointTests
     [Fact]
     public async Task A_writer_may_not_restore_a_checkpoint_that_moves_the_board_out_of_its_place()
     {
-        await Write("/Demo/Draft/Board/Board.md", BoardTemplate.Text("Demo"));
+        await Write("/Demo/Draft/Board/Board.md", BoardTemplate.Text());
         await Run("mkcp /Demo/Draft cp");
         Assert.False((await Run("mv /Demo/Draft/Board/ /Demo/")).IsError);
         var before = await SnapshotAsync();
@@ -584,13 +584,13 @@ public class CheckpointTests
         Assert.Equal(ShellResult.Error(RestoreSentence) with { Code = Refusals.Structural }, preview);
         Assert.Equal(ShellResult.Error(RestoreSentence) with { Code = Refusals.Structural }, applied);
         Assert.Equal(before, await SnapshotAsync());
-        Assert.Equal(BoardTemplate.Text("Demo"), await Content(BoardPath));
+        Assert.Equal(BoardTemplate.Text(), await Content(BoardPath));
     }
 
     [Fact]
     public async Task A_writer_may_not_restore_a_checkpoint_that_rewrites_a_link_in_Board_md()
     {
-        await Write(BoardPath, BoardTemplate.Text("Demo") + "See [[arbeit/plan]].\n");
+        await Write(BoardPath, BoardTemplate.Text() + "See [[arbeit/plan]].\n");
         await Run("mkcp /Demo/arbeit cp");
         Assert.False((await Run("mv /Demo/arbeit/plan.md /Demo/elsewhere/plan.md")).IsError);
         Assert.Contains("[[elsewhere/plan]]", await Content(BoardPath));

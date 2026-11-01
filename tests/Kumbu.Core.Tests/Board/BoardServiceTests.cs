@@ -255,7 +255,7 @@ public class BoardServiceTests
         var result = await service.CreateAsync("Work", Ct);
 
         Assert.Equal("board: created /Work/Board/Board.md from the template; 'board /Work' shows it", result.Output);
-        Assert.Equal(BoardTemplate.Text("Work"), await Content(store, "/Work/Board/Board.md"));
+        Assert.Equal(BoardTemplate.Text(), await Content(store, "/Work/Board/Board.md"));
 
         var again = await service.CreateAsync("/Work", Ct);
         Assert.Equal("board: /Work/Board/Board.md exists already; 'board /Work' shows it", again.Output);
