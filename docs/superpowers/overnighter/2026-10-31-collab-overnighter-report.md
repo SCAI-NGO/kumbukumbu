@@ -1026,4 +1026,4 @@ None of these has a confidentiality or authorisation effect, per the final revie
 
 ## 9. The pull request
 
-PR: (added after the pull request is opened)
+PR: https://github.com/SCAI-NGO/kumbukumbu/pull/125 (draft, `feature/collab` → `master`; not to be merged before 0.3.0 is complete)
