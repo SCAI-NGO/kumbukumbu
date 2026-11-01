@@ -131,6 +131,39 @@ public sealed class BoundMembershipWriteTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, hers.StatusCode);
     }
 
+    /// <summary>A member's own routes beside leaving: her alias, and the embedding provider she has seen.</summary>
+    private static Task<HttpResponseMessage> MemberCallAsync(RestClient caller, string route, string membershipId) => route == "alias"
+        ? caller.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias = "Mine" })
+        : caller.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/provider-seen", new { provider = "internal" });
+
+    [Theory]
+    [InlineData("alias")]
+    [InlineData("provider-seen")]
+    public async Task A_member_cannot_rename_or_acknowledge_for_someone_else(string route)
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        var bobs = await alice.ShareWithAsync(bob, "Garten");
+        await alice.ShareWithAsync(carol, "Beete");
+        // As if the vault's provider had changed since he last saw it, so that his own OK changes something.
+        await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).UpdateOneAsync(
+            m => m.Id == bobs, Builders<MembershipDocument>.Update.Set(m => m.ProviderSeen, "earlier"), cancellationToken: Ct);
+        var before = await SnapshotAsync(bobs);
+
+        // Neither another member nor the owner, with Bob's membership id.
+        foreach (var caller in new[] { carol, alice })
+        {
+            using var response = await MemberCallAsync(caller, route, bobs);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        Assert.Equal(before, await SnapshotAsync(bobs));
+        using var his = await MemberCallAsync(bob, route, bobs);
+        Assert.True(his.IsSuccessStatusCode, $"{route}: {his.StatusCode}");
+        Assert.NotEqual(before, await SnapshotAsync(bobs));
+    }
+
     [Theory]
     [InlineData("confirm", MembershipStatus.Active)]
     [InlineData("decline", MembershipStatus.Active)]
