@@ -26,8 +26,10 @@ namespace Kumbu.Server.Tests.Sharing;
 public sealed class NoNamesTests(MongoFixture fixture)
 {
     private const string Password = "correct horse battery staple";
-    private const string KeyName = "Bobs-Agent-7x";
-    private const string DeviceName = "Bobs-Laptop-9q";
+    // Every name, and the marker "Bobs." below, holds a '.': it is in neither base64 alphabet, so none of the sealed
+    // bytes and ids in a payload can spell one by chance, which matched "Bobs" alone now and then.
+    private const string KeyName = "Bobs.Agent-7x";
+    private const string DeviceName = "Bobs.Laptop-9q";
     private const string DeviceKeyName = "garten – Obsidian " + DeviceName;
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -165,7 +167,7 @@ public sealed class NoNamesTests(MongoFixture fixture)
         var writerId = Memberships.WriterIdOf(await Share.MembershipAsync(_db, w.MembershipId), w.VaultKey, credentialId ?? Memberships.SessionWriter);
         Assert.NotNull(writerId);
         var expectedKind = kind switch { "session" => WriterRef.Session, "device" => WriterRef.Device, _ => WriterRef.Agent };
-        string[] forbidden = [w.Bob.User.Username, w.Bob.User.Id, KeyName, DeviceName, "Bobs", .. credentialId is null ? Array.Empty<string>() : [credentialId]];
+        string[] forbidden = [w.Bob.User.Username, w.Bob.User.Id, KeyName, DeviceName, "Bobs.", .. credentialId is null ? Array.Empty<string>() : [credentialId]];
         // What the caller hands to the store, and what the vault in memory now holds, is that reference too: no
         // credential id that a later rendering, or a sealing that kept it, could pass on.
         Assert.Equal(WriterRef.ForMember(writerId!, expectedKind), caller.ReferenceIn("garten"));
