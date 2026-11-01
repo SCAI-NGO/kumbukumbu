@@ -12,6 +12,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Kumbu.Server.Tests.Vaults;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Api;
@@ -1304,5 +1306,88 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.False((await JsonAsync(readOff))["askPasswordForDownloads"]!.GetValue<bool>());
         Assert.Equal(HttpStatusCode.OK, on.StatusCode);
         Assert.True((await JsonAsync(readOn))["askPasswordForDownloads"]!.GetValue<bool>());
+    }
+
+    /// <summary>An admin deletes <paramref name="target"/>; the receipt.</summary>
+    private async Task<JsonNode> AdminDeletesAsync(RestClient target)
+    {
+        var admin = await SignInAsync(await NewUserAsync(Roles.Admin));
+        using var deleted = await SendAsync(HttpMethod.Post, $"/api/admin/users/{target.User.Id}/delete", new { password = Password, confirm = target.Username }, session: admin);
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        return JsonNode.Parse(await deleted.Content.ReadAsStringAsync(Ct))!;
+    }
+
+    [Fact]
+    public async Task The_receipt_counts_ended_memberships_and_names_no_vault()
+    {
+        var alice = await RestClient.NewAsync(Api, "Geheimgarten");
+        var carol = await RestClient.NewAsync(Api, "Kraeuterbeet");
+        var bob = await RestClient.NewAsync(Api, "Werkstatt");
+        await Sharing.Share.ShareWithAsync(alice, bob, "Rosenbeet");
+        // A membership Bob left already ended: not counted again.
+        var left = await Sharing.Share.ShareWithAsync(carol, bob, "Minze");
+        using (var leaving = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{left}/leave")) Assert.Equal(HttpStatusCode.NoContent, leaving.StatusCode);
+        // His own vault, shared with Carol, closes for her with him.
+        await Sharing.Share.ShareWithAsync(bob, carol, "Schuppen");
+
+        var receipt = await AdminDeletesAsync(bob);
+
+        Assert.Equal((1, 1, 1), (receipt["vaults"]!.GetValue<int>(), receipt["memberships"]!.GetValue<int>(), receipt["sharedVaultsClosed"]!.GetValue<int>()));
+        Assert.Equal("Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history.", receipt["sharedNotes"]!.GetValue<string>());
+        var body = receipt.ToJsonString();
+        foreach (var name in new[] { "Geheimgarten", "Kraeuterbeet", "Werkstatt", "Rosenbeet", "Minze", "Schuppen" }) Assert.DoesNotContain(name, body, StringComparison.Ordinal);
+        // Someone with no membership gets no such sentence.
+        Assert.Null((await AdminDeletesAsync(await RestClient.NewAsync(Api, "Allein")))["sharedNotes"]);
+    }
+
+    [Fact]
+    public async Task After_deletion_nothing_in_the_vault_names_Bob()
+    {
+        var alice = await RestClient.NewAsync(Api, "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "Beete planen\n");
+        var bob = await RestClient.NewAsync(Api, "Werkstatt");
+        await Api.Services.GetRequiredService<MongoDB.Driver.IMongoDatabase>().GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == bob.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "Bobs-Anzeigename"), cancellationToken: Ct);
+        var carol = await RestClient.NewAsync(Api, "Kraeuterbeet");
+        await Sharing.Share.ShareWithAsync(alice, bob, "garten", label: "Bobs-Etikett");
+        await Sharing.Share.ShareWithAsync(alice, carol, "beete", label: "Carol");
+        var vaultId = await Sharing.Share.VaultIdAsync(alice);
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Bobs-Agent", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct);
+        // His writes: by his session and his agent, a note trashed and one moved.
+        using (var r = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/kohl.md", new { content = "Kohl\n" })) Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        using (var r = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/klee.md", new { content = "Klee\n" }, bearer: key)) Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        Assert.False((await bob.ShAsync("mv /garten/klee.md /garten/klee-2.md", key)).IsError);
+        using (var r = await bob.SendAsync(HttpMethod.Delete, "/api/notes/garten/kohl.md")) Assert.Equal(HttpStatusCode.NoContent, r.StatusCode);
+        var vaultKey = await Sharing.Share.VaultKeyAsync(alice);
+        var keyId = (await Api.Services.GetRequiredService<MongoDB.Driver.IMongoDatabase>().GetCollection<ApiKeyDocument>("api_keys").Find(k => k.User == bob.User.Id).SingleAsync(Ct)).Id;
+
+        await AdminDeletesAsync(bob);
+
+        var db = Api.Services.GetRequiredService<MongoDB.Driver.IMongoDatabase>();
+        var texts = new List<string>();
+        // Every document of the vault as stored, in every collection.
+        foreach (var name in await (await db.ListCollectionNamesAsync(cancellationToken: Ct)).ToListAsync(Ct))
+        {
+            var docs = await db.GetCollection<MongoDB.Bson.BsonDocument>(name).Find(new MongoDB.Bson.BsonDocument("vault", vaultId)).ToListAsync(Ct);
+            texts.AddRange(docs.Select(d => d.ToJson()));
+        }
+
+        // Their payloads, opened with the vault key.
+        foreach (var collection in SealedPayloads.WithWriter) texts.AddRange((await SealedPayloads.OpenAllAsync(db, vaultId, vaultKey, collection, Ct)).Select(p => p.ToJsonString()));
+        // What the memberships left seal under it.
+        foreach (var m in await db.GetCollection<Kumbu.Server.Sharing.MembershipDocument>(Kumbu.Server.Sharing.Memberships.CollectionName).Find(m => m.Vault == vaultId).ToListAsync(Ct))
+        {
+            texts.Add(Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, vaultId, Kumbu.Server.Sharing.Memberships.LabelPurpose, m.Label, $"membership-label:{vaultId}:{m.Id}")));
+            texts.Add(Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, vaultId, Kumbu.Server.Sharing.Memberships.WritersPurpose, m.Writers, $"membership-writers:{vaultId}:{m.Id}")));
+            texts.Add(Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, vaultId, Kumbu.Server.Sharing.Memberships.WriterIdsPurpose, m.WriterIds, $"membership-writer-ids:{vaultId}:{m.Id}")));
+        }
+
+        Assert.Contains(texts, t => t.Contains("Carol", StringComparison.Ordinal));
+        Assert.Contains(texts, t => t.Contains("klee-2.md", StringComparison.Ordinal));
+        foreach (var marker in new[] { bob.User.Id, bob.Username, "Bobs-Anzeigename", "Bobs-Etikett", "Bobs-Agent", keyId })
+        {
+            Assert.DoesNotContain(texts, t => t.Contains(marker, StringComparison.Ordinal));
+        }
     }
 }

@@ -8,8 +8,11 @@ namespace Kumbu.Server.Accounts;
 /// <summary>What a deletion removed, for the log and the caller: counts only, never a name. <c>Notes</c> counts the
 /// documents in the <c>notes</c> collection of the deleted vaults (by vault id, so no key is needed), <c>Attachments</c>
 /// those in <c>attachments</c> (one per file, its versions and trash not counted); <c>Invitations</c> the invitations
-/// the user joined with whose note and link to them were erased.</summary>
-public sealed record DeletionSummary(int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0, int Invitations = 0, long Attachments = 0);
+/// the user joined with whose note and link to them were erased. <c>Memberships</c>: the user's memberships of other
+/// people's vaults that were live (active, or pending) and ended with the account; <c>SharedVaults</c>: the user's own
+/// vaults among <c>Vaults</c> that were shared with anyone, closed for their members with them (collab design §7.2).</summary>
+public sealed record DeletionSummary(
+    int Vaults, int ApiKeys, long Documents, int Connections, long Notes = 0, int Invitations = 0, long Attachments = 0, int Memberships = 0, int SharedVaults = 0);
 
 /// <summary>A user an admin deleted, for the receipt: ids, the usernames, the time and the counts; no content and no
 /// vault or note name. <c>Listed</c>: the id was added to the <see cref="DeletionList"/>.</summary>
@@ -160,6 +163,7 @@ public sealed class Deletion(
     private async Task<DeletionSummary?> DeleteAccountAsync(string userId, FilterDefinition<UserDocument> stillDeletable, CancellationToken ct)
     {
         var vaults = await OwnedVaultsAsync(userId, ct);
+        var shared = await SharedCountAsync(vaults, ct);
         var notes = await CountAsync(Notes, vaults, ct);
         var attachments = await CountAsync(Attachments, vaults, ct);
         var keyCount = 0;
@@ -208,12 +212,24 @@ public sealed class Deletion(
         var late = await OwnedVaultsAsync(userId, ct);
         if (late.Count > 0)
         {
+            shared += await SharedCountAsync(late, ct);
             notes += await CountAsync(Notes, late, ct);
             attachments += await CountAsync(Attachments, late, ct);
             documents += await catalog.DeleteVaultsAsync(late, (_, _) => Task.CompletedTask, ct);
         }
 
-        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount, notes, invitationCount, attachments);
+        return new DeletionSummary(vaults.Count + late.Count, keyCount, documents, connectionCount, notes, invitationCount, attachments, membershipCount, shared);
+    }
+
+    /// <summary>How many of these vaults are shared with anyone now (a membership or an invitation neither revoked nor
+    /// left), read by vault id before they go.</summary>
+    private async Task<int> SharedCountAsync(IReadOnlyList<string> vaults, CancellationToken ct)
+    {
+        if (vaults.Count == 0) return 0;
+        var f = Builders<Sharing.MembershipDocument>.Filter;
+        var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
+        return (await docs.Distinct(m => m.Vault, f.In(m => m.Vault, vaults) & f.In(m => m.Status, [Sharing.MembershipStatus.Pending, Sharing.MembershipStatus.Active]), cancellationToken: ct)
+            .ToListAsync(ct)).Count;
     }
 
     /// <summary>The notes or attachments in these vaults, counted by vault id: the receipt's counts, read without any key.</summary>

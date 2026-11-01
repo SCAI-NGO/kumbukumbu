@@ -7175,6 +7175,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/memberships/{id}/provider-seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ProviderSeenRequest"];
+                };
+            };
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/invitations": {
         parameters: {
             query?: never;
@@ -7610,6 +7685,17 @@ export interface components {
             externalProviders: string[];
             privacyContact: null | string;
             listed: boolean;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            memberships: number | string;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            sharedVaultsClosed: number | string;
+            sharedNotes?: null | string;
         };
         DeletionsView: {
             configured: boolean;
@@ -7810,6 +7896,9 @@ export interface components {
         ProblemView: {
             path: string;
             what: string;
+        };
+        ProviderSeenRequest: {
+            provider: string;
         };
         PutNoteRequest: {
             content: string;
@@ -8059,6 +8148,13 @@ export interface components {
             owner?: null | string;
             /** @default false */
             shared: boolean;
+            /** Format: int32 */
+            members?: null | number | string;
+            membership?: null | string;
+            /** @default false */
+            providerChanged: boolean;
+            /** @default false */
+            ownerInactive: boolean;
         };
         VersionEntry: {
             path: string;

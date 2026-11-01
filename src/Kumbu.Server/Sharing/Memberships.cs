@@ -327,19 +327,21 @@ public sealed partial class Memberships(
     /// Inside the transaction of <paramref name="userId"/>'s account deletion (collab design §7.2): every membership
     /// with that user as member goes, tombstones included, with its member slot and the slots derived through it
     /// (<c>grantedVia</c>). Nothing that names the member stays with the vault; their writes resolve to "a former member".
-    /// Only <c>member == userId</c>: the vaults the user owns, and their memberships, go with those vaults. The number deleted.
+    /// Only <c>member == userId</c>: the vaults the user owns, and their memberships, go with those vaults. The number of
+    /// those that were live (active or pending), which the deletion ends; tombstones had ended before.
     /// </summary>
     internal static async Task<int> DeleteOfMemberAsync(IMongoDatabase db, IClientSessionHandle s, string userId, CancellationToken ct)
     {
         var docs = db.GetCollection<MembershipDocument>(CollectionName);
-        var ids = await docs.Find(s, m => m.Member == userId).Project(m => m.Id).ToListAsync(ct);
-        if (ids.Count == 0) return 0;
+        var found = await docs.Find(s, m => m.Member == userId).Project(m => new { m.Id, m.Status }).ToListAsync(ct);
+        if (found.Count == 0) return 0;
+        var ids = found.Select(m => m.Id).ToList();
         await VaultEvents.DeleteAsync(db, s, null, ids, ct);
         var f = Builders<SlotDocument>.Filter;
         await db.GetCollection<SlotDocument>("slots").DeleteManyAsync(
             s, (f.Eq(sl => sl.Kind, SlotDocument.Member) & f.In(sl => sl.Membership, ids)) | f.In(sl => sl.GrantedVia, ids), cancellationToken: ct);
         await docs.DeleteManyAsync(s, Builders<MembershipDocument>.Filter.In(m => m.Id, ids), cancellationToken: ct);
-        return ids.Count;
+        return found.Count(m => m.Status is MembershipStatus.Active or MembershipStatus.Pending);
     }
 
     /// <summary>

@@ -105,11 +105,15 @@ public sealed record RepeatDeletionsRequest(string Password);
 /// users kept outside the database. <c>attachments</c>: files (PDFs, images) in the deleted vaults, as <c>notes</c>
 /// counts notes. <c>invitations</c>: invitations the user joined with whose note and link to the
 /// user were erased (the invitation itself stays as a used one). <c>apiKeys</c> and <c>connections</c> count every
-/// record removed, revoked ones included.
+/// record removed, revoked ones included. <c>memberships</c>: the user's memberships of vaults shared with them that
+/// ended; <c>sharedVaultsClosed</c>: their own vaults that were shared with others and went for those members too
+/// (collab design §7.2), counted, never named. <c>sharedNotes</c>: with memberships ended, what became of the user's
+/// writes there, for the person: "Notes you wrote in vaults shared with you stay in those vaults; your name was removed
+/// from their history."; else null.
 /// </summary>
 public sealed record DeletionReceiptView(
     string UserId, string Username, string DeletedBy, DateTime DeletedAt, int Vaults, long Notes, long Attachments, int ApiKeys, int Connections, int Invitations,
-    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed);
+    IReadOnlyList<string> ExternalProviders, string? PrivacyContact, bool Listed, int Memberships = 0, int SharedVaultsClosed = 0, string? SharedNotes = null);
 
 /// <summary><c>createdBy</c> and <c>usedBy</c> are user ids (<c>bootstrap-admin</c> for the primary admin's link);
 /// <c>state</c> is <c>open</c>, <c>used</c>, <c>expired</c> or <c>revoked</c>.</summary>
@@ -425,7 +429,11 @@ public static class AccountApi
     internal static DeletionReceiptView ReceiptView(DeletedUser deleted, SearchIndex index, KumbuOptions options) => new(
         deleted.Id, deleted.Username, deleted.DeletedBy, deleted.DeletedAt, deleted.Summary.Vaults, deleted.Summary.Notes, deleted.Summary.Attachments, deleted.Summary.ApiKeys,
         deleted.Summary.Connections, deleted.Summary.Invitations, index.Providers.All.Where(p => p.External).Select(p => p.Label).ToArray(),
-        string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed);
+        string.IsNullOrWhiteSpace(options.Privacy.Contact) ? null : options.Privacy.Contact.Trim(), deleted.Listed,
+        deleted.Summary.Memberships, deleted.Summary.SharedVaults, deleted.Summary.Memberships > 0 ? SharedNotesSentence : null);
+
+    /// <summary>The concept's sentence (§9) on a member's writes after her account's deletion.</summary>
+    internal const string SharedNotesSentence = "Notes you wrote in vaults shared with you stay in those vaults; your name was removed from their history.";
 
     private static async Task<Ok<AdminInvitationView[]>> ListInvitationsAsync(RequestCaller caller, Invitations invitations, CancellationToken ct) =>
         TypedResults.Ok((await invitations.ListAsync(caller.User!, ct)).Select(InvitationView).ToArray());
