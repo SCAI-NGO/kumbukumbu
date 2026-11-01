@@ -162,7 +162,7 @@ public sealed class AliasTests(KumbuAppFactory app)
 
         using var response = await bob.SendAsync(HttpMethod.Post, "/api/ws-ticket", bearer: key);
         var ticket = (await RestClient.JsonAsync(response))["ticket"]!.GetValue<string>();
-        Assert.Equal([(vaultId, "garten")], Api.Services.GetRequiredService<SyncTickets>().Take(ticket)!.Vaults);
+        Assert.Equal([(vaultId, "garten")], Api.Services.GetRequiredService<SyncTickets>().Take(ticket)!.Vaults.Select(v => (v.VaultId, v.VaultName)));
 
         using var keys = await bob.GetAsync("/api/keys");
         var listed = (await RestClient.JsonAsync(keys)).AsArray().Single()!["vaults"]!.AsObject();

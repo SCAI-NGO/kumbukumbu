@@ -387,7 +387,7 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             .Select(e => e.RoutePattern.RawText)
             .Order(StringComparer.Ordinal);
 
-        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}"], endpoints);
+        Assert.Equal(["/api/vaults/{vault}/board/", "/api/version/{vault}/{**path}", "/api/ws-ticket"], endpoints);
     }
 
     [Fact]

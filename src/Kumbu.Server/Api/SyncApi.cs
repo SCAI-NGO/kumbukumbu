@@ -51,22 +51,29 @@ public static class SyncApi
     {
         var api = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter);
         api.MapGet("/vaults/{vault}/versions", VersionsAsync).Produces(StatusCodes.Status304NotModified).Errors(400, 401, 404, 503);
-        api.MapPost("/ws-ticket", TicketAsync).Errors(401, 403, 503);
+        // Not a use of the session: a tab that reconnects its socket mustn't keep a session alive (collab design §13 L7).
+        api.MapPost("/ws-ticket", TicketAsync).WithMetadata(BackgroundMetadata.Instance).Errors(401, 403, 503);
         api.MapDelete("/key", RevokeSelfAsync).Errors(401, 403);
         // The ticket is the credential: no cookie or header is involved, so neither the caller nor the Origin check applies.
         app.MapGet("/api/ws", SocketAsync).AllowAnonymous().Produces(StatusCodes.Status101SwitchingProtocols).Errors(400, 401);
     }
 
-    /// <summary>API keys only: a session has the web app, which polls; the dev token and connections don't sync.</summary>
-    private static async Task<Ok<WsTicketView>> TicketAsync(RequestCaller caller, SyncTickets tickets, CancellationToken ct)
+    /// <summary>
+    /// API keys and web sessions (collab design §9.1); the dev token and connections don't sync. The ticket holds the
+    /// caller's vaults as it opens them now, each under its name for it and at its level.
+    /// </summary>
+    private static async Task<Ok<WsTicketView>> TicketAsync(HttpContext http, RequestCaller caller, SyncTickets tickets, CancellationToken ct)
     {
-        if (caller.Kind != CallerKind.ApiKey || caller.Credential is not ApiKeyCredential key)
+        var subject = caller switch
         {
-            throw new ApiException(StatusCodes.Status403Forbidden, "Only an API key gets a WebSocket ticket.");
-        }
+            { Kind: CallerKind.ApiKey, Credential: ApiKeyCredential key } => new Subject(SubjectKind.Key, key.KeyId, caller.User!.Id),
+            { Kind: CallerKind.Session } when http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var secret) && Sessions.SubjectOf(secret) is { } id =>
+                new Subject(SubjectKind.Session, id, caller.User!.Id),
+            _ => throw new ApiException(StatusCodes.Status403Forbidden, "Only an API key or a web session gets a WebSocket ticket."),
+        };
 
         var vaults = await caller.OpenVaultsAsync(ct);
-        var (ticket, expiresAt) = tickets.Issue(key.KeyId, [.. vaults.Select(v => (v.Id, v.Name))]);
+        var (ticket, expiresAt) = tickets.Issue(new TicketGrant(subject, [.. vaults.Select(a => new TicketVault(a.Id, a.Name, a.Membership?.Id, a.Level))]));
         return TypedResults.Ok(new WsTicketView(ticket, expiresAt));
     }
 
@@ -87,11 +94,11 @@ public static class SyncApi
     }
 
     /// <summary>The upgrade; 401 for an unknown, used or expired ticket. Hints go out until the socket closes.</summary>
-    private static async Task<IResult> SocketAsync(HttpContext http, string? ticket, SyncTickets tickets, SyncHub hub, ApiKeys keys)
+    private static async Task<IResult> SocketAsync(HttpContext http, string? ticket, SyncTickets tickets, SyncHub hub)
     {
         if (!http.WebSockets.IsWebSocketRequest) return ApiErrors.Result(StatusCodes.Status400BadRequest, "This is a WebSocket; connect with an upgrade and a ticket from POST /api/ws-ticket.");
-        // The key is asked again: revoked or expired in the seconds since the ticket was made, it gets no socket.
-        if (ticket is null || tickets.Take(ticket) is not { } grant || !await keys.IsActiveAsync(grant.KeyId, http.RequestAborted))
+        // The subject is asked again: a key revoked or a session ended in the seconds since the ticket was made gets no socket.
+        if (ticket is null || tickets.Take(ticket) is not { } grant || !await hub.IsAliveAsync(grant.Subject, http.RequestAborted))
         {
             return ApiErrors.Result(StatusCodes.Status401Unauthorized, "This ticket is not valid (any more); ask for a new one.");
         }

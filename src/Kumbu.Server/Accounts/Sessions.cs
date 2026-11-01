@@ -105,30 +105,7 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
     public async Task<(User User, byte[] UserKey, DateTime CredentialReadAt, bool WindowOpen)?> ResolveAsync(string secret, CancellationToken ct, bool touch = true)
     {
         if (Decode(secret) is not { } bytes) return null;
-        await EnsureReadyAsync(ct);
-        var lookup = Lookup(bytes);
-        var slot = await Slots.Find(s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup).FirstOrDefaultAsync(ct);
-        if (slot is null) return null;
-
-        // The TTL index removes expired slots only eventually (MongoDB's sweep runs once a minute), and idle
-        // ones not at all before their absolute limit, so the times are checked here.
-        var now = Now;
-        if (slot.ExpiresAt is not { } expiresAt || slot.LastUsedAt is not { } lastUsedAt || now >= expiresAt || now - lastUsedAt > IdleLimit(slot))
-        {
-            await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
-            return null;
-        }
-
-        var user = await Users.Find(u => u.Id == slot.User).FirstOrDefaultAsync(ct);
-        // A password change or recovery deletes the sessions after it sets the new password; this catches the
-        // ones a crash in between would have left behind, and those of a sign-in that read the old password.
-        // At most equal, not only earlier: MongoDB keeps milliseconds, so a read just before the change can
-        // carry the change's very time; a sign-in in the same millisecond merely has to sign in again.
-        if (user is null || !user.Active || slot.CreatedAt <= user.CredentialsChangedAt)
-        {
-            await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
-            return null;
-        }
+        if (await LiveAsync(Lookup(bytes), ct) is not var (slot, user, now, lastUsedAt)) return null;
 
         byte[] userKey;
         try
@@ -164,6 +141,66 @@ public sealed class Sessions(IMongoDatabase db, TimeProvider time)
         }
 
         return (user.ToUser(), userKey, slot.CreatedAt, windowOpen);
+    }
+
+    /// <summary>
+    /// The sync socket's name for the session of <paramref name="secret"/> (collab design §9.1): its lookup value, which
+    /// the database holds anyway, in hex; it finds the session's slot, but opens nothing. Null for a malformed secret.
+    /// </summary>
+    public static string? SubjectOf(string secret) => Decode(secret) is { } bytes ? Convert.ToHexStringLower(Lookup(bytes)) : null;
+
+    /// <summary>
+    /// The user of the session <paramref name="subject"/> (<see cref="SubjectOf"/>) if it is alive by the same rules as
+    /// <see cref="ResolveAsync"/>, else null. Never touches it: an open sync socket is no use of the session, so a tab
+    /// left open doesn't keep it alive, and its socket closes once the session's idle time is up.
+    /// </summary>
+    public async Task<string?> AliveAsync(string subject, CancellationToken ct)
+    {
+        byte[] lookup;
+        try
+        {
+            lookup = Convert.FromHexString(subject);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+
+        return await LiveAsync(lookup, ct) is var (_, user, _, _) ? user.Id : null;
+    }
+
+    /// <summary>
+    /// The session slot of <paramref name="lookup"/> and its user, if the session is alive: not ended, idle too long,
+    /// past its absolute limit or older than the user's last password change or recovery, and the user active. A slot
+    /// found dead is deleted. Touches nothing.
+    /// </summary>
+    private async Task<(UserSlotDocument Slot, UserDocument User, DateTime Now, DateTime LastUsedAt)?> LiveAsync(byte[] lookup, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var slot = await Slots.Find(s => s.Kind == UserSlotDocument.Session && s.Lookup == lookup).FirstOrDefaultAsync(ct);
+        if (slot is null) return null;
+
+        // The TTL index removes expired slots only eventually (MongoDB's sweep runs once a minute), and idle
+        // ones not at all before their absolute limit, so the times are checked here.
+        var now = Now;
+        if (slot.ExpiresAt is not { } expiresAt || slot.LastUsedAt is not { } lastUsedAt || now >= expiresAt || now - lastUsedAt > IdleLimit(slot))
+        {
+            await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
+            return null;
+        }
+
+        var user = await Users.Find(u => u.Id == slot.User).FirstOrDefaultAsync(ct);
+        // A password change or recovery deletes the sessions after it sets the new password; this catches the
+        // ones a crash in between would have left behind, and those of a sign-in that read the old password.
+        // At most equal, not only earlier: MongoDB keeps milliseconds, so a read just before the change can
+        // carry the change's very time; a sign-in in the same millisecond merely has to sign in again.
+        if (user is null || !user.Active || slot.CreatedAt <= user.CredentialsChangedAt)
+        {
+            await Slots.DeleteOneAsync(s => s.Id == slot.Id, ct);
+            return null;
+        }
+
+        return (slot, user, now, lastUsedAt);
     }
 
     /// <summary>
