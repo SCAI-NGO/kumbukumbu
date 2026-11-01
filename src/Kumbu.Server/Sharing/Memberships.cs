@@ -788,14 +788,14 @@ public sealed partial class Memberships(
     /// for good, with everything in it, its memberships and the slots its members reached it by. Idempotent: a vault
     /// gone already is found no more, and a restored one whose time had passed goes on the next round. Returns how many.
     /// </summary>
-    internal async Task<int> DeleteClosedVaultsAsync(CancellationToken ct)
+    internal async Task<IReadOnlyList<string>> DeleteClosedVaultsAsync(CancellationToken ct)
     {
         var due = await catalog.Vaults.Find(v => v.ClosingAt != null && v.ClosingAt <= Now).Project(v => v.Id).ToListAsync(ct);
-        if (due.Count == 0) return 0;
+        if (due.Count == 0) return [];
         var documents = await catalog.DeleteVaultsAsync(due, (_, _) => Task.CompletedTask, ct);
         foreach (var id in due) log.LogInformation("Vault {VaultId} reached the end of its closing period and was deleted", id);
         log.LogInformation("{Count} closed vaults deleted ({Documents} documents)", due.Count, documents);
-        return due.Count;
+        return due;
     }
 
     /// <summary>The database's name: hosts on one database count its memberships once (<see cref="Metrics.KumbuMetrics"/>).</summary>

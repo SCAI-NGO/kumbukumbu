@@ -218,17 +218,20 @@ public static class SharingApi
     /// <summary>The member renames a vault shared with her (collab design §2.3, §10.1): her name for it, in her own
     /// namespace, so it widens nothing and needs no password window. Bound to her as the member; a name she has for an
     /// own vault or another alias answers 409 and the old alias stays.</summary>
-    private static async Task<NoContent> RenameAliasAsync(string id, RenameAliasRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
+    private static async Task<NoContent> RenameAliasAsync(string id, RenameAliasRequest body, RequestCaller caller, VaultCatalog catalog, SyncHub hub, CancellationToken ct)
     {
         var alias = VaultNames.Check(body.Alias);
         try
         {
-            await catalog.RenameAliasAsync(caller.User!.Id, caller.UserKey!, id, alias, ct);
+            alias = await catalog.RenameAliasAsync(caller.User!.Id, caller.UserKey!, id, alias, ct);
         }
         catch (ArgumentException)
         {
             throw new MembershipNotFoundException();
         }
+
+        // Her sockets' hints and presence name the vault as she does now.
+        hub.AliasRenamed(caller.User.Id, id, alias);
 
         return TypedResults.NoContent();
     }

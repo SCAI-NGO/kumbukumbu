@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -38,14 +39,17 @@ public sealed class DeletionTests(MongoFixture fixture)
 
     private Sessions Sessions() => new(_db, _time);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), Hub(), _time, NullLogger<Admin>.Instance);
+
+    /// <summary>A hub without sockets, for what is told it.</summary>
+    private SyncHub Hub() => new(Catalog(), Keys(), Sessions(), NullLogger<SyncHub>.Instance);
 
     private string? _listPath;
 
     private DeletionList List() =>
         new(Options.Create(new KumbuOptions { Deletions = new DeletionsOptions { Path = _listPath } }), LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<DeletionList>());
 
-    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
+    private Deletion Deletion() => new(_db, Catalog(), Users(), List(), Restored(), Hub(), _time, LoggerFactory.Create(b => b.AddProvider(_log)).CreateLogger<Deletion>());
 
     private RestoredDeletions Restored() => new(_db, List());
 

@@ -2,6 +2,7 @@
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Vaults;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -39,12 +40,15 @@ public sealed class OwnershipTests(MongoFixture fixture)
     private UserCatalog Users() =>
         new(Db, new Argon2Kdf(new Argon2Parameters(MemoryKiB: 1024, Iterations: 1, Parallelism: 1)), Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance);
 
-    private Admin Admin() => new(Db, Catalog(), new Sessions(Db, _time), Keys(), Connections(), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(Db, Catalog(), new Sessions(Db, _time), Keys(), Connections(), Hub(), _time, NullLogger<Admin>.Instance);
+
+    /// <summary>A hub without sockets, for what is told it.</summary>
+    private SyncHub Hub() => new(Catalog(), Keys(), new Sessions(Db, _time), NullLogger<SyncHub>.Instance);
 
     private Deletion Deletion()
     {
         var list = new DeletionList(Options.Create(new KumbuOptions()), NullLogger<DeletionList>.Instance);
-        return new(Db, Catalog(), Users(), list, new RestoredDeletions(Db, list), _time, NullLogger<Deletion>.Instance);
+        return new(Db, Catalog(), Users(), list, new RestoredDeletions(Db, list), Hub(), _time, NullLogger<Deletion>.Instance);
     }
 
     private async Task<(User User, byte[] Key)> SignedInAsync(string username, string role = Roles.User)

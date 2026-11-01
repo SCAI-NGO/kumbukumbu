@@ -35,7 +35,8 @@ public sealed class MembershipSweeper(Memberships memberships, Sync.SyncHub hub,
     public async Task SweepAsync(CancellationToken ct)
     {
         await memberships.SweepInvitationsAsync(ct);
-        await memberships.DeleteClosedVaultsAsync(ct);
+        // The members' sockets drop the vaults at once, not at the hub's next check.
+        await hub.VaultsChangedAsync(await memberships.DeleteClosedVaultsAsync(ct), ct);
         var f = Builders<MembershipDocument>.Filter;
         var unfinished = await memberships.Docs
             .Find(f.In(m => m.Status, [MembershipStatus.Revoked, MembershipStatus.Left]) & f.Eq(m => m.CleanedAt, null))

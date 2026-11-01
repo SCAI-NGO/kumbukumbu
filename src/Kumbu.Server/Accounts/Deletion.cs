@@ -59,7 +59,8 @@ public sealed record DeletedUser(string Id, string Username, string Display, str
 /// </para>
 /// </summary>
 public sealed class Deletion(
-    IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, RestoredDeletions restored, TimeProvider time, ILogger<Deletion> log)
+    IMongoDatabase db, VaultCatalog catalog, UserCatalog users, DeletionList list, RestoredDeletions restored, Sync.SyncHub hub, TimeProvider time,
+    ILogger<Deletion> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -90,6 +91,7 @@ public sealed class Deletion(
         await RequireNoSharedRunAsync(null, [vaultId], ct);
         var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct, first: (s, token) => RequireNoSharedRunAsync(s, [vaultId], token));
         log.LogInformation("User {Username} deleted vault {VaultId} ({Documents} documents)", user.Username, vaultId, documents);
+        await TellHubAsync(null, [vaultId]);
         return new DeletionSummary(1, 0, documents, 0);
     }
 
@@ -312,6 +314,8 @@ public sealed class Deletion(
         if (FaultAt is { } fault) await fault("after-commit");
         // Nothing more of a closing vault is indexed in this process; others learn it from the members' next request.
         foreach (var vaultId in closing.Keys) catalog.OwnerActive(vaultId, false);
+        // Her sockets close, and the members' drop a vault gone or hold a closing one read-only, before the answer.
+        await TellHubAsync(userId, owned);
         if (revokedCount > 0) log.LogInformation("{Count} open invitations of deleted user {UserId} revoked", revokedCount, userId);
         if (membershipCount > 0) log.LogInformation("{Count} memberships of deleted user {UserId} ended", membershipCount, userId);
         foreach (var (vaultId, at) in closing) log.LogInformation("Vault {VaultId} of deleted user {UserId} is closing until {ClosingAt:O}", vaultId, userId, at);
@@ -433,6 +437,24 @@ public sealed class Deletion(
         await catalog.Slots.Distinct(
             s => s.Vault, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User) & Builders<SlotDocument>.Filter.Eq(s => s.Owner, userId), cancellationToken: ct)
             .ToListAsync(ct);
+
+    /// <summary>
+    /// After a deletion committed (collab design §9.1): the hub checks at once the sockets of the user (if
+    /// <paramref name="userId"/>) and those with one of <paramref name="vaultIds"/>. Whatever happens to the request
+    /// meanwhile; a failure is only logged, and the 30-second check catches up.
+    /// </summary>
+    private async Task TellHubAsync(string? userId, IReadOnlyCollection<string> vaultIds)
+    {
+        try
+        {
+            if (userId is not null) await hub.UserChangedAsync(userId, CancellationToken.None);
+            await hub.VaultsChangedAsync(vaultIds, CancellationToken.None);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogWarning(e, "Telling the sync hub of a deletion failed; its sockets learn it at the next check");
+        }
+    }
 
     private sealed class UserChangedException() : Exception("The user changed during the deletion.");
 

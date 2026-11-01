@@ -21,8 +21,9 @@ namespace Kumbu.Server.Sync;
 /// <see cref="CheckInterval"/> each connection is checked: a key revoked, expired or its owner deactivated, or a
 /// session ended, idle too long (it is never touched here, so an open tab keeps no session alive) or its user
 /// deactivated, closes with 4401; and the subject's vaults are worked out again from its slots and the memberships
-/// active now, so a vault it lost is dropped and a role changed is its level. A membership's revocation, leaving or
-/// role change tells the hub at once (<see cref="MembershipChangedAsync"/>). A connection holds no vault open: a hint needs only the vault's id. A subject holds
+/// active now, so a vault it lost is dropped and a role changed is its level. The requests that change access tell the
+/// hub at once (<see cref="MembershipChangedAsync"/>, <see cref="UserChangedAsync"/>, <see cref="VaultsChangedAsync"/>);
+/// the check is only the backstop. A connection holds no vault open: a hint needs only the vault's id. A subject holds
 /// at most <see cref="MaxPerKey"/> connections (each costs MongoDB lookups per check): a new one beyond that closes the
 /// subject's oldest with <see cref="Replaced"/>, so a socket the client gave up on, not yet noticed, never locks out
 /// its reconnect.
@@ -52,6 +53,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     private long _opened;
     private readonly CancellationTokenSource _stopping = new();
     private Task? _checks;
+
+    /// <summary>For tests: awaited first by every notification of an access change, so a test can hold one up.</summary>
+    internal Func<Task>? BeforeAccessChange { get; set; }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -129,11 +133,40 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// </summary>
     public async Task MembershipChangedAsync(string vaultId, string memberId, string membershipId, CancellationToken ct)
     {
+        if (BeforeAccessChange is { } before) await before();
         var checkedCount = await RefreshAsync(c => c.Grant.Subject.User == memberId && c.Has(vaultId), ct);
         if (checkedCount > 0) log.LogInformation("Checked {Count} sync connections of user {UserId}: membership {MembershipId} changed", checkedCount, memberId, membershipId);
     }
 
-    /// <summary>For tests: how many connections are held.</summary>    /// <summary>For tests: how many connections are held.</summary>
+    /// <summary>
+    /// Told after a user was deactivated, reactivated or deleted (collab design §7.2–§7.4, §9.1), before the request
+    /// answers: her own connections are checked (and close, her keys revoked and sessions ended), and so is every
+    /// connection with a vault she shares, whose members are read-only while she is inactive.
+    /// </summary>
+    public async Task UserChangedAsync(string userId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        var shared = await catalog.SharedVaultIdsAsync(userId, ct);
+        await RefreshAsync(c => c.Grant.Subject.User == userId || shared.Any(c.Has), ct);
+    }
+
+    /// <summary>Told when vaults closed or went for everyone (an owner's deletion, the end of a closing period): every
+    /// connection with one of them is checked at once.</summary>
+    public async Task VaultsChangedAsync(IReadOnlyCollection<string> vaultIds, CancellationToken ct)
+    {
+        if (vaultIds.Count == 0) return;
+        if (BeforeAccessChange is { } before) await before();
+        await RefreshAsync(c => vaultIds.Any(c.Has), ct);
+    }
+
+    /// <summary>A member renamed her vault (collab design §2.3): her connections that hold it through
+    /// <paramref name="membershipId"/> name it so in their hints from now on.</summary>
+    public void AliasRenamed(string memberId, string membershipId, string alias)
+    {
+        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == memberId)) connection.Rename(membershipId, alias);
+    }
+
+    /// <summary>For tests: how many connections are held.</summary>
     internal int Count => _connections.Count;
 
     /// <summary>For tests: every connection's vaults, as each holds them now.</summary>
@@ -297,6 +330,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         public bool Has(string vaultId) => _vaults.ContainsKey(vaultId);
 
         public void SetVaults(IReadOnlyDictionary<string, VaultState> vaults) => _vaults = vaults;
+
+        public void Rename(string membershipId, string alias) =>
+            _vaults = _vaults.ToDictionary(v => v.Key, v => v.Value.Membership == membershipId ? v.Value with { Name = alias } : v.Value, StringComparer.Ordinal);
 
         public bool IsEmpty => _vaults.Count == 0;
 

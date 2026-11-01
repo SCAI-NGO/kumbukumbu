@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -32,7 +33,7 @@ public sealed class AdminTests(MongoFixture fixture)
 
     private ApiKeys Keys() => new(_db, Catalog(), _time, NullLogger<ApiKeys>.Instance);
 
-    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), _time, NullLogger<Admin>.Instance);
+    private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), new SyncHub(Catalog(), Keys(), Sessions(), NullLogger<SyncHub>.Instance), _time, NullLogger<Admin>.Instance);
 
     private async Task<User> UserAsync(string username, string role)
     {

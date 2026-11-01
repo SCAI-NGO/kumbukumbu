@@ -16,7 +16,8 @@ public sealed record UserSummary(
 /// primary admin, and nobody is made primary admin. Admins never see content: the figures here come from what
 /// MongoDB holds in the clear (slot owners, document sizes), and no vault is opened.
 /// </summary>
-public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, TimeProvider time, ILogger<Admin> log)
+public sealed class Admin(
+    IMongoDatabase db, VaultCatalog catalog, Sessions sessions, ApiKeys keys, Connections connections, Sync.SyncHub hub, TimeProvider time, ILogger<Admin> log)
 {
     private IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
 
@@ -102,6 +103,17 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
         // her flag themselves, from the next one on, in every process. Reactivated, every vault of hers is cleared, not
         // only those shared now: one whose members all left meanwhile would otherwise stay unindexed here.
         foreach (var vaultId in active ? await catalog.OwnedVaultIdsAsync(userId, ct) : await SharedVaultsAsync(null, userId, ct)) catalog.OwnerActive(vaultId, active);
+        // Before the answer (collab design §9.1): her sockets close, and her members' hold her vaults read-only (or
+        // again at their roles), for hints and presence alike. Past the commit: an aborted request must not skip it.
+        try
+        {
+            await hub.UserChangedAsync(userId, CancellationToken.None);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            log.LogWarning(e, "Telling the sync hub that user {UserId} changed failed; the sockets learn it at the next check", userId);
+        }
+
         if (active) log.LogInformation("{Admin} reactivated user {Username}", acting.Username, target.Username);
         else
         {

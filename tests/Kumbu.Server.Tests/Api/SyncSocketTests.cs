@@ -495,8 +495,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
 
         using var deleted = await user.SendAsync(HttpMethod.Post, "/api/vaults/Privat/delete", new { password = Password, confirm = "Privat" });
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
-        Assert.Equal(Changed("Privat"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
-        await Api.Services.GetRequiredService<SyncHub>().CheckAsync(Ct);
+        // Dropped with the answer, not at the next check: not even the deletion's own change is hinted.
         catalog.RaiseNotesChanged(privat.Id);
 
         Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
@@ -524,5 +523,92 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Contains("401", error.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Revoking_drops_the_vault_from_Bobs_tab_before_the_answer()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Hub.BeforeAccessChange = () => gate.Task;
+        try
+        {
+            var revoking = alice.SendAsync(HttpMethod.Post, $"/api/vaults/Gartenarbeit/memberships/{membership}/revoke");
 
+            // The answer waits for the hub.
+            Assert.NotSame(revoking, await Task.WhenAny(revoking, Task.Delay(500, Ct)));
+            Assert.Contains(("garten", AccessLevel.Write), SessionVaults(bob));
+            gate.SetResult();
+            using var revoked = await revoking;
+            Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        }
+        finally
+        {
+            Hub.BeforeAccessChange = null;
+        }
+
+        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
+    }
+
+    [Fact]
+    public async Task Lowering_to_read_stops_Bobs_presence_frames_at_once()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+
+        using (var lowered = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role = "read" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        }
+
+        // Read with the answer: too low to announce editing (the presence frames of collab design §9.2).
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task Deactivating_the_owner_re_levels_members_to_read()
+    {
+        var (alice, bob, _, _) = await SharedAsync();
+        var carol = await NewAsync(Api, vault: "Notizen");
+        await alice.ShareWithAsync(carol, "beete");
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        using var carols = await SyncSockets.OpenAsync(Api, carol);
+        var admin = await NewAsync(Api, vault: "Admin", role: Roles.Admin);
+
+        using (var deactivated = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{alice.User.Id}", new { active = false }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deactivated.StatusCode);
+        }
+
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+        Assert.Contains(("beete", AccessLevel.Read), SessionVaults(carol));
+        // Her own sockets went with her sessions; reactivated, the members are at their roles again.
+        Assert.DoesNotContain(Hub.Held, h => h.Subject.User == alice.User.Id);
+        using (var reactivated = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{alice.User.Id}", new { active = true }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, reactivated.StatusCode);
+        }
+
+        Assert.Contains(("garten", AccessLevel.Write), SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task A_renamed_alias_names_the_hints_at_once()
+    {
+        var (alice, bob, vaultId, membership) = await SharedAsync();
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "garten – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        using var tab = await SyncSockets.OpenAsync(Api, bob);
+        using var device = await SyncSockets.OpenAsync(Api, bob, key);
+
+        using (var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = "Beet" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Equal(Changed("Beet"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Beet"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
+    }
 }

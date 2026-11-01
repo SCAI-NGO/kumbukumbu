@@ -156,9 +156,9 @@ public sealed partial class VaultCatalog
     /// she has for an own vault or another alias (<see cref="VaultNameTakenException"/>), and the old alias stays.
     /// Her keys and connections read the alias through the alias key, which doesn't change: from the next request on
     /// they see the new name too, and none of them keeps the old one, which is free for an own vault now.
-    /// <see cref="ArgumentException"/> if no such membership is hers.
+    /// <see cref="ArgumentException"/> if no such membership is hers. Returns the alias as stored.
     /// </summary>
-    internal async Task RenameAliasAsync(string memberId, byte[] memberKey, string membershipId, string newAlias, CancellationToken ct)
+    internal async Task<string> RenameAliasAsync(string memberId, byte[] memberKey, string membershipId, string newAlias, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var alias = newAlias.Normalize(NormalizationForm.FormC).Trim();
@@ -200,6 +200,7 @@ public sealed partial class VaultCatalog
                 return true;
             },
             cancellationToken: ct);
+        return alias;
     }
 
     /// <summary>
@@ -273,6 +274,12 @@ public sealed partial class VaultCatalog
     /// <summary>The vaults whose user slot names <paramref name="ownerId"/> as their owner.</summary>
     internal async Task<IReadOnlyList<string>> OwnedVaultIdsAsync(string ownerId, CancellationToken ct) =>
         await Slots.Distinct(s => s.Vault, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User) & Builders<SlotDocument>.Filter.Eq(s => s.Owner, ownerId), cancellationToken: ct)
+            .ToListAsync(ct);
+
+    /// <summary>The vaults <paramref name="ownerId"/> shares with anyone now (an active membership).</summary>
+    internal async Task<IReadOnlyList<string>> SharedVaultIdsAsync(string ownerId, CancellationToken ct) =>
+        await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .Distinct(m => m.Vault, Builders<MembershipDocument>.Filter.Eq(m => m.Owner, ownerId) & Builders<MembershipDocument>.Filter.Eq(m => m.Status, MembershipStatus.Active), cancellationToken: ct)
             .ToListAsync(ct);
 
     /// <summary>The display name of user <paramref name="userId"/> as typed, or null: for a member's view of her vault's owner.</summary>
