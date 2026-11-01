@@ -62,6 +62,18 @@ export function useLevel(vault: string | null): Level {
 }
 
 /**
+ * Whether the caller may change `path` (a file, or with `vaultWide` anything in its vault, as an upload into it), from
+ * the vault list. While the list is unknown (or couldn't be read) the controls stay: the server refuses below the level
+ * either way, and they would flash out of sight on every page otherwise.
+ */
+export function useMayChange(path: string, vaultWide = false) {
+  const vaults = useVaults();
+  if (!vaults.data) return true;
+  const level = levelOf(vaults.data.find((v) => v.name === vaultOf(path)));
+  return vaultWide ? atLeast(level, "write") : mayChange(level, path);
+}
+
+/**
  * Who shares `vault` with the caller, as she is shown it: the owner's display name (free text, quoted by the server)
  * with her username beside it, which tells two owners of one display name apart.
  */

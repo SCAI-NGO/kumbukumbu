@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 import { openPdf } from "./pdf";
@@ -576,5 +577,36 @@ describe("Gallery", () => {
     expect(canvas.width).toBeGreaterThan(0);
     report("chart_q3.pdf", false);
     expect([canvas.width, canvas.height]).toEqual([0, 0]);
+  });
+});
+
+describe("Gallery for a member", () => {
+  // W is shared with her to read; her own Home, which the drawer has open, she may write.
+  const vaults = [
+    { name: "Home", notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false },
+    { name: "W", notes: 9, embeddings: "internal", pending: false, canWrite: false, level: "read", owner: '"Alice"', shared: true, membership: "m1" },
+  ];
+  afterEach(() => useEditor.getState().reset());
+
+  it("a read member sees no upload, replace or delete", async () => {
+    useEditor.setState({ activeVault: "Home" });
+    api({ "GET /api/vaults": () => json(200, vaults) });
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Upload" })).not.toBeInTheDocument());
+    await longPress("layout_editor_bad1.png");
+    const bar = screen.getByRole("region", { name: "Selection" });
+    expect(within(bar).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "Move" })).not.toBeInTheDocument();
+    expect(within(bar).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+  });
+
+  it("a writer keeps upload, move and delete", async () => {
+    api({ "GET /api/vaults": () => json(200, vaults.map((v) => (v.name === "W" ? { ...v, level: "write", canWrite: true } : v))) });
+    renderApp("/gallery/W");
+    await screen.findByRole("button", { name: "whiteboard.png" });
+    expect(screen.getByRole("button", { name: "Upload" })).toBeInTheDocument();
+    await longPress("layout_editor_bad1.png");
+    expect(within(screen.getByRole("region", { name: "Selection" })).getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 });

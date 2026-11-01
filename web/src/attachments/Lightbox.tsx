@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Download, Ellipsis, FolderInput, History, In
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useCheckpointTree } from "../api/history";
-import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useTree, type TreeFolder } from "../api/notes";
+import { findFolder, useAttachmentUrl, useFileInfo, useHistory, useMayChange, useTree, type TreeFolder } from "../api/notes";
 import { checkpointUrl, fileAtUrl, fileKindOf, folderOf, inVault, isAttachment, titleOf, viewUrl, type FileAt, type LightboxState } from "../api/paths";
 import { Menu } from "../components/Menu";
 import { sizeText, timeText } from "../components/Sheet";
@@ -52,6 +52,8 @@ export default function Lightbox() {
   const checkpoint = search.get("checkpoint") ?? undefined;
   const source = useMemo<FileAt>(() => (checkpoint ? { checkpoint } : version ? { version } : {}), [checkpoint, version]);
   const readOnly = !!(checkpoint || version);
+  // Below `write` the file is looked at, linked to and its history read, never moved or deleted (collab design §12).
+  const writes = useMayChange(path);
   const state = location.state as State | null;
   const given = state?.paths?.includes(path) ? state.paths : null;
   // An earlier version is shown on its own; a checkpoint's file pages through its folder as the checkpoint held it.
@@ -147,10 +149,10 @@ export default function Lightbox() {
     ...(readOnly
       ? []
       : [
-          { label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") },
+          ...(writes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => setDialog("move") }] : []),
           { label: "Copy link", icon: Link2, onSelect: () => void copyLink() },
           { label: "History", icon: History, onSelect: () => setDialog("history") },
-          { label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current },
+          ...(writes ? [{ label: "Delete", icon: Trash2, onSelect: () => setDialog("delete"), disabled: !current }] : []),
         ]),
   ];
 
@@ -251,21 +253,25 @@ export default function Lightbox() {
           </a>
           {!readOnly && (
             <>
-              <button type="button" aria-label="Rename or move" onClick={() => setDialog("move")} className={controlClass}>
-                <FolderInput size={20} aria-hidden />
-              </button>
+              {writes && (
+                <button type="button" aria-label="Rename or move" onClick={() => setDialog("move")} className={controlClass}>
+                  <FolderInput size={20} aria-hidden />
+                </button>
+              )}
               <button type="button" aria-label="Copy link" onClick={() => void copyLink()} className={controlClass}>
                 <Link2 size={20} aria-hidden />
               </button>
-              <button type="button" aria-label="Delete" disabled={!current} onClick={() => setDialog("delete")} className={controlClass}>
-                <Trash2 size={20} aria-hidden />
-              </button>
+              {writes && (
+                <button type="button" aria-label="Delete" disabled={!current} onClick={() => setDialog("delete")} className={controlClass}>
+                  <Trash2 size={20} aria-hidden />
+                </button>
+              )}
             </>
           )}
         </div>
       </div>
 
-      {dialog === "move" && (
+      {dialog === "move" && writes && (
         <MoveDialog
           subject={{ kind: "attachment", path }}
           onClose={() => setDialog(null)}
@@ -284,7 +290,7 @@ export default function Lightbox() {
           />
         </Suspense>
       )}
-      {dialog === "delete" && current && (
+      {dialog === "delete" && current && writes && (
         <DeleteFileDialog
           path={path}
           version={current}

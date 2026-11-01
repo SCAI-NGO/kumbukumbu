@@ -296,3 +296,40 @@ describe("Lightbox", () => {
     expect(router.state.location.pathname).toBe("/view/W/report.pdf");
   });
 });
+
+describe("Lightbox for a member", () => {
+  const shared = (level: string) => [
+    { name: "Home", notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false },
+    { name: "W", notes: 3, embeddings: "internal", pending: false, canWrite: level !== "read", level, owner: '"Alice"', shared: true, membership: "m1" },
+  ];
+
+  it("a read member sees no rename or delete, in the bar or the menu", async () => {
+    api({ "GET /api/vaults": () => json(200, shared("read")) });
+    renderApp(opened("/W/shots/b.png"));
+    await screen.findByRole("button", { name: "Copy link" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Rename or move" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Actions for b.png" }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Download", "Copy link", "History"]);
+  });
+
+  it("attachment history shows 'another user', and no restore below write", async () => {
+    api({
+      "GET /api/vaults": () => json(200, shared("read")),
+      "GET /api/history/W/shots/b.png": () =>
+        json(200, [
+          { version: "v2", writtenAt: "2026-10-28T09:00:00Z", writer: "another user", writerKind: "user", size: 20, current: true },
+          { version: "v1", writtenAt: "2026-10-27T09:00:00Z", writer: '"Alice"', writerKind: "user", size: 10, current: false },
+        ]),
+    });
+    renderApp(opened("/W/shots/b.png"));
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for b.png" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "History" }));
+    const versions = await screen.findByRole("list", { name: "Versions" });
+    expect(versions).toHaveTextContent("by another user");
+    expect(versions).toHaveTextContent('by "Alice"');
+    await userEvent.click(within(versions).getAllByRole("button").find((b) => b.textContent?.includes('"Alice"'))!);
+    await screen.findByText(/^By "Alice"/);
+    expect(screen.queryByRole("button", { name: "Restore this version" })).not.toBeInTheDocument();
+  });
+});

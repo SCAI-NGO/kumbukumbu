@@ -7,7 +7,7 @@ import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
-import { levelOf, mayChange, useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
+import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
 import { crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
@@ -79,6 +79,8 @@ export default function NoteView({ path }: { path: string }) {
   // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
   const vaults = useVaults();
   const changes = !vaults.data || mayChange(levelOf(vaults.data.find((v) => v.name === vaultOf(path))), path);
+  // Files dropped on the note are an upload into its folder: none below `write`.
+  const uploads = useMayChange(path, true);
   const createNote = useCreateNote();
   const openNote = useEditor((s) => s.openNote);
   const navigate = useNavigate();
@@ -266,7 +268,7 @@ export default function NoteView({ path }: { path: string }) {
   // Files dropped on the note go into its folder, by way of the upload sheet (which asks before sending).
   const dropTarget = {
     onDragOver: (e: DragEvent) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
+      if (!uploads || !e.dataTransfer.types.includes("Files")) return;
       e.preventDefault();
       setDropping(true);
     },
@@ -274,7 +276,7 @@ export default function NoteView({ path }: { path: string }) {
       if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
     },
     onDrop: (e: DragEvent) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
+      if (!uploads || !e.dataTransfer.types.includes("Files")) return;
       e.preventDefault();
       setDropping(false);
       void collectFromDrop(e.dataTransfer.items).then((picked) => useEditor.getState().openUpload(folderOf(path), picked));
