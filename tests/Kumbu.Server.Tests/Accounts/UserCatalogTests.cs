@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Events;
 
 namespace Kumbu.Server.Tests.Accounts;
 
@@ -322,6 +323,46 @@ public sealed class UserCatalogTests(MongoFixture fixture)
         Assert.Null(await users.RecoverAsync("chris", "kumbu-rk-not-a-key", NewPassword, Ct));
         Assert.Null(await users.RecoverAsync("nobody", otherKey, NewPassword, Ct));
         Assert.NotNull(await users.TrySignInAsync("chris", Password, Ct));
+    }
+
+    [Fact]
+    public async Task Recovery_issues_the_same_lookups_for_a_known_and_an_unknown_username()
+    {
+        var found = new List<string>();
+        var recording = false;
+        var settings = MongoClientSettings.FromConnectionString(fixture.ConnectionString);
+        settings.ClusterConfigurator = b => b.Subscribe<CommandStartedEvent>(e =>
+        {
+            if (recording && e.CommandName == "find") lock (found) found.Add(e.Command["find"].AsString);
+        });
+        var db = new MongoClient(settings).GetDatabase("t" + Guid.NewGuid().ToString("N"));
+        var users = Catalog(db);
+        var (_, recoveryKey) = await users.CreateAsync("chris", Password, Roles.User, Ct);
+        var (inactive, inactiveKey) = await users.CreateAsync("dormant", Password, Roles.User, Ct);
+        await db.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == inactive.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        await users.TrySignInAsync("chris", "not the password at all", Ct);
+
+        async Task<List<string>> LookupsAsync(Func<Task> action)
+        {
+            lock (found) found.Clear();
+            recording = true;
+            await action();
+            recording = false;
+            lock (found) return [.. found];
+        }
+
+        var signIn = await LookupsAsync(() => users.TrySignInAsync("nobody", "not the password at all", Ct));
+        Assert.Equal(["users", "user_slots"], signIn);
+
+        // Wrong keys, so that nothing changes between the runs.
+        var otherKey = RecoveryKey.Format(RecoveryKey.New());
+        Assert.Equal(signIn, await LookupsAsync(() => users.RecoverAsync("chris", otherKey, NewPassword, Ct)));
+        Assert.Equal(signIn, await LookupsAsync(() => users.RecoverAsync("nobody", otherKey, NewPassword, Ct)));
+        Assert.Equal(signIn, await LookupsAsync(() => users.RecoverAsync("dormant", otherKey, NewPassword, Ct)));
+
+        // The right key of an inactive user gets nothing either, after the same lookups.
+        Assert.Equal(signIn, await LookupsAsync(async () => Assert.Null(await users.RecoverAsync("dormant", inactiveKey, NewPassword, Ct))));
+        Assert.NotNull(await users.RecoverAsync("chris", recoveryKey, NewPassword, Ct));
     }
 
     [Fact]

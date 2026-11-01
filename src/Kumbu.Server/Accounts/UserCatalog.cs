@@ -33,6 +33,9 @@ public sealed class UserCatalog(
     /// <summary>No user has this id (ids are hex): the slot lookup for an unknown username runs against it.</summary>
     private const string DummyId = "-";
 
+    /// <summary>Recovery for an unknown or inactive user opens this, so it does the same work as for a known one.</summary>
+    private static readonly UserSlotDocument DummyRecoverySlot = RecoverySlot(DummyId, VaultCrypto.NewKey(), RecoveryKey.New(), DateTime.UnixEpoch);
+
     private volatile bool _ready;
 
     internal IMongoCollection<UserDocument> Users { get; } = db.GetCollection<UserDocument>("users");
@@ -142,18 +145,13 @@ public sealed class UserCatalog(
         if (PasswordPolicy.Check(newPassword) is { } reason) throw new ArgumentException(reason, nameof(newPassword));
         await EnsureReadyAsync(ct);
         if (!RecoveryKey.TryParse(recoveryKey, out var key)) return null;
-        var user = NormaliseUsername(username) is { } name ? await Users.Find(u => u.Username == name && u.Active).FirstOrDefaultAsync(ct) : null;
-        if (user is null || await FindSlotAsync(user.Id, UserSlotDocument.Recovery, ct) is not { } slot) return null;
-
-        byte[] userKey;
-        try
-        {
-            userKey = VaultCrypto.Open(RecoveryKek(key, user.Id), slot.Wrapped, SlotContext(user.Id, UserSlotDocument.Recovery));
-        }
-        catch (CryptographicException)
-        {
-            return null;
-        }
+        // The same two lookups and the same opening for every username, as in sign-in: known, inactive or unknown.
+        var name = NormaliseUsername(username) ?? "";
+        var user = await Users.Find(u => u.Username == name).FirstOrDefaultAsync(ct);
+        var id = user?.Id ?? DummyId;
+        var slot = await FindSlotAsync(id, UserSlotDocument.Recovery, ct);
+        var opened = TryOpenRecoverySlot(key, id, slot ?? DummyRecoverySlot);
+        if (user is not { Active: true } || slot is null || opened is not { } userKey) return null;
 
         // The new recovery slot replaces exactly the one just opened, together with the new password: of two
         // recoveries racing with the same key only one gets through, and nobody is shown a key that doesn't work.
@@ -404,6 +402,18 @@ public sealed class UserCatalog(
         Wrapped = VaultCrypto.Seal(RecoveryKek(recoveryKey, userId), userKey, SlotContext(userId, UserSlotDocument.Recovery)),
         CreatedAt = now,
     };
+
+    private static byte[]? TryOpenRecoverySlot(byte[] recoveryKey, string userId, UserSlotDocument slot)
+    {
+        try
+        {
+            return VaultCrypto.Open(RecoveryKek(recoveryKey, userId), slot.Wrapped, SlotContext(userId, UserSlotDocument.Recovery));
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+    }
 
     private static byte[] RecoveryKek(byte[] recoveryKey, string userId) =>
         VaultCrypto.Derive(recoveryKey, RecoveryKekLabel, Encoding.UTF8.GetBytes(userId));
