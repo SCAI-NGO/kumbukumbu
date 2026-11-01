@@ -27,10 +27,10 @@ export const expiries: { days: number; label: string }[] = [
   { days: 0, label: "Never" },
 ];
 
-const segmentClass =
+export const segmentClass =
   "flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-text-body has-checked:bg-accent has-checked:text-on-accent has-focus-visible:outline-2 has-focus-visible:outline-accent";
 // Maintain keeps its warning colour when chosen: a ring on the darker ground instead of the accent fill.
-const maintainClass =
+export const maintainClass =
   "flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-[8px] px-2 text-center text-sm text-warning has-checked:bg-bg has-checked:font-medium has-checked:inset-ring has-checked:inset-ring-warning has-focus-visible:outline-2 has-focus-visible:outline-accent";
 
 /** The vaults that got a right, as the server takes them. */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -19,6 +19,7 @@ import { exportUrl } from "../data/exportUrl";
 import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
+import AccessList from "./AccessList";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
@@ -330,6 +331,7 @@ export default function TreeDrawer(props: {
   const [choosingEmbeddings, setChoosingEmbeddings] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
@@ -381,7 +383,12 @@ export default function TreeDrawer(props: {
               ? [{ label: "Create board", icon: SquareKanban, onSelect: () => createBoard.mutate({ kind: "create" }, { onSuccess: () => openBoard(activeVault) }) }]
               : []),
           { label: "Gallery", icon: Images, onSelect: () => openGallery(activeVault) },
-          ...(owner ? [{ label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) }] : []),
+          ...(owner
+            ? [
+                { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
+                { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
+              ]
+            : []),
           { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
         ]
       : []),
@@ -458,6 +465,7 @@ export default function TreeDrawer(props: {
   // Outside the sidebar's box, which would otherwise hold them: they cover the whole shell, docked or not.
   const dialogs = (
     <>
+      {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />

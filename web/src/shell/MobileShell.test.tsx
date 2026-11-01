@@ -601,6 +601,21 @@ describe("vaults shared with the user", () => {
     );
   });
 
+  it("offers the owner Share…, which lists who has access", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/Work/access": () =>
+        json(200, { apiKeys: [], connections: [], members: [{ id: "m9", label: "Bob", role: "write", status: "active", confirm: false, acceptedAt: null, redeemedAt: null, expiresAt: null, credentials: [] }] }),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await within(drawer()).findByText("zeta");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Share…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Who has access to Work" });
+    expect(await within(dialog).findByRole("listitem", { name: "Bob" })).toBeInTheDocument();
+  });
+
   it("lets a maintainer change Board.md, and keeps the owner's choices for the owner", async () => {
     signedInApi({
       "GET /api/vaults": () => json(200, sharedVaults),
@@ -619,6 +634,7 @@ describe("vaults shared with the user", () => {
     expect(items).toContain("Board");
     // Pairing a shared vault and its embedding provider stay the owner's.
     expect(items).not.toContain("Connect Obsidian…");
+    expect(items).not.toContain("Share…");
     expect(items).not.toContain("Search by meaning…");
   });
 });
