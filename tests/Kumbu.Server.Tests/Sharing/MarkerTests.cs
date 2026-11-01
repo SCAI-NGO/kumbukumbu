@@ -246,6 +246,57 @@ public sealed class MarkerTests(KumbuAppFactory app)
         AssertClean(w, "socket", message);
     }
 
+    /// <summary>
+    /// What Bob's tab and his key's socket receive while Carol edits and writes in the web app under
+    /// <paramref name="carolsAlias"/>: both must hear something (a hint, and Carol as "another user" in the tab), and
+    /// nothing of hers (checked by the callers).
+    /// </summary>
+    private async Task<IReadOnlyList<string>> BobsTranscriptAsync(World w, string carolsAlias)
+    {
+        using var tab = await SyncSockets.OpenAsync(Api, w.Bob);
+        using var device = await SyncSockets.OpenAsync(Api, w.Bob, w.BobKey);
+        using var carols = await SyncSockets.OpenAsync(Api, w.Carol);
+
+        await SyncSockets.EditingAsync(carols, carolsAlias, "lauch.md", on: true);
+        // Heard before the off: the last state per note wins, and an off soon after would replace it unsent.
+        var editing = (await SyncSockets.PresenceAsync(tab, TimeSpan.FromSeconds(3)))!;
+        Assert.Single(SyncSockets.Editors(editing));
+        await PutAsync(w.Carol, $"/api/notes/{carolsAlias}/lauch.md", new { content = "Lauch\n" }, null);
+        await SyncSockets.EditingAsync(carols, carolsAlias, "lauch.md", on: false);
+
+        var heard = (await SyncSockets.DrainAsync(tab, TimeSpan.FromSeconds(2))).Concat(await SyncSockets.DrainAsync(device, TimeSpan.FromSeconds(1))).Append(editing.ToJsonString()).ToList();
+        // Matched loosely, so that a hint carrying more than it should is caught by what Bob mustn't read, not here.
+        Assert.Contains(heard, m => m.Contains("\"type\":\"changed\"", StringComparison.Ordinal) && m.Contains("\"vault\":\"garten\"", StringComparison.Ordinal));
+        return heard;
+    }
+
+    [Fact]
+    public async Task A_label_written_by_member_A_never_reaches_member_B_over_the_socket()
+    {
+        var w = await WorldAsync();
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == w.Carol.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "MARKER-Carol"), cancellationToken: Ct);
+
+        var heard = await BobsTranscriptAsync(w, "Beete");
+        foreach (var message in heard) AssertClean(w, "socket", message);
+        Assert.Contains(heard, m => m.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_members_alias_never_reaches_another_member_over_the_socket()
+    {
+        var w = await WorldAsync();
+        var carols = await Share.MembershipOfAsync(app.Database, w.Carol, w.VaultId);
+        using (var renamed = await w.Carol.SendAsync(HttpMethod.Put, $"/api/memberships/{carols}/alias", new { alias = "MARKER-beet" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        var heard = await BobsTranscriptAsync(w, "MARKER-beet");
+        foreach (var message in heard) AssertClean(w, "socket", message);
+        Assert.Contains(heard, m => m.Contains(Kumbu.Server.Api.WriterLabels.AnotherUser, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task Writer_names_are_never_written_into_note_content()
     {
