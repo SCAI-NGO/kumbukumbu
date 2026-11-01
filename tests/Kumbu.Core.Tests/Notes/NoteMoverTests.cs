@@ -146,7 +146,7 @@ public class NoteMoverTests
 
         var result = await Move("/W/Screens/shot.png", "/W/x.png");
 
-        Assert.Equal("mv: /W/Screens/shot.png: No such file or directory; it was moved to /W/Archive/shot.png on 2026-10-02 12:00 UTC (dev)", result.Output);
+        Assert.Equal("mv: /W/Screens/shot.png: No such file or directory; it was moved to /W/Archive/shot.png on 2026-10-02 12:00 UTC", result.Output);
     }
 
     [Fact]

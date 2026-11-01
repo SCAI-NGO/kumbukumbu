@@ -14,7 +14,8 @@ public static class Moves
 
     /// <summary>
     /// For a path with no note or attachment: where it was moved, following later moves, as the end of an error message
-    /// ("; it was moved to /Demo/b.md on 2026-10-23 14:03 UTC (dev)"); empty if it wasn't moved.
+    /// ("; it was moved to /Demo/b.md on 2026-10-23 14:03 UTC"); empty if it wasn't moved. It names no writer: the
+    /// label of whoever moved the note would reach every viewer who asks for the old path.
     /// </summary>
     public static async Task<string> HintAsync(INoteReader notes, VaultPath path, CancellationToken ct)
     {
@@ -29,7 +30,7 @@ public static class Moves
         }
 
         var exists = await ExistsAsync(notes, last.To, ct);
-        return $"; it was moved to {last.To.Value} on {History.Time(first.MovedAt)} ({first.MovedBy})"
+        return $"; it was moved to {last.To.Value} on {History.Time(first.MovedAt)}"
             + (exists ? "" : ", and is not there any more ('trash' may list it)");
     }
 
