@@ -177,4 +177,19 @@ public sealed class UploadApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.BadRequest, nullFile.StatusCode);
         Assert.False(string.IsNullOrEmpty(await RestClient.ErrorAsync(nullFile)));
     }
+
+    [Fact]
+    public async Task A_read_member_uploads_nothing()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, carol, "garten", Kumbu.Server.Sharing.MemberRole.Read);
+
+        using var response = await carol.SendAsync(HttpMethod.Post, "/api/upload/garten/In", new { files = new[] { File("plan.md", "# Plan\n") } });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(Kumbu.Core.Notes.Refusals.ReadOnly, (await JsonAsync(response))["code"]?.GetValue<string>());
+        using var none = await alice.GetAsync("/api/notes/Gartenarbeit/In/plan.md");
+        Assert.Equal(HttpStatusCode.NotFound, none.StatusCode);
+    }
 }
