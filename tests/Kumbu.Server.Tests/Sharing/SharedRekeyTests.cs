@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using System.Net;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
@@ -181,5 +182,80 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         Assert.Equal(before.ToDictionary(r => r.Key, r => r.Value + 1), after);
         Assert.Equal(before[bobs] + 1, after[bobs]);
         Assert.Equal(before[invitation.MembershipId] + 1, after[invitation.MembershipId]);
+    }
+    [Fact]
+    public async Task A_member_meeting_the_placeholder_does_not_resume_the_run()
+    {
+        var (alice, bob, vaultId, _) = await SharedAsync();
+        await StopAfterStartAsync(alice, vaultId);
+        var runner = Api.Services.GetRequiredService<RekeyRunner>();
+        var triggered = new ConcurrentQueue<(string Vault, string User)>();
+        var found = new ConcurrentQueue<(string User, bool BobsKey)>();
+        void Found(string vault, string user, byte[] key)
+        {
+            if (vault == vaultId) found.Enqueue((user, key.AsSpan().SequenceEqual(bob.UserKey)));
+        }
+
+        runner.Triggered = (vault, user) => triggered.Enqueue((vault, user));
+        Catalog.RekeyPendingFound += Found;
+        try
+        {
+            // Bob's session meets the placeholder on every route, and once more after signing in again: it has no owner
+            // slot, and his user key never reaches the runner.
+            using (var read = await bob.GetAsync("/api/notes/garten/plan.md")) Assert.Equal(HttpStatusCode.ServiceUnavailable, read.StatusCode);
+            using (var list = await bob.GetAsync("/api/vaults")) Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+            var again = await bob.SignInAgainAsync();
+            using (var read = await again.GetAsync("/api/notes/garten/plan.md")) Assert.Equal(HttpStatusCode.ServiceUnavailable, read.StatusCode);
+            Assert.Single(await Catalog.OpenForUserAsync(bob.User.Id, bob.UserKey, Ct), a => a.Id == vaultId && a.Vault.Pending);
+
+            Assert.Empty(found);
+            Assert.DoesNotContain(triggered, t => t.Vault == vaultId);
+            Assert.DoesNotContain(triggered, t => t.User == bob.User.Id);
+            Assert.False(runner.IsRunning(vaultId));
+            Assert.True(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId && v.RekeyStartedAt != null).AnyAsync(Ct));
+
+            // The owner's session does: her key is the one that resumes the run.
+            await Catalog.OpenForUserAsync(alice.User.Id, alice.UserKey, Ct);
+            Assert.Equal([(alice.User.Id, false)], found);
+            Assert.Contains(triggered, t => t.Vault == vaultId && t.User == alice.User.Id);
+        }
+        finally
+        {
+            Catalog.RekeyPendingFound -= Found;
+            runner.Triggered = null;
+        }
+    }
+
+    [Fact]
+    public async Task Members_see_being_re_encrypted()
+    {
+        var (alice, bob, vaultId, _) = await SharedAsync();
+        await bob.CreateAsync("tasks.md", "# Aufgaben\n");
+        await StopAfterStartAsync(alice, vaultId);
+
+        // As the owner does during a run: the sentence, with a retry time, for reads and writes alike.
+        using (var read = await bob.GetAsync("/api/notes/garten/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, read.StatusCode);
+            Assert.Equal("5", read.Headers.GetValues("Retry-After").Single());
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(read));
+        }
+
+        using (var write = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/new.md", new { content = "# Neu\n" }))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, write.StatusCode);
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(write));
+        }
+
+        // His list keeps the vault, pending, under his alias; his own vault is untouched.
+        using (var list = await bob.GetAsync("/api/vaults"))
+        {
+            var vaults = (await RestClient.JsonAsync(list)).AsArray();
+            var garten = Assert.Single(vaults, v => v!["name"]!.GetValue<string>() == "garten")!;
+            Assert.True(garten["pending"]!.GetValue<bool>());
+            Assert.False(Assert.Single(vaults, v => v!["name"]!.GetValue<string>() == "Work")!["pending"]!.GetValue<bool>());
+        }
+
+        Assert.Equal("# Aufgaben\n", (await bob.ReadAsync("tasks.md"))["content"]!.GetValue<string>());
     }
 }
