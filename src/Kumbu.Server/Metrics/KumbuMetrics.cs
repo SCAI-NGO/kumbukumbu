@@ -208,7 +208,7 @@ public static class KumbuMetrics
         Prometheus.Metrics.DefaultRegistry.AddBeforeCollectCallback(async ct =>
         {
             double backlog = 0, unlocked = 0;
-            var databases = new Dictionary<string, Sharing.Memberships>(StringComparer.Ordinal);
+            var databases = new Dictionary<string, List<Sharing.Memberships>>(StringComparer.Ordinal);
             lock (Hosts)
             {
                 Hosts.RemoveAll(h => !h.Index.TryGetTarget(out _) && !h.Catalog.TryGetTarget(out _));
@@ -216,36 +216,69 @@ public static class KumbuMetrics
                 {
                     if (i.TryGetTarget(out var idx)) backlog += idx.Queued;
                     if (c.TryGetTarget(out var cat)) unlocked += cat.UnlockedCount;
-                    if (m is not null && m.TryGetTarget(out var ms)) databases.TryAdd(ms.DatabaseName, ms);
+                    if (m is not null && m.TryGetTarget(out var ms))
+                    {
+                        // The newest host first: an older one may be disposed already, and its database client with it.
+                        if (!databases.TryGetValue(ms.DatabaseName, out var hosts)) databases[ms.DatabaseName] = hosts = [];
+                        hosts.Insert(0, ms);
+                    }
                 }
             }
 
             EmbeddingBacklog.Set(backlog);
             VaultsUnlocked.Set(unlocked);
             if (databases.Count == 0) return;
+            double shared = 0;
+            var byStatus = MembershipStatuses.ToDictionary(s => s, _ => 0.0, StringComparer.Ordinal);
+            foreach (var (name, hosts) in databases)
+            {
+                // A database that doesn't answer in time counts as it did last: one away (a test host's, say) holds
+                // up neither the scrape nor the others' figures.
+                if (await CountsOfAsync(hosts, ct) is { } fresh) LastCounts[name] = fresh;
+                if (!LastCounts.TryGetValue(name, out var counts)) continue;
+                shared += counts.SharedVaults;
+                foreach (var (status, n) in counts.ByStatus)
+                {
+                    // A status outside the fixed set (written to the database by hand) is no label value.
+                    if (byStatus.ContainsKey(status)) byStatus[status] += n;
+                }
+            }
+
+            SharedVaults.Set(shared);
+            foreach (var (status, n) in byStatus) Memberships.WithLabels(status).Set(n);
+        });
+    }
+
+    /// <summary>The sharing counts last read from each database, by its name.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long SharedVaults, IReadOnlyDictionary<string, long> ByStatus)> LastCounts =
+        new(StringComparer.Ordinal);
+
+    /// <summary>How long a scrape waits for one database's sharing counts.</summary>
+    private static readonly TimeSpan CountsTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>One database's sharing counts, from the first of its hosts that answers within <see cref="CountsTimeout"/>;
+    /// null if none does (the database away).</summary>
+    private static async Task<(long SharedVaults, IReadOnlyDictionary<string, long> ByStatus)?> CountsOfAsync(List<Sharing.Memberships> hosts, CancellationToken ct)
+    {
+        foreach (var host in hosts)
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(CountsTimeout);
             try
             {
-                double shared = 0;
-                var byStatus = MembershipStatuses.ToDictionary(s => s, _ => 0.0, StringComparer.Ordinal);
-                foreach (var ms in databases.Values)
-                {
-                    var counts = await ms.CountsAsync(ct);
-                    shared += counts.SharedVaults;
-                    foreach (var (status, n) in counts.ByStatus)
-                    {
-                        // A status outside the fixed set (written to the database by hand) is no label value.
-                        if (byStatus.ContainsKey(status)) byStatus[status] += n;
-                    }
-                }
-
-                SharedVaults.Set(shared);
-                foreach (var (status, n) in byStatus) Memberships.WithLabels(status).Set(n);
+                return await host.CountsAsync(limit.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Too slow: the next host of the same database, or the last figures.
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                // The database away: the gauges keep their last values, and the rest of the scrape goes on.
+                // The next host of the same database.
             }
-        });
+        }
+
+        return null;
     }
 
     public enum RenderKind { Page, Image }

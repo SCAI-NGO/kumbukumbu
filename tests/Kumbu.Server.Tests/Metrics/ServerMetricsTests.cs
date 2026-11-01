@@ -3,7 +3,10 @@ using System.Net.Http.Json;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Search;
 using Kumbu.Server.Vaults;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol.Client;
 
@@ -124,6 +127,10 @@ public sealed class ServerMetricsTests(KumbuAppFactory app)
         var alice = await Api.RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
         var bob = await Api.RestClient.NewAsync(app.PublicApi, vault: "Work");
         var carol = await Api.RestClient.NewAsync(app.PublicApi, vault: "Notizen");
+        // A host of this process whose database is away (as the start-up tests' are): it holds up neither the scrape nor
+        // the other databases' figures.
+        await using var away = new AwayHost();
+        Assert.NotNull(away.Server);
         var before = await Scrape.TextAsync(app);
 
         var bobs = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "garten");
@@ -138,6 +145,20 @@ public sealed class ServerMetricsTests(KumbuAppFactory app)
             (Scrape.Value(after, shared) - Scrape.Value(before, shared), Scrape.Value(after, Status("active")) - Scrape.Value(before, Status("active")),
              Scrape.Value(after, Status("pending")) - Scrape.Value(before, Status("pending")), Scrape.Value(after, Status("revoked")) - Scrape.Value(before, Status("revoked")),
              Scrape.Value(after, Status("left")) - Scrape.Value(before, Status("left"))));
+    }
+}
+
+/// <summary>A server whose MongoDB is never reachable; it starts, since nothing at start needs the database.</summary>
+internal sealed class AwayHost : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseSetting("Kumbu:Mongo:ConnectionString", "mongodb://localhost:1");
+        builder.UseSetting("Kumbu:Mongo:Database", "away");
+        builder.UseSetting("Kumbu:DevToken", "");
+        builder.UseSetting("Kumbu:Seed:Path", "");
+        builder.UseSetting("Kumbu:Metrics:Url", "http://127.0.0.1:0");
+        builder.ConfigureLogging(l => l.ClearProviders());
     }
 }
 
