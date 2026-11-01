@@ -8148,6 +8148,7 @@ export interface components {
         RedeemPairingRequest: {
             code: string;
             device: string;
+            plugin?: null | string;
         };
         ReencryptRequest: {
             password: string;

@@ -89,34 +89,15 @@ public sealed class OwnerOnlyTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, read.StatusCode);
     }
 
+    // Task 1.14 refused these codes until the plugin check at redemption (task 5.8, PairingApiTests) came.
     [Fact]
-    public async Task A_member_cannot_pair_a_device_to_the_shared_vault_yet()
+    public async Task The_member_and_the_owner_get_pairing_codes_for_the_shared_vault()
     {
-        var (alice, bob, vaultId, membership) = await SharedAsync();
+        var (alice, bob, _, _) = await SharedAsync();
 
-        using (var member = await PairAsync(bob, "garten"))
-        {
-            Assert.Equal(HttpStatusCode.Conflict, member.StatusCode);
-            Assert.Equal("Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.", await RestClient.ErrorAsync(member));
-        }
-
-        // Nor the owner, while it is shared.
-        using (var owner = await PairAsync(alice, "Gartenarbeit"))
-        {
-            Assert.Equal(HttpStatusCode.Conflict, owner.StatusCode);
-            Assert.Equal(PairingApi.SharedNotYet, await RestClient.ErrorAsync(owner));
-        }
-
-        // Their own vaults pair as before.
+        using (var member = await PairAsync(bob, "garten")) Assert.Equal(HttpStatusCode.Created, member.StatusCode);
+        using (var owner = await PairAsync(alice, "Gartenarbeit")) Assert.Equal(HttpStatusCode.Created, owner.StatusCode);
         using (var bobs = await PairAsync(bob, "Work")) Assert.Equal(HttpStatusCode.Created, bobs.StatusCode);
-        var carol = await RestClient.NewAsync(Api, vault: "Diary");
-        using (var carols = await PairAsync(carol, "Diary")) Assert.Equal(HttpStatusCode.Created, carols.StatusCode);
-
-        // Once Bob is gone, the vault is Alice's alone and pairs again.
-        await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Revoked);
-        Assert.False(await Catalog.IsSharedAsync(null, vaultId, Ct));
-        using var again = await PairAsync(alice, "Gartenarbeit");
-        Assert.Equal(HttpStatusCode.Created, again.StatusCode);
     }
 
     [Fact]

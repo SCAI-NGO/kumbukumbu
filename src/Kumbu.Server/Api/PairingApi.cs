@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Text.RegularExpressions;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Vaults;
@@ -13,18 +14,23 @@ public sealed record CreatePairingRequest(int? ExpiresInDays = null);
 /// the web app counts down from when the answer came, not by its own clock against the server's.</summary>
 public sealed record PairingCodeView(string Code, DateTime ExpiresAt, int ExpiresIn);
 
-/// <summary><c>code</c> as the user typed it (case, spaces and dashes don't matter); <c>device</c>: 1 to 32 characters.</summary>
-public sealed record RedeemPairingRequest(string Code, string Device);
+/// <summary><c>code</c> as the user typed it (case, spaces and dashes don't matter); <c>device</c>: 1 to 32 characters;
+/// <c>plugin</c>: the Kumbu² plugin's version (<c>0.2.0</c>), which a shared vault needs to be at least
+/// <see cref="PairingApi.SharedPlugin"/> (collab design §10.2). Plugins before 0.2.0 send none.</summary>
+public sealed record RedeemPairingRequest(string Code, string Device, string? Plugin = null);
 
 /// <summary><c>key</c> is shown here once: the device keeps it, nobody types it.</summary>
 public sealed record RedeemedKeyView(string Key, string Vault, string KeyName);
 
 /// <summary>Pairing a device (sync spec §4): the web app makes a code, Obsidian exchanges it for a device key.</summary>
-public static class PairingApi
+public static partial class PairingApi
 {
     public const string NotValid = "This pairing code is not valid (any more).";
 
-    public const string SharedNotYet = "Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.";
+    public const string PluginTooOld = "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault.";
+
+    /// <summary>The first plugin that knows refusals by their code and names no device in a shared vault's conflict copies.</summary>
+    public static readonly Version SharedPlugin = new(0, 2, 0);
 
     public static void MapPairingApi(this IEndpointRouteBuilder app)
     {
@@ -40,21 +46,28 @@ public static class PairingApi
     {
         var found = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == vault) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         if (found.Vault.Pending) throw VaultBusyException.Being();
-        // A device on a shared vault needs a plugin that knows members (collab design §10.2): refused for the owner and
-        // the members alike until then.
-        if (found.Membership is not null || await catalog.IsSharedAsync(null, found.Id, ct)) throw new ApiException(StatusCodes.Status409Conflict, SharedNotYet);
+        // A shared vault's code is made like any other: the plugin's version is checked when it is redeemed, which
+        // also covers a code made before the vault was shared.
         var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, found.Id, found.Name, body.ExpiresInDays);
         return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt, (int)Pairings.Lifetime.TotalSeconds));
     }
 
     private static async Task<Created<RedeemedKeyView>> RedeemAsync(
-        RedeemPairingRequest body, HttpContext http, Pairings pairings, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
+        RedeemPairingRequest body, HttpContext http, Pairings pairings, VaultCatalog catalog, AccountLimits limits, ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.Redeem(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Every redeem, right or wrong: letting open codes through would check every guess, and the counts per network
         // and server-wide are what bound a guess spread over many addresses (spec §4).
         if (limits.RedeemsBlocked(http)) throw ApiErrors.TooMany(AccountLimits.RedeemRetryAfter);
-        var redeemed = await pairings.RedeemAsync(body.Code, body.Device, ct);
+        // A shared vault, the owner's as much as a member's, takes a plugin that reads refusals by their code (collab
+        // design §10.2): asked before the code is used up, so the device keeps it for the updated plugin.
+        var redeemed = await pairings.RedeemAsync(body.Code, body.Device, ct, async (vaultId, token) =>
+        {
+            if (!PluginAtLeast(body.Plugin, SharedPlugin) && await catalog.IsSharedAsync(null, vaultId, token))
+            {
+                throw new ApiException(StatusCodes.Status409Conflict, PluginTooOld, type: "plugin-too-old");
+            }
+        });
         if (redeemed is null)
         {
             // The network goes unnamed, as every address does in the log.
@@ -75,4 +88,21 @@ public static class PairingApi
 
         return TypedResults.Created((string?)null, new RedeemedKeyView(redeemed.Key, redeemed.Vault, redeemed.KeyName));
     }
+
+    /// <summary>
+    /// Whether <paramref name="plugin"/> is <c>major.minor.patch</c> (numbers, with an optional <c>-pre-release</c> or
+    /// <c>+build</c>) at <paramref name="least"/> or later, compared as numbers; a pre-release counts as before its
+    /// version (semver). Anything else, none included, is too old.
+    /// </summary>
+    internal static bool PluginAtLeast(string? plugin, Version least)
+    {
+        if (plugin is null || plugin.Length > 64) return false;
+        var m = PluginVersion().Match(plugin);
+        if (!m.Success || !int.TryParse(m.Groups[1].Value, out var major) || !int.TryParse(m.Groups[2].Value, out var minor) || !int.TryParse(m.Groups[3].Value, out var patch)) return false;
+        var version = new Version(major, minor, patch);
+        return version > least || (version == least && !m.Groups[4].Success);
+    }
+
+    [GeneratedRegex(@"^(\d{1,9})\.(\d{1,9})\.(\d{1,9})(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$", RegexOptions.CultureInvariant)]
+    private static partial Regex PluginVersion();
 }

@@ -111,8 +111,10 @@ public sealed class Pairings : IDisposable
     /// The key for a code, made once: null for a code that is unknown, used, expired, or made before the user's
     /// credentials or user key changed. A bad device name throws <see cref="ArgumentException"/> before the code is
     /// taken, so a corrected retry still works. A name taken up to " 20" throws <see cref="ApiKeyNameTakenException"/>.
+    /// <paramref name="check"/> is given the code's vault before the code is taken, and refuses by throwing: the code
+    /// then stays open for a retry that passes it.
     /// </summary>
-    public async Task<RedeemedKey?> RedeemAsync(string code, string device, CancellationToken ct)
+    public async Task<RedeemedKey?> RedeemAsync(string code, string device, CancellationToken ct, Func<string, CancellationToken, Task>? check = null)
     {
         var clean = Device(device);
         Sweep();
@@ -122,12 +124,13 @@ public sealed class Pairings : IDisposable
         // if it ever does, the code stays for a corrected retry, as for a bad device name.
         var baseName = Name(peeked.VaultName, clean);
         WriterNames.Check(peeked.User, baseName, "A device key");
+        if (Now >= peeked.ExpiresAt) return null;
+        if (check is not null) await check(peeked.VaultId, ct);
         // Taken out before use: of two redeems at once, only one gets the record.
         if (!_records.TryRemove(normal, out var record)) return null;
         var keep = false;
         try
         {
-
             if (Now >= record.ExpiresAt) return null;
             for (var n = 1; n <= MaxNumber; n++)
             {
