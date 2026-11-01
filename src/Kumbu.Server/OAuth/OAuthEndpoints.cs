@@ -178,14 +178,25 @@ public static partial class OAuthEndpoints
 
         // One value each (RFC 6749 §3.1); a repeated parameter counts as missing.
         var clientId = One(query, "client_id");
-        // Fetching a metadata document is a request to wherever the stranger says: limited per address and per host.
-        if (clientId is not null && clients.WouldFetch(clientId) && limits.MetadataFetch(http, new Uri(clientId).IdnHost) is not null)
+        IResult Unavailable(string outcome)
         {
-            LogStep(log, "authorize", "rate_limited", null, HostOf(clientId), null);
+            LogStep(log, "authorize", outcome, null, HostOf(clientId), null);
             return SeeOther(http, "/consent?error=temporarily_unavailable");
         }
 
-        var client = clientId is null ? null : await clients.ResolveAsync(clientId, ct);
+        // Fetching a metadata document is a request to wherever the stranger says: limited per address and per host.
+        if (clientId is not null && clients.WouldFetch(clientId) && limits.MetadataFetch(http, new Uri(clientId).IdnHost) is not null) return Unavailable("rate_limited");
+
+        OAuthClient? client;
+        try
+        {
+            client = clientId is null ? null : await clients.ResolveAsync(clientId, ct);
+        }
+        catch (ClientMetadataUnavailableException)
+        {
+            return Unavailable("busy");
+        }
+
         if (client is null)
         {
             LogStep(log, "authorize", "unknown_client", null, HostOf(clientId), null);

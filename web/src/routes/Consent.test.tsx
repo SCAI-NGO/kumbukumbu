@@ -17,6 +17,7 @@ const view = {
 };
 const redirect = "https://claude.ai/api/mcp/auth_callback?code=kumbu_ac_secret&state=s";
 const expired = "This request has expired; start the connection again in the app.";
+const otherAccount = "This request is for another Kumbu² account; sign in as the connection's owner.";
 
 const path = (router: ReturnType<typeof renderApp>) => router.state.location.pathname + router.state.location.search;
 
@@ -161,10 +162,10 @@ describe("Consent", () => {
     expect(await decisions(fetch)[0].clone().json()).toEqual({ allow: false });
   });
 
-  it("another user's connection offers sign-out", async () => {
+  it("another account's request offers sign-out", async () => {
     let signedOut = false;
     const fetch = api({
-      "GET /api/oauth/requests/r1": () => json(200, { ...view, problem: "other_user" }),
+      "GET /api/oauth/requests/r1": () => json(404, { error: otherAccount, type: "other-account" }),
       "GET /api/session": () => (signedOut ? json(401, { error: "Sign in first." }) : json(200, { user, previousSignInAt: null })),
       "DELETE /api/session": () => {
         signedOut = true;
@@ -172,12 +173,18 @@ describe("Consent", () => {
       },
     });
     const router = renderApp("/consent?request=r1");
-    expect(await screen.findByText("This connection belongs to another Kumbu² account. Sign out and sign in as its owner.")).toBeInTheDocument();
+    expect(await screen.findByText(otherAccount)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back to claude.ai" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => expect(path(router)).toBe("/signin?next=%2Fconsent%3Frequest%3Dr1"));
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE" && (r as Request).url.endsWith("/api/session"))).toBe(true);
+  });
+
+  it("an expired request offers no sign-out", async () => {
+    api({ "GET /api/oauth/requests/r1": () => json(404, { error: expired }) });
+    renderApp("/consent?request=r1");
+    expect(await screen.findByText(expired)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 
   it.each([
@@ -194,6 +201,7 @@ describe("Consent", () => {
   it.each([
     ["unknown_client", "The app could not be identified, so Kumbu² can't connect it."],
     ["invalid_redirect_uri", "The app asked to return to an address it didn't register. Nothing was connected."],
+    ["temporarily_unavailable", "Too many apps are being identified right now; try again in a minute. Nothing was connected."],
     ["server_error", "The app's request could not be used. Nothing was connected."],
   ])("errors before the app is trusted stay here: %s", async (code, text) => {
     const fetch = fakeApi({});

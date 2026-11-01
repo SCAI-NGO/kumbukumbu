@@ -14,7 +14,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -263,6 +266,7 @@ public sealed class AuthorizeTests(KumbuAppFactory app)
         var body = await response.Content.ReadAsStringAsync(Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("other-account", JsonDocument.Parse(body).RootElement.GetProperty("type").GetString());
         foreach (var hidden in new[] { "claude", "Arbeit", "Privat", "Test app", flow.ConnectionId, flow.RequestId })
         {
             Assert.DoesNotContain(hidden, body, StringComparison.Ordinal);
@@ -287,6 +291,7 @@ public sealed class AuthorizeTests(KumbuAppFactory app)
         var body = await deny.Content.ReadAsStringAsync(Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, deny.StatusCode);
+        Assert.Equal("other-account", JsonDocument.Parse(body).RootElement.GetProperty("type").GetString());
         Assert.DoesNotContain(flow.State, body, StringComparison.Ordinal);
         Assert.DoesNotContain("claude.test", body, StringComparison.Ordinal);
         Assert.Equal(1, await Collection("oauth_requests").CountDocumentsAsync(new BsonDocument("_id", flow.RequestId), cancellationToken: Ct));
@@ -360,6 +365,35 @@ public sealed class AuthorizeTests(KumbuAppFactory app)
         // The same address may still fetch from another host.
         Assert.Equal(Unknown, await AuthorizeLocationAsync(api, "https://b.example/client.json", "198.28.2.1"));
         Assert.Equal(1, fetches.Of("b.example"));
+    }
+
+    [Fact]
+    public async Task A_fetch_that_waits_too_long_for_its_turn_ends_on_the_unavailable_page()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        // The fetcher on a clock of its own, so that its wait for a turn ends when the test says, not after 5 s of the held fetches' own.
+        var time = new FakeTimeProvider();
+        var api = Api.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+        {
+            services.AddHttpClient(ClientMetadataServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => handler);
+            services.RemoveAll<ClientMetadataFetcher>();
+            services.AddSingleton(sp => new ClientMetadataFetcher(
+                sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<IOptions<KumbuOptions>>(), time, sp.GetRequiredService<ILogger<ClientMetadataFetcher>>()));
+        }));
+
+        var held = Enumerable.Range(0, 8).Select(i => AuthorizeLocationAsync(api, $"https://c{i}.example/client.json", $"198.29.1.{i + 1}")).ToList();
+        await handler.StartedAsync(8);
+        var ninth = AuthorizeLocationAsync(api, "https://ninth.example/client.json", "198.29.2.1");
+        await Task.Delay(100, Ct);
+        Assert.False(ninth.IsCompleted);
+        time.Advance(ClientMetadataFetcher.Timeout);
+
+        Assert.Equal(Limited, await ninth.WaitAsync(TimeSpan.FromSeconds(4), Ct));
+        Assert.Equal(8, handler.Started);
+
+        release.SetResult();
+        Assert.All(await Task.WhenAll(held), location => Assert.Equal(Unknown, location));
     }
 
     /// <summary>Stands in for the hosts of metadata documents: counts the requests per host and answers each with a 404.</summary>

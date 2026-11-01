@@ -33,8 +33,7 @@ public sealed class ClientMetadataTests
         var fetcher = Fetcher(handler: handler);
 
         var fetches = Enumerable.Range(0, 12).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
-        var deadline = DateTime.UtcNow.AddSeconds(3);
-        while (handler.Started < 8 && DateTime.UtcNow < deadline) await Task.Delay(20, Ct);
+        await handler.StartedAsync(8);
         // Long enough for a ninth to arrive if nothing held it back.
         await Task.Delay(300, Ct);
 
@@ -45,36 +44,54 @@ public sealed class ClientMetadataTests
         Assert.Equal(8, handler.MostAtOnce);
     }
 
-    /// <summary>Holds every request until <paramref name="release"/> completes, then answers 404; counts how many ran at once.</summary>
-    private sealed class HoldingHandler(Task release) : HttpMessageHandler
+    [Fact]
+    public async Task A_fetch_that_waits_too_long_for_its_turn_is_unavailable_and_not_cached()
     {
-        private int _running;
-        private int _started;
-        private int _mostAtOnce;
+        var time = new FakeTimeProvider();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(time: time, handler: handler);
+        const string ninth = "https://ninth.example/client.json";
 
-        public int Started => Volatile.Read(ref _started);
+        var held = Enumerable.Range(0, 8).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        await handler.StartedAsync(8);
+        var waiting = fetcher.FetchAsync(ninth, Ct);
+        await Task.Delay(100, Ct);
+        Assert.False(waiting.IsCompleted);
 
-        public int MostAtOnce => Volatile.Read(ref _mostAtOnce);
+        time.Advance(ClientMetadataFetcher.Timeout);
+        var result = await waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct);
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _started);
-            var running = Interlocked.Increment(ref _running);
-            int most;
-            while (running > (most = Volatile.Read(ref _mostAtOnce)) && Interlocked.CompareExchange(ref _mostAtOnce, running, most) != most)
-            {
-            }
+        Assert.Equal("unavailable", result.Error);
+        Assert.Null(result.Client);
+        Assert.Equal(8, handler.Started);
+        Assert.False(fetcher.IsCached(ninth));
 
-            try
-            {
-                await release.WaitAsync(cancellationToken);
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _running);
-            }
-        }
+        // Once a turn is free, the same document is fetched after all.
+        release.SetResult();
+        await Task.WhenAll(held);
+        Assert.Equal("unreachable", (await fetcher.FetchAsync(ninth, Ct)).Error);
+        Assert.Equal(9, handler.Started);
+    }
+
+    [Fact]
+    public async Task An_unavailable_fetch_is_an_exception_of_its_own_when_resolving()
+    {
+        var time = new FakeTimeProvider();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(time: time, handler: handler);
+        var clients = new OAuthClients(null!, fetcher, time);
+
+        var held = Enumerable.Range(0, 8).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        await handler.StartedAsync(8);
+        var waiting = clients.ResolveAsync("https://ninth.example/client.json", Ct);
+        await Task.Delay(100, Ct);
+        time.Advance(ClientMetadataFetcher.Timeout);
+
+        await Assert.ThrowsAsync<ClientMetadataUnavailableException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+        release.SetResult();
+        await Task.WhenAll(held);
     }
 
     private static string Document(string clientId, string? redirectUris = null, string? extra = null) =>

@@ -27,9 +27,15 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
     private volatile bool _ready;
 
     /// <summary>Null when the client is unknown or its document unusable; <see cref="ClientMetadataFetcher.FetchAsync"/> says why when that matters.</summary>
+    /// <exception cref="ClientMetadataUnavailableException">The document couldn't be fetched now; that says nothing about the client.</exception>
     public async Task<OAuthClient?> ResolveAsync(string clientId, CancellationToken ct)
     {
-        if (ClientMetadataFetcher.IsMetadataUrl(clientId)) return (await fetcher.FetchAsync(clientId, ct)).Client;
+        if (ClientMetadataFetcher.IsMetadataUrl(clientId))
+        {
+            var fetched = await fetcher.FetchAsync(clientId, ct);
+            return fetched.Error == ClientMetadataFetcher.Unavailable ? throw new ClientMetadataUnavailableException() : fetched.Client;
+        }
+
         if (!IsRegisteredId(clientId)) return null;
 
         await EnsureReadyAsync(ct);

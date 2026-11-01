@@ -136,10 +136,10 @@ public static class ConnectionApi
             OAuthEndpoints.LogStep(log, "consent", "conflict", request.ConnectionId, clientHost, request.Id);
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
-        catch (VaultBusyException)
+        catch (Exception e) when (e is VaultBusyException or ClientMetadataUnavailableException)
         {
-            // A re-keying started or finished between the check above and the transaction, which issued nothing:
-            // the request goes back, so "try again" means this request.
+            // A re-keying started or finished between the check above and the transaction, or the app's document
+            // couldn't be fetched in time; nothing was issued: the request goes back, so "try again" means this request.
             await requests.PutBackAsync(request, CancellationToken.None);
             OAuthEndpoints.LogStep(log, "consent", "busy", request.ConnectionId, clientHost, request.Id);
             throw;
@@ -155,7 +155,8 @@ public static class ConnectionApi
     private static async Task RequireOwnerAsync(PendingAuthorisation request, RequestCaller caller, Connections connections, CancellationToken ct)
     {
         if (request.ConnectionId is null) return;
-        if (await connections.FindAsync(request.ConnectionId, ct) is { } doc && doc.User != caller.User!.Id) throw ApiErrors.NotFound(OtherAccount);
+        if (await connections.FindAsync(request.ConnectionId, ct) is { } doc && doc.User != caller.User!.Id)
+            throw new ApiException(StatusCodes.Status404NotFound, OtherAccount, type: ApiErrors.OtherAccount);
     }
 
     /// <summary>
