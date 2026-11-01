@@ -160,7 +160,7 @@ public static class AccountApi
         account.MapPost("/password", ChangePasswordAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/recovery-key", RegenerateRecoveryKeyAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/sessions/end-others", EndOtherSessionsAsync).Errors(401, 403);
-        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 429);
+        account.MapPost("/account/delete", DeleteAccountAsync).Errors(400, 401, 403, 409, 429);
         account.MapPost("/account/reencrypt", ReencryptAsync).Errors(400, 401, 403, 409, 429);
 
         account.MapGet("/keys", ListKeysAsync).Errors(401, 403, 503);

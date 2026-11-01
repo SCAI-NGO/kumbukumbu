@@ -22,6 +22,8 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    private const string NewPassword = "another horse, another staple";
+
     private WebApplicationFactory<Program> Api => app.PublicApi;
 
     private VaultCatalog Catalog => Api.Services.GetRequiredService<VaultCatalog>();
@@ -459,5 +461,163 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         Assert.Equal([bobsWork], (await ConnectionDocAsync(connectionId)).Vaults);
         using var tokens = await flow.TokenAsync();
         Assert.Equal(HttpStatusCode.OK, tokens.StatusCode);
+    }
+
+    /// <summary>Waits until none of the user's vaults is pending: none in <c>rekeyPending</c>, none in its two-key period.</summary>
+    private async Task RekeyedAsync(string userId, params string[] vaultIds)
+    {
+        var until = DateTime.UtcNow.AddSeconds(30);
+        while (await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == userId && u.RekeyPending != null && u.RekeyPending.Count > 0).AnyAsync(Ct)
+            || await app.Database.GetCollection<VaultDocument>("vaults").Find(v => vaultIds.Contains(v.Id) && v.RekeyStartedAt != null).AnyAsync(Ct))
+        {
+            Assert.True(DateTime.UtcNow < until, "The vaults were not re-keyed in time.");
+            await Task.Delay(50, Ct);
+        }
+    }
+
+    /// <summary>The key of the owner's vault as her user slot under <paramref name="userKey"/> opens it.</summary>
+    private Task<byte[]> OwnerKeyAsync(string userId, byte[] userKey, string vaultId) => Catalog.OwnerVaultKeyAsync(userId, userKey, vaultId, Ct);
+
+    [Fact]
+    public async Task Re_encrypt_my_vaults_re_keys_the_shared_vault_and_Bob_keeps_access()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        var oldKey = await alice.VaultKeyAsync();
+
+        using (var reencrypted = await alice.SendAsync(HttpMethod.Post, "/api/account/reencrypt", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, reencrypted.StatusCode);
+        }
+
+        await RekeyedAsync(alice.User.Id, vaultId);
+        var (_, newUserKey, _) = (await Api.Services.GetRequiredService<UserCatalog>().TrySignInAsync(alice.Username, RestClient.Password, Ct))!.Value;
+        var newKey = await OwnerKeyAsync(alice.User.Id, newUserKey, vaultId);
+        Assert.NotEqual(oldKey, newKey);
+        // Bob's slot was wrapped again to his pinned key, and he reads as before; his own vault wasn't touched.
+        using var bobsPrivate = await PrivateOfAsync(bob.User.Id, bob.UserKey);
+        Assert.Equal(newKey, await MemberSlotKeyAsync(bobs, bobsPrivate));
+        Assert.Equal(MembershipStatus.Active, (await Share.MembershipAsync(app.Database, bobs)).Status);
+        using (var read = await bob.GetAsync("/api/notes/garten/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            Assert.Equal("# Beete\n", (await RestClient.JsonAsync(read))["content"]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
+    public async Task The_owners_recovery_re_keys_the_shared_vault()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        var users = Api.Services.GetRequiredService<UserCatalog>();
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(alice.User.Id, alice.UserKey, RestClient.Password, Ct);
+        var oldKey = await alice.VaultKeyAsync();
+
+        using (var recovered = await bob.SendAsync(HttpMethod.Post, "/api/recover", new { username = alice.Username, recoveryKey, newPassword = NewPassword }))
+        {
+            Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        }
+
+        await RekeyedAsync(alice.User.Id, vaultId);
+        var (_, newUserKey, _) = (await users.TrySignInAsync(alice.Username, NewPassword, Ct))!.Value;
+        var newKey = await OwnerKeyAsync(alice.User.Id, newUserKey, vaultId);
+        Assert.NotEqual(oldKey, newKey);
+        using var bobsPrivate = await PrivateOfAsync(bob.User.Id, bob.UserKey);
+        Assert.Equal(newKey, await MemberSlotKeyAsync(bobs, bobsPrivate));
+        using var read = await bob.GetAsync("/api/notes/garten/plan.md");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_members_recovery_re_keys_no_vault()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        var bobsWork = await bob.VaultIdAsync();
+        var users = Api.Services.GetRequiredService<UserCatalog>();
+        var recoveryKey = await users.RegenerateRecoveryKeyAsync(bob.User.Id, bob.UserKey, RestClient.Password, Ct);
+        var sharedKey = await alice.VaultKeyAsync();
+        var revision = (await Share.MembershipAsync(app.Database, bobs)).Revision;
+
+        using (var recovered = await alice.SendAsync(HttpMethod.Post, "/api/recover", new { username = bob.Username, recoveryKey, newPassword = NewPassword }))
+        {
+            Assert.Equal(HttpStatusCode.OK, recovered.StatusCode);
+        }
+
+        // Only his own vault is re-keyed; the shared one was never pending, and keeps its key.
+        await RekeyedAsync(bob.User.Id, bobsWork);
+        Assert.False(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId && v.RekeyStartedAt != null).AnyAsync(Ct));
+        Assert.Equal(sharedKey, await alice.VaultKeyAsync());
+        // His keypair is new and his slot is wrapped to it, through the pin: the membership moved once, by his rotation.
+        var (_, newUserKey, _) = (await users.TrySignInAsync(bob.Username, NewPassword, Ct))!.Value;
+        using var bobsPrivate = await PrivateOfAsync(bob.User.Id, newUserKey);
+        Assert.Equal(sharedKey, await MemberSlotKeyAsync(bobs, bobsPrivate));
+        Assert.Equal(revision + 1, (await Share.MembershipAsync(app.Database, bobs)).Revision);
+        using var read = await alice.GetAsync("/api/notes/Gartenarbeit/plan.md");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        var opened = await Catalog.OpenForUserAsync(bob.User.Id, newUserKey, Ct);
+        Assert.Contains(opened, a => a.Id == vaultId && !a.Vault.Pending);
+    }
+
+    [Fact]
+    public async Task Deleting_a_shared_vault_during_a_run_is_refused()
+    {
+        var (alice, bob, vaultId, _) = await SharedAsync();
+        await StopAfterStartAsync(alice, vaultId);
+
+        using (var refused = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/delete", new { password = RestClient.Password, confirm = "Gartenarbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal("A re-encryption is still running; try again in a few minutes.", await RestClient.ErrorAsync(refused));
+        }
+
+        Assert.True(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId).AnyAsync(Ct));
+        Assert.Single(await SlotsOfAsync(vaultId, SlotDocument.Member));
+
+        // Once the run is done, the deletion goes through.
+        await Api.Services.GetRequiredService<RekeyRunner>().RunAsync(vaultId, alice.User.Id, alice.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        using (var deleted = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/delete", new { password = RestClient.Password, confirm = "Gartenarbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+
+        Assert.False(await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId).AnyAsync(Ct));
+        using var gone = await bob.GetAsync("/api/notes/garten/plan.md");
+        Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+
+        // A vault she shares with nobody goes during its run, as before: nobody else is left with it.
+        using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Diary" })) Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var diary = (await Catalog.FindForUserAsync(alice.User.Id, alice.UserKey, "Diary", Ct))!;
+        await StopAfterStartAsync(alice, diary);
+        using (var deleted = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Diary/delete", new { password = RestClient.Password, confirm = "Diary" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_the_owners_account_during_a_run_is_refused()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        await StopAfterStartAsync(alice, vaultId);
+
+        using (var refused = await alice.SendAsync(HttpMethod.Post, "/api/account/delete", new { password = RestClient.Password, confirm = alice.Username }))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal("A re-encryption is still running; try again in a few minutes.", await RestClient.ErrorAsync(refused));
+        }
+
+        Assert.True(await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == alice.User.Id).AnyAsync(Ct));
+        Assert.Single(await SlotsOfAsync(vaultId, SlotDocument.User));
+        Assert.Equal(MembershipStatus.Active, (await Share.MembershipAsync(app.Database, bobs)).Status);
+
+        // Once the run is done, the account goes, and Bob keeps the vault through its closing period.
+        await Api.Services.GetRequiredService<RekeyRunner>().RunAsync(vaultId, alice.User.Id, alice.UserKey).WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        using (var deleted = await alice.SendAsync(HttpMethod.Post, "/api/account/delete", new { password = RestClient.Password, confirm = alice.Username }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+
+        Assert.False(await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == alice.User.Id).AnyAsync(Ct));
+        using var read = await bob.GetAsync("/api/notes/garten/plan.md");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
     }
 }

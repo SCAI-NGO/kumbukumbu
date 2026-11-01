@@ -87,7 +87,8 @@ public sealed class Deletion(
         // Only the owner's user key finds a vault through a user slot: nobody else finds it by name.
         if (await catalog.FindForUserAsync(user.Id, userKey, name, ct) is not { } vaultId) return null;
 
-        var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct);
+        await RequireNoSharedRunAsync(null, [vaultId], ct);
+        var documents = await catalog.DeleteVaultsAsync([vaultId], (_, _) => Task.CompletedTask, ct, first: (s, token) => RequireNoSharedRunAsync(s, [vaultId], token));
         log.LogInformation("User {Username} deleted vault {VaultId} ({Documents} documents)", user.Username, vaultId, documents);
         return new DeletionSummary(1, 0, documents, 0);
     }
@@ -103,7 +104,7 @@ public sealed class Deletion(
         if (user.Role == Roles.PrimaryAdmin) throw new NotPermittedException("The primary admin's account can't be deleted.");
         if (!await users.CheckPasswordAsync(user.Id, userKey, password, ct)) return false;
 
-        var summary = await DeleteAccountAsync(user.Id, Builders<UserDocument>.Filter.Where(u => u.Id == user.Id && u.Role != Roles.PrimaryAdmin), shared, null, ct)
+        var summary = await DeleteAccountAsync(user.Id, Builders<UserDocument>.Filter.Where(u => u.Id == user.Id && u.Role != Roles.PrimaryAdmin), shared, null, ct, ownRuns: true)
             ?? throw new NotPermittedException("Your account changed meanwhile; nothing was deleted.");
         // After the commit, and whatever happens to the request now: the deletion is done either way.
         await list.AddAsync(user.Id, CancellationToken.None, summary.Closing);
@@ -212,10 +213,12 @@ public sealed class Deletion(
     /// </para>
     /// </summary>
     private async Task<DeletionSummary?> DeleteAccountAsync(
-        string userId, FilterDefinition<UserDocument> stillDeletable, SharedVaultChoice choice, IReadOnlyDictionary<string, DateTime>? recorded, CancellationToken ct)
+        string userId, FilterDefinition<UserDocument> stillDeletable, SharedVaultChoice choice, IReadOnlyDictionary<string, DateTime>? recorded, CancellationToken ct,
+        bool ownRuns = false)
     {
         var now = time.GetUtcNow().UtcDateTime;
         var owned = await OwnedVaultsAsync(userId, ct);
+        if (ownRuns) await RequireNoSharedRunAsync(null, owned, ct);
         var withMembers = await WithActiveMembersAsync(owned, ct);
         var closing = new Dictionary<string, DateTime>(StringComparer.Ordinal);
         foreach (var vaultId in withMembers)
@@ -271,7 +274,11 @@ public sealed class Deletion(
                 },
                 ct,
                 // Before the vaults' slots go: the members' notices copy their aliases from them.
-                first: async (s, token) => noticeCount = await Sharing.MemberNotices.LeaveForDeletedAsync(db, s, deletedShared, now, token));
+                first: async (s, token) =>
+                {
+                    if (ownRuns) await RequireNoSharedRunAsync(s, owned, token);
+                    noticeCount = await Sharing.MemberNotices.LeaveForDeletedAsync(db, s, deletedShared, now, token);
+                });
         }
         catch (UserChangedException)
         {
@@ -341,6 +348,29 @@ public sealed class Deletion(
         return open.Count;
     }
 
+    /// <summary>
+    /// <see cref="RekeyRunningException"/> if one of these vaults has an active member and a re-keying run holds it or
+    /// it is in its two-key period (collab design §7.1): only its owner's key finishes the run, and she is signed in, so
+    /// it resumes and ends; deleted now, her account or the vault would leave the members with one nobody can finish.
+    /// Before the deletion, and again inside its transaction (<paramref name="session"/>), where a start that commits
+    /// meanwhile conflicts with the deletion of the vault document and the retry sees it.
+    /// </summary>
+    private async Task RequireNoSharedRunAsync(IClientSessionHandle? session, IReadOnlyList<string> vaults, CancellationToken ct)
+    {
+        if (vaults.Count == 0) return;
+        var v = Builders<VaultDocument>.Filter;
+        var started = v.In(x => x.Id, vaults) & v.Ne(x => x.RekeyStartedAt, null);
+        var running = vaults.Where(catalog.IsRekeying).Concat(
+            session is null
+                ? await catalog.Vaults.Find(started).Project(x => x.Id).ToListAsync(ct)
+                : await catalog.Vaults.Find(session, started).Project(x => x.Id).ToListAsync(ct)).Distinct().ToList();
+        if (running.Count == 0) return;
+        var f = Builders<Sharing.MembershipDocument>.Filter;
+        var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
+        var shared = f.In(m => m.Vault, running) & f.Eq(m => m.Status, Sharing.MembershipStatus.Active);
+        if (session is null ? await docs.Find(shared).AnyAsync(ct) : await docs.Find(session, shared).AnyAsync(ct)) throw new RekeyRunningException();
+    }
+
     /// <summary>Which of these vaults have an active member now: those a closing period applies to.</summary>
     private async Task<IReadOnlyList<string>> WithActiveMembersAsync(IReadOnlyList<string> vaults, CancellationToken ct)
     {
@@ -373,3 +403,7 @@ public sealed class Deletion(
 
     private sealed class UserChangedException() : Exception("The user changed during the deletion.");
 }
+
+/// <summary>A shared vault, or the account of its owner, can't be deleted while a re-keying of the vault is under way
+/// (collab design §7.1); nothing was deleted. Answered with 409.</summary>
+public sealed class RekeyRunningException() : Exception("A re-encryption is still running; try again in a few minutes.");
