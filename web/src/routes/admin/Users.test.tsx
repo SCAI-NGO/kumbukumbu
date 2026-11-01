@@ -87,6 +87,34 @@ describe("Admin users", () => {
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["deactivates", "Deactivate Bob", { active: false }],
+    ["makes a user of an admin", "Make Ada a user", { role: "user" }],
+  ])("asks for the password when the window is closed and then %s", async (_, button, expected) => {
+    const patches: unknown[] = [];
+    let tries = 0;
+    // The first try finds the password window closed; the repeat after the password goes through.
+    const patch = async (r: Request) => {
+      patches.push(await r.json());
+      return tries++ === 0 ? json(401, { error: "Give your password again.", type: "password-required" }) : noContent();
+    };
+    api(root, { "PATCH /api/admin/users/u1": patch, "PATCH /api/admin/users/u2": patch, "POST /api/session/confirm": () => noContent() });
+    renderApp("/admin/users");
+    await userEvent.click(await screen.findByRole("button", { name: button }));
+    if (button.startsWith("Deactivate")) {
+      await userEvent.type(within(screen.getByRole("alertdialog", { name: "Deactivate Bob?" })).getByLabelText(/Type bob to confirm/), "bob");
+      await userEvent.click(within(screen.getByRole("alertdialog", { name: "Deactivate Bob?" })).getByRole("button", { name: "Deactivate" }));
+    }
+
+    const prompt = await screen.findByRole("alertdialog", { name: "Confirm your password" });
+    await userEvent.type(within(prompt).getByLabelText("Your password"), "correct horse battery staple");
+    await userEvent.click(within(prompt).getByRole("button", { name: "Confirm" }));
+
+    await vi.waitFor(() => expect(patches).toEqual([expected, expected]));
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("reactivates a deactivated user, again with the username typed", async () => {
     const patches: unknown[] = [];
     api(admin, {

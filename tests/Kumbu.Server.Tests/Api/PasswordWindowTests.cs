@@ -349,28 +349,70 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Deactivating_another_account_needs_the_window(bool open)
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
+        var (otherId, _) = await OtherUserAsync(api);
+        CloseWindow();
+        if (open) await ConfirmAsync(user);
+
+        using var response = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId}", new { active = false });
+
+        var listed = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == otherId)!;
+        if (open)
+        {
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.False(listed["active"]!.GetValue<bool>());
+        }
+        else
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.True(listed["active"]!.GetValue<bool>());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Demoting_another_admin_needs_the_window(bool open)
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
+        var (otherId, _) = await api.Services.GetRequiredService<UserCatalog>().CreateAsync("u" + Guid.NewGuid().ToString("N")[..12], RestClient.Password, Roles.Admin, Ct);
+        CloseWindow();
+        if (open) await ConfirmAsync(user);
+
+        using var response = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId.Id}", new { role = Roles.User });
+
+        var role = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == otherId.Id)!["role"]!.GetValue<string>();
+        if (open)
+        {
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Equal(Roles.User, role);
+        }
+        else
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.Equal(Roles.Admin, role);
+        }
+    }
+
     [Fact]
     public async Task What_grants_nothing_or_brings_the_password_passes_with_the_window_closed()
     {
         await using var api = Timed();
         var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
         var connection = await ConnectionAsync(user);
-        var (otherId, _) = await OtherUserAsync(api);
         var (promotedId, _) = await OtherUserAsync(api);
-        var (demotedId, _) = await OtherUserAsync(api);
-        using (var made = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.Admin, password = RestClient.Password }))
-        {
-            Assert.Equal(HttpStatusCode.NoContent, made.StatusCode);
-        }
-
         CloseWindow();
 
         var flow = await OAuthFlow.StartAsync(api, user, connection, await OAuthFlow.RegisterAsync(api, Callback), Callback);
         using (var denied = await flow.DecideAsync(allow: false)) Assert.Equal(HttpStatusCode.OK, denied.StatusCode);
         using (var gone = await flow.GetConsentAsync()) Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
-        using (var off = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId}", new { active = false })) Assert.Equal(HttpStatusCode.NoContent, off.StatusCode);
-        using (var demoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.User })) Assert.Equal(HttpStatusCode.NoContent, demoted.StatusCode);
-        Assert.Equal(Roles.User, (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == demotedId)!["role"]!.GetValue<string>());
         Assert.False(await WindowOpenAsync(user));
 
         using (var promoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{promotedId}", new { role = Roles.Admin, password = RestClient.Password }))
