@@ -43,6 +43,13 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// <summary>Closed for a newer connection of the same subject.</summary>
     public const WebSocketCloseStatus Replaced = (WebSocketCloseStatus)4409;
 
+    /// <summary>
+    /// Closed because the subject's vaults couldn't be worked out (the database didn't answer): fail closed, since the
+    /// socket would otherwise keep a vault it may have lost. 1013, "try again later": the client reconnects, and its
+    /// new ticket needs the database.
+    /// </summary>
+    public const WebSocketCloseStatus CheckFailed = (WebSocketCloseStatus)1013;
+
     /// <summary>Connections per subject: a person with several tabs has four in one session.</summary>
     public const int MaxPerKey = 4;
 
@@ -71,6 +78,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
     /// <summary>For tests: awaited first by every notification of an access change, so a test can hold one up.</summary>
     internal Func<Task>? BeforeAccessChange { get; set; }
+
+    /// <summary>For tests: awaited before every recomputation of a connection's vaults, so a test can make it fail.</summary>
+    internal Func<Subject, Task>? BeforeRecompute { get; set; }
 
     /// <summary>For tests: the debounce of hints (zero: each change is its own hint, at once).</summary>
     internal TimeSpan HintDebounce { get; set; } = Debounce;
@@ -113,9 +123,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                 if (_connections.TryRemove(replaced, out _))
                 {
                     ClearPresence(replaced, null);
-                    _ = Observed(replaced.CloseAsync(Replaced, "replaced by a newer connection of this key"));
+                    _ = Observed(replaced.CloseAsync(Replaced, "replaced by a newer connection of this subject"));
                 }
             }
+
+            // The ticket's vaults as they are now: a ticket asked for before a revocation or a role lowered (or while
+            // one was told to the hub, before this connection was listed) holds them as they were. Nothing goes out
+            // and no frame is read before this.
+            if (!await RecomputeAsync(connection, ct)) return;
 
             // Who is editing already, as this connection is shown it.
             foreach (var vaultId in connection.Vaults.Keys)
@@ -185,6 +200,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         if (checkedCount > 0) log.LogInformation("Checked {Count} sync connections of user {UserId}: membership {MembershipId} changed", checkedCount, memberId, membershipId);
     }
 
+    /// <summary>Told after sessions or keys of a user ended (signing out, "end other sessions", a password changed or
+    /// recovered, her vaults re-encrypted): her connections are checked at once, so a session ended keeps no socket.</summary>
+    public async Task SubjectsEndedAsync(string userId, CancellationToken ct)
+    {
+        if (BeforeAccessChange is { } before) await before();
+        await RefreshAsync(c => c.Grant.Subject.User == userId, ct);
+    }
+
     /// <summary>
     /// Told after a user was deactivated, reactivated or deleted (collab design §7.2–§7.4, §9.1), before the request
     /// answers: her own connections are checked (and close, her keys revoked and sessions ended), and so is every
@@ -235,26 +258,66 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     private async Task CheckAsync(Connection connection, CancellationToken ct)
     {
         var subject = connection.Grant.Subject;
+        bool alive;
         try
         {
-            if (!await IsAliveAsync(subject, ct))
-            {
-                log.LogInformation("Closed the sync connection of {Subject}: revoked, ended, expired or its user deactivated", Describe(subject));
-                ClearPresence(connection, null);
-                await connection.CloseAsync(KeyInactive, subject.Kind == SubjectKind.Key ? "key revoked or expired" : "session ended");
-                return;
-            }
-
-            var before = connection.Vaults;
-            var after = await VaultsNowAsync(subject, before, ct);
-            connection.SetVaults(after);
-            ClearPresence(connection, v => !connection.CanEdit(v));
-            if (before.Count > 0 && after.Count == 0) await connection.CloseAsync(KeyInactive, "no vault left");
+            alive = await IsAliveAsync(subject, ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            log.LogWarning(e, "Checking the sync connection of {Subject} failed; it is checked again next time", Describe(subject));
+            await FailClosedAsync(connection, e);
+            return;
         }
+
+        if (!alive)
+        {
+            log.LogInformation("Closed the sync connection of {Subject}: revoked, ended, expired or its user deactivated", Describe(subject));
+            ClearPresence(connection, null);
+            await connection.CloseAsync(KeyInactive, subject.Kind == SubjectKind.Key ? "key revoked or expired" : "session ended");
+            return;
+        }
+
+        await RecomputeAsync(connection, ct);
+    }
+
+    /// <summary>
+    /// The connection's vaults and levels worked out again, its presence on vaults it can no longer edit cleared, and
+    /// a socket left with no vault closed; false if it was closed. One that can't be worked out closes with
+    /// <see cref="CheckFailed"/>: a failure never leaves a socket the vaults it held.
+    /// </summary>
+    private async Task<bool> RecomputeAsync(Connection connection, CancellationToken ct)
+    {
+        var subject = connection.Grant.Subject;
+        IReadOnlyDictionary<string, VaultState> before, after;
+        try
+        {
+            if (BeforeRecompute is { } fault) await fault(subject);
+            before = connection.Vaults;
+            after = await VaultsNowAsync(subject, before, ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            await FailClosedAsync(connection, e);
+            return false;
+        }
+
+        connection.SetVaults(after);
+        ClearPresence(connection, v => !connection.CanEdit(v));
+        if (before.Count > 0 && after.Count == 0)
+        {
+            ClearPresence(connection, null);
+            await connection.CloseAsync(KeyInactive, "no vault left");
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task FailClosedAsync(Connection connection, Exception e)
+    {
+        log.LogWarning(e, "Checking the sync connection of {Subject} failed; it is closed, and its client connects again", Describe(connection.Grant.Subject));
+        ClearPresence(connection, null);
+        await connection.CloseAsync(CheckFailed, "check failed, connect again");
     }
 
     /// <summary>
@@ -407,6 +470,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         /// <summary>In the order connections opened.</summary>
         public long Number { get; } = number;
 
+        /// <summary>The vaults to hint at, by id: a hint is written when it goes out, under the vault's name then, and
+        /// only for a vault the connection still holds.</summary>
         private readonly Channel<string> _out = Channel.CreateBounded<string>(new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.DropOldest });
 
         /// <summary>Presence, apart from the hints: the last state per note, which a newer one replaces before it is sent.</summary>
@@ -454,11 +519,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                 TaskScheduler.Default);
         }
 
-        /// <summary>Under the name the vault has when the hint goes out: a rename since the change counts.</summary>
         private void Enqueue(string vaultId)
         {
-            if (!_vaults.TryGetValue(vaultId, out var vault)) return;
-            _out.Writer.TryWrite(JsonSerializer.Serialize(new { type = "changed", vault = vault.Name }));
+            if (!_vaults.ContainsKey(vaultId)) return;
+            _out.Writer.TryWrite(vaultId);
             _wake.Writer.TryWrite(0);
         }
 
@@ -479,7 +543,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         public PresenceEditor? Editor(string vaultId) =>
             _vaults.TryGetValue(vaultId, out var vault) ? new PresenceEditor(Number, Grant.Subject.User, vault.Membership is null, vault.Label, Grant.Display) : null;
 
-        public void SetVaults(IReadOnlyDictionary<string, VaultState> vaults) => _vaults = vaults;
+        /// <summary>Presence waiting for a vault no longer held goes with it (the send loop checks again).</summary>
+        public void SetVaults(IReadOnlyDictionary<string, VaultState> vaults)
+        {
+            _vaults = vaults;
+            foreach (var key in _presence.Keys.Where(k => !vaults.ContainsKey(k.Vault))) _presence.TryRemove(key, out _);
+        }
 
         public void Rename(string membershipId, string alias) =>
             _vaults = _vaults.ToDictionary(v => v.Key, v => v.Value.Membership == membershipId ? v.Value with { Name = alias } : v.Value, StringComparer.Ordinal);
@@ -499,14 +568,16 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             {
                 // Taken before what it woke for: whatever comes after this is woken for again.
                 _wake.Reader.TryRead(out _);
+                // Each checked against the vaults held now: nothing rendered or queued before a vault was dropped goes out after.
                 foreach (var key in _presence.Keys)
                 {
-                    if (_presence.TryRemove(key, out var message) && !await SendAsync(message, ct)) return;
+                    if (_presence.TryRemove(key, out var message) && _vaults.ContainsKey(key.Vault) && !await SendAsync(message, ct)) return;
                 }
 
-                while (_out.Reader.TryRead(out var hint))
+                // Under the name the vault has when the hint goes out: a rename since the change counts.
+                while (_out.Reader.TryRead(out var vaultId))
                 {
-                    if (!await SendAsync(hint, ct)) return;
+                    if (_vaults.TryGetValue(vaultId, out var vault) && !await SendAsync(JsonSerializer.Serialize(new { type = "changed", vault = vault.Name }), ct)) return;
                 }
             }
         }

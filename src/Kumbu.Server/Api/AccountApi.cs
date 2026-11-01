@@ -4,6 +4,7 @@ using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sync;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
@@ -248,12 +249,13 @@ public static class AccountApi
     /// <summary>The used recovery key stops working: the answer carries its replacement, shown here once. The user key
     /// is rotated in the recovery; the vaults are re-keyed in the background, after the answer, which never waits for them.</summary>
     private static async Task<Ok<RecoveryKeyView>> RecoverAsync(
-        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, Pairings pairings, CancellationToken ct)
+        RecoverRequest body, HttpContext http, UserCatalog users, Rekeying rekeying, AccountLimits limits, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         if (limits.Recovery(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var (recoveryKey, user, userKey) = await users.RecoverWithKeyAsync(body.Username, body.RecoveryKey, body.NewPassword, ct)
             ?? throw new ApiException(StatusCodes.Status401Unauthorized, "The username or recovery key is wrong.");
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         rekeying.ResumePending(user, userKey);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
@@ -287,16 +289,18 @@ public static class AccountApi
 
     private static ILogger Log(ILoggerFactory logs) => logs.CreateLogger(typeof(AccountApi).FullName!);
 
-    private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
+    private static async Task<NoContent> SignOutAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         await sessions.EndAsync(http.Request.Cookies[CallerMiddleware.SessionCookie]!, ct);
         pairings.DropAll(caller.User!.Id);
+        // Past the end: this tab's socket closes with it, rather than at the next check (collab design §9.1).
+        await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);
         ClearSessionCookie(http);
         return TypedResults.NoContent();
     }
 
     private static async Task<Ok<PasswordChangedView>> ChangePasswordAsync(
-        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, CancellationToken ct)
+        ChangePasswordRequest body, HttpContext http, RequestCaller caller, UserCatalog users, AccountLimits limits, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -306,6 +310,7 @@ public static class AccountApi
         }
 
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         ClearSessionCookie(http);
         return TypedResults.Ok(new PasswordChangedView(SignedOut: true));
     }
@@ -328,7 +333,7 @@ public static class AccountApi
     /// </summary>
     private static async Task<Ok<RecoveryKeyView>> ReencryptAsync(
         ReencryptRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits, Pairings pairings,
-        CancellationToken ct)
+        SyncHub hub, CancellationToken ct)
     {
         var user = caller.User!;
         if (limits.PasswordCheck(user.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
@@ -336,6 +341,7 @@ public static class AccountApi
             ?? throw new WrongPasswordException("The password is wrong.");
         await PasswordGivenAsync(http, sessions, ct);
         pairings.DropAll(user.Id);
+        await hub.SubjectsEndedAsync(user.Id, CancellationToken.None);
         return TypedResults.Ok(new RecoveryKeyView(recoveryKey));
     }
 
@@ -352,11 +358,12 @@ public static class AccountApi
         return TypedResults.NoContent();
     }
 
-    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, CancellationToken ct)
+    private static async Task<NoContent> EndOtherSessionsAsync(HttpContext http, RequestCaller caller, Sessions sessions, Pairings pairings, SyncHub hub, CancellationToken ct)
     {
         await sessions.EndAllAsync(caller.User!.Id, http.Request.Cookies[CallerMiddleware.SessionCookie], ct);
         // A code made by one of the sessions ended (perhaps the one that prompted this) goes with them.
         pairings.DropAll(caller.User!.Id);
+        await hub.SubjectsEndedAsync(caller.User!.Id, CancellationToken.None);
         return TypedResults.NoContent();
     }
 

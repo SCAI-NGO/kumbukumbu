@@ -24,12 +24,19 @@ internal sealed class Presence(TimeProvider time)
     /// <summary>The largest inbound frame read; anything longer is ignored whole.</summary>
     public const int MaxFrame = 1024;
 
+    /// <summary>
+    /// The most notes one connection is shown editing at once; an announcement for a further note is ignored until
+    /// one of them ends. A tab edits one note: this keeps a client that announces many from flooding everyone's lines
+    /// and the server's memory.
+    /// </summary>
+    public const int MaxPerConnection = 8;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<(string Vault, string Path), Dictionary<long, (PresenceEditor Editor, DateTime At)>> _entries = [];
 
     private DateTime Now => time.GetUtcNow().UtcDateTime;
 
-    /// <summary>Records an announcement; true if the set of editors changed (a refresh doesn't).</summary>
+    /// <summary>Records an announcement; true if the set of editors changed (a refresh doesn't, nor one past <see cref="MaxPerConnection"/>).</summary>
     public bool Set(string vaultId, string path, PresenceEditor editor, bool on)
     {
         lock (_gate)
@@ -37,14 +44,16 @@ internal sealed class Presence(TimeProvider time)
             var key = (vaultId, path);
             if (on)
             {
-                if (!_entries.TryGetValue(key, out var editors)) _entries[key] = editors = [];
-                var added = !editors.ContainsKey(editor.Connection);
+                var held = _entries.TryGetValue(key, out var editors) && editors.ContainsKey(editor.Connection);
+                if (!held && _entries.Values.Count(e => e.ContainsKey(editor.Connection)) >= MaxPerConnection) return false;
+                if (editors is null) _entries[key] = editors = [];
+                var added = !held;
                 editors[editor.Connection] = (editor, Now);
                 return added;
             }
 
-            if (!_entries.TryGetValue(key, out var held) || !held.Remove(editor.Connection)) return false;
-            if (held.Count == 0) _entries.Remove(key);
+            if (!_entries.TryGetValue(key, out var current) || !current.Remove(editor.Connection)) return false;
+            if (current.Count == 0) _entries.Remove(key);
             return true;
         }
     }
