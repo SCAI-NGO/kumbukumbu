@@ -83,6 +83,28 @@ public sealed class NoticeTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Notices_beyond_the_first_twenty_still_arrive()
+    {
+        var (_, bob, vaultId, keys) = await LoweredAsync("Claude");
+        // 21 more of the vault's own events after the role change: 22 in all, more than one call tells.
+        var at = DateTime.UtcNow;
+        await app.Database.GetCollection<VaultEventDocument>("vault_events").InsertManyAsync(
+            Enumerable.Range(1, 21).Select(i => new VaultEventDocument { Vault = vaultId, Kind = VaultEvents.ProviderChanged, At = at.AddMilliseconds(i) }),
+            cancellationToken: Ct);
+
+        static int Count(IReadOnlyList<string> blocks) => blocks.Count(b => b.Contains("Notice:", StringComparison.Ordinal));
+        var first = await bob.ShBlocksAsync("ls /", keys[0]);
+        var second = await bob.ShBlocksAsync("ls /", keys[0]);
+        var third = await bob.ShBlocksAsync("ls /", keys[0]);
+
+        Assert.Equal(20, Count(first));
+        Assert.Equal(Notice, first[1]);
+        Assert.Equal(2, Count(second));
+        Assert.All(second.Skip(1), b => Assert.Contains("changed the embedding provider of /garten", b, StringComparison.Ordinal));
+        Assert.Equal(0, Count(third));
+    }
+
+    [Fact]
     public async Task The_owners_agents_get_no_member_notice()
     {
         var (alice, _, vaultId, _) = await LoweredAsync();

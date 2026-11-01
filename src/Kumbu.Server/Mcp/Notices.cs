@@ -72,21 +72,25 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
     {
         await EnsureReadyAsync(ct);
         var since = time.GetUtcNow().UtcDateTime - Window;
+        // What the credential was told within the window, first: limiting before leaving those out would return the same
+        // given events on every call once there are 20 of them, and nothing newer would ever be told. A mark is made
+        // after its event, so the marks of every event in the window are in it too.
+        var m = Builders<NoticeMarkDocument>.Filter;
+        var given = await Marks.Find(m.Eq(x => x.Credential, credentialId) & m.Gt(x => x.At, since)).Project(x => x.Event).ToListAsync(ct);
         var f = Builders<VaultEventDocument>.Filter;
         var filters = shared.Select(a =>
             f.Eq(e => e.Vault, a.Id)
             & f.Gt(e => e.At, a.DerivedSlot?.CreatedAt is { } made && made > since ? made : since)
-            & ((f.Eq(e => e.Membership, a.Membership!.Id) & f.In(e => e.Kind, NoticeKinds)) | (f.Eq(e => e.Membership, null) & f.In(e => e.Kind, NoticeKinds))));
-        var events = await VaultEvents.Docs(db).Find(f.Or(filters)).SortBy(e => e.At).Limit(20).ToListAsync(ct);
-        if (events.Count == 0) return [];
-        var m = Builders<NoticeMarkDocument>.Filter;
-        var given = (await Marks.Find(m.Eq(x => x.Credential, credentialId) & m.In(x => x.Event, events.Select(e => e.Id))).Project(x => x.Event).ToListAsync(ct)).ToHashSet();
-        return [.. events.Where(e => !given.Contains(e.Id)).Select(e => (e, shared.First(a => a.Id == e.Vault)))];
+            & ((f.Eq(e => e.Membership, a.Membership!.Id) & f.In(e => e.Kind, OwnKinds)) | (f.Eq(e => e.Membership, null) & f.In(e => e.Kind, VaultKinds))));
+        var events = await VaultEvents.Docs(db).Find(f.Or(filters) & f.Nin(e => e.Id, given)).SortBy(e => e.At).Limit(20).ToListAsync(ct);
+        return [.. events.Select(e => (e, shared.First(a => a.Id == e.Vault)))];
     }
 
     /// <summary>What an agent is told: a change of its role, and the vault's own events. A removal it learns from the
     /// vault being gone.</summary>
-    private static readonly string[] NoticeKinds = [VaultEvents.RoleChanged, VaultEvents.ProviderChanged, VaultEvents.RekeyFinished, VaultEvents.ClosingStarted, VaultEvents.OwnerInactive];
+    private static readonly string[] OwnKinds = [VaultEvents.RoleChanged];
+
+    private static readonly string[] VaultKinds = [VaultEvents.ProviderChanged, VaultEvents.RekeyFinished, VaultEvents.ClosingStarted, VaultEvents.OwnerInactive];
 
     private async Task MarkAsync(string credentialId, IEnumerable<ObjectId> events, CancellationToken ct)
     {

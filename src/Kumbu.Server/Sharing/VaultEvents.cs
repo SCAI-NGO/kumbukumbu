@@ -92,15 +92,17 @@ public static class VaultEvents
 
     /// <summary>
     /// The events <paramref name="memberId"/> sees of <paramref name="vaultId"/>: only those of her own memberships of
-    /// it that are a member's to see (never another member's), and the vault's own, newest first.
+    /// it that are a member's to see (never another member's), and the vault's own since she joined, newest first.
     /// </summary>
     internal static async Task<IReadOnlyList<VaultEventDocument>> OfMemberAsync(IMongoDatabase db, string vaultId, string memberId, CancellationToken ct)
     {
         var mine = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-            .Find(m => m.Vault == vaultId && m.Member == memberId).Project(m => m.Id).ToListAsync(ct);
+            .Find(m => m.Vault == vaultId && m.Member == memberId).Project(m => new { m.Id, m.Status, m.AcceptedAt, m.CreatedAt }).ToListAsync(ct);
         var f = Builders<VaultEventDocument>.Filter;
-        var own = f.In(e => e.Membership, mine) & f.In(e => e.Kind, MemberKinds);
-        var vaultWide = f.Eq(e => e.Membership, null) & f.In(e => e.Kind, VaultWide);
+        var own = f.In(e => e.Membership, mine.Select(m => m.Id)) & f.In(e => e.Kind, MemberKinds);
+        // The vault's own only since she joined: one from before would tell her it was shared before her.
+        var joined = mine.Where(m => m.Status == MembershipStatus.Active).Select(m => m.AcceptedAt ?? m.CreatedAt).DefaultIfEmpty(DateTime.MaxValue).Min();
+        var vaultWide = f.Eq(e => e.Membership, null) & f.In(e => e.Kind, VaultWide) & f.Gte(e => e.At, joined);
         return await Docs(db).Find(f.Eq(e => e.Vault, vaultId) & (own | vaultWide)).SortByDescending(e => e.At).ToListAsync(ct);
     }
 
@@ -139,13 +141,13 @@ public static class VaultEvents
         IMongoDatabase db, string memberId, IReadOnlyDictionary<string, string> aliases, Func<string, CancellationToken, Task<string?>> displayName, CancellationToken ct)
     {
         var mine = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-            .Find(m => m.Member == memberId).Project(m => new { m.Id, m.Vault, m.Owner, m.Status }).ToListAsync(ct);
+            .Find(m => m.Member == memberId).Project(m => new { m.Id, m.Vault, m.Owner, m.Status, m.AcceptedAt, m.CreatedAt }).ToListAsync(ct);
         if (mine.Count == 0) return [];
         var f = Builders<VaultEventDocument>.Filter;
-        var activeVaults = mine.Where(m => m.Status == MembershipStatus.Active).Select(m => m.Vault).Distinct().ToList();
-        var events = await Docs(db).Find(
-            (f.In(e => e.Membership, mine.Select(m => m.Id)) & f.In(e => e.Kind, MemberKinds))
-            | (f.In(e => e.Vault, activeVaults) & f.Eq(e => e.Membership, null) & f.In(e => e.Kind, VaultWide)))
+        // A vault's own events only while she is a member, and only since she joined it (as OfMemberAsync).
+        var vaultWide = mine.Where(m => m.Status == MembershipStatus.Active)
+            .Select(m => f.Eq(e => e.Vault, m.Vault) & f.Eq(e => e.Membership, null) & f.In(e => e.Kind, VaultWide) & f.Gte(e => e.At, m.AcceptedAt ?? m.CreatedAt));
+        var events = await Docs(db).Find(f.Or([f.In(e => e.Membership, mine.Select(m => m.Id)) & f.In(e => e.Kind, MemberKinds), .. vaultWide]))
             .SortByDescending(e => e.At).Limit(100).ToListAsync(ct);
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         var result = new List<(VaultEventDocument, string?, string)>();

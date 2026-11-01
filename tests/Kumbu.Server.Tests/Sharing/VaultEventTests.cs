@@ -104,6 +104,23 @@ public sealed class VaultEventTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Bob_sees_no_vault_event_from_before_he_joined()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var vaultId = await alice.VaultIdAsync();
+        var events = app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName);
+        // While the vault was shared with someone else, before Bob.
+        await events.InsertOneAsync(new VaultEventDocument { Vault = vaultId, Kind = VaultEvents.ProviderChanged, At = DateTime.UtcNow.AddHours(-1) }, cancellationToken: Ct);
+        await alice.ShareWithAsync(bob, "Garten", MemberRole.Read, label: "Bob");
+        await events.InsertOneAsync(new VaultEventDocument { Vault = vaultId, Kind = VaultEvents.ProviderChanged, At = DateTime.UtcNow.AddSeconds(1) }, cancellationToken: Ct);
+
+        Assert.Single(await ActivityTextsAsync(bob, "Garten"));
+        Assert.Single(await FeedAsync(bob));
+        Assert.Equal(2, (await ActivityTextsAsync(alice, "Gartenarbeit")).Count(t => t == "You changed the embedding provider."));
+    }
+
+    [Fact]
     public async Task Events_go_with_the_vault()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);

@@ -87,4 +87,19 @@ public sealed class MemberViewTests(KumbuAppFactory app)
         Assert.Equal("Beete planen\n", (await alice.ShAsync("cat /Gartenarbeit/plan.md", hers)).Text);
         Assert.Equal("[/garten/plan.md: last written by another user]\n/garten/plan.md:1:Beete planen", (await bob.ShAsync("rg Beete /garten", maintain)).Text);
     }
+
+    [Fact]
+    public async Task A_note_from_before_writer_references_is_the_owners_own_and_another_users_to_a_member()
+    {
+        var (alice, bob, vaultId) = await SharedAsync();
+        // plan.md as written before 0.3.0: no v, no reference. Read again from MongoDB.
+        await Vaults.SealedPayloads.RewriteAsync(app.Database, vaultId, await alice.VaultKeyAsync(), "notes", _ => true, p => { p.Remove("v"); p.Remove("ref"); }, Ct);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        catalog.Forget(catalog.Current(vaultId)!, new InvalidOperationException("test"));
+
+        var hers = await KeyAsync(alice, KeyRight.Write, vaultId);
+        Assert.Equal("Beete planen\n", (await alice.ShAsync("cat /Gartenarbeit/plan.md", hers)).Text);
+        var his = await KeyAsync(bob, KeyRight.Write, vaultId);
+        Assert.Equal("[/garten/plan.md: last written by another user]\nBeete planen\n", (await bob.ShAsync("cat /garten/plan.md", his)).Text);
+    }
 }
