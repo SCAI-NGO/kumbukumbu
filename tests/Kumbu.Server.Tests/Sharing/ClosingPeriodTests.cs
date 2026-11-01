@@ -97,6 +97,7 @@ public sealed class ClosingPeriodTests(KumbuAppFactory app)
         var w = await SharedAsync();
         var privatId = await Api.Services.GetRequiredService<VaultCatalog>().FindForUserAsync(w.Alice.User.Id, w.Alice.UserKey, "Privat", Ct);
         var deletion = Api.Services.GetRequiredService<Deletion>();
+        var locked = await Api.Services.GetRequiredService<VaultCatalog>().CountLockedAsync(KumbuAppFactory.Token, Ct);
         var before = DateTime.UtcNow;
         // A crash right after the commit: the closing period is set in the deletion's own transaction, or not at all.
         deletion.FaultAt = at => at == "after-commit" ? throw new InvalidOperationException("crash") : Task.CompletedTask;
@@ -118,6 +119,8 @@ public sealed class ClosingPeriodTests(KumbuAppFactory app)
         Assert.All(slots, s => Assert.True(s.Kind == SlotDocument.Member || s.GrantedVia is not null, s.Kind));
         Assert.Contains(slots, s => s.Kind == SlotDocument.Member);
         Assert.Empty(await Api.Services.GetRequiredService<VaultCatalog>().OwnedVaultIdsAsync(w.Alice.User.Id, Ct));
+        // Without a user slot, it is still no dev-token vault the token fails to open.
+        Assert.Equal(locked, await Api.Services.GetRequiredService<VaultCatalog>().CountLockedAsync(KumbuAppFactory.Token, Ct));
 
         // Bob reads it, read-only, with the date for the banner.
         var garten = (await GartenAsync(w.Bob))!;

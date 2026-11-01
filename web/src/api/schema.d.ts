@@ -7250,6 +7250,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/member-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MemberNoticeView"][];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/member-notices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vaults/{vault}/invitations": {
         parameters: {
             query?: never;
@@ -7655,10 +7770,12 @@ export interface components {
         DeleteAccountRequest: {
             password: string;
             confirm: string;
+            sharedVaults?: null | string;
         };
         DeleteUserRequest: {
             password: string;
             confirm: string;
+            sharedVaults?: null | string;
         };
         DeleteVaultRequest: {
             password: string;
@@ -7696,6 +7813,7 @@ export interface components {
              */
             sharedVaultsClosed: number | string;
             sharedNotes?: null | string;
+            sharedVaultsScheduled?: null | string[];
         };
         DeletionsView: {
             configured: boolean;
@@ -7812,6 +7930,14 @@ export interface components {
             kind: string;
             /** Format: date-time */
             lastUsedAt: null | string;
+        };
+        MemberNoticeView: {
+            id: string;
+            kind: string;
+            /** Format: date-time */
+            at: string;
+            vault: null | string;
+            text: string;
         };
         MembershipView: {
             id: string;
@@ -8155,6 +8281,8 @@ export interface components {
             providerChanged: boolean;
             /** @default false */
             ownerInactive: boolean;
+            /** Format: date-time */
+            closingAt?: null | string;
         };
         VersionEntry: {
             path: string;

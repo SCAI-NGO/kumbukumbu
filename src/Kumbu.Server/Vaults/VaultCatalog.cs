@@ -920,7 +920,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         await EnsureReadyAsync(ct);
         var owned = (await Slots.Distinct(s => s.Vault, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User), cancellationToken: ct).ToListAsync(ct))
             .ToHashSet(StringComparer.Ordinal);
-        var unowned = await Vaults.CountDocumentsAsync(Builders<VaultDocument>.Filter.Nin(v => v.Id, owned), cancellationToken: ct);
+        // A closing vault (collab design §7.3) has no user slot any more either: it is its members', not the token's.
+        var unowned = await Vaults.CountDocumentsAsync(Builders<VaultDocument>.Filter.Nin(v => v.Id, owned) & Builders<VaultDocument>.Filter.Eq(v => v.ClosingAt, null), cancellationToken: ct);
         var opened = (await OpenAsync(secret, ct)).Select(v => v.Id).Where(id => !owned.Contains(id)).Distinct().Count();
         return (int)(unowned - opened);
     }
