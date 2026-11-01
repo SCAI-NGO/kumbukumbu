@@ -266,7 +266,7 @@ public sealed class MarkerTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Events_never_name_another_member_to_a_member()
+    public async Task Events_and_notices_never_name_another_member_to_a_member()
     {
         var w = await WorldAsync();
         var carols = await Share.MembershipOfAsync(app.Database, w.Carol, w.VaultId);
@@ -286,6 +286,11 @@ public sealed class MarkerTests(KumbuAppFactory app)
             using var response = await w.Bob.GetAsync(path);
             answers.Add((path, await response.Content.ReadAsStringAsync(Ct)));
         }
+
+        // His agent is told once, and of his own role only.
+        var told = string.Join("\n", await w.Bob.ShBlocksAsync("ls /", w.BobKey));
+        Assert.Contains("Notice: Your role in /garten is now write.", told, StringComparison.Ordinal);
+        answers.Add(("notices", told));
 
         // Bob sees his own role change, through the renderer, and nothing of Carol's.
         Assert.Contains("changed your role to write", answers.Single(a => a.What == "/api/vaults/garten/activity").Text, StringComparison.Ordinal);

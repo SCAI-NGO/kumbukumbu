@@ -121,6 +121,7 @@ builder.Services.AddSingleton<SyncTickets>();
 builder.Services.AddSingleton<ExportTickets>();
 builder.Services.AddSingleton<Pairings>();
 builder.Services.AddSingleton<SyncHub>();
+builder.Services.AddSingleton<Notices>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SyncHub>());
 
 // The REST API's JSON: a required field that is missing or null is a bad request, not a null in a handler. And a
@@ -163,6 +164,7 @@ builder.Services.AddMcpServer(o =>
         o.ServerInfo = new Implementation { Name = "kumbu", Version = BuildVersion.Semver };
         o.ServerInstructions = ServerInstructions.Text;
         o.Filters.Request.CallToolFilters.Add(RequiredArguments.Filter);
+        o.Filters.Request.CallToolFilters.Add(Notices.Filter);
     })
     .WithHttpTransport()
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);

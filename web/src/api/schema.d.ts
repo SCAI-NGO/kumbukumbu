@@ -7060,6 +7060,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vault-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["VaultEventView"][];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/memberships/{id}/leave": {
         parameters: {
             query?: never;
@@ -7267,6 +7320,7 @@ export interface components {
         ActivityView: {
             rows: components["schemas"]["ActivityRowView"][];
             more: boolean;
+            events?: null | components["schemas"]["VaultEventView"][];
         };
         AddCardRequest: {
             title: string;
@@ -7653,6 +7707,26 @@ export interface components {
             path: null | string;
             candidates: string[];
         };
+        MemberAccessView: {
+            id: string;
+            label: string;
+            role: string;
+            status: string;
+            confirm: boolean;
+            /** Format: date-time */
+            acceptedAt: null | string;
+            /** Format: date-time */
+            redeemedAt: null | string;
+            /** Format: date-time */
+            expiresAt: null | string;
+            credentials: components["schemas"]["MemberCredentialView"][];
+        };
+        MemberCredentialView: {
+            name: string;
+            kind: string;
+            /** Format: date-time */
+            lastUsedAt: null | string;
+        };
         MembershipView: {
             id: string;
             label: string;
@@ -7963,6 +8037,15 @@ export interface components {
         VaultAccessView: {
             apiKeys: string[];
             connections: string[];
+            members: components["schemas"]["MemberAccessView"][];
+        };
+        VaultEventView: {
+            kind: string;
+            /** Format: date-time */
+            at: string;
+            text: string;
+            role?: null | string;
+            vault?: null | string;
         };
         VaultView: {
             name: string;
@@ -7971,6 +8054,11 @@ export interface components {
             embeddings: string;
             pending: boolean;
             canWrite: boolean;
+            /** @default owner */
+            level: string;
+            owner?: null | string;
+            /** @default false */
+            shared: boolean;
         };
         VersionEntry: {
             path: string;

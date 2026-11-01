@@ -103,6 +103,23 @@ public sealed class RestClient
         return (result.IsError ?? false, Assert.IsType<TextContentBlock>(result.Content[0]).Text);
     }
 
+    /// <summary>As <see cref="ShAsync"/>, with every text block of the result, the notices appended to it included.</summary>
+    public async Task<IReadOnlyList<string>> ShBlocksAsync(string command, string bearer)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(_api.Server.BaseAddress, "mcp"),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" },
+            },
+            _api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: Ct);
+        var result = await client.CallToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, cancellationToken: Ct);
+        return [.. result.Content.OfType<TextContentBlock>().Select(b => b.Text)];
+    }
+
     /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead.</summary>
     public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null, IReadOnlyDictionary<string, string>? headers = null) =>
         SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer, headers);

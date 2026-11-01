@@ -191,6 +191,18 @@ public static class VaultEvents
         _ => "Something changed in the sharing of this vault.",
     };
 
+    /// <summary>What a member's agent is told of an event, once (collab design §8.4): <paramref name="vault"/> is the
+    /// path of the vault as the agent sees it, <paramref name="owner"/> the owner's display name as shown to members.</summary>
+    internal static string NoticeFor(string kind, string owner, string vault, string? role, DateTime? until) => kind switch
+    {
+        RoleChanged => $"Your role in {vault} is now {role}.",
+        ProviderChanged => $"The owner ({owner}) changed the embedding provider of {vault}.",
+        RekeyFinished => $"The owner ({owner}) re-encrypted {vault}.",
+        ClosingStarted => $"{vault} will be deleted{Until(until)}; export a copy to keep its notes.",
+        OwnerInactive => $"The owner of {vault} ({owner}) is deactivated; {vault} is read-only until the account is active again.",
+        _ => $"The sharing of {vault} changed.",
+    };
+
     private static string Until(DateTime? until) => until is { } at ? " on " + at.ToString("d MMMM yyyy", CultureInfo.InvariantCulture) : "";
 
     /// <summary>The names an event's text takes, read once per request.</summary>
