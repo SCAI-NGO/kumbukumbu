@@ -491,8 +491,21 @@ public sealed class EncryptedNoteStore(
         if (index is null) return new(Kumbu.Core.Search.SemanticState.Off, [], 0, "search by meaning is off on this server");
 
         IEnumerable<VaultAccess> vaults = scope.IsRoot ? await AllVaultsAsync(ct) : await VaultAsync(scope, ct) is { } v ? [v] : [];
+        var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<VaultAccess> Vaults)>();
+        // A shared vault whose provider the member hasn't OKed is left out, also when it is the scope (collab design
+        // §8.5, §13 M5): the owner's choice decides where her notes go, not where the member's queries go.
+        var unconsented = vaults.Where(a => !ProviderConsented(a)).ToList();
+        if (unconsented.Count > 0)
+        {
+            vaults = vaults.Except(unconsented).ToList();
+            foreach (var provider in unconsented.GroupBy(a => a.Vault.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                unavailable.Add((Kumbu.Core.Search.SemanticState.Off, UnconsentedReason(provider.Key), [.. provider]));
+            }
+        }
+
         var groups = vaults.GroupBy(v => v.Vault.EmbeddingProvider, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal).ToList();
-        if (groups.Count == 0)
+        if (groups.Count == 0 && unavailable.Count == 0)
         {
             var driver = index.Providers.InternalProvider.Driver;
             if (driver.State != Kumbu.Core.Search.SemanticState.Ready) return new(driver.State, [], 0, driver.Reason);
@@ -502,7 +515,6 @@ public sealed class EncryptedNoteStore(
         var hits = new List<Kumbu.Core.Search.SemanticHit>();
         var pending = 0;
         var searched = false;
-        var unavailable = new List<(Kumbu.Core.Search.SemanticState State, string Reason, IReadOnlyList<VaultAccess> Vaults)>();
         // One request per provider, at the same time: a search waits for the slowest provider, not for all of them in turn.
         var queries = await Task.WhenAll(groups.Select(g => EmbedQueryAsync(g.Key, query, ct)));
         foreach (var (group, (state, reason, vector)) in groups.Zip(queries))
@@ -571,6 +583,16 @@ public sealed class EncryptedNoteStore(
         static string Named((Kumbu.Core.Search.SemanticState, string Reason, IReadOnlyList<VaultAccess> Vaults) u) =>
             $"{string.Join(", ", u.Vaults.Select(v => v.Name).Order(StringComparer.Ordinal))}: {u.Reason}";
     }
+
+    /// <summary>Whether the caller's searches may go to the provider of <paramref name="access"/>'s vault: her own vault's
+    /// always; a shared one's once she has acknowledged the provider it has now (<c>providerSeen</c>). Fails closed: a
+    /// membership without one hasn't.</summary>
+    internal static bool ProviderConsented(VaultAccess access) =>
+        access.Membership is not { } membership || string.Equals(membership.ProviderSeen, access.Vault.EmbeddingProvider, StringComparison.Ordinal);
+
+    /// <summary>Why a shared vault is left out of the member's search by meaning, in the result's words.</summary>
+    internal static string UnconsentedReason(string provider) =>
+        $"its owner changed its embedding provider to '{provider}', and your searches don't go there until you OK the change";
 
     /// <summary>The caller's vaults, unlocked, each under the caller's name for it (the vault endpoints show each one's
     /// embedding provider; the version list reads the working set).</summary>

@@ -243,7 +243,7 @@ public sealed partial class VaultCatalog
         var f = Builders<MembershipDocument>.Filter;
         var found = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
             .Find(f.In(m => m.Id, ids.Distinct(StringComparer.Ordinal)) & f.Eq(m => m.Status, MembershipStatus.Active))
-            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Owner).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds))
+            .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Owner).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds).Include(m => m.ProviderSeen))
             .ToListAsync(ct);
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
@@ -251,6 +251,11 @@ public sealed partial class VaultCatalog
     /// <summary>The display name of user <paramref name="userId"/> as typed, or null: for a member's view of her vault's owner.</summary>
     internal Task<string?> DisplayNameAsync(string userId, CancellationToken ct) =>
         Users.Find(u => u.Id == userId).Project(u => (string?)u.Display).FirstOrDefaultAsync(ct);
+
+    /// <summary>How many people the vault is shared with now: its active memberships.</summary>
+    internal async Task<int> ActiveMemberCountAsync(string vaultId, CancellationToken ct) =>
+        (int)await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .CountDocumentsAsync(m => m.Vault == vaultId && m.Status == MembershipStatus.Active, cancellationToken: ct);
 
     /// <summary>Whether <paramref name="memberId"/> holds an active membership of <paramref name="vaultId"/>.</summary>
     internal Task<bool> HasActiveMembershipAsync(string vaultId, string memberId, CancellationToken ct) =>

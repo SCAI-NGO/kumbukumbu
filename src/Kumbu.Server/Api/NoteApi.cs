@@ -24,8 +24,15 @@ namespace Kumbu.Server.Api;
 /// the caller may do in it, <c>read</c>, <c>write</c>, <c>maintain</c> (also its structure: the board's columns,
 /// checkpoints) or <c>owner</c>; for a member, at most her role. <c>canWrite</c>: <c>level</c> is <c>write</c> or above
 /// (kept for older clients). <c>owner</c>: for a vault shared with the caller, its owner's display name, sanitised and
-/// quoted; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).</summary>
-public sealed record VaultView(string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false);
+/// quoted; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).
+/// <c>members</c>: on the owner's own vault, how many people it is shared with now (what her embedding dialog states);
+/// null on a vault shared with the caller, who sees no member list. <c>membership</c>: on a vault shared with the caller,
+/// her membership's id (for "OK" and "Leave this vault"). <c>providerChanged</c>: on a vault shared with her, its
+/// embedding provider (<c>embeddings</c>) isn't the one she acknowledged: the vault is left out of her searches by
+/// meaning until she OKs it (<c>POST /api/memberships/{id}/provider-seen</c>).</summary>
+public sealed record VaultView(
+    string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
+    int? Members = null, string? Membership = null, bool ProviderChanged = false);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
 /// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
@@ -190,15 +197,15 @@ public static class NoteApi
         api.MapGet("/changes", ChangesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 503);
     }
 
-    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, RequestCaller caller, CancellationToken ct)
+    private static async Task<Ok<VaultView[]>> ListVaultsAsync(EncryptedNoteStore store, VaultCatalog catalog, RequestCaller caller, CancellationToken ct)
     {
-        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, v => v.Vault, StringComparer.Ordinal);
+        var vaults = (await store.UnlockedVaultsAsync(ct)).ToDictionary(v => v.Name, StringComparer.Ordinal);
         var views = new List<VaultView>();
         foreach (var name in (await store.ListVaultsAsync(ct)).Order(TextOrder.Default))
         {
             // A vault being re-encrypted has no notes to count yet; it is listed all the same.
-            var notes = vaults[name].Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
-            views.Add(await ViewAsync(store, name, notes, vaults[name], caller, ct));
+            var notes = vaults[name].Vault.Pending ? 0 : (await store.ListNotesUnderAsync(VaultPath.Root.Child(name), ct)).Count;
+            views.Add(await ViewAsync(store, catalog, notes, vaults[name], caller, ct));
         }
 
         return TypedResults.Ok(views.ToArray());
@@ -243,16 +250,21 @@ public static class NoteApi
             }
         }
 
-        return TypedResults.Ok(await ViewAsync(store, access.Name, unlocked.Notes.Count, unlocked, caller, ct));
+        return TypedResults.Ok(await ViewAsync(store, catalog, unlocked.Notes.Count, access, caller, ct));
     }
 
     /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
-    /// requests act at, and <c>canWrite</c> derived from it.</summary>
-    private static async Task<VaultView> ViewAsync(EncryptedNoteStore store, string name, int notes, UnlockedVault vault, RequestCaller caller, CancellationToken ct)
+    /// requests act at, and <c>canWrite</c> derived from it; the owner's member count, a member's own membership and
+    /// whether she still has to OK its embedding provider (collab design §8.5).</summary>
+    private static async Task<VaultView> ViewAsync(EncryptedNoteStore store, VaultCatalog catalog, int notes, VaultAccess access, RequestCaller caller, CancellationToken ct)
     {
+        var (name, vault) = (access.Name, access.Vault);
         var info = await store.VaultInfoAsync(name, ct);
         var level = info?.Level ?? caller.Level(name) ?? AccessLevel.Read;
-        return new VaultView(name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false);
+        var members = access.Membership is null && access.IsOwner && info?.Shared == true ? await catalog.ActiveMemberCountAsync(access.Id, ct) : access.Membership is null ? 0 : (int?)null;
+        return new VaultView(
+            name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
+            members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access));
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
@@ -260,7 +272,7 @@ public static class NoteApi
         var name = VaultNames.Check(body.Name);
 
         await catalog.CreateForUserAsync(name, caller.User!.Id, caller.UserKey!, ct, caller.CredentialReadAt);
-        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true));
+        return TypedResults.Created($"/api/vaults/{Uri.EscapeDataString(name)}/tree", new VaultView(name, 0, catalog.DefaultEmbeddingProvider, Pending: false, CanWrite: true, Members: 0));
     }
 
     /// <summary>The vault with every note, its history, trash, checkpoints and embeddings, for good.</summary>

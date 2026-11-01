@@ -46,6 +46,9 @@ public sealed record MembershipView(
 /// <summary>A member's new role: <c>read</c>, <c>write</c> or <c>maintain</c>.</summary>
 public sealed record ChangeRoleRequest(string Role);
 
+/// <summary><c>provider</c>: the embedding provider the member OKs, as the vault's <c>embeddings</c> named it.</summary>
+public sealed record ProviderSeenRequest(string Provider);
+
 /// <summary>Sharing a vault (collab design §4): invitations and memberships.</summary>
 public static class SharingApi
 {
@@ -64,6 +67,7 @@ public static class SharingApi
         api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPost("/memberships/{id}/provider-seen", ProviderSeenAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
 
@@ -198,6 +202,16 @@ public static class SharingApi
     private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
         await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>The member's "OK" on the banner of a changed embedding provider (collab design §8.5): bound to her as the
+    /// member, as leaving is. Her own consent, for her own searches: nothing of the vault changes.</summary>
+    private static async Task<NoContent> ProviderSeenAsync(
+        string id, ProviderSeenRequest body, RequestCaller caller, Memberships memberships, Search.SearchIndex index, CancellationToken ct)
+    {
+        if (index.Providers.Get(body.Provider) is null) throw ApiErrors.BadRequest($"This server has no embedding provider '{body.Provider}'.");
+        await memberships.ProviderSeenAsync(caller.User!.Id, id, body.Provider, ct);
         return TypedResults.NoContent();
     }
 

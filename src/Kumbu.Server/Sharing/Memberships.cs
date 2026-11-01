@@ -87,6 +87,8 @@ public sealed partial class Memberships(
                 // and a crash leaves neither a keypair without the grant nor a slot without a keypair.
                 var memberPublic = await MemberPublicKeyAsync(s, memberId, memberKey, token);
                 var doc = NewMembership(vaultId, ownerId, memberId, memberPublic, vaultKey, id, label, role);
+                // The provider she is taken to have seen, as an acceptance records it (collab design §8.5).
+                doc.ProviderSeen = (await catalog.InviteMetaAsync(s, vaultId, vaultKey, token))?.EmbeddingProvider;
                 var slot = catalog.MemberSlot(vaultId, id, memberId, memberKey, memberPublic, vaultKey, alias);
                 await GrantInAsync(s, ownerId, ownerKey, vaultKey, doc, slot, alias, token);
                 if (FaultAt is { } fault) await fault("inside-grant");
@@ -354,6 +356,19 @@ public sealed partial class Memberships(
     /// of to the vault, to <c>left</c>.</summary>
     public Task<EndedMembership> LeaveAsync(string memberId, string membershipId, CancellationToken ct) =>
         EndAsync(BoundFilter(membershipId, MembershipScope.OfMember(memberId), MembershipStatus.Active, MembershipStatus.Left), MembershipStatus.Left, ct);
+
+    /// <summary>
+    /// The member acknowledges <paramref name="provider"/> as the embedding provider of the vault of her active membership
+    /// <paramref name="membershipId"/> (collab design §8.5): her searches go to it again once it is the vault's. Bound
+    /// to her as the member (HARD RULE 2); <see cref="MembershipNotFoundException"/> for anyone else's membership.
+    /// </summary>
+    public async Task ProviderSeenAsync(string memberId, string membershipId, string provider, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var bound = BoundFilter(membershipId, MembershipScope.OfMember(memberId), MembershipStatus.Active, MembershipStatus.Active);
+        var updated = await Docs.UpdateOneAsync(bound, Builders<MembershipDocument>.Update.Set(m => m.ProviderSeen, provider), cancellationToken: ct);
+        if (updated.MatchedCount == 0) throw new MembershipNotFoundException();
+    }
 
     /// <summary>
     /// The owner changes the role of an active membership of <paramref name="vaultId"/> (collab design §6.3): one update
