@@ -41,12 +41,28 @@ export function useLevel(vault: string | null): Level {
   return levelOf(vaults.data?.find((v) => v.name === vault));
 }
 
-/** The caller's own vaults, and those shared with her grouped by owner (by display name, in text order). */
+/**
+ * Who shares `vault` with the caller, as she is shown it: the owner's display name (free text, quoted by the server)
+ * with her username beside it, which tells two owners of one display name apart.
+ */
+export const ownerLabel = (vault: Pick<VaultView, "owner" | "ownerUsername">) =>
+  vault.ownerUsername ? `${vault.owner ?? ""} (${vault.ownerUsername})` : (vault.owner ?? "");
+
+/**
+ * The caller's own vaults, and those shared with her grouped by owner: by the owner's username, never by her display
+ * name, which anyone may choose; in text order of what is shown.
+ */
 export function groupVaults(vaults: VaultView[]) {
   const own = vaults.filter((v) => v.owner == null);
   const byOwner = new Map<string, VaultView[]>();
-  for (const v of vaults) if (v.owner != null) byOwner.set(v.owner, [...(byOwner.get(v.owner) ?? []), v]);
-  const shared = [...byOwner].sort(([a], [b]) => textOrder(a, b)).map(([owner, list]) => ({ owner, vaults: list }));
+  for (const v of vaults) {
+    if (v.owner == null) continue;
+    const key = v.ownerUsername ?? `display:${v.owner}`;
+    byOwner.set(key, [...(byOwner.get(key) ?? []), v]);
+  }
+  const shared = [...byOwner]
+    .map(([key, list]) => ({ key, owner: ownerLabel(list[0]), vaults: list }))
+    .sort((a, b) => textOrder(a.owner, b.owner));
   return { own, shared };
 }
 

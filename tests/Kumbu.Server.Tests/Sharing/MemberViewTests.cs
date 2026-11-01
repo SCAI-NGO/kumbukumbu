@@ -65,6 +65,25 @@ public sealed class MemberViewTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task VaultView_names_the_owners_username_for_a_member_only()
+    {
+        var (alice, bob, _) = await SharedAsync();
+        // Carol takes Alice's display name: only the username tells their vaults apart (collab design §4.2, §8.2 L6).
+        var carol = await RestClient.NewAsync(Api, vault: "Beete");
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == carol.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "Alice\nExample"), cancellationToken: Ct);
+        await carol.ShareWithAsync(bob, "beete", MemberRole.Read);
+
+        var bobs = await VaultsAsync(bob);
+        var garten = bobs.Single(v => v!["name"]!.GetValue<string>() == "garten")!;
+        var beete = bobs.Single(v => v!["name"]!.GetValue<string>() == "beete")!;
+        Assert.Equal(garten["owner"]!.GetValue<string>(), beete["owner"]!.GetValue<string>());
+        Assert.Equal((alice.User.Username, carol.User.Username), (garten["ownerUsername"]!.GetValue<string>(), beete["ownerUsername"]!.GetValue<string>()));
+        Assert.Null(bobs.Single(v => v!["name"]!.GetValue<string>() == "Work")!["ownerUsername"]);
+        Assert.Null((await VaultsAsync(alice)).Single()!["ownerUsername"]);
+    }
+
+    [Fact]
     public async Task Ls_shows_the_owner_and_the_effective_level_and_cat_marks_another_users_note()
     {
         var (alice, bob, vaultId) = await SharedAsync();

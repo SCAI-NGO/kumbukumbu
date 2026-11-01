@@ -100,8 +100,8 @@ function VaultOverview({ onNewVault }: { onNewVault(): void }) {
       {shared.length > 0 && (
         <>
           <h2 className="mt-8 text-[22px] leading-tight font-bold text-text">Shared with me</h2>
-          {shared.map(({ owner, vaults: list }) => (
-            <section key={owner} className="mt-4">
+          {shared.map(({ key, owner, vaults: list }) => (
+            <section key={key} className="mt-4">
               {/* The owner's display name, as she typed it: quoted by the server, so it reads as a name and nothing more. */}
               <h3 className="truncate font-mono text-[12px] tracking-[0.08em] text-muted uppercase">{owner}</h3>
               <ul aria-label={`Shared by ${owner}`} className="mt-2 flex flex-col gap-2">

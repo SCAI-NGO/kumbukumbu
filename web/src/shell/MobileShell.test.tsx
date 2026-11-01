@@ -560,6 +560,27 @@ describe("vaults shared with the user", () => {
     expect(within(drawer()).getByText('Shared by "Alice"', { selector: "p" })).toBeInTheDocument();
   });
 
+  it("keeps two owners of one display name apart by their usernames", async () => {
+    signedInApi({
+      "GET /api/vaults": () =>
+        json(200, [
+          vault("Home"),
+          vault("garten", { owner: '"Alice"', ownerUsername: "alice", level: "write", shared: true, membership: "m1" }),
+          vault("Beete", { owner: '"Alice"', ownerUsername: "mallory", level: "write", shared: true, membership: "m2" }),
+        ]),
+      "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+    });
+    renderApp("/");
+    expect(names(await screen.findByRole("list", { name: 'Shared by "Alice" (alice)' }))).toEqual(["garten"]);
+    expect(names(screen.getByRole("list", { name: 'Shared by "Alice" (mallory)' }))).toEqual(["Beete"]);
+
+    await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
+    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
+    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (alice)' })).toHaveTextContent("garten");
+    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (mallory)' })).toHaveTextContent("Beete");
+    expect(within(drawer()).getByText('Shared by "Alice" (alice)', { selector: "p" })).toBeInTheDocument();
+  });
+
   it("opens a read-only shared vault without write actions", async () => {
     sharedApi();
     renderApp("/notes/Rezepte/soup.md");

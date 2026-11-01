@@ -28,8 +28,8 @@ export default function VaultSwitcher({ onNewVault }: { onNewVault(): void }) {
   return (
     <div role="group" aria-label="Switch vault" className="flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
       {own.map(button)}
-      {shared.map(({ owner, vaults: list }) => (
-        <div key={owner} role="group" aria-label={`Shared by ${owner}`} className="flex flex-none items-center gap-1.5 border-l border-line pl-1.5">
+      {shared.map(({ key, owner, vaults: list }) => (
+        <div key={key} role="group" aria-label={`Shared by ${owner}`} className="flex flex-none items-center gap-1.5 border-l border-line pl-1.5">
           <span aria-hidden className="max-w-32 truncate font-mono text-[11px] text-dim">
             {owner}
           </span>

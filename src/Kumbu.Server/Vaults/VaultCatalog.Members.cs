@@ -279,6 +279,11 @@ public sealed partial class VaultCatalog
     internal Task<string?> DisplayNameAsync(string userId, CancellationToken ct) =>
         Users.Find(u => u.Id == userId).Project(u => (string?)u.Display).FirstOrDefaultAsync(ct);
 
+    /// <summary>The username of <paramref name="userId"/>: beside a display name, which anyone may type, it tells two
+    /// owners apart (collab design §4.2).</summary>
+    internal Task<string?> UsernameAsync(string userId, CancellationToken ct) =>
+        Users.Find(u => u.Id == userId).Project(u => (string?)u.Username).FirstOrDefaultAsync(ct);
+
     /// <summary>How many people the vault is shared with now: its active memberships.</summary>
     internal async Task<int> ActiveMemberCountAsync(string vaultId, CancellationToken ct) =>
         (int)await db.GetCollection<MembershipDocument>(Memberships.CollectionName)

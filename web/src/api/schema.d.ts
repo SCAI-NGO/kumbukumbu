@@ -8299,6 +8299,7 @@ export interface components {
             ownerInactive: boolean;
             /** Format: date-time */
             closingAt?: null | string;
+            ownerUsername?: null | string;
         };
         VersionEntry: {
             path: string;

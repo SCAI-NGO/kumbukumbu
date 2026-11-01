@@ -6,7 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { atLeast, findFolder, levelOf, mayChange, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
+import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
@@ -401,7 +401,7 @@ export default function TreeDrawer(props: {
     <>
       <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
         <div className="min-w-0 flex-1">
-          <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${active.owner}` : "Vault"}</p>
+          <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${ownerLabel(active)}` : "Vault"}</p>
           <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
         {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
