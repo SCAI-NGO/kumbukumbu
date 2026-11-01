@@ -221,6 +221,52 @@ public sealed partial class Memberships(
         return updated.MatchedCount > 0 ? pinned : null;
     }
 
+    /// <summary>
+    /// The memberships' part of a re-keying's start (collab design §7.1), inside its transaction: the invitations nobody
+    /// redeemed are withdrawn (an outstanding link can't be wrapped again) and those redeemed but not confirmed are
+    /// declined (the redeemer of a link the owner hasn't vouched for gets no new key), each <c>revoked</c> without lookup,
+    /// expiry and pin, with its event for the owner; their invite and member slots go, and so does every member slot
+    /// of the vault without an active membership. Every membership of the vault gets <c>revision</c> raised, so a write
+    /// that read one before the start conflicts. Returns the active memberships' revisions as they are now, for the
+    /// finish (<see cref="FinishRekeyAsync"/>), and the ids withdrawn and declined. Idempotent: a resumed run finds
+    /// nothing to end.
+    /// </summary>
+    internal static async Task<StartedRekey> StartRekeyAsync(IMongoDatabase db, IClientSessionHandle s, string vaultId, DateTime now, CancellationToken ct)
+    {
+        var docs = db.GetCollection<MembershipDocument>(CollectionName);
+        var f = Builders<MembershipDocument>.Filter;
+        var pending = await docs.Find(s, f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Pending)).Project(m => new { m.Id, m.Member }).ToListAsync(ct);
+        var withdrawn = pending.Where(m => m.Member is null).Select(m => m.Id).ToList();
+        var declined = pending.Where(m => m.Member is not null).Select(m => m.Id).ToList();
+        if (pending.Count > 0)
+        {
+            await docs.UpdateManyAsync(
+                s,
+                f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Pending),
+                Builders<MembershipDocument>.Update
+                    .Set(m => m.Status, MembershipStatus.Revoked).Set(m => m.RevokedAt, now)
+                    .Unset(m => m.InviteLookup).Unset(m => m.ExpiresAt).Unset(m => m.Pin)
+                    // Their only ways in go below, in this transaction: nothing is left for the cleanup.
+                    .Set(m => m.CleanedAt, now),
+                cancellationToken: ct);
+            foreach (var id in withdrawn) await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.InvitationWithdrawn, id, now, null, ct);
+            foreach (var id in declined) await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.InvitationDeclined, id, now, null, ct);
+        }
+
+        await docs.UpdateManyAsync(s, f.Eq(m => m.Vault, vaultId), Builders<MembershipDocument>.Update.Inc(m => m.Revision, 1), cancellationToken: ct);
+        var active = (await docs.Find(s, f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Active)).Project(m => new { m.Id, m.Revision }).ToListAsync(ct))
+            .ToDictionary(m => m.Id, m => m.Revision, StringComparer.Ordinal);
+
+        // Invite slots, and member slots of anything but an active membership: a declined redeemer's, and one a
+        // revocation's cleanup hasn't reached yet. Only the active members' slots stay, wrapped again by the finish.
+        var sl = Builders<SlotDocument>.Filter;
+        await db.GetCollection<SlotDocument>("slots").DeleteManyAsync(
+            s,
+            sl.Eq(x => x.Vault, vaultId) & (sl.Eq(x => x.Kind, SlotDocument.Invite) | (sl.Eq(x => x.Kind, SlotDocument.Member) & sl.Nin(x => x.Membership, active.Keys))),
+            cancellationToken: ct);
+        return new StartedRekey(active, withdrawn, declined);
+    }
+
     /// <summary>The grant's writes, inside the caller's transaction.</summary>
     private async Task GrantInAsync(
         IClientSessionHandle s, string ownerId, byte[] ownerKey, byte[] vaultKey, MembershipDocument doc, SlotDocument slot, string alias, CancellationToken ct)
@@ -723,6 +769,10 @@ public sealed partial class Memberships(
 /// private key opened.
 /// </summary>
 internal sealed record PinRotation(byte[] OldPublicKey, byte[] NewPublicKey, byte[] OldWrapped);
+
+/// <summary>What a re-keying's start did to the vault's memberships: the active ones by id with the revision the finish
+/// expects of each, and the invitations withdrawn and the redemptions declined.</summary>
+internal sealed record StartedRekey(IReadOnlyDictionary<string, int> Active, IReadOnlyList<string> Withdrawn, IReadOnlyList<string> Declined);
 
 /// <summary>What a membership's <c>pin</c> holds, sealed under the vault key (collab design §2.1).</summary>
 internal sealed record MembershipPin(

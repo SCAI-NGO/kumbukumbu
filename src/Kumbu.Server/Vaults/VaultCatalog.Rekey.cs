@@ -279,10 +279,10 @@ public sealed partial class VaultCatalog
     {
         await EnsureReadyAsync(ct);
         if (IsDeleted(vaultId)) throw new VaultDeletedException();
-        // Before the mark, the interrupt and the gates: a shared vault stays pending until phase 4 and is tried at every
-        // trigger, which must not cut its embedding short or evict its working set each time. The start checks again
-        // inside its transaction, for a grant that commits meanwhile.
-        if (await IsSharedAsync(null, vaultId, ct)) throw new VaultSharedException();
+        // Before the mark, the interrupt and the gates: a shared vault stays pending until the finish wraps the new key
+        // to its members (task 4.3) and is tried at every trigger, which must not cut its embedding short or evict its
+        // working set each time. The start checks again inside its transaction, for a grant that commits meanwhile.
+        if (RefusesShared && await IsSharedAsync(null, vaultId, ct)) throw new VaultSharedException();
         if (!_rekeying.TryAdd(vaultId, 0)) throw VaultBusyException.Being();
         var locks = LocksFor(vaultId);
         var (gate, indexGate) = (false, false);
@@ -306,10 +306,17 @@ public sealed partial class VaultCatalog
         }
     }
 
-    /// <summary>What the start transaction found or made.</summary>
+    /// <summary>Until the finish wraps the new key to the members (task 4.3), a shared vault is refused (task 1.13);
+    /// tests of the start turn it off.</summary>
+    internal bool RefusesShared { get; set; } = true;
+
+    /// <summary>What the start transaction found or made; <c>Members</c> what it did to the vault's memberships.</summary>
     private sealed record RekeyStart(
         byte[] OldKey, byte[] NewKey, ObjectId UserSlotId, byte[] UserSlotWrapped, ObjectId NextSlotId, bool Resumed,
-        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected);
+        IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> Disconnected, Sharing.StartedRekey Members, MembersCredentials MembersRevoked);
+
+    /// <summary>The members' API keys and connections a start revoked, since this vault was their last.</summary>
+    private sealed record MembersCredentials(IReadOnlyList<string> ApiKeys, IReadOnlyList<string> Connections);
 
     private async Task<RekeySummary> RunRekeyAsync(string id, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -342,6 +349,10 @@ public sealed partial class VaultCatalog
             _loading.Release();
         }
 
+        foreach (var membershipId in start.Members.Withdrawn) log.LogInformation("The invitation of membership {MembershipId} to vault {VaultId}, which is re-keyed, is withdrawn", membershipId, id);
+        foreach (var membershipId in start.Members.Declined) log.LogInformation("The redemption of membership {MembershipId} of vault {VaultId}, which is re-keyed, is declined", membershipId, id);
+        foreach (var keyId in start.MembersRevoked.ApiKeys) log.LogInformation("A member's API key {KeyId} has no vault left after vault {VaultId} is re-keyed, and is revoked", keyId, id);
+        foreach (var connectionId in start.MembersRevoked.Connections) log.LogInformation("A member's connection {ConnectionId} has no vault left after vault {VaultId} is re-keyed, and is revoked", connectionId, id);
         foreach (var keyId in start.RevokedApiKeys) log.LogInformation("API key {KeyId} had a slot on vault {VaultId}, which is re-keyed; it is revoked", keyId, id);
         foreach (var connectionId in start.Disconnected) log.LogInformation("Connection {ConnectionId} lists vault {VaultId}, which is re-keyed; it needs a reconnect", connectionId, id);
         log.LogInformation(start.Resumed ? "Resuming the re-keying of vault {VaultId}" : "Re-keying vault {VaultId}", id);
@@ -382,8 +393,12 @@ public sealed partial class VaultCatalog
 
     /// <summary>
     /// The start transaction: a new key in a <c>user-next</c> slot, <c>rekeyStartedAt</c> on the vault, every API key
-    /// with a slot on it revoked whole, every connection listing it disconnected (<see cref="Accounts.ConnectionReasons.Rekeyed"/>),
-    /// and the vault pending for its owner. A vault that has a <c>user-next</c> slot is resumed with that slot's key.
+    /// of the owner with a slot on it revoked whole, every connection of hers listing it disconnected
+    /// (<see cref="Accounts.ConnectionReasons.Rekeyed"/>), and the vault pending for her. Of a shared vault (collab
+    /// design §7.1) the members' slots stay, for the finish to wrap again; invitations are withdrawn and unconfirmed
+    /// redemptions declined (<see cref="Sharing.Memberships.StartRekeyAsync"/>); the members' own keys and connections
+    /// lose only this vault (<see cref="EndMembersCredentialsAsync"/>). A vault that has a <c>user-next</c> slot is
+    /// resumed with that slot's key.
     /// </summary>
     private async Task<RekeyStart> StartRekeyAsync(IClientSessionHandle s, string id, string userId, byte[] userKey, CancellationToken ct)
     {
@@ -394,10 +409,10 @@ public sealed partial class VaultCatalog
             ?? throw new VaultNotRekeyableException();
         var oldKey = OpenUserSlot(userKey, userSlot) ?? throw new VaultNotRekeyableException();
 
-        // Until re-keying wraps the new key to members (collab design §7.1), a shared vault is left as it is: the
-        // deletion of other slots below would take its members' slots. Inside the transaction, so that a grant
-        // committing meanwhile conflicts with the vault document's write below, and the retry sees it.
-        if (await IsSharedAsync(s, id, ct)) throw new VaultSharedException();
+        // Until the finish wraps the new key to members (task 4.3), a shared vault is left as it is. Inside the
+        // transaction, so that a grant committing meanwhile conflicts with the vault document's write below, and the
+        // retry sees it.
+        if (RefusesShared && await IsSharedAsync(s, id, ct)) throw new VaultSharedException();
 
         await FaultAsync("inside-start");
 
@@ -410,6 +425,11 @@ public sealed partial class VaultCatalog
             cancellationToken: ct);
         if (owner.MatchedCount == 0) throw new VaultNotRekeyableException();
 
+        // A grant or an acceptance at the same time conflicts with the vault document's write below (§13 M8); one that
+        // committed first is among these.
+        var members = await Sharing.Memberships.StartRekeyAsync(db, s, id, Now, ct);
+        var membersRevoked = await EndMembersCredentialsAsync(s, id, userId, ct);
+
         if (await Slots.Find(s, f.Eq(sl => sl.Vault, id) & f.Eq(sl => sl.Kind, SlotDocument.UserNext)).FirstOrDefaultAsync(ct) is { } nextSlot)
         {
             if (nextSlot.Lookup is null || !CryptographicOperations.FixedTimeEquals(nextSlot.Lookup, lookup) || OpenUserSlot(userKey, nextSlot) is not { } resumedKey)
@@ -418,7 +438,7 @@ public sealed partial class VaultCatalog
             }
 
             if (doc.RekeyStartedAt is null) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, Now), cancellationToken: ct);
-            return new RekeyStart(oldKey, resumedKey, userSlot.Id, userSlot.Wrapped, nextSlot.Id, Resumed: true, [], []);
+            return new RekeyStart(oldKey, resumedKey, userSlot.Id, userSlot.Wrapped, nextSlot.Id, Resumed: true, [], [], members, membersRevoked);
         }
 
         var newKey = VaultCrypto.NewKey();
@@ -434,10 +454,12 @@ public sealed partial class VaultCatalog
         await Slots.InsertOneAsync(s, next, cancellationToken: ct);
         await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, Now), cancellationToken: ct);
 
-        // The server can't wrap K′ for an API key without the key (Ruling 20): each one with a slot here goes whole,
-        // as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted.
+        // The server can't wrap K′ for an API key without the key (Ruling 20): each one of the owner's with a slot here
+        // goes whole, as ApiKeys.RevokeAsync revokes it, its name freed and its slots on every vault deleted. The
+        // members' slots here went above.
         var keyIds = (await (await Slots.DistinctAsync(
-            s, sl => sl.KeyId, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Eq(sl => sl.Vault, id) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct))
+            s, sl => sl.KeyId, f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Eq(sl => sl.Vault, id) & f.Exists(sl => sl.KeyId) & f.Eq(sl => sl.GrantedVia, null),
+            cancellationToken: ct)).ToListAsync(ct))
             .OfType<string>().ToList();
         var keys = db.GetCollection<Accounts.ApiKeyDocument>(Accounts.ApiKeys.CollectionName);
         var revoked = keyIds.Count == 0 ? [] : await keys.Find(s, k => keyIds.Contains(k.Id) && k.RevokedAt == null).Project(k => k.Id).ToListAsync(ct);
@@ -452,18 +474,40 @@ public sealed partial class VaultCatalog
         // Its tokens become tombstones, so a revoked token stays recognised (Ruling 12); the app reconnects.
         var connections = db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName);
         var c = Builders<Accounts.ConnectionDocument>.Filter;
-        var disconnected = await connections.Find(s, c.AnyEq(x => x.Vaults, id) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
+        var disconnected = await connections.Find(s, c.AnyEq(x => x.Vaults, id) & c.Eq(x => x.User, userId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
         if (disconnected.Count > 0)
         {
             await Accounts.ConnectionRevocation.RevokeTokensAsync(db, s, c.In(x => x.Id, disconnected), Accounts.ConnectionReasons.Rekeyed, Now, ct);
             await connections.UpdateManyAsync(s, c.In(x => x.Id, disconnected), Builders<Accounts.ConnectionDocument>.Update.Inc(x => x.Wraps, 1), cancellationToken: ct);
         }
 
-        // Nothing but the owner's slots may wrap K from here on.
-        var others = await Slots.DeleteManyAsync(s, f.Eq(sl => sl.Vault, id) & f.Nin(sl => sl.Kind, [SlotDocument.User, SlotDocument.UserNext]), cancellationToken: ct);
-        if (others.DeletedCount > 0) log.LogWarning("Vault {VaultId} had {Count} more slots besides its owner's; they were deleted with its re-keying", id, others.DeletedCount);
+        // Nothing but the owner's slots and the active members' may wrap K from here on.
+        var others = await Slots.DeleteManyAsync(s, f.Eq(sl => sl.Vault, id) & f.Nin(sl => sl.Kind, [SlotDocument.User, SlotDocument.UserNext, SlotDocument.Member]), cancellationToken: ct);
+        if (others.DeletedCount > 0) log.LogWarning("Vault {VaultId} had {Count} more slots besides its owner's and members'; they were deleted with its re-keying", id, others.DeletedCount);
 
-        return new RekeyStart(oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)]);
+        return new RekeyStart(
+            oldKey, newKey, userSlot.Id, userSlot.Wrapped, next.Id, Resumed: false, [.. revoked.Order(StringComparer.Ordinal)], [.. disconnected.Order(StringComparer.Ordinal)], members, membersRevoked);
+    }
+
+    /// <summary>
+    /// Inside the start transaction, the members' keys and connections on the vault (collab design §7.1, §13 L9): only
+    /// their slots on this vault (<c>grantedVia</c>) go, an API key left with no vault is revoked, and a connection
+    /// loses the vault, revoked if it was its last. The owner's re-key doesn't reach into the members' own vaults; they
+    /// give their agents this vault again.
+    /// </summary>
+    private async Task<MembersCredentials> EndMembersCredentialsAsync(IClientSessionHandle s, string id, string ownerId, CancellationToken ct)
+    {
+        var f = Builders<SlotDocument>.Filter;
+        var derived = f.Eq(sl => sl.Vault, id) & f.Ne(sl => sl.GrantedVia, null);
+        var keyIds = await (await Slots.DistinctAsync(s, sl => sl.KeyId, derived & f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct);
+        await Slots.DeleteManyAsync(s, derived, cancellationToken: ct);
+        var keys = await RevokeKeysWithoutVaultsAsync(s, keyIds, ct);
+
+        var c = Builders<Accounts.ConnectionDocument>.Filter;
+        var theirs = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
+            .Find(s, c.AnyEq(x => x.Vaults, id) & c.Ne(x => x.User, ownerId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
+        var connections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, [id], Now, ct, reason: Accounts.ConnectionReasons.Rekeyed, only: theirs);
+        return new MembersCredentials(keys, connections);
     }
 
     /// <summary>
