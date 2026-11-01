@@ -2,7 +2,9 @@
 
 Written on Oct 24, 2026, after phase 6, against [OKF v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) (Open Knowledge Format, Google Cloud, Apache 2.0). Section numbers `OKF §n` refer to the spec.
 
-**Outcome (decided by Chris):** OKF becomes a v2 feature, **opt-in per directory**. Directories without the flag stay plain Obsidian folders; strict rules would annoy most Obsidian users and don't fit every use. Two groundworks go into v1 (below). Open design questions are in `concept.md` §13.
+**Superseded on Nov 1, 2026:** OKF is parked, and if it comes it is an export format per vault, not an opt-in per directory with rules on write (`concept.md` §13). This analysis is kept for the record and shows the state of Oct 24: since then markdown links, writer identities, reading frontmatter and the ZIP export have been built.
+
+**Outcome then (decided by Chris):** OKF becomes a v2 feature, **opt-in per directory**. Directories without the flag stay plain Obsidian folders; strict rules would annoy most Obsidian users and don't fit every use. Two groundworks go into v1 (below). Open design questions are in `concept.md` §13.
 
 ## What OKF is
 

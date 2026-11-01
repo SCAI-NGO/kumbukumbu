@@ -150,13 +150,13 @@ Existing accounts get a keypair at their next sign-in (the user key is available
 |---|:-:|:-:|:-:|:-:|
 | `cat`, `ls`, `rg`, `semsearch`, `board` (read), history, diff, `img`, `pdf` | ✓ | ✓ | ✓ | ✓ |
 | `write`, `edit`, `replace`, `mv`, `rm`, `restore <path>`, `restore --checkpoint`; `board` add/move/update (cards); uploads | | ✓ | ✓ | ✓ |
-| **Structure:** writing `/Board/Board.md` by any route, `board create`, `rename_column`, `mkcp`, `rmcp`; later the OKF bundles' manifests (v4) | | | ✓ | ✓ |
+| **Structure:** writing `/Board/Board.md` by any route, `board create`, `rename_column`, `mkcp`, `rmcp` | | | ✓ | ✓ |
 | create own API keys / connections for the vault (up to own level) | ✓ | ✓ | ✓ | ✓ |
 | export (with password; the owner sees an event) | ✓ | ✓ | ✓ | ✓ |
 | share, revoke members, choose embedding provider, re-encrypt, delete vault | | | | ✓ |
 
 - **No sham rules** (Chris): a right that one route enforces and another doesn't is worse than none. So a *structural file* is protected on every route: the tools, the REST API and web app (opened read-only for those below `maintain`), and the Obsidian sync (a local change to it is refused and listed as not synced, with the reason; the server's version stays).
-- **The server knows which files are structural** (today `/Board/Board.md`; the OKF manifests with v4). Users don't flag files themselves; that would be a feature of its own.
+- **The server knows which files are structural** (today `/Board/Board.md`). Users don't flag files themselves; that would be a feature of its own.
 - **Existing keys:** a write key can do `mkcp` and change the board's structure today; on the update it becomes `maintain`, so nothing breaks. New keys and invitations suggest `write`; `maintain` is chosen deliberately.
 - **In the web app,** the `maintain` option is shown in a warning colour with a sentence: "Can change the vault's structure: the board's columns, checkpoints." The theme has no warning token yet: a new `--warning` for every colour scheme, checked by the contrast test.
 

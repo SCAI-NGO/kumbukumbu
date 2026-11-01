@@ -6,7 +6,7 @@ namespace Kumbu.Core.Notes;
 
 /// <summary>
 /// What makes up a vault's structure (collab design §3.3): the files and commands only those who may maintain the
-/// vault can change. One list, so further structural files (the OKF manifests) are one line each.
+/// vault can change. One list, so further structural files are one line each.
 /// </summary>
 public static class StructuralFiles
 {
