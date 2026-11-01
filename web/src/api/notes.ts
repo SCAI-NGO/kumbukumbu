@@ -35,6 +35,26 @@ export const isStructural = (path: string) => inVault(path) === "Board/Board.md"
 /** Whether the level lets the caller change `path` (a note, or a folder holding the board). */
 export const mayChange = (level: Level, path: string) => atLeast(level, isStructural(path) || inVault(path) === "Board" ? "maintain" : "write");
 
+/**
+ * Why the caller can't change `path` in `vault`, in the server's words (collab design §3.5, §9.3), or null if she can:
+ * the vault is closing, its owner is deactivated, her level is below `write`, or the board's structure wants `maintain`.
+ */
+export function refusalOf(vault: VaultView | undefined, path: string): string | null {
+  const level = levelOf(vault);
+  if (mayChange(level, path)) return null;
+  const name = vault?.name ?? vaultOf(path);
+  if (vault?.closingAt) return `${name} is read-only: its owner deleted their account, and it is closing.`;
+  if (vault?.ownerInactive) return `${name} is read-only while its owner's account is deactivated.`;
+  if (!atLeast(level, "write")) return `You can only read ${name}.`;
+  return `Only those who may maintain ${name} can change its board's columns.`;
+}
+
+/** Whether people other than the caller can write into `vault`: her own vault that she shares, or one shared with her that isn't read-only for everyone. */
+export const othersWrite = (vault: VaultView) => (vault.owner == null ? vault.shared : !vault.closingAt && !vault.ownerInactive);
+
+/** Her own vault that nobody else reaches. */
+export const isPrivate = (vault: VaultView) => vault.owner == null && !vault.shared;
+
 /** The caller's level in the vault named `vault`, from the vault list. */
 export function useLevel(vault: string | null): Level {
   const vaults = useVaults();

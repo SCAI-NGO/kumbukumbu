@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
-import { atLeast, groupVaults, levelOf, mayChange, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
+import { onRefusal } from "../api/client";
+import { atLeast, groupVaults, levelOf, mayChange, refusalOf, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
 import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
@@ -21,6 +23,7 @@ import Dock from "./Dock";
 import type { MoveSubject } from "./MoveDialog";
 import NewFolderDialog from "./NewFolderDialog";
 import NewVaultDialog from "./NewVaultDialog";
+import SharedBanner, { MemberNotices } from "./SharedBanner";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject } from "./TreeDrawer";
 
@@ -201,6 +204,12 @@ export default function MobileShell() {
   useEffect(() => {
     if (readOnlyNote && useEditor.getState().mode === "write") useEditor.getState().setMode("read");
   }, [readOnlyNote, mode]);
+  const refusal = path && vaults.data ? refusalOf(vaults.data.find((v) => v.name === vaultOf(path)), path) : null;
+
+  // A write the server refused for the level (a role lowered, the owner deactivated, the vault closing): the list is
+  // read again, and the write actions and Write mode follow it.
+  const queryClient = useQueryClient();
+  useEffect(() => onRefusal(() => void queryClient.invalidateQueries({ queryKey: ["vaults"] })), [queryClient]);
 
   if (!path && recentPaths.length) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
@@ -221,13 +230,17 @@ export default function MobileShell() {
 
   return (
     <div data-testid="shell" {...swipe} className="relative flex h-dvh flex-col overflow-hidden bg-bg">
-      <TopBar path={path} writable={!readOnlyNote} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
+      <TopBar path={path} writable={!readOnlyNote} refusal={refusal} sidebar={docked ? { expanded: !collapsed, toggle: toggleSidebar } : null} />
       <UpdateBar />
+      <MemberNotices />
       <InstallHint />
       {/* In the tab order the docked tree comes before the note, as it is shown: top bar, tree, note, dock. */}
       <div className="flex min-h-0 flex-1">
         {docked && <TreeDrawer docked hidden={collapsed} {...treeProps} />}
         <div className="flex min-w-0 flex-1 flex-col">
+          <div className="pt-2 empty:hidden">
+            <SharedBanner vault={path ? vaultOf(path) : activeVault} refusal={refusal} />
+          </div>
           <main className="flex min-h-0 flex-1 flex-col">{path ? <NoteView key={path} path={path} /> : <VaultOverview onNewVault={() => setVaultDialog(true)} />}</main>
           {createUntitled.isError && (
             <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">

@@ -308,3 +308,72 @@ describe("Keys", () => {
     expect(router.state.location.pathname).toBe("/settings");
   });
 });
+
+describe("keys and vaults shared with the user", () => {
+  const own = (name: string, extra: Record<string, unknown> = {}) => ({ name, notes: 1, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false, ...extra });
+  const garten = own("Gartenarbeit", { owner: '"Alice"', ownerUsername: "alice", level: "read", canWrite: false, shared: true, membership: "m1" });
+  const key = (vaults: Record<string, string>) => ({ ...listed, vaults });
+  const warning = /Others can write into Gartenarbeit\. An agent that reads their text and also reaches your private vaults could be talked into copying from them\. Consider a separate key for shared vaults\./;
+
+  it("shows a capped key as acts as read", async () => {
+    api({ "GET /api/vaults": () => json(200, [own("Work"), garten]), "GET /api/keys": () => json(200, [key({ Gartenarbeit: "write", Work: "write" })]) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Laptop")).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
+    expect(within(item).getByText(/acts as read/).querySelector("em")).toHaveTextContent("Gartenarbeit");
+    // Her own vault is hers: nothing caps it.
+    expect(item).toHaveTextContent("Work: read and write");
+  });
+
+  it("caps maintain at her role, and shows a right within it as it is", async () => {
+    const writer = { ...garten, level: "write", canWrite: true };
+    api({ "GET /api/vaults": () => json(200, [writer]), "GET /api/keys": () => json(200, [key({ Gartenarbeit: "maintain" }), { ...key({ Gartenarbeit: "read" }), id: "k9", name: "Reader" }]) });
+    renderApp("/keys");
+    const item = (await screen.findByText("Laptop")).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: maintain, acts as write while you can only write Gartenarbeit"));
+    expect(screen.getByText("Reader").closest("li")).toHaveTextContent("Gartenarbeit: read");
+    expect(screen.getByText("Reader").closest("li")).not.toHaveTextContent("acts as");
+  });
+
+  it("warns when one key covers a shared writable vault and a private one", async () => {
+    const writable = { ...garten, level: "write", canWrite: true };
+    api({ "GET /api/vaults": () => json(200, [own("Work"), own("Shared", { shared: true }), writable]), "GET /api/keys": () => json(200, []) });
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    await userEvent.click(within(within(dialog).getByRole("group", { name: /^Gartenarbeit/ })).getByLabelText("Read and write"));
+    expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+    // Two vaults others write into, and none of hers alone: nothing private to copy from.
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Shared" })).getByLabelText("Read"));
+    expect(within(dialog).queryByRole("note")).not.toBeInTheDocument();
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Work" })).getByLabelText("Read"));
+    expect(within(dialog).getByRole("note")).toHaveTextContent(warning);
+    expect(within(dialog).getByRole("note")).toHaveClass("text-warning");
+    await userEvent.click(within(within(dialog).getByRole("group", { name: /^Gartenarbeit/ })).getByLabelText("None"));
+    // Her own shared vault: others write into it too.
+    expect(within(dialog).getByRole("note")).toHaveTextContent("Others can write into Shared.");
+  });
+
+  it("warns for a listed key that covers both, but not where the shared vault is read-only for everyone", async () => {
+    const writable = { ...garten, level: "write", canWrite: true };
+    const closing = { ...writable, name: "Beete", level: "read", canWrite: false, closingAt: "2026-11-08T10:00:00Z" };
+    api({
+      "GET /api/vaults": () => json(200, [own("Work"), writable, closing]),
+      "GET /api/keys": () => json(200, [key({ Gartenarbeit: "write", Work: "read" }), { ...key({ Beete: "read", Work: "read" }), id: "k8", name: "Closing" }]),
+    });
+    renderApp("/keys");
+    await waitFor(() => expect(screen.getByText("Laptop").closest("li")).toHaveTextContent(warning));
+    expect(screen.getByText("Closing").closest("li")).not.toHaveTextContent("Others can write");
+  });
+
+  it("lists a shared vault in the new key's dialog with its owner, and shows a right above her role as capped", async () => {
+    api({ "GET /api/vaults": () => json(200, [own("Work"), garten]), "GET /api/keys": () => json(200, []) });
+    renderApp("/keys");
+    const dialog = await openNewKey();
+    const group = within(dialog).getByRole("group", { name: /^Gartenarbeit/ });
+    expect(group).toHaveTextContent('shared by "Alice" (alice)');
+    // Any level may be chosen, up to maintain.
+    expect(within(group).getByLabelText("Maintain")).toBeInTheDocument();
+    await userEvent.click(within(group).getByLabelText("Read and write"));
+    expect(group).toHaveTextContent("write, acts as read while you can only read Gartenarbeit");
+  });
+});

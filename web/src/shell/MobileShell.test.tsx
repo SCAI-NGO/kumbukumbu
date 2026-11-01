@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api, call } from "../api/client";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, noContent, renderApp, user } from "../test/app";
@@ -53,6 +54,7 @@ function signedInApi(extra: Parameters<typeof fakeApi>[0] = {}, who = user) {
     "GET /api/links/*": () => json(200, []),
     "GET /api/backlinks/*": () => json(200, []),
     "GET /api/changes": () => json(200, []),
+    "GET /api/member-notices": () => json(200, []),
     ...extra,
   });
 }
@@ -586,6 +588,7 @@ describe("vaults shared with the user", () => {
     renderApp("/notes/Rezepte/soup.md");
     expect(await screen.findByRole("heading", { name: "soup" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    expect(screen.getByText("You can only read Rezepte.")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
@@ -596,8 +599,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the gallery and the export stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Export as ZIP…"]);
+    // Reading, the trash, activity, checkpoints, the gallery, her side of the sharing and the export stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Shared with you…", "Export as ZIP…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(within(drawer()).queryByRole("button", { name: "Actions for soup" })).not.toBeInTheDocument();
   });
@@ -607,6 +610,10 @@ describe("vaults shared with the user", () => {
     renderApp("/notes/garten/Board/Board.md");
     expect(await screen.findByRole("heading", { name: "Board" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeDisabled());
+    // Refused with the server's sentence (collab design §9.3), on the button and above the note.
+    const sentence = "Only those who may maintain garten can change its board's columns.";
+    expect(screen.getByRole("button", { name: "Write" })).toHaveAttribute("title", sentence);
+    expect(screen.getByText(sentence)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Find in note", "History"]);
     await userEvent.keyboard("{Escape}");
@@ -620,6 +627,25 @@ describe("vaults shared with the user", () => {
     expect(await menuItems("Actions for garten")).toEqual(
       expect.arrayContaining(["New note here", "New folder…", "Upload here", "Trash", "Board", "Export as ZIP…"]),
     );
+  });
+
+  it("reads the vault list again when the server refuses a write for the level", async () => {
+    const fetch = signedInApi({
+      "GET /api/vaults": () => json(200, sharedVaults),
+      "GET /api/vaults/garten/tree": () => json(200, tree("garten", ["plan.md"])),
+      // Her role was lowered meanwhile.
+      "PUT /api/notes/garten/plan.md": () => json(403, { error: "you can only read vault garten", code: "read-only" }),
+    });
+    renderApp("/notes/garten/plan.md");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Write" })).toBeEnabled());
+    const vaultReads = () => fetch.mock.calls.filter(([r]) => (r as Request).method === "GET" && new URL((r as Request).url).pathname === "/api/vaults").length;
+    const before = vaultReads();
+    // Any refused write, wherever it came from.
+    await expect(call(api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault: "garten", path: "plan.md" } }, body: { content: "x" } }))).rejects.toMatchObject({
+      status: 403,
+      code: "read-only",
+    });
+    await waitFor(() => expect(vaultReads()).toBeGreaterThan(before));
   });
 
   it("offers the owner Share…, which lists who has access", async () => {

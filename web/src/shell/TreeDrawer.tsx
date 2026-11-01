@@ -20,6 +20,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
+import MemberPanel from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
@@ -332,6 +333,7 @@ export default function TreeDrawer(props: {
   const [connecting, setConnecting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [member, setMember] = useState(false);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
@@ -389,6 +391,8 @@ export default function TreeDrawer(props: {
                 { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
               ]
             : []),
+          // Her side of a vault shared with her: owner, role, provider, her name for it, and leaving.
+          ...(active?.membership ? [{ label: "Shared with you…", icon: Users, onSelect: () => setMember(true) }] : []),
           { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
         ]
       : []),
@@ -466,6 +470,7 @@ export default function TreeDrawer(props: {
   const dialogs = (
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
+      {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />

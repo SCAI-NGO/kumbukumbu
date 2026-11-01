@@ -3,11 +3,11 @@ import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/reac
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useVaults } from "../api/notes";
+import { ownerLabel, useVaults, type VaultView } from "../api/notes";
 import type { components } from "../api/schema";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass, TextField } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
-import { maintainSentence } from "./rights";
+import { CappedRight, isCapped, maintainSentence, MixedWarning, mixedVault } from "./rights";
 
 type Created = components["schemas"]["CreatedApiKeyView"];
 export type Right = "none" | "read" | "write" | "maintain";
@@ -38,7 +38,9 @@ export const grant = (chosen: Record<string, Right>) => Object.fromEntries(Objec
 
 /**
  * A right per vault, as one group of radios for each; "none" leaves the vault out. `children` is the hint underneath.
- * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it.
+ * A right the vault has is kept as it is until another is chosen, so saving unchanged never lowers it. A vault shared
+ * with her names its owner, any level may be chosen for it, and one above her own is shown as what it acts as; one
+ * choice that covers a vault others write into and a private one is warned about.
  */
 export function RightsPicker({
   vaults,
@@ -46,12 +48,13 @@ export function RightsPicker({
   onChange,
   children,
 }: {
-  vaults: UseQueryResult<{ name: string }[]>;
+  vaults: UseQueryResult<VaultView[]>;
   chosen: Record<string, Right>;
   onChange(chosen: Record<string, Right>): void;
   children?: ReactNode;
 }) {
   const id = useId();
+  const mixed = mixedVault(vaults.data, Object.keys(grant(chosen)));
   return (
     <div className="flex flex-col gap-3">
       <p className={labelClass}>Vaults</p>
@@ -60,7 +63,10 @@ export function RightsPicker({
       {vaults.data?.length === 0 && <p className="text-text-body">You have no vault yet. Make one first.</p>}
       {vaults.data?.map((vault) => (
         <fieldset key={vault.name} className="flex min-w-0 flex-col gap-1">
-          <legend className="mb-1 text-text">{vault.name}</legend>
+          <legend className="mb-1 text-text">
+            {vault.name}
+            {vault.owner != null && <span className="ml-2 text-sm text-muted">shared by {ownerLabel(vault)}</span>}
+          </legend>
           <div className="flex rounded-[10px] border border-line bg-surface-2 p-0.5">
             {rights.map((right) => (
               <label key={right.value} className={right.value === "maintain" ? maintainClass : segmentClass}>
@@ -77,8 +83,14 @@ export function RightsPicker({
             ))}
           </div>
           {chosen[vault.name] === "maintain" && <p className="text-sm text-warning">{maintainSentence}</p>}
+          {chosen[vault.name] && isCapped(chosen[vault.name], vault) && (
+            <p className="text-sm text-muted">
+              <CappedRight right={chosen[vault.name]} vault={vault} />
+            </p>
+          )}
         </fieldset>
       ))}
+      {mixed && <MixedWarning vault={mixed} />}
       {children && <p className="text-sm text-muted">{children}</p>}
     </div>
   );

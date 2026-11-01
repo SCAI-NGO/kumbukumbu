@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, call } from "./client";
+import { useEditor } from "../state/editor";
 import type { components } from "./schema";
 
 export type MemberAccess = components["schemas"]["MemberAccessView"];
@@ -52,5 +53,60 @@ export function useMembershipChange(vault: string) {
       queryClient.removeQueries({ queryKey: ["membership", vault, change.id] });
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
     },
+  });
+}
+
+export type MemberNotice = components["schemas"]["MemberNoticeView"];
+
+/** The caller leaves a vault shared with her: from the next request on, none of her credentials reaches it. */
+export function useLeave() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ membership }: { membership: string; vault: string }) =>
+      void (await call(api.POST("/api/memberships/{id}/leave", { params: { path: { id: membership } } }))),
+    onSuccess: async (_, { vault }) => {
+      useEditor.getState().forgetVault(vault);
+      // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
+      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
+      await Promise.all(["vaults", "keys", "connections", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    },
+  });
+}
+
+/** The caller's new name for a vault shared with her; her open note, recent notes and drawer move with it. */
+export function useRenameAlias() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ membership, alias }: { membership: string; vault: string; alias: string }) =>
+      void (await call(api.PUT("/api/memberships/{id}/alias", { params: { path: { id: membership } }, body: { alias } }))),
+    onSuccess: async (_, { vault, alias }) => {
+      const to = alias.normalize("NFC").trim();
+      const editor = useEditor.getState();
+      editor.moved(`/${vault}/`, `/${to}/`);
+      if (useEditor.getState().activeVault === vault) editor.setActiveVault(to);
+      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
+      await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    },
+  });
+}
+
+/** The member's OK for the provider the owner chose: her searches take the vault in again. */
+export function useProviderSeen() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ membership, provider }: { membership: string; provider: string }) =>
+      void (await call(api.POST("/api/memberships/{id}/provider-seen", { params: { path: { id: membership } }, body: { provider } }))),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["vaults"] }),
+  });
+}
+
+/** The caller's notices of shared vaults deleted for everyone, each naming the vault by her own name for it. */
+export const useMemberNotices = () => useQuery({ queryKey: ["member-notices"], queryFn: () => call(api.GET("/api/member-notices")) });
+
+export function useDismissNotice() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => void (await call(api.DELETE("/api/member-notices/{id}", { params: { path: { id } } }))),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["member-notices"] }),
   });
 }

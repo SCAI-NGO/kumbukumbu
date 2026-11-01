@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
+import { useVaults } from "../api/notes";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -29,6 +30,11 @@ function left(ms: number) {
 export default function ConnectObsidianDialog({ vault, onClose }: { vault: string; onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
+  // Others reach a shared vault, and a device there needs a plugin that knows them (collab design §10.2): the server
+  // refuses to pair it until that plugin is out, so no code is asked for. Until the list is in, none either.
+  const vaults = useVaults();
+  const entry = vaults.data?.find((v) => v.name === vault);
+  const shared = entry?.shared === true || entry?.owner != null;
   const server = window.location.origin;
   const [expiresInDays, setExpiresInDays] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -59,7 +65,10 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
     [vault],
   );
 
-  useEffect(() => mutate(expiresInDays), [mutate, expiresInDays]);
+  const asking = !!entry && !shared;
+  useEffect(() => {
+    if (asking) mutate(expiresInDays);
+  }, [asking, mutate, expiresInDays]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -109,6 +118,11 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
               <span className="font-medium text-text">3.</span> And this pairing code, then Connect:
             </p>
             <div className="flex flex-col items-center gap-1 rounded-[12px] border border-line bg-surface-2 p-4">
+              {shared && (
+                <p className="text-center text-sm text-text-body">
+                  {vault} is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.
+                </p>
+              )}
               {valid ? (
                 <>
                   <p className={labelClass}>Pairing code</p>
@@ -119,7 +133,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
                 isPending && <p className="text-sm text-muted">Asking for a code…</p>
               )}
               {error !== null && !isPending && <FormError>{errorText(error)}</FormError>}
-              <button type="button" onClick={() => mutate(expiresInDays)} disabled={isPending} className={`${secondaryButtonClass} mt-1`}>
+              <button type="button" onClick={() => mutate(expiresInDays)} disabled={isPending || !asking} className={`${secondaryButtonClass} mt-1`}>
                 New code
               </button>
             </div>

@@ -254,3 +254,17 @@ describe("Connections", () => {
     await waitFor(() => expect(queryClient.getMutationCache().getAll().filter((m) => m.state.data !== undefined)).toEqual([]));
   });
 });
+
+describe("connections and vaults shared with the user", () => {
+  it("shows a capped connection as acts as read, and warns that it also reaches a private vault", async () => {
+    const shared = [
+      { name: "Arbeit", notes: 3, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false },
+      { name: "Gartenarbeit", notes: 2, embeddings: "internal", pending: false, canWrite: false, level: "read", owner: '"Alice"', shared: true, membership: "m1" },
+    ];
+    api([{ ...base, vaults: { Arbeit: "write", Gartenarbeit: "write" } }], { "GET /api/vaults": () => json(200, shared) });
+    renderApp("/keys");
+    const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
+    expect(item).toHaveTextContent("Others can write into Gartenarbeit.");
+  });
+});

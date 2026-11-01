@@ -7,8 +7,8 @@ import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
-import { useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote } from "../api/notes";
-import { crumbOf, folderOf, noteUrl, titleOf } from "../api/paths";
+import { levelOf, mayChange, useBacklinks, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
+import { crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -76,6 +76,9 @@ export default function NoteView({ path }: { path: string }) {
   // Every save is a new version; the links are only asked for once they are shown again.
   const links = useLinks(path, mode === "read" ? note.data?.version : undefined);
   const save = useSaveNote(path);
+  // A task's box is a write: none for a note the caller can't change (once the levels are in, as for Write mode).
+  const vaults = useVaults();
+  const changes = !vaults.data || mayChange(levelOf(vaults.data.find((v) => v.name === vaultOf(path))), path);
   const createNote = useCreateNote();
   const openNote = useEditor((s) => s.openNote);
   const navigate = useNavigate();
@@ -331,7 +334,7 @@ export default function NoteView({ path }: { path: string }) {
             <MarkdownView
               source={parts.body}
               links={links.data}
-              tasksDisabled={save.isPending}
+              tasksDisabled={save.isPending || !changes}
               onToggleTask={toggleTask}
               onCreateMissing={createMissing}
               highlight={highlight}

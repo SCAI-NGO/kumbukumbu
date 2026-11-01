@@ -5,15 +5,36 @@ import { useSession } from "../state/session";
 import { useUpdate } from "../update/store";
 import type { paths } from "./schema";
 
-/** A refusal or fault from the API; `message` is the server's sentence for the user, if it sent one, `type` its machine-readable kind. */
+/**
+ * A refusal or fault from the API; `message` is the server's sentence for the user, if it sent one, `type` its
+ * machine-readable kind, and `code` a write refusal's reason (collab design §3.5): see `RefusalCode`.
+ */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
     readonly type?: string,
+    readonly code?: string,
   ) {
     super(message);
   }
+}
+
+/** Why the server refused a write: the level is below `write`, below `maintain` for the vault's structure, the vault is closing, or its owner is deactivated. */
+export type RefusalCode = "read-only" | "structural" | "closing" | "owner-inactive";
+const refusalCodes: readonly string[] = ["read-only", "structural", "closing", "owner-inactive"];
+
+export const isRefusal = (error: unknown): error is HttpError & { code: RefusalCode } =>
+  error instanceof HttpError && error.code !== undefined && refusalCodes.includes(error.code);
+
+/**
+ * Told of every refused write: the caller's level changed since the vault list was read (a role lowered, the owner
+ * deactivated), so the shell reads it again and the write actions follow.
+ */
+const refusalListeners = new Set<(error: HttpError) => void>();
+export function onRefusal(listener: (error: HttpError) => void) {
+  refusalListeners.add(listener);
+  return () => void refusalListeners.delete(listener);
 }
 
 // These answer 401 for wrong credentials, not for a missing session; the screens show that themselves.
@@ -106,7 +127,10 @@ export async function call<T>(request: Promise<{ data?: T; error?: unknown; resp
   if (!response.ok) {
     const message = error && typeof error === "object" && "error" in error && typeof error.error === "string" ? error.error : "";
     const type = error && typeof error === "object" && "type" in error && typeof error.type === "string" ? error.type : undefined;
-    throw new HttpError(response.status, message, type);
+    const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+    const refused = new HttpError(response.status, message, type, code);
+    if (isRefusal(refused)) for (const listener of refusalListeners) listener(refused);
+    throw refused;
   }
   return data as T;
 }

@@ -49,6 +49,9 @@ public sealed record ChangeRoleRequest(string Role);
 /// <summary><c>provider</c>: the embedding provider the member OKs, as the vault's <c>embeddings</c> named it.</summary>
 public sealed record ProviderSeenRequest(string Provider);
 
+/// <summary><c>alias</c>: the member's new name for a vault shared with her, a vault name she doesn't have yet.</summary>
+public sealed record RenameAliasRequest(string Alias);
+
 /// <summary>A notice to the caller of a vault shared with her that is gone (collab design §7.3): <c>vault</c>, her name
 /// for it, or null where it can't be read any more; <c>text</c>, "The owner has deleted gartenarbeit.".</summary>
 public sealed record MemberNoticeView(string Id, string Kind, DateTime At, string? Vault, string Text);
@@ -71,6 +74,7 @@ public static class SharingApi
         api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
+        api.MapPut("/memberships/{id}/alias", RenameAliasAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409);
         api.MapPost("/memberships/{id}/provider-seen", ProviderSeenAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
         api.MapGet("/member-notices", NoticesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapDelete("/member-notices/{id}", DismissNoticeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
@@ -208,6 +212,24 @@ public static class SharingApi
     private static async Task<NoContent> LeaveAsync(string id, RequestCaller caller, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
         await EndedAsync(await memberships.LeaveAsync(caller.User!.Id, id, ct), memberships, hub);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>The member renames a vault shared with her (collab design §2.3, §10.1): her name for it, in her own
+    /// namespace, so it widens nothing and needs no password window. Bound to her as the member; a name she has for an
+    /// own vault or another alias answers 409 and the old alias stays.</summary>
+    private static async Task<NoContent> RenameAliasAsync(string id, RenameAliasRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
+    {
+        var alias = VaultNames.Check(body.Alias);
+        try
+        {
+            await catalog.RenameAliasAsync(caller.User!.Id, caller.UserKey!, id, alias, ct);
+        }
+        catch (ArgumentException)
+        {
+            throw new MembershipNotFoundException();
+        }
+
         return TypedResults.NoContent();
     }
 
