@@ -74,7 +74,7 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
 
         async Task<string> OwnerShownAsync(string owner)
         {
-            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = Api.WriterLabels.Quoted(await memberships.DisplayNameAsync(owner, ct) ?? "");
+            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = Api.WriterLabels.Owner(await memberships.DisplayNameAsync(owner, ct));
             return shown;
         }
     }

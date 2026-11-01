@@ -92,6 +92,12 @@ export function useMayChange(path: string, vaultWide = false) {
 export const ownerLabel = (vault: Pick<VaultView, "owner" | "ownerUsername">) =>
   vault.ownerUsername ? `${vault.owner ?? ""} (${vault.ownerUsername})` : (vault.owner ?? "");
 
+/** What the server names an owner whose account is gone (a closing vault): no display name is left to show. */
+export const goneOwner = "the owner";
+
+/** The owner as a sentence begins with her: her quoted display name, or "The owner" once her account is gone. */
+export const ownerAtStart = (vault: Pick<VaultView, "owner">) => (vault.owner === goneOwner ? "The owner" : (vault.owner ?? ""));
+
 /**
  * The caller's own vaults, and those shared with her grouped by owner: by the owner's username, never by her display
  * name, which anyone may choose; in text order of what is shown.

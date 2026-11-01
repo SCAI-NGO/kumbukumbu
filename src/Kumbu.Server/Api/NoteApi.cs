@@ -24,7 +24,7 @@ namespace Kumbu.Server.Api;
 /// the caller may do in it, <c>read</c>, <c>write</c>, <c>maintain</c> (also its structure: the board's columns,
 /// checkpoints) or <c>owner</c>; for a member, at most her role. <c>canWrite</c>: <c>level</c> is <c>write</c> or above
 /// (kept for older clients). <c>owner</c>: for a vault shared with the caller, its owner's display name, sanitised and
-/// quoted; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).
+/// quoted, or <c>the owner</c> once her account is gone; null for her own. <c>shared</c>: others reach it too (her own vault shared with anyone, or one shared with her).
 /// <c>members</c>: on the owner's own vault, how many people it is shared with now (what her embedding dialog states);
 /// null on a vault shared with the caller, who sees no member list. <c>membership</c>: on a vault shared with the caller,
 /// her membership's id (for "OK" and "Leave this vault"). <c>providerChanged</c>: on a vault shared with her, its

@@ -85,6 +85,13 @@ describe("SharedBanner", () => {
     );
   });
 
+  it("names an owner whose account is gone as the owner", async () => {
+    fakeApi({ "GET /api/vaults": () => json(200, [garten({ owner: "the owner", ownerUsername: null, providerChanged: true })]), "GET /api/embeddings": () => json(200, providers) });
+    renderIt(<SharedBanner vault="garten" />);
+    const banner = await screen.findByRole("region", { name: "Embedding provider changed" });
+    await waitFor(() => expect(banner).toHaveTextContent("The owner changed how garten is searched by meaning"));
+  });
+
   it("says why a note can't be changed where no banner does", async () => {
     fakeApi({ "GET /api/vaults": () => json(200, [garten({ level: "read", canWrite: false })]) });
     renderIt(<SharedBanner vault="garten" refusal="You can only read garten." />);

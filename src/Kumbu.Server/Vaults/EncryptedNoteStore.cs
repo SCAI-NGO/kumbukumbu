@@ -79,7 +79,7 @@ public sealed class EncryptedNoteStore(
         if (!(await VaultsAsync(ct)).TryGetValue(vault, out var access)) return null;
         if (_infos.TryGetValue(vault, out var known)) return known;
         var info = access.Membership is { } membership
-            ? new VaultInfo(Api.WriterLabels.Quoted(await catalog.DisplayNameAsync(membership.Owner, ct) ?? ""), access.Level, Shared: true)
+            ? new VaultInfo(Api.WriterLabels.Owner(await catalog.DisplayNameAsync(membership.Owner, ct)), access.Level, Shared: true)
             : new VaultInfo(null, access.Level, await catalog.IsSharedAsync(null, access.Id, ct));
         return _infos[vault] = info;
     }

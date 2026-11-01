@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
@@ -145,6 +146,45 @@ public sealed class ClosingPeriodTests(KumbuAppFactory app)
         Assert.Contains("garten/plan.md", zip.Entries.Select(e => e.FullName));
         var catalog = Api.Services.GetRequiredService<VaultCatalog>();
         Assert.False(catalog.MayIndex(catalog.Current(w.VaultId)!));
+    }
+
+    [Fact]
+    public async Task A_member_sees_the_owner_whose_account_is_gone_as_the_owner_not_an_empty_name()
+    {
+        var w = await SharedAsync();
+        var bobs = await Share.MembershipOfAsync(app.Database, w.Bob, w.VaultId);
+        using (var lowered = await w.Alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{bobs}/role", new { role = "read" }))
+        {
+            Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        }
+
+        await DeleteOwnAsync(w.Alice);
+
+        Assert.Equal(WriterLabels.GoneOwner, (await GartenAsync(w.Bob))!["owner"]!.GetValue<string>());
+        var answers = new List<(string What, string Text)>();
+        foreach (var path in new[] { "/api/vaults", "/api/vaults/garten/activity", "/api/vault-events", "/api/history/garten/plan.md", "/api/notes/garten/plan.md" })
+        {
+            using var response = await w.Bob.GetAsync(path);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            answers.Add((path, await response.Content.ReadAsStringAsync(Ct)));
+        }
+
+        foreach (var command in new[] { "history /garten/plan.md", "ls /" }) answers.Add((command, string.Join("\n", await w.Bob.ShBlocksAsync(command, w.Key))));
+        Assert.Contains("The owner changed your role to read.", answers.Single(a => a.What == "/api/vaults/garten/activity").Text, StringComparison.Ordinal);
+        Assert.Contains("The owner changed your role to read.", answers.Single(a => a.What == "/api/vault-events").Text, StringComparison.Ordinal);
+        Assert.Contains(WriterLabels.GoneOwner, answers.Single(a => a.What == "/api/history/garten/plan.md").Text, StringComparison.Ordinal);
+        Assert.Contains(WriterLabels.GoneOwner, answers.Single(a => a.What == "history /garten/plan.md").Text, StringComparison.Ordinal);
+        // No empty quoted name (inside a JSON string, or in a shell answer's text), nor a made-up one.
+        foreach (var (what, text) in answers)
+        {
+            Assert.False(text.Contains(what.StartsWith('/') ? "\\\"\\\"" : "\"\"", StringComparison.Ordinal), $"{what}: {text}");
+            Assert.DoesNotContain("someone", text, StringComparison.Ordinal);
+        }
+
+        // An agent's notices too: the owner's sentence, without an empty name.
+        Assert.Equal("The owner re-encrypted a vault shared with you; you no longer reach it until you are given it again.",
+            VaultEvents.NoticeFor(VaultEvents.RekeyFinished, WriterLabels.GoneOwner, "", null, null));
+        Assert.Equal("The owner changed the embedding provider of /garten.", VaultEvents.NoticeFor(VaultEvents.ProviderChanged, WriterLabels.GoneOwner, "/garten", null, null));
     }
 
     [Theory]

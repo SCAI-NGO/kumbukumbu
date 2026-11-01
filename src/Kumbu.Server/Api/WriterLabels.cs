@@ -39,6 +39,9 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
     public const string AnotherUser = "another user";
     public const string FormerMember = "a former member";
 
+    /// <summary>The owner to a member once her account is gone (a closing vault): her display name is no more.</summary>
+    public const string GoneOwner = "the owner";
+
     /// <summary>A member's own sessions, to her session (collab design §8.2: viewer = writer).</summary>
     public const string You = "You";
 
@@ -132,7 +135,7 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
 
     private async Task<string> OwnerAsync(string ownerId, CancellationToken ct)
     {
-        if (!_owners.TryGetValue(ownerId, out var shown)) _owners[ownerId] = shown = Quoted(await memberships.DisplayNameAsync(ownerId, ct) ?? "");
+        if (!_owners.TryGetValue(ownerId, out var shown)) _owners[ownerId] = shown = Owner(await memberships.DisplayNameAsync(ownerId, ct));
         return shown;
     }
 
@@ -173,6 +176,10 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
 
     /// <summary><see cref="Sanitise"/>d and quoted: "Alice".</summary>
     public static string Quoted(string name) => $"\"{Sanitise(name)}\"";
+
+    /// <summary>A vault's owner as a member is shown her: her display name <see cref="Quoted"/>, or <see cref="GoneOwner"/>
+    /// once her account is gone, never an empty or made-up name in quotes.</summary>
+    public static string Owner(string? display) => display is null ? GoneOwner : Quoted(display);
 
     /// <summary>
     /// The key of an activity row as the caller gets it: from the row's changeset (or commit), hashed with the caller's

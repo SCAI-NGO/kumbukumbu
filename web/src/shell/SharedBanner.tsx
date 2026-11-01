@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
 import { errorText } from "../api/error-text";
-import { useEmbeddingProviders, useVaults, type VaultView } from "../api/notes";
+import { ownerAtStart, useEmbeddingProviders, useVaults, type VaultView } from "../api/notes";
 import { useDismissNotice, useMemberNotices, useProviderSeen } from "../api/sharing";
 import { FormError, secondaryButtonClass } from "../components/form";
 import { LeaveVaultDialog } from "./MemberPanel";
@@ -22,7 +22,7 @@ function ProviderBanner({ vault }: { vault: VaultView }) {
   return (
     <section aria-label="Embedding provider changed" className={bannerClass}>
       <p>
-        {vault.owner} changed how <em>{vault.name}</em> is searched by meaning: its notes now go to <em>{provider?.label ?? vault.embeddings}</em>. Until you OK
+        {ownerAtStart(vault)} changed how <em>{vault.name}</em> is searched by meaning: its notes now go to <em>{provider?.label ?? vault.embeddings}</em>. Until you OK
         this, your searches leave <em>{vault.name}</em> out; reading and writing go on.
       </p>
       {seen.isError && <FormError>{errorText(seen.error)}</FormError>}
@@ -63,7 +63,7 @@ export default function SharedBanner({ vault: name, refusal }: { vault: string |
   if (vault.ownerInactive) {
     return (
       <p role="status" className={bannerClass}>
-        {vault.owner}'s account is deactivated. This vault is read-only until it is active again. You can export a copy.
+        {ownerAtStart(vault)}'s account is deactivated. This vault is read-only until it is active again. You can export a copy.
       </p>
     );
   }

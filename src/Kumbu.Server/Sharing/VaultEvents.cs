@@ -163,7 +163,7 @@ public static class VaultEvents
         foreach (var e in events)
         {
             var owner = mine.First(m => m.Vault == e.Vault).Owner;
-            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = WriterLabels.Quoted(await displayName(owner, ct) ?? "");
+            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = WriterLabels.Owner(await displayName(owner, ct));
             var alias = aliases.GetValueOrDefault(e.Vault);
             result.Add((e, alias, TextFor(e.Kind, toOwner: false, shown, alias ?? "a vault shared with you", e.Role, e.Until)));
         }
@@ -192,14 +192,14 @@ public static class VaultEvents
         (true, RekeyFinished) => $"{vault} was re-encrypted; members' keys and apps for it were revoked.",
         (true, ClosingStarted) => $"{vault} is closing{Until(until)}.",
         (true, OwnerInactive) => "Your account was deactivated; members can only read.",
-        (false, MembershipRevoked) => $"{person} removed you from {vault}.",
+        (false, MembershipRevoked) => $"{AtStart(person)} removed you from {vault}.",
         (false, MembershipLeft) => $"You left {vault}.",
-        (false, RoleChanged) => $"{person} changed your role to {role}.",
-        (false, ProviderChanged) => $"{person} changed the embedding provider of {vault}.",
-        (false, RekeyFinished) => $"{person} re-encrypted {vault}; your keys and apps for it were revoked. Give your agents {vault} again.",
+        (false, RoleChanged) => $"{AtStart(person)} changed your role to {role}.",
+        (false, ProviderChanged) => $"{AtStart(person)} changed the embedding provider of {vault}.",
+        (false, RekeyFinished) => $"{AtStart(person)} re-encrypted {vault}; your keys and apps for it were revoked. Give your agents {vault} again.",
         // The owner is gone: she isn't named.
         (false, ClosingStarted) => $"The owner deleted their account; {vault} will be deleted{Until(until)}. Export a copy to keep its notes.",
-        (false, OwnerInactive) => $"{person}'s account is deactivated; {vault} is read-only until it is active again.",
+        (false, OwnerInactive) => $"{AtStart(person)}'s account is deactivated; {vault} is read-only until it is active again.",
         _ => "Something changed in the sharing of this vault.",
     };
 
@@ -208,13 +208,19 @@ public static class VaultEvents
     internal static string NoticeFor(string kind, string owner, string vault, string? role, DateTime? until) => kind switch
     {
         RoleChanged => $"Your role in {vault} is now {role}.",
-        ProviderChanged => $"The owner ({owner}) changed the embedding provider of {vault}.",
+        ProviderChanged => $"{TheOwner(owner)} changed the embedding provider of {vault}.",
         // The credential no longer reaches the vault, so it can't be named by the member's alias (§2.3).
-        RekeyFinished => $"The owner ({owner}) re-encrypted a vault shared with you; you no longer reach it until you are given it again.",
+        RekeyFinished => $"{TheOwner(owner)} re-encrypted a vault shared with you; you no longer reach it until you are given it again.",
         ClosingStarted => $"{vault} will be deleted{Until(until)}; export a copy to keep its notes.",
-        OwnerInactive => $"The owner of {vault} ({owner}) is deactivated; {vault} is read-only until the account is active again.",
+        OwnerInactive => $"The owner of {vault}{(owner == WriterLabels.GoneOwner ? "" : $" ({owner})")} is deactivated; {vault} is read-only until the account is active again.",
         _ => $"The sharing of {vault} changed.",
     };
+
+    /// <summary>A person at the start of a sentence: <see cref="WriterLabels.GoneOwner"/> capitalised, a quoted name as it is.</summary>
+    private static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
+
+    /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
+    private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";
 
     private static string Until(DateTime? until) => until is { } at ? " on " + at.ToString("d MMMM yyyy", CultureInfo.InvariantCulture) : "";
 
@@ -232,7 +238,7 @@ public static class VaultEvents
                 return TextFor(e.Kind, toOwner: true, person, access.Name, e.Role, e.Until);
             }
 
-            _owner ??= WriterLabels.Quoted(await displayName(access.Membership!.Owner, ct) ?? "");
+            _owner ??= WriterLabels.Owner(await displayName(access.Membership!.Owner, ct));
             return TextFor(e.Kind, toOwner: false, _owner, access.Name, e.Role, e.Until);
         }
 
