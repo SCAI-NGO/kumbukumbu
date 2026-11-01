@@ -416,6 +416,29 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_write_members_device_may_write_notes_but_not_the_board()
+    {
+        var (_, bob, _, _) = await SharedAsync();
+        using var redeemed = await RedeemAsync(await CodeForAsync(bob, "garten"), "Laptop", plugin: "0.2.0");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        var key = (await JsonAsync(redeemed))["key"]!.GetValue<string>();
+        // Sealed at maintain, as every device key is; capped at his role through its membership.
+        using (var keys = await bob.GetAsync("/api/keys"))
+        {
+            Assert.Equal("maintain", Assert.Single((await JsonAsync(keys)).AsArray())!["vaults"]!["garten"]!.GetValue<string>());
+        }
+
+        using (var note = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/a.md", new { content = "Beete\n" }, bearer: key))
+        {
+            Assert.Equal(HttpStatusCode.Created, note.StatusCode);
+        }
+
+        using var board = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/Board/Board.md", new { content = "---\nkumbu-board: 1\ncolumns: [Ideas]\n---\n" }, bearer: key);
+        Assert.Equal(HttpStatusCode.Forbidden, board.StatusCode);
+        Assert.Equal("structural", (await JsonAsync(board))["code"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task An_own_vault_pairs_without_a_plugin_version()
     {
         var (_, bob, _, _) = await SharedAsync();
