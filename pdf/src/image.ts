@@ -4,14 +4,14 @@
 // decodes a JPEG, so sizes and crops are in the image's displayed pixels, as the server reports
 // them. The header is checked before anything is decoded.
 
-import { createCanvas, loadImage } from "@napi-rs/canvas";
+import { type Canvas, createCanvas, loadImage } from "@napi-rs/canvas";
 import { type Rendered, encode } from "./encode.js";
 import { MAX_IMAGE_PIXELS, PdfError } from "./pdfjs.js";
 import { type Crop, type Target, fit, inside, pixels } from "./steps.js";
 
 export const MAX_SIDE = 16_384;
 
-export type RenderedImage = Rendered & { originalWidth: number; originalHeight: number };
+export type RenderedImage = Rendered & { originalWidth: number; originalHeight: number; transparent: boolean };
 
 export async function renderImage(img: Uint8Array, t: Target, crop?: Crop): Promise<RenderedImage> {
   const header = imageHeader(img);
@@ -38,7 +38,25 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop): Prom
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(image, region.x, region.y, region.w, region.h, 0, 0, width, height);
-  return { ...(await encode(canvas, t.bytes, false)), originalWidth: ow, originalHeight: oh };
+  const transparent = hasTransparency(canvas);
+  return { ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)), originalWidth: ow, originalHeight: oh, transparent };
+}
+
+function hasTransparency(canvas: Canvas): boolean {
+  const { data } = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+  for (let alpha = 3; alpha < data.length; alpha += 4) if (data[alpha]! < 255) return true;
+  return false;
+}
+
+// Clients show transparency as they like, some on black, where a black shape vanishes. On white,
+// as on paper, every client sees the same picture; the server's text says what became of it.
+function onWhite(canvas: Canvas): Canvas {
+  const flat = createCanvas(canvas.width, canvas.height);
+  const ctx = flat.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, flat.width, flat.height);
+  ctx.drawImage(canvas, 0, 0);
+  return flat;
 }
 
 // The stored size from the header (PNG, JPEG, GIF, WebP), or null. Reads lengths and sizes only.

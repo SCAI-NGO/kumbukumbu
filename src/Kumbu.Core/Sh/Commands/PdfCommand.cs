@@ -52,9 +52,10 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                             points, ready for --crop. A cheap first look.
           --images          also show the mixed and image pages of the range as an image, after their text
           --images=all      show every page of the range as an image, whatever its type
-          --crop x,y,w,h    one page only: a part of it, rendered anew at full sharpness, without the text;
-                            in points of the page as displayed (1 pt = 1/72 inch), x and y from the top left,
-                            as 'pdf info' gives the regions
+          --crop x,y,w,h    one page only: a part of it, rendered anew, without the text; drawings stay sharp,
+                            but a photo in the PDF has only the detail it was stored with; in points of the
+                            page as displayed (1 pt = 1/72 inch), x and y from the top left, as 'pdf info'
+                            gives the regions, which leave out a figure's labels and legend when those are text
           --size S          the step for images, medium if omitted:
         {SizeSteps.Table}
           At most {MaxImages} images come from one call, and at most {MaxPages} pages, fewer when their text would pass
@@ -63,6 +64,10 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
           meaning (1. /Work/paper.pdf p7). Neither finds the text of pages without a text layer (scans),
           which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to
           page 2000, and says so.
+          The text and the picture of a page can differ. OCR text may have wrong or missing words, so a word
+          not found doesn't prove it isn't there; and text covered up on the page, or hidden, is still in the
+          text, so a reader of the page may not see all of it. When it matters, check the picture. Small text
+          and digits may be misread at medium: look at them in a crop before quoting them.
           If the analysis hasn't run yet, pdf runs it first (up to a minute); until it is there the text and
           the types aren't known, and only --images=all and --crop show pages.
           pdf stands alone, not in a pipeline. A client may drop images; if none follows a page's text, say
@@ -301,7 +306,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         switch (page.Type)
         {
             case PageType.Image:
-                return $"{(page.Chars > 0 ? "text layer" : "no text layer")}; one image covers the page";
+                return $"{(page.Chars > 0 ? "text layer, perhaps OCR: words may be wrong or missing, check the image" : "no text layer")}; one image covers the page";
             case PageType.Mixed:
                 var figures = Figures(page, small: false);
                 return $"{(page.Chars > 0 ? "text" : "no text layer")}{(figures.Count > 0 ? $"; {string.Join(", ", figures)} of the page" : "")}";

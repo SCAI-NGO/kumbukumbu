@@ -45,9 +45,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           page by page: a match prints /Work/paper.pdf:p7: text (with -n the line within the page:
           /Work/paper.pdf:p7:12: text), context lines /Work/paper.pdf:p7- text, and context stays within
           a page. -l lists a PDF once, -c and -m count per PDF. Pages without a text layer (scans) and PDFs
-          not analysed yet have no text to find; look at pages with 'pdf'. PDFs are searched in the current
-          state only, not with --checkpoint; --files and --tag leave them out. Images are not searched
-          ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
+          not analysed yet have no text to find, and the text of a scan may have wrong or missing words: if
+          nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
+          searched in the current state only, not with --checkpoint; --files and --tag leave them out.
+          Images are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
 
@@ -194,10 +195,28 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
         var matched = new List<VaultPath>();
         var lines = NoteLines(search, options, searched, matched);
-        if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, ct);
+        var pictured = new List<(VaultPath Path, int Pages)>();
+        if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, pictured, ct);
         var result = ShellResult.Ok(Lines.Join(lines));
         if (marks is not null && !options.Has("invert-match")) result = result with { Notice = await marks.NoticeAsync(matched, ct) };
-        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NameHint(search, options, searched.Select(n => n.Path)) };
+        return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NoMatchHint(NameHint(search, options, searched.Select(n => n.Path)), PictureHint(pictured)) };
+    }
+
+    private static string? NoMatchHint(string? names, string? pictures) =>
+        names is not null && pictures is not null ? $"{names}\n{pictures}" : names ?? pictures;
+
+    /// <summary>
+    /// For a search that found nothing in the text: the PDFs in its scope with pages that are pictures, whose text is
+    /// missing or may be wrong, so that the empty answer isn't taken for proof that the words aren't there.
+    /// </summary>
+    private static string? PictureHint(List<(VaultPath Path, int Pages)> pictured)
+    {
+        if (pictured.Count == 0) return null;
+
+        var sorted = pictured.OrderBy(p => p.Path.Value, TextOrder.Default).ToList();
+        var shown = string.Join(", ", sorted.Take(HintedPaths).Select(p => $"{p.Path.Value} ({p.Pages} page{(p.Pages == 1 ? "" : "s")})"));
+        var more = sorted.Count > HintedPaths ? $" and {sorted.Count - HintedPaths} more" : "";
+        return $"no match in the text, but pages that are scans or photos may hold it, as their text is missing or may be wrong: {shown}{more} (pdf info shows which; pdf <path> --images shows them)";
     }
 
     private const int HintedPaths = 5;
@@ -264,7 +283,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// once the output is past what the shell would show anyway. A PDF without a stored analysis, or whose analysis
     /// failed, has no text to find: it is skipped, never analysed here.
     /// </summary>
-    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, CancellationToken ct)
+    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, List<(VaultPath Path, int Pages)> pictured, CancellationToken ct)
     {
         var lineNumbers = options.Has("line-number") && !options.Has("no-line-number");
         var size = output.Sum(l => l.Length + 1);
@@ -279,6 +298,9 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             {
                 var analysis = await pixels!.AnalysisAsync(path, state, runIfPending: false, ct);
                 if (analysis is null) continue;
+
+                var pictures = analysis.Pages.Count(p => p.Type == PageType.Image || (p.Type == PageType.Mixed && p.Chars == 0));
+                if (pictures > 0) pictured.Add((path, pictures));
 
                 for (var first = 1; first <= analysis.AnalysedPages && size <= OutputLimit.MaxChars && search.Remaining(total) != 0; first += PagesAtATime)
                 {

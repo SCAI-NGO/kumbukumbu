@@ -3,8 +3,11 @@ using Kumbu.Core.Paths;
 
 namespace Kumbu.Core.Attachments;
 
-/// <summary>An image ready for the model, with the size it had before scaling (pixels for an image, points for a page).</summary>
-public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight);
+/// <summary>
+/// An image ready for the model, with the size it had before scaling (pixels for an image, points for a page).
+/// <paramref name="Transparent"/>: it had see-through areas, which are delivered on white.
+/// </summary>
+public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight, bool Transparent = false);
 
 /// <summary>
 /// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, the sidecar away or busy
