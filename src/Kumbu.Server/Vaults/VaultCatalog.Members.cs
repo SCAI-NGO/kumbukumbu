@@ -380,7 +380,7 @@ public sealed partial class VaultCatalog
             });
 
     /// <summary>The level a membership's role gives; a role that doesn't parse reads as <c>read</c>.</summary>
-    private static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch
+    internal static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch
     {
         MemberRole.Maintain => Kumbu.Core.Notes.AccessLevel.Maintain,
         MemberRole.Write => Kumbu.Core.Notes.AccessLevel.Write,

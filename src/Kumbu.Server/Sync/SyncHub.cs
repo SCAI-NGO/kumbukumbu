@@ -8,6 +8,7 @@ using Kumbu.Core.Notes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Vaults;
+using MongoDB.Driver;
 
 namespace Kumbu.Server.Sync;
 
@@ -17,8 +18,11 @@ namespace Kumbu.Server.Sync;
 /// subject's own name for it, on each connection whose subject has that vault, and on no other. A hint is a nudge to
 /// ask for the version list, so a lost or doubled one does no harm; per connection and vault at most one goes out per
 /// <see cref="Debounce"/>. A subject is an API key or a web session (<see cref="Subject"/>). Every
-/// <see cref="CheckInterval"/> each connection's subject is checked: a key revoked, expired or its owner deactivated,
-/// or a session ended or its user deactivated, closes with 4401; a vault deleted is dropped. A connection holds no vault open: a hint needs only the vault's id. A subject holds
+/// <see cref="CheckInterval"/> each connection is checked: a key revoked, expired or its owner deactivated, or a
+/// session ended, idle too long (it is never touched here, so an open tab keeps no session alive) or its user
+/// deactivated, closes with 4401; and the subject's vaults are worked out again from its slots and the memberships
+/// active now, so a vault it lost is dropped and a role changed is its level. A membership's revocation, leaving or
+/// role change tells the hub at once (<see cref="MembershipChangedAsync"/>). A connection holds no vault open: a hint needs only the vault's id. A subject holds
 /// at most <see cref="MaxPerKey"/> connections (each costs MongoDB lookups per check): a new one beyond that closes the
 /// subject's oldest with <see cref="Replaced"/>, so a socket the client gave up on, not yet noticed, never locks out
 /// its reconnect.
@@ -116,25 +120,17 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
     /// <summary>
     /// Told by the request that changed membership <paramref name="membershipId"/> of <paramref name="vaultId"/>
-    /// (collab design §6.1, §6.3), before it answers: unless the membership is still active, the vault goes from every
-    /// socket of <paramref name="memberId"/>'s subjects at once, not at the next check, and a socket left with no vault is
-    /// closed with <see cref="KeyInactive"/>. The sweep tells it too, after a cleanup it finished, in case the request
-    /// that ended the membership never got here. Nothing is dropped while she holds another active membership of the
-    /// vault (invited again since).
+    /// (revoked, left, its role changed; collab design §6.1, §6.3, §9.1), before it answers, and by the sweep after a
+    /// cleanup it finished, in case that request never got here. Every connection of <paramref name="memberId"/>'s
+    /// subjects (her sessions, her keys) with the vault is checked at once: the vault goes where the membership it came
+    /// through is no longer active, and its level follows the role where it is. A socket left with no vault is closed with <see cref="KeyInactive"/>. Each connection holds the vault through
+    /// the membership its ticket had, so a late call for an old membership never drops it from a socket of the member's
+    /// newer one (invited again since).
     /// </summary>
     public async Task MembershipChangedAsync(string vaultId, string memberId, string membershipId, CancellationToken ct)
     {
-        if ((await catalog.ActiveMembershipsAsync([membershipId], ct)).ContainsKey(membershipId)) return;
-        if (await catalog.HasActiveMembershipAsync(vaultId, memberId, ct)) return;
-        var closing = new List<Task>();
-        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == memberId && c.Has(vaultId)).ToList())
-        {
-            connection.DropVaults(v => v == vaultId);
-            if (connection.IsEmpty) closing.Add(connection.CloseAsync(KeyInactive, "no vault left"));
-        }
-
-        await Task.WhenAll(closing);
-        if (closing.Count > 0) log.LogInformation("Closed {Count} sync connections of user {UserId}: membership {MembershipId} ended", closing.Count, memberId, membershipId);
+        var checkedCount = await RefreshAsync(c => c.Grant.Subject.User == memberId && c.Has(vaultId), ct);
+        if (checkedCount > 0) log.LogInformation("Checked {Count} sync connections of user {UserId}: membership {MembershipId} changed", checkedCount, memberId, membershipId);
     }
 
     /// <summary>For tests: how many connections are held.</summary>    /// <summary>For tests: how many connections are held.</summary>
@@ -146,6 +142,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
     /// <summary>One round of the 30-second check, for every connection; the loop runs it, tests call it directly.</summary>
     internal Task CheckAsync(CancellationToken ct) => Task.WhenAll(_connections.Keys.Select(c => CheckAsync(c, ct)));
+
+    /// <summary>The connections <paramref name="which"/> picks, checked now; how many.</summary>
+    private async Task<int> RefreshAsync(Func<Connection, bool> which, CancellationToken ct)
+    {
+        var picked = _connections.Keys.Where(which).ToList();
+        await Task.WhenAll(picked.Select(c => CheckAsync(c, ct)));
+        return picked.Count;
+    }
 
     /// <summary>One connection; in parallel with the others, so a slow close holds up only its own.</summary>
     private async Task CheckAsync(Connection connection, CancellationToken ct)
@@ -160,12 +164,56 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                 return;
             }
 
-            connection.DropVaults(catalog.IsDeleted);
+            var before = connection.Vaults;
+            var after = await VaultsNowAsync(subject, before, ct);
+            connection.SetVaults(after);
+            if (before.Count > 0 && after.Count == 0) await connection.CloseAsync(KeyInactive, "no vault left");
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             log.LogWarning(e, "Checking the sync connection of {Subject} failed; it is checked again next time", Describe(subject));
         }
+    }
+
+    /// <summary>
+    /// Of the vaults a connection holds, those its subject still has, at the level it has now (collab design §9.1):
+    /// read afresh from its slots (a key's own; a session's user slots and member slots) and the memberships active
+    /// now. A vault deleted goes; one reached through a membership goes once that membership isn't active, of this
+    /// user, on this vault, and otherwise takes the role's level, <c>read</c> while the owner is inactive or the vault
+    /// closing, and a key's never above its ticket's. Vaults gained since the ticket come with the next ticket.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, VaultState>> VaultsNowAsync(Subject subject, IReadOnlyDictionary<string, VaultState> held, CancellationToken ct)
+    {
+        var live = held.Where(v => !catalog.IsDeleted(v.Key)).ToList();
+        if (live.Count == 0) return new Dictionary<string, VaultState>(StringComparer.Ordinal);
+        var via = live.Select(v => v.Value.Membership).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        var f = Builders<SlotDocument>.Filter;
+        var mine = subject.Kind == SubjectKind.Key
+            ? f.Eq(s => s.Kind, SlotDocument.ApiKey) & f.Eq(s => s.KeyId, subject.Id)
+            : (f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Owner, subject.User)) | (f.Eq(s => s.Kind, SlotDocument.Member) & f.In(s => s.Membership, via));
+        var slots = await catalog.Slots.Find(f.In(s => s.Vault, live.Select(v => v.Key)) & mine)
+            .Project(s => new { s.Vault, s.Kind, s.GrantedVia, s.Membership }).ToListAsync(ct);
+        var active = via.Count == 0 ? null : await catalog.ActiveMembershipsAsync(via, ct);
+
+        var result = new Dictionary<string, VaultState>(StringComparer.Ordinal);
+        foreach (var (vaultId, state) in live)
+        {
+            var slotHeld = slots.Any(s => s.Vault == vaultId && (subject.Kind == SubjectKind.Key
+                ? s.GrantedVia == state.Membership
+                : state.Membership is null ? s.Kind == SlotDocument.User : s.Kind == SlotDocument.Member && s.Membership == state.Membership));
+            if (!slotHeld) continue;
+            if (state.Membership is null)
+            {
+                result[vaultId] = state;
+                continue;
+            }
+
+            if (active is null || !active.TryGetValue(state.Membership, out var membership) || membership.Vault != vaultId || membership.Member != subject.User) continue;
+            var level = membership.OwnerInactive ? AccessLevel.Read : VaultCatalog.LevelOf(membership);
+            result[vaultId] = state with { Level = level < state.Ceiling ? level : state.Ceiling };
+        }
+
+        return result;
     }
 
     private static string Describe(Subject subject) => subject.Kind == SubjectKind.Key ? $"API key {subject.Id}" : $"a session of user {subject.User}";
@@ -196,8 +244,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     }
 
     /// <summary>A vault as a connection holds it: the subject's name for it, the membership it came through (null for
-    /// the owner), and its level.</summary>
-    private sealed record VaultState(string Name, string? Membership, AccessLevel Level);
+    /// the owner), its level now, and the most it may have (a key's ticket level; a member's session follows her role).</summary>
+    private sealed record VaultState(string Name, string? Membership, AccessLevel Level, AccessLevel Ceiling);
 
     private sealed class Connection(WebSocket socket, TicketGrant grant, long number)
     {
@@ -215,7 +263,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         private volatile IReadOnlyDictionary<string, VaultState> _vaults = grant.Vaults.ToDictionary(
             v => v.VaultId,
-            v => new VaultState(v.VaultName, v.Membership, v.Level),
+            v => new VaultState(v.VaultName, v.Membership, v.Level, grant.Subject.Kind == SubjectKind.Session && v.Membership is not null ? AccessLevel.Maintain : v.Level),
             StringComparer.Ordinal);
 
         public TicketGrant Grant { get; } = grant;
@@ -248,8 +296,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
 
         public bool Has(string vaultId) => _vaults.ContainsKey(vaultId);
 
-        public void DropVaults(Func<string, bool> gone) =>
-            _vaults = _vaults.Where(v => !gone(v.Key)).ToDictionary(v => v.Key, v => v.Value, StringComparer.Ordinal);
+        public void SetVaults(IReadOnlyDictionary<string, VaultState> vaults) => _vaults = vaults;
 
         public bool IsEmpty => _vaults.Count == 0;
 

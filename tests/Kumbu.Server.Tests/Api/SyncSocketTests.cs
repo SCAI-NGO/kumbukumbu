@@ -237,6 +237,81 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task The_check_drops_a_vault_whose_membership_was_revoked_behind_the_servers_back()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+
+        await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Revoked);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal([("Work", AccessLevel.Owner)], SessionVaults(bob));
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromSeconds(1.5)));
+        await bob.CreateAsync("eigen.md", "y\n");
+        Assert.Equal(Changed("Work"), await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task The_check_follows_a_role_changed_behind_the_servers_back()
+    {
+        var (_, bob, _, membership) = await SharedAsync(MemberRole.Read);
+        using var socket = await SyncSockets.OpenAsync(Api, bob);
+        Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+
+        await Share.SetRoleAsync(app.Database, membership, MemberRole.Maintain);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Contains(("garten", AccessLevel.Maintain), SessionVaults(bob));
+    }
+
+    [Fact]
+    public async Task The_check_closes_a_members_key_socket_left_with_no_vault()
+    {
+        var (_, bob, vaultId, membership) = await SharedAsync();
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "garten – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        using var socket = await SyncSockets.OpenAsync(Api, bob, key);
+
+        await Share.SetStatusAsync(app.Database, membership, MembershipStatus.Left);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    private IMongoCollection<UserSlotDocument> UserSlots => app.Database.GetCollection<UserSlotDocument>("user_slots");
+
+    [Fact]
+    public async Task An_open_tab_does_not_keep_its_session_alive()
+    {
+        var user = await NewAsync(Api);
+        using var socket = await SyncSockets.OpenAsync(Api, user);
+        var usedAt = (await UserSlots.Find(s => s.User == user.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct)).LastUsedAt;
+
+        _time.Advance(TimeSpan.FromMinutes(29));
+        await Hub.CheckAsync(Ct);
+        Assert.Null(await ReceiveAsync(socket, TimeSpan.FromMilliseconds(300)));
+        Assert.Equal(usedAt, (await UserSlots.Find(s => s.User == user.User.Id && s.Kind == UserSlotDocument.Session).SingleAsync(Ct)).LastUsedAt);
+
+        // The session's idle time is up: the socket closes with it.
+        _time.Advance(TimeSpan.FromMinutes(2));
+        await Hub.CheckAsync(Ct);
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_deactivated_users_session_socket_closes_with_4401()
+    {
+        var user = await NewAsync(Api);
+        using var socket = await SyncSockets.OpenAsync(Api, user);
+
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == user.User.Id, Builders<UserDocument>.Update.Set(u => u.Active, false), cancellationToken: Ct);
+        await Hub.CheckAsync(Ct);
+
+        Assert.Equal("close 4401", await ReceiveAsync(socket, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task A_key_holds_ten_open_tickets_and_a_new_one_drops_the_oldest()
     {
         var user = await NewAsync(Api);
