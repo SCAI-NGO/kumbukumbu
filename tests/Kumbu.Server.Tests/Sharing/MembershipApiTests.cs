@@ -506,9 +506,12 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
     public async Task The_sweep_tells_the_hub_of_an_ended_membership_it_cleans_up()
     {
         var api = app.PublicApi;
-        var (_, bob, vaultId, membershipId) = await SharedAsync(api);
+        var (alice, bob, vaultId, membershipId) = await SharedAsync(api);
         var (key, _) = await KeyAsync(api, bob, "Laptop", vaultId);
         using var socket = await SocketAsync(api, bob, key);
+        // A hint says the socket is up, its vaults worked out again at the upgrade: an end before that would be seen there.
+        await alice.CreateAsync("up.md", "x\n");
+        Assert.NotNull(await ReceiveAsync(socket, TimeSpan.FromSeconds(3)));
 
         // Ended without the request's part (as if it was aborted after the commit): only the sweep is left to tell the hub.
         await Share.SetStatusAsync(app.Database, membershipId, MembershipStatus.Revoked);
