@@ -62,6 +62,7 @@ public static class SharingApi
         api.MapDelete("/vaults/{vault}/memberships/{id}", WithdrawAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/memberships/{id}/revoke", RevokeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
     }
@@ -178,6 +179,19 @@ public static class SharingApi
         }
 
         return TypedResults.Ok(View(changed));
+    }
+
+    /// <summary>
+    /// The caller's own events as a member, across the vaults shared with her (collab design §8.3): her role changes,
+    /// her removal and her leaving, also of a vault she no longer reaches, and the vaults' own events while she is a
+    /// member. Nothing of another member's.
+    /// </summary>
+    private static async Task<Ok<VaultEventView[]>> EventsAsync(
+        RequestCaller caller, Vaults.EncryptedNoteStore store, Memberships memberships, MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
+    {
+        var aliases = (await store.UnlockedVaultsAsync(ct)).Where(a => a.Membership is not null).ToDictionary(a => a.Id, a => a.Name, StringComparer.Ordinal);
+        var events = await VaultEvents.OfMemberEverywhereAsync(db, caller.User!.Id, aliases, memberships.DisplayNameAsync, ct);
+        return TypedResults.Ok(events.Select(e => new VaultEventView(e.Event.Kind, e.Event.At, e.Text, e.Event.Role, e.Vault)).ToArray());
     }
 
     /// <summary>The member leaves a vault shared with her: as a revocation, bound to her as the member.</summary>

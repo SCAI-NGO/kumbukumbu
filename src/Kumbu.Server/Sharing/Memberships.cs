@@ -332,6 +332,7 @@ public sealed partial class Memberships(
         var docs = db.GetCollection<MembershipDocument>(CollectionName);
         var ids = await docs.Find(s, m => m.Member == userId).Project(m => m.Id).ToListAsync(ct);
         if (ids.Count == 0) return 0;
+        await VaultEvents.DeleteAsync(db, s, null, ids, ct);
         var f = Builders<SlotDocument>.Filter;
         await db.GetCollection<SlotDocument>("slots").DeleteManyAsync(
             s, (f.Eq(sl => sl.Kind, SlotDocument.Member) & f.In(sl => sl.Membership, ids)) | f.In(sl => sl.GrantedVia, ids), cancellationToken: ct);
@@ -395,12 +396,25 @@ public sealed partial class Memberships(
     private async Task<EndedMembership> EndAsync(FilterDefinition<MembershipDocument> bound, string to, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
-        var ended = await Docs.FindOneAndUpdateAsync(
-            bound,
-            Builders<MembershipDocument>.Update.Set(m => m.Status, to).Set(m => m.RevokedAt, Now).Unset(m => m.Pin).Inc(m => m.Revision, 1),
-            new FindOneAndUpdateOptions<MembershipDocument> { ReturnDocument = ReturnDocument.After },
-            ct) ?? throw new MembershipNotFoundException();
-        log.LogInformation("Membership {MembershipId} of vault {VaultId} is {Status}", ended.Id, ended.Vault, to);
+        MembershipDocument? ended = null;
+        using var session = await catalog.StartSessionAsync(ct);
+        // The atomic step is the one update; its event commits with it.
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                var now = Now;
+                ended = await Docs.FindOneAndUpdateAsync(
+                    s,
+                    bound,
+                    Builders<MembershipDocument>.Update.Set(m => m.Status, to).Set(m => m.RevokedAt, now).Unset(m => m.Pin).Inc(m => m.Revision, 1),
+                    new FindOneAndUpdateOptions<MembershipDocument> { ReturnDocument = ReturnDocument.After },
+                    token) ?? throw new MembershipNotFoundException();
+                await VaultEvents.RecordAsync(
+                    db, s, ended.Vault, to == MembershipStatus.Left ? VaultEvents.MembershipLeft : VaultEvents.MembershipRevoked, ended.Id, now, null, token);
+                return true;
+            },
+            cancellationToken: ct);
+        log.LogInformation("Membership {MembershipId} of vault {VaultId} is {Status}", ended!.Id, ended.Vault, to);
         return new EndedMembership(ended.Id, ended.Vault, ended.Member!);
     }
 
@@ -649,9 +663,7 @@ public sealed partial class Memberships(
                     }),
             ],
             ct);
-        await VaultEvents.Docs(db).Indexes.CreateOneAsync(
-            new CreateIndexModel<VaultEventDocument>(Builders<VaultEventDocument>.IndexKeys.Ascending(e => e.Vault).Ascending(e => e.Membership).Descending(e => e.At)),
-            cancellationToken: ct);
+        await VaultEvents.EnsureIndexAsync(db, ct);
         _ready = true;
     }
 }

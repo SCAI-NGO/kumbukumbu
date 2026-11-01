@@ -93,8 +93,19 @@ public sealed record ActivityFileView(
 public sealed record ActivityRowView(string? Id, string Writer, string? WriterKind, DateTime From, DateTime To, IReadOnlyList<ActivityFileView> Files, string Key, bool Restore);
 
 /// <summary>The vault's changesets, newest first; <c>more</c>: older ones follow (ask again with <c>before</c> = the last
-/// row's <c>to</c> and <c>key</c> = its <c>key</c>).</summary>
-public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More);
+/// row's <c>to</c> and <c>key</c> = its <c>key</c>). <c>events</c>: what happened to the sharing of the vault in the
+/// same span of time as the rows (from the last row's <c>to</c>, or from the start when there are no more rows, up to
+/// <c>before</c>), newest first: the owner sees every event, a member those of her own membership and the vault's.</summary>
+public sealed record ActivityView(IReadOnlyList<ActivityRowView> Rows, bool More, IReadOnlyList<VaultEventView>? Events = null);
+
+/// <summary>A sharing event (collab design §8.3). <c>kind</c>: <c>invitation-created</c>, <c>invitation-withdrawn</c>,
+/// <c>invitation-declined</c>, <c>invitation-expired</c>, <c>invitation-accepted</c>, <c>invitation-confirmed</c>,
+/// <c>member-export</c>, <c>membership-revoked</c>, <c>membership-left</c>, <c>role-changed</c> (<c>role</c> the new
+/// one), <c>provider-changed</c>, <c>rekey-finished</c>, <c>closing-started</c> or <c>owner-inactive</c>. <c>text</c>: the
+/// sentence for the caller ("\"Alice\" changed your role to write."); names in it are the owner's labels for her members
+/// to the owner, the owner's display name, sanitised and quoted, to a member, and never another member's.
+/// <c>vault</c>: the caller's name for the vault, null when she has no access to it any more.</summary>
+public sealed record VaultEventView(string Kind, DateTime At, string Text, string? Role = null, string? Vault = null);
 
 /// <summary>
 /// A note's restore, the vault's trash and its checkpoints for the web app: the code paths of <c>restore</c>,
@@ -254,7 +265,8 @@ public static class HistoryApi
     /// earlier versions (<see cref="AccountLimits.HistoryScansPerUser"/>): both read every note of the vault.
     /// </summary>
     private static async Task<Ok<ActivityView>> ActivityAsync(
-        string vault, string? before, string? key, int? limit, RequestCaller caller, AccountLimits limits, INoteStore store, WriterLabels labels, CancellationToken ct)
+        string vault, string? before, string? key, int? limit, RequestCaller caller, AccountLimits limits, INoteStore store, WriterLabels labels,
+        MongoDB.Driver.IMongoDatabase db, Sharing.Memberships memberships, CancellationToken ct)
     {
         var max = limit ?? DefaultActivityRows;
         if (max is < 1 or > MaxActivityRows) throw ApiErrors.BadRequest($"limit is 1 to {MaxActivityRows}.");
@@ -291,7 +303,21 @@ public static class HistoryApi
                 f.Path, f.Kind.ToString().ToLowerInvariant(), f.From, f.Version, f.Before, f.BeforeLost, f.Trashed, f.To, f.FileKind))], row.Key, row.Restore));
         }
 
-        return TypedResults.Ok(new ActivityView(views, rows.Count > max));
+        // The sharing's events of the same span as the rows, so that paging through the rows pages through them too.
+        var more = rows.Count > max;
+        var from = more ? views[^1].To : DateTime.MinValue;
+        var events = new List<VaultEventView>();
+        if ((caller.Credential as IRightsCredential)?.Access(root.Segments[0]) is { } access)
+        {
+            foreach (var (e, text) in await Sharing.VaultEvents.ForAsync(db, access, caller.User?.Id, memberships.DisplayNameAsync, ct))
+            {
+                if ((until is { } upTo && e.At >= upTo) || e.At < from) continue;
+                if (events.Count == MaxActivityRows) break;
+                events.Add(new VaultEventView(e.Kind, e.At, text, e.Role, access.Name));
+            }
+        }
+
+        return TypedResults.Ok(new ActivityView(views, more, events));
     }
 
     private static async Task<Ok<CheckpointsView>> ListCheckpointsAsync(string vault, INoteStore store, Checkpoints checkpoints, WriterLabels labels, CancellationToken ct)

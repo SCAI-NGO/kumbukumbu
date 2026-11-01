@@ -104,6 +104,7 @@ public sealed partial class Memberships
                 await RequireUnderLimitsAsync(s, vaultId, pending: true, token);
                 await Docs.InsertOneAsync(s, doc, cancellationToken: token);
                 await catalog.Slots.InsertOneAsync(s, slot, cancellationToken: token);
+                await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.InvitationCreated, id, now, doc.Role, token);
                 return true;
             },
             cancellationToken: ct);
@@ -186,6 +187,7 @@ public sealed partial class Memberships
                     // With confirm it stays pending, redeemed, until the owner confirms or declines.
                     if (!claimed.Confirm) update = update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, now);
                     await Docs.UpdateOneAsync(s, m => m.Id == claimed.Id, update, cancellationToken: token);
+                    await VaultEvents.RecordAsync(db, s, claimed.Vault, VaultEvents.InvitationAccepted, claimed.Id, now, null, token);
                     if (FaultAt is { } inside) await inside("inside-accept");
                     accepted = new AcceptedInvite(
                         claimed.Id, alias, MemberRoles.Parse(claimed.Role) ?? MemberRole.Read, claimed.Confirm ? MembershipStatus.Pending : MembershipStatus.Active);
@@ -253,6 +255,7 @@ public sealed partial class Memberships
                     Builders<MembershipDocument>.Update.Set(m => m.Status, MembershipStatus.Active).Set(m => m.AcceptedAt, Now).Inc(m => m.Revision, 1),
                     cancellationToken: token);
                 if (confirmed.MatchedCount == 0) throw new MembershipNotFoundException();
+                await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.InvitationConfirmed, membershipId, Now, null, token);
                 return true;
             },
             cancellationToken: ct);
@@ -298,6 +301,7 @@ public sealed partial class Memberships
                 // Its way in: the invite slot of an open invitation, the member slot of a redeemed one.
                 var kind = redeemed ? SlotDocument.Member : SlotDocument.Invite;
                 await catalog.Slots.DeleteManyAsync(s, sl => sl.Kind == kind && sl.Membership == membershipId && sl.Vault == vaultId, cancellationToken: token);
+                await VaultEvents.RecordAsync(db, s, vaultId, redeemed ? VaultEvents.InvitationDeclined : VaultEvents.InvitationWithdrawn, membershipId, Now, null, token);
                 return true;
             },
             cancellationToken: ct);
@@ -352,6 +356,8 @@ public sealed partial class Memberships
                     cancellationToken: token);
                 if (ended.MatchedCount == 0) return false;
                 await catalog.Slots.DeleteManyAsync(s, sl => sl.Kind == slotKind && sl.Membership == membershipId, cancellationToken: token);
+                var vault = await Docs.Find(s, m => m.Id == membershipId).Project(m => m.Vault).FirstAsync(token);
+                await VaultEvents.RecordAsync(db, s, vault, VaultEvents.InvitationExpired, membershipId, now, null, token);
                 return true;
             },
             cancellationToken: ct);

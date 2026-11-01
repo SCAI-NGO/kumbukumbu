@@ -216,7 +216,8 @@ public static class NoteApi
     /// provider is what sends the vault's text there, so the web app asks first.
     /// </summary>
     private static async Task<Ok<VaultView>> SetEmbeddingsAsync(
-        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller, CancellationToken ct)
+        string vault, SetEmbeddingsRequest body, EncryptedNoteStore store, VaultCatalog catalog, SearchIndex index, RequestCaller caller,
+        MongoDB.Driver.IMongoDatabase db, CancellationToken ct)
     {
         var root = ApiPaths.Parse(vault, null, note: false);
         var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
@@ -232,8 +233,14 @@ public static class NoteApi
 
         if (unlocked.Pending || unlocked.EmbeddingProvider != body.Provider)
         {
+            var changed = !unlocked.Pending && unlocked.EmbeddingProvider != body.Provider;
             await catalog.SetEmbeddingProviderAsync(unlocked, body.Provider, ct);
             index.CatchUp(unlocked);
+            // The members' event (collab design §8.5); the name of the provider stays in the sealed meta.
+            if (changed && await catalog.IsSharedAsync(null, unlocked.Id, ct))
+            {
+                await Sharing.VaultEvents.RecordAsync(db, unlocked.Id, Sharing.VaultEvents.ProviderChanged, null, catalog.Now, ct);
+            }
         }
 
         return TypedResults.Ok(await ViewAsync(store, access.Name, unlocked.Notes.Count, unlocked, caller, ct));

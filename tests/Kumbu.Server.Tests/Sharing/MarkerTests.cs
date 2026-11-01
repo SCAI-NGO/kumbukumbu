@@ -264,4 +264,36 @@ public sealed class MarkerTests(KumbuAppFactory app)
 
         Assert.NotEmpty(await SealedPayloads.OpenAllAsync(app.Database, w.VaultId, vaultKey, "checkpoint_texts", Ct));
     }
+
+    [Fact]
+    public async Task Events_never_name_another_member_to_a_member()
+    {
+        var w = await WorldAsync();
+        var carols = await Share.MembershipOfAsync(app.Database, w.Carol, w.VaultId);
+        var bobs = await Share.MembershipOfAsync(app.Database, w.Bob, w.VaultId);
+        // Alice lowers both roles (no password window needed), then removes Carol.
+        foreach (var id in new[] { carols, bobs })
+        {
+            using var lowered = await w.Alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{id}/role", new { role = "write" });
+            Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        }
+
+        using (var revoked = await w.Alice.SendAsync(HttpMethod.Post, $"/api/vaults/Gartenarbeit/memberships/{carols}/revoke")) Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+
+        var answers = new List<(string What, string Text)>();
+        foreach (var path in new[] { "/api/vaults/garten/activity", "/api/vault-events", "/api/vaults", "/api/vaults/garten/access" })
+        {
+            using var response = await w.Bob.GetAsync(path);
+            answers.Add((path, await response.Content.ReadAsStringAsync(Ct)));
+        }
+
+        // Bob sees his own role change, through the renderer, and nothing of Carol's.
+        Assert.Contains("changed your role to write", answers.Single(a => a.What == "/api/vaults/garten/activity").Text, StringComparison.Ordinal);
+        Assert.Single((await RestClient.JsonAsync(await w.Bob.GetAsync("/api/vault-events"))).AsArray());
+        Assert.DoesNotContain(carols, string.Concat(answers.Select(a => a.Text)), StringComparison.Ordinal);
+        foreach (var (what, text) in answers) AssertClean(w, what, text);
+        // The owner, by contrast, sees Carol by her label.
+        using var owners = await w.Alice.GetAsync("/api/vaults/Gartenarbeit/activity");
+        Assert.Contains($"You removed {w.Carol.Username}.", await owners.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+    }
 }

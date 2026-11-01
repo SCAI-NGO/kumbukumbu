@@ -744,6 +744,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                             count += (await collection.DeleteManyAsync(s, Builders<SealedDocument>.Filter.In(d => d.Vault, ids), cancellationToken: token)).DeletedCount;
                         }
 
+                        await Sharing.VaultEvents.DeleteAsync(db, s, ids, null, token);
                         await alsoDelete(s, token);
                         return count;
                     },
