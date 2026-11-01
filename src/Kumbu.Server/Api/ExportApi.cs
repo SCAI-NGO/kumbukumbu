@@ -28,7 +28,8 @@ public sealed record ExportTicketView(string Ticket, DateTime ExpiresAt);
 /// as it holds them (a folder checkpoint below the vault's folder), each entry dated with the time the checkpoint was
 /// made; one whose content doesn't open is refused whole, before the first byte, as its restore is.
 /// A download of several attachments (<c>GET /api/files/{vault}/zip</c>) is treated as an export too, unless the user
-/// turned its password off. Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An
+/// turned its password off. A member exports a vault shared with her as its owner does, by all three routes and with the
+/// same ticket, and each such export is an event for the owner (collab design §3.3). Sessions only (<see cref="SessionOnlyMetadata"/>): a key or a connection never exports. An
 /// export is a heavyweight operation: it takes the notes out of the encryption at rest in one go, so it needs the
 /// password again, as deleting a vault does, through a ticket (<see cref="ExportTickets"/>), and each one is logged with
 /// ids and counts, never a name. The exports also carry <see cref="PasswordWindowMetadata"/>: the ticket's password
@@ -73,7 +74,8 @@ public static class ExportApi
 
     /// <summary>What every export needs, bound from the request.</summary>
     internal sealed record Export(
-        INoteStore Store, TimeProvider Time, RequestCaller Caller, ExportTickets Tickets, ILoggerFactory Logs, HttpContext Http, CancellationToken Ct)
+        INoteStore Store, TimeProvider Time, RequestCaller Caller, ExportTickets Tickets, ILoggerFactory Logs, HttpContext Http, MongoDB.Driver.IMongoDatabase Db,
+        CancellationToken Ct)
     {
         public ILogger Log => Logs.CreateLogger(typeof(ExportApi).FullName!);
 
@@ -83,6 +85,22 @@ public static class ExportApi
             if (!Tickets.Take(Caller.User!.Id, ticket))
             {
                 throw new ApiException(StatusCodes.Status403Forbidden, "An export needs your password: get a ticket from POST /api/export/ticket and add it as ?ticket=.");
+            }
+        }
+
+        /// <summary>
+        /// A member's export of a vault shared with her is an event for its owner (collab design §3.3, §8.3): "Bob
+        /// exported Gartenarbeit", one per vault, recorded once every check has passed and before the first byte, so a
+        /// download cut short still counts. The owner's own exports record nothing.
+        /// </summary>
+        public async Task RecordMemberExportsAsync(IEnumerable<string> names)
+        {
+            var open = await Caller.OpenVaultsAsync(Ct);
+            var at = Time.GetUtcNow().UtcDateTime;
+            foreach (var name in names)
+            {
+                if (open.FirstOrDefault(v => v.Name == name)?.Membership is not { } membership) continue;
+                await Sharing.VaultEvents.RecordAsync(Db, membership.Vault, Sharing.VaultEvents.MemberExport, membership.Id, at, Ct);
             }
         }
 
@@ -122,6 +140,7 @@ public static class ExportApi
             .OrderBy(e => e.Path.Value, StringComparer.Ordinal)
             .ToList();
         var zone = Zone(tz);
+        await export.RecordMemberExportsAsync([root.Segments[0]]);
         export.Log.LogInformation(
             "User {UserId} exported a checkpoint of vault {VaultId}: {Notes} notes, {Files} files",
             export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]), entries.Count(e => e.IsNote), entries.Count(e => !e.IsNote));
@@ -164,6 +183,7 @@ public static class ExportApi
             content.Add((root.Segments[0] + "/", [.. entries.OrderBy(e => e.Path.Value, StringComparer.Ordinal)]));
         }
 
+        await export.RecordMemberExportsAsync(roots.Select(r => r.Segments[0]));
         export.Log.LogInformation(
             "User {UserId} exported {Count} vaults ({VaultIds}): {Notes} notes, {Files} files, {Damaged} that don't open left out",
             export.Caller.User!.Id, content.Count, await export.VaultIdsAsync(roots.Select(r => r.Segments[0])),
@@ -238,6 +258,7 @@ public static class ExportApi
             bytes += file.Current.Size;
         }
 
+        await export.RecordMemberExportsAsync([root.Segments[0]]);
         // Logged once the last byte is out: a download cut off by a file that doesn't open is logged as such instead.
         var (userId, vaultId) = (export.Caller.User!.Id, await export.VaultIdsAsync([root.Segments[0]]));
         var name = $"{root.Segments[0]} files {export.Time.GetUtcNow().UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.zip";
