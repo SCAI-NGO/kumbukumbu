@@ -14,14 +14,67 @@ public sealed class ClientMetadataTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static ClientMetadataFetcher Fetcher(bool allowLoopback = true, TimeProvider? time = null, CapturedLog? log = null)
+    private static ClientMetadataFetcher Fetcher(bool allowLoopback = true, TimeProvider? time = null, CapturedLog? log = null, HttpMessageHandler? handler = null)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => { if (log is not null) b.AddProvider(log); });
         services.AddSingleton<IOptions<KumbuOptions>>(Options.Create(new KumbuOptions { OAuth = { AllowLoopbackClients = allowLoopback } }));
         services.AddSingleton(time ?? TimeProvider.System);
         services.AddClientMetadataFetcher();
+        if (handler is not null) services.AddHttpClient(ClientMetadataServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => handler);
         return services.BuildServiceProvider().GetRequiredService<ClientMetadataFetcher>();
+    }
+
+    [Fact]
+    public async Task At_most_8_metadata_fetches_run_at_once()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(handler: handler);
+
+        var fetches = Enumerable.Range(0, 12).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (handler.Started < 8 && DateTime.UtcNow < deadline) await Task.Delay(20, Ct);
+        // Long enough for a ninth to arrive if nothing held it back.
+        await Task.Delay(300, Ct);
+
+        Assert.Equal(8, handler.Started);
+        release.SetResult();
+        await Task.WhenAll(fetches);
+        Assert.Equal(12, handler.Started);
+        Assert.Equal(8, handler.MostAtOnce);
+    }
+
+    /// <summary>Holds every request until <paramref name="release"/> completes, then answers 404; counts how many ran at once.</summary>
+    private sealed class HoldingHandler(Task release) : HttpMessageHandler
+    {
+        private int _running;
+        private int _started;
+        private int _mostAtOnce;
+
+        public int Started => Volatile.Read(ref _started);
+
+        public int MostAtOnce => Volatile.Read(ref _mostAtOnce);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _started);
+            var running = Interlocked.Increment(ref _running);
+            int most;
+            while (running > (most = Volatile.Read(ref _mostAtOnce)) && Interlocked.CompareExchange(ref _mostAtOnce, running, most) != most)
+            {
+            }
+
+            try
+            {
+                await release.WaitAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _running);
+            }
+        }
     }
 
     private static string Document(string clientId, string? redirectUris = null, string? extra = null) =>

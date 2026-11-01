@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -6,9 +7,12 @@ using System.Text.Json;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.OAuth;
 using Kumbu.Server.Tests.Api;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -250,29 +254,128 @@ public sealed class AuthorizeTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task Another_users_connection_is_not_shown()
+    public async Task The_consent_view_of_another_users_request_is_a_404()
     {
         var flow = await FlowAsync(twoVaults: true);
-        var other = await RestClient.NewAsync(Api, vault: "Fremd");
+        var other = await RestClient.NewAsync(Api, vault: "Work");
 
         using var response = await flow.GetConsentAsync(other);
         var body = await response.Content.ReadAsStringAsync(Ct);
-        var view = await flow.ConsentAsync(other);
 
-        Assert.Equal("other_user", view.Problem);
-        Assert.Null(view.Connection);
-        Assert.False(view.Renewal);
-        Assert.DoesNotContain("claude\"", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("Arbeit", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("Privat", body, StringComparison.Ordinal);
-        Assert.DoesNotContain(flow.ConnectionId, body, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        foreach (var hidden in new[] { "claude", "Arbeit", "Privat", "Test app", flow.ConnectionId, flow.RequestId })
+        {
+            Assert.DoesNotContain(hidden, body, StringComparison.Ordinal);
+        }
 
         using var allow = await flow.DecideAsync(allow: true, other);
-        Assert.Equal(HttpStatusCode.Conflict, allow.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, allow.StatusCode);
         Assert.Equal(0, await Collection("oauth_tokens").CountDocumentsAsync(new BsonDocument("connection", flow.ConnectionId), cancellationToken: Ct));
 
-        // The owner can still decide: the other user's Allow didn't consume the request.
+        // The owner still sees it and can decide: the other user's Allow didn't consume the request.
+        Assert.Null((await flow.ConsentAsync()).Problem);
         Assert.StartsWith("kumbu_ac_", await flow.AllowAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Deny_of_another_users_request_is_a_404_and_leaves_it()
+    {
+        var flow = await FlowAsync();
+        var other = await RestClient.NewAsync(Api, vault: "Work");
+
+        using var deny = await flow.DecideAsync(allow: false, other);
+        var body = await deny.Content.ReadAsStringAsync(Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, deny.StatusCode);
+        Assert.DoesNotContain(flow.State, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("claude.test", body, StringComparison.Ordinal);
+        Assert.Equal(1, await Collection("oauth_requests").CountDocumentsAsync(new BsonDocument("_id", flow.RequestId), cancellationToken: Ct));
+
+        // The request is still the owner's to decide.
+        Assert.StartsWith("kumbu_ac_", await flow.AllowAsync(), StringComparison.Ordinal);
+    }
+
+    /// <summary>The public app with limits of its own, whose metadata fetches reach <paramref name="fetches"/> instead of the network.</summary>
+    private WebApplicationFactory<Program> WithFetches(CountingHandler fetches) => Api.WithWebHostBuilder(b => b.ConfigureTestServices(services =>
+        services.AddHttpClient(ClientMetadataServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => fetches)));
+
+    /// <summary>Where <c>/oauth/authorize</c> sends a browser at <paramref name="address"/> for the metadata URL <paramref name="clientId"/>.</summary>
+    private static async Task<string> AuthorizeLocationAsync(WebApplicationFactory<Program> api, string clientId, string address)
+    {
+        var url = QueryHelpers.AddQueryString("/oauth/authorize", new Dictionary<string, string?> { ["client_id"] = clientId, ["redirect_uri"] = Callback });
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("X-Forwarded-For", address);
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, AllowAutoRedirect = false, BaseAddress = new Uri("https://localhost") });
+        using var response = await client.SendAsync(request, Ct);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        return Location(response);
+    }
+
+    private const string Unknown = "/consent?error=unknown_client";
+    private const string Limited = "/consent?error=temporarily_unavailable";
+
+    // Spec §1.4: ten fetches a minute per address and ten per host of the client_id URL.
+    private const int FetchesPerAddress = 10;
+    private const int FetchesPerHost = 10;
+
+    [Fact]
+    public async Task Authorize_limits_metadata_fetches_per_address()
+    {
+        var fetches = new CountingHandler();
+        var api = WithFetches(fetches);
+        const string address = "198.27.1.1";
+
+        // Spread over two hosts, so that neither host's own limit is reached.
+        for (var i = 0; i < FetchesPerAddress; i++)
+        {
+            Assert.Equal(Unknown, await AuthorizeLocationAsync(api, $"https://{(i % 2 == 0 ? "a" : "b")}.example/client-{i}.json", address));
+        }
+
+        Assert.Equal(FetchesPerAddress, fetches.Total);
+        Assert.Equal(Limited, await AuthorizeLocationAsync(api, "https://a.example/one-more.json", address));
+        Assert.Equal(FetchesPerAddress, fetches.Total);
+
+        // A document in the cache needs no fetch, so it isn't held back.
+        Assert.Equal(Unknown, await AuthorizeLocationAsync(api, "https://a.example/client-0.json", address));
+        // Another address still fetches.
+        Assert.Equal(Unknown, await AuthorizeLocationAsync(api, "https://a.example/one-more.json", "198.27.1.2"));
+        Assert.Equal(FetchesPerAddress + 1, fetches.Total);
+    }
+
+    [Fact]
+    public async Task Authorize_limits_metadata_fetches_per_client_host()
+    {
+        var fetches = new CountingHandler();
+        var api = WithFetches(fetches);
+
+        for (var i = 0; i < FetchesPerHost; i++)
+        {
+            Assert.Equal(Unknown, await AuthorizeLocationAsync(api, $"https://a.example/client-{i}.json", $"198.28.1.{i + 1}"));
+        }
+
+        Assert.Equal(FetchesPerHost, fetches.Of("a.example"));
+        Assert.Equal(Limited, await AuthorizeLocationAsync(api, "https://a.example/one-more.json", "198.28.2.1"));
+        Assert.Equal(FetchesPerHost, fetches.Of("a.example"));
+
+        // The same address may still fetch from another host.
+        Assert.Equal(Unknown, await AuthorizeLocationAsync(api, "https://b.example/client.json", "198.28.2.1"));
+        Assert.Equal(1, fetches.Of("b.example"));
+    }
+
+    /// <summary>Stands in for the hosts of metadata documents: counts the requests per host and answers each with a 404.</summary>
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        private readonly ConcurrentQueue<string> _hosts = new();
+
+        public int Total => _hosts.Count;
+
+        public int Of(string host) => _hosts.Count(h => h == host);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _hosts.Enqueue(request.RequestUri!.Host);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
     }
 
     [Fact]

@@ -51,6 +51,7 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private const int MaxEntries = 1000;
+    private const int MaxConcurrentFetches = 8;
     private const int MaxUrlLength = 2048;
     private const int MaxNameLength = 100;
     private static readonly TimeSpan MinAge = TimeSpan.FromMinutes(5);
@@ -59,6 +60,9 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     private static readonly TimeSpan FailureAge = TimeSpan.FromMinutes(1);
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
+
+    /// <summary>At most this many fetches at once, whoever starts them; the rest wait their turn.</summary>
+    private readonly SemaphoreSlim _fetches = new(MaxConcurrentFetches);
 
     private sealed record CacheEntry(ClientMetadataResult Result, DateTimeOffset Stored, DateTimeOffset Expires);
 
@@ -71,15 +75,28 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
         && uri.UserInfo.Length == 0
         && !clientId.Contains('#', StringComparison.Ordinal);
 
+    /// <summary>Whether <see cref="FetchAsync"/> would answer from the cache, without a request.</summary>
+    public bool IsCached(string clientId) => _cache.TryGetValue(clientId, out var cached) && time.GetUtcNow() < cached.Expires;
+
     public async Task<ClientMetadataResult> FetchAsync(string clientId, CancellationToken ct)
     {
-        var now = time.GetUtcNow();
-        if (_cache.TryGetValue(clientId, out var cached) && now < cached.Expires) return cached.Result;
+        if (_cache.TryGetValue(clientId, out var cached) && time.GetUtcNow() < cached.Expires) return cached.Result;
 
-        var allowLoopback = options.Value.OAuth.AllowLoopbackClients;
-        var (result, maxAge) = await FetchUncachedAsync(clientId, allowLoopback, ct);
-        Store(clientId, result, now, result.Error is null ? maxAge : FailureAge);
-        return result;
+        await _fetches.WaitAsync(ct);
+        try
+        {
+            // Another request may have fetched it while this one waited.
+            var now = time.GetUtcNow();
+            if (_cache.TryGetValue(clientId, out cached) && now < cached.Expires) return cached.Result;
+            var allowLoopback = options.Value.OAuth.AllowLoopbackClients;
+            var (result, maxAge) = await FetchUncachedAsync(clientId, allowLoopback, ct);
+            Store(clientId, result, now, result.Error is null ? maxAge : FailureAge);
+            return result;
+        }
+        finally
+        {
+            _fetches.Release();
+        }
     }
 
     private void Store(string clientId, ClientMetadataResult result, DateTimeOffset now, TimeSpan age)

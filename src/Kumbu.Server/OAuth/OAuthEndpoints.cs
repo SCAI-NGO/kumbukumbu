@@ -167,8 +167,8 @@ public static partial class OAuthEndpoints
     /// connection is not an error here: the consent page explains what to do (Ruling 7).
     /// </summary>
     private static async Task<IResult> AuthorizeAsync(
-        HttpContext http, OAuthClients clients, Connections connections, AuthorizationRequests requests, IOptions<KumbuOptions> options, TimeProvider time,
-        ILoggerFactory logs, CancellationToken ct)
+        HttpContext http, OAuthClients clients, Connections connections, AuthorizationRequests requests, AccountLimits limits, IOptions<KumbuOptions> options,
+        TimeProvider time, ILoggerFactory logs, CancellationToken ct)
     {
         http.Response.Headers.CacheControl = "no-store";
         // The URL holds the state and the challenge; whatever page comes next is not told it.
@@ -178,6 +178,13 @@ public static partial class OAuthEndpoints
 
         // One value each (RFC 6749 §3.1); a repeated parameter counts as missing.
         var clientId = One(query, "client_id");
+        // Fetching a metadata document is a request to wherever the stranger says: limited per address and per host.
+        if (clientId is not null && clients.WouldFetch(clientId) && limits.MetadataFetch(http, new Uri(clientId).IdnHost) is not null)
+        {
+            LogStep(log, "authorize", "rate_limited", null, HostOf(clientId), null);
+            return SeeOther(http, "/consent?error=temporarily_unavailable");
+        }
+
         var client = clientId is null ? null : await clients.ResolveAsync(clientId, ct);
         if (client is null)
         {

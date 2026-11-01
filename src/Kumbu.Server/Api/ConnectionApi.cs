@@ -35,8 +35,8 @@ public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, stri
 /// the browser returns. <c>connection</c>: the connection its URL names, with the rights this grant gets (already
 /// capped to read if the app asked for read only); null when there is a <c>problem</c> that hides it.
 /// <c>renewal</c>: the connection was authorised before. <c>problem</c>: null, <c>not_a_connection</c> (the app was
-/// given an address that is no connection's URL), <c>other_user</c> (the connection is another account's),
-/// <c>revoked</c> or <c>expired</c>; with a problem only Deny is possible.
+/// given an address that is no connection's URL), <c>revoked</c> or <c>expired</c>; with a problem only Deny is
+/// possible. A request for another account's connection is a 404 to this one, for the view and the decision alike.
 /// </summary>
 public sealed record ConsentView(string RequestId, ClientView Client, string RedirectHost, ConsentConnectionView? Connection, bool Renewal, string? Problem);
 
@@ -73,11 +73,13 @@ public static class ConnectionApi
 
     private const string RequestExpired = "This request has expired; start the connection again in the app.";
     private const string ClientGone = "The app could not be identified any more; start the connection again in the app.";
+    private const string OtherAccount = "This request is for another Kumbu² account; sign in as the connection's owner.";
 
     private static async Task<Ok<ConsentView>> ConsentAsync(
         string id, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, Connections connections, TimeProvider time, CancellationToken ct)
     {
         var request = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
+        await RequireOwnerAsync(request, caller, connections, ct);
         var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw ApiErrors.NotFound(ClientGone);
         var (problem, connection, renewal) = await ConsentConnectionAsync(request, caller, connections, time, ct);
         return TypedResults.Ok(new ConsentView(request.Id, new ClientView(client.Name, client.Host, client.Verified), new Uri(request.RedirectUri).Host, connection, renewal, problem));
@@ -87,6 +89,7 @@ public static class ConnectionApi
     /// The decision, which takes the request (single use): Deny always redirects with <c>access_denied</c>
     /// (<c>invalid_target</c> for an address that is no connection's, Ruling 7); Allow with a problem is a 409 and
     /// leaves the request, so the page can still offer the way back; Allow issues the code for the signed-in user.
+    /// Another account's request is a 404 either way, before anything is taken.
     /// </summary>
     private static async Task<Ok<ConsentDecisionView>> DecideAsync(
         string id, ConsentDecisionRequest body, HttpContext http, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, OAuthTokens tokens,
@@ -96,6 +99,7 @@ public static class ConnectionApi
         if (body.Allow) Security.RequirePasswordWindow(caller);
         var log = logs.CreateLogger(OAuthEndpoints.LogCategory);
         var pending = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
+        await RequireOwnerAsync(pending, caller, connections, ct);
         var clientHost = OAuthEndpoints.ClientHost(pending.ClientId, pending.RedirectUri);
         if (body.Allow)
         {
@@ -147,10 +151,17 @@ public static class ConnectionApi
         return TypedResults.Ok(new ConsentDecisionView(OAuthEndpoints.Redirect(request.RedirectUri, issuer, request.State, ("code", code))));
     }
 
+    /// <summary>A request naming another account's connection is not found for this one: not shown, allowed or denied.</summary>
+    private static async Task RequireOwnerAsync(PendingAuthorisation request, RequestCaller caller, Connections connections, CancellationToken ct)
+    {
+        if (request.ConnectionId is null) return;
+        if (await connections.FindAsync(request.ConnectionId, ct) is { } doc && doc.User != caller.User!.Id) throw ApiErrors.NotFound(OtherAccount);
+    }
+
     /// <summary>
-    /// The connection a request names, as the signed-in user may see it: its problem if any (then nothing of it is
-    /// shown when it isn't theirs), else its name, its vaults by name with the rights of this grant, its expiry and
-    /// client, and whether it was authorised before.
+    /// The connection a request names, which <see cref="RequireOwnerAsync"/> found to be the signed-in user's: its
+    /// problem if any, else its name, its vaults by name with the rights of this grant, its expiry and client, and
+    /// whether it was authorised before.
     /// </summary>
     private static async Task<(string? Problem, ConsentConnectionView? Connection, bool Renewal)> ConsentConnectionAsync(
         PendingAuthorisation request, RequestCaller caller, Connections connections, TimeProvider time, CancellationToken ct)
@@ -158,9 +169,8 @@ public static class ConnectionApi
         if (request.Problem is not null || request.ConnectionId is null) return (request.Problem ?? AuthorizationRequests.NotAConnection, null, false);
         var doc = await connections.FindAsync(request.ConnectionId, ct);
         if (doc is null) return (AuthorizationRequests.NotAConnection, null, false);
-        if (doc.User != caller.User!.Id) return ("other_user", null, false);
         // A meta that doesn't open with the user key was changed in the database: nothing to show or to authorise.
-        if (connections.OpenMeta(caller.User, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
+        if (connections.OpenMeta(caller.User!, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
 
         var names = await AccountApi.VaultNamesAsync(caller, ct);
         var view = new ConsentConnectionView(
@@ -177,7 +187,6 @@ public static class ConnectionApi
     private static string ProblemText(string problem) => problem switch
     {
         AuthorizationRequests.NotAConnection => "This address isn't a connection; it can't be allowed.",
-        "other_user" => "This connection belongs to another account.",
         "expired" => "This connection has expired.",
         _ => "This connection was revoked.",
     };

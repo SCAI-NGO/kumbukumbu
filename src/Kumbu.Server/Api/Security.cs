@@ -201,6 +201,7 @@ public static class Security
 /// password change or of a new recovery key 5 per minute per username (together). Every attempt counts,
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
+/// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL.
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
@@ -246,6 +247,15 @@ public sealed class AccountLimits : IDisposable
 
     public const int InvitePeeksPerNetwork = 60;
 
+    /// <summary>
+    /// Fetches of a client's metadata document that an anonymous <c>/oauth/authorize</c> starts, a minute per address
+    /// and per host of the <c>client_id</c> URL: each is a request to an address a stranger picks. A document in the
+    /// cache needs no fetch and isn't counted, so a known app keeps working while a host is held back.
+    /// </summary>
+    public const int MetadataFetchesPerAddress = 10;
+
+    public const int MetadataFetchesPerHost = 10;
+
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>No username is longer; a longer one only needs a partition, not a distinct one.</summary>
@@ -262,6 +272,8 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
     private readonly PartitionedRateLimiter<string> _invitePeekByAccount;
     private readonly PartitionedRateLimiter<string> _invitePeekByNetwork;
+    private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
+    private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
 
     public AccountLimits()
         : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
@@ -301,6 +313,11 @@ public sealed class AccountLimits : IDisposable
     /// limit uses up nothing of its network's.</summary>
     public TimeSpan? InvitePeek(HttpContext context, string userId) =>
         Take(_invitePeekByAccount, userId) ?? Take(_invitePeekByNetwork, Network(context));
+
+    /// <summary>A fetch of a client's metadata document from <paramref name="host"/>: the address is asked first, so
+    /// one over its own limit uses up nothing of the host's.</summary>
+    public TimeSpan? MetadataFetch(HttpContext context, string host) =>
+        Take(_metadataFetchByAddress, Address(context)) ?? Take(_metadataFetchByHost, host.ToLowerInvariant());
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
@@ -377,6 +394,8 @@ public sealed class AccountLimits : IDisposable
         _historyScanByUser.Dispose();
         _invitePeekByAccount.Dispose();
         _invitePeekByNetwork.Dispose();
+        _metadataFetchByAddress.Dispose();
+        _metadataFetchByHost.Dispose();
     }
 }
 

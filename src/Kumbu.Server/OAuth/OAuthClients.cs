@@ -39,6 +39,9 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
         return new OAuthClient(doc.Id, doc.Name, HostOf(doc.RedirectUris[0]), doc.RedirectUris, Verified: false);
     }
 
+    /// <summary>Whether resolving <paramref name="clientId"/> would fetch a metadata document, rather than read the cache or the store.</summary>
+    public bool WouldFetch(string clientId) => ClientMetadataFetcher.IsMetadataUrl(clientId) && !fetcher.IsCached(clientId);
+
     /// <summary>
     /// Registers a public client from RFC 7591 client metadata. Only what Kumbu² uses is read; the rest is ignored.
     /// </summary>
