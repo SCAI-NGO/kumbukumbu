@@ -82,6 +82,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// <summary>For tests: awaited before every recomputation of a connection's vaults, so a test can make it fail.</summary>
     internal Func<Subject, Task>? BeforeRecompute { get; set; }
 
+    /// <summary>For tests: awaited after a recomputation read the subject's vaults, before it applies them, so a test can hold it up.</summary>
+    internal Func<Subject, Task>? AfterRecomputeRead { get; set; }
+
+    /// <summary>For tests: called between an incoming frame's check and its presence entry.</summary>
+    internal Action<Subject>? BeforePresenceSet { get; set; }
+
     /// <summary>For tests: the debounce of hints (zero: each change is its own hint, at once).</summary>
     internal TimeSpan HintDebounce { get; set; } = Debounce;
 
@@ -283,17 +289,21 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// <summary>
     /// The connection's vaults and levels worked out again, its presence on vaults it can no longer edit cleared, and
     /// a socket left with no vault closed; false if it was closed. One that can't be worked out closes with
-    /// <see cref="CheckFailed"/>: a failure never leaves a socket the vaults it held.
+    /// <see cref="CheckFailed"/>: a failure never leaves a socket the vaults it held. Recomputations of one connection
+    /// may overlap (the check, and a notification of a revoke): the one started last wins, so one that read the
+    /// memberships before a revoke never gives the vault back after the revoke's own dropped it (collab design §13 M1).
     /// </summary>
     private async Task<bool> RecomputeAsync(Connection connection, CancellationToken ct)
     {
         var subject = connection.Grant.Subject;
+        var generation = connection.StartRecompute();
         IReadOnlyDictionary<string, VaultState> before, after;
         try
         {
             if (BeforeRecompute is { } fault) await fault(subject);
             before = connection.Vaults;
             after = await VaultsNowAsync(subject, before, ct);
+            if (AfterRecomputeRead is { } held) await held(subject);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -301,8 +311,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return false;
         }
 
-        connection.SetVaults(after);
-        ClearPresence(connection, v => !connection.CanEdit(v));
+        // Under the connection's gate, as an incoming frame's check and its entry are: no entry set on a level just lowered survives.
+        if (!connection.TryApply(generation, after, () => ClearPresence(connection, v => !connection.CanEdit(v)))) return !connection.IsClosed;
         if (before.Count > 0 && after.Count == 0)
         {
             ClearPresence(connection, null);
@@ -411,7 +421,6 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         if (frame is not { Type: "editing", Vault: { } name, Path: { } path, On: { } on }) return;
-        if (connection.IdOf(name) is not { } vaultId || !connection.CanEdit(vaultId)) return;
         string note;
         try
         {
@@ -422,7 +431,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             return;
         }
 
-        if (connection.Editor(vaultId) is { } editor && _presence.Set(vaultId, note, editor, on)) Broadcast(vaultId, note);
+        // The check and the entry under the connection's gate: a recomputation that lowers or drops the vault applies
+        // before (the check fails) or after (it clears the entry), never in between.
+        connection.Locked(() =>
+        {
+            if (connection.IdOf(name) is not { } vaultId || !connection.CanEdit(vaultId)) return;
+            BeforePresenceSet?.Invoke(connection.Grant.Subject);
+            if (connection.Editor(vaultId) is { } editor && _presence.Set(vaultId, note, editor, on)) Broadcast(vaultId, note);
+        });
     }
 
     private sealed record EditingFrame(string? Type, string? Vault, string? Path, bool? On);
@@ -543,15 +559,54 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         public PresenceEditor? Editor(string vaultId) =>
             _vaults.TryGetValue(vaultId, out var vault) ? new PresenceEditor(Number, Grant.Subject.User, vault.Membership is null, vault.Label, Grant.Display) : null;
 
-        /// <summary>Presence waiting for a vault no longer held goes with it (the send loop checks again).</summary>
-        public void SetVaults(IReadOnlyDictionary<string, VaultState> vaults)
+        /// <summary>Taken for the vaults, a frame's check and its entry, and a close: a recomputation applies between them, never inside.</summary>
+        private readonly Lock _gate = new();
+        private long _started;
+        private long _applied;
+        private bool _ended;
+
+        public bool IsClosed
         {
-            _vaults = vaults;
-            foreach (var key in _presence.Keys.Where(k => !vaults.ContainsKey(k.Vault))) _presence.TryRemove(key, out _);
+            get
+            {
+                lock (_gate) return _ended;
+            }
         }
 
-        public void Rename(string membershipId, string alias) =>
-            _vaults = _vaults.ToDictionary(v => v.Key, v => v.Value.Membership == membershipId ? v.Value with { Name = alias } : v.Value, StringComparer.Ordinal);
+        public void Locked(Action action)
+        {
+            lock (_gate) action();
+        }
+
+        /// <summary>The generation of a recomputation starting now; later ones have higher numbers.</summary>
+        public long StartRecompute() => Interlocked.Increment(ref _started);
+
+        /// <summary>
+        /// The vaults recomputation <paramref name="generation"/> worked out, unless a later one applied already or the
+        /// connection was closed; <paramref name="then"/> runs under the same gate. A name renamed meanwhile is kept.
+        /// Presence waiting for a vault no longer held goes with it (the send loop checks again).
+        /// </summary>
+        public bool TryApply(long generation, IReadOnlyDictionary<string, VaultState> vaults, Action then)
+        {
+            lock (_gate)
+            {
+                if (_ended || generation <= _applied) return false;
+                _applied = generation;
+                var now = _vaults;
+                _vaults = vaults.ToDictionary(
+                    v => v.Key,
+                    v => now.TryGetValue(v.Key, out var current) && current.Membership == v.Value.Membership ? v.Value with { Name = current.Name } : v.Value,
+                    StringComparer.Ordinal);
+                foreach (var key in _presence.Keys.Where(k => !vaults.ContainsKey(k.Vault))) _presence.TryRemove(key, out _);
+                then();
+                return true;
+            }
+        }
+
+        public void Rename(string membershipId, string alias)
+        {
+            lock (_gate) _vaults = _vaults.ToDictionary(v => v.Key, v => v.Value.Membership == membershipId ? v.Value with { Name = alias } : v.Value, StringComparer.Ordinal);
+        }
 
         public bool IsEmpty => _vaults.Count == 0;
 
@@ -612,7 +667,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         /// <summary>Bounded: a send under way is cancelled first, and a socket that won't take the close frame in time is aborted.</summary>
         public async Task CloseAsync(WebSocketCloseStatus status, string reason)
         {
-            _vaults = new Dictionary<string, VaultState>();
+            lock (_gate)
+            {
+                _ended = true;
+                _vaults = new Dictionary<string, VaultState>();
+            }
+
             Complete();
             await _sends.CancelAsync();
             if (!await _sending.WaitAsync(CloseTimeout))

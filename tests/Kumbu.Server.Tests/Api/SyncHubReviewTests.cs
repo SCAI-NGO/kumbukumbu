@@ -64,6 +64,120 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_check_that_read_before_the_revoke_never_gives_the_vault_back()
+    {
+        var (alice, bob, carol, membership) = await SharedAsync();
+        var vaultId = await alice.VaultIdAsync();
+        using var carols = await OpenAsync(Api, carol);
+        using var bobs = await OpenAsync(Api, bob);
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = 1;
+        // The 30-second check reads Bob's vaults while he is still a member, and is held up; the revoke's own check
+        // drops the vault meanwhile; then the stale one finishes.
+        Hub.AfterRecomputeRead = s => s.User == bob.User.Id && Interlocked.Exchange(ref first, 0) == 1 ? HoldAsync() : Task.CompletedTask;
+        try
+        {
+            var checking = Hub.CheckAsync(TestContext.Current.CancellationToken);
+            await read.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+            using (var revoked = await alice.SendAsync(HttpMethod.Post, $"/api/vaults/Gartenarbeit/memberships/{membership}/revoke"))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+            }
+
+            Assert.DoesNotContain(Hub.Held, h => h.Subject.User == bob.User.Id && h.VaultId == vaultId);
+            release.SetResult();
+            await checking;
+        }
+        finally
+        {
+            Hub.AfterRecomputeRead = null;
+        }
+
+        Assert.DoesNotContain(Hub.Held, h => h.Subject.User == bob.User.Id && h.VaultId == vaultId);
+        await EditingAsync(carols, "beete", "plan.md", on: true);
+        await alice.CreateAsync("plan.md", "x\n");
+        Assert.Empty(await DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
+
+        async Task HoldAsync()
+        {
+            read.SetResult();
+            await release.Task;
+        }
+    }
+
+    [Fact]
+    public async Task A_check_that_read_before_a_rename_keeps_the_new_alias()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        var vaultId = await alice.VaultIdAsync();
+        using var bobs = await OpenAsync(Api, bob);
+        // Frames are read only after the upgrade's own recomputation: his own presence line says it is done, so the
+        // one held below is the check's.
+        await EditingAsync(bobs, "garten", "plan.md", on: true);
+        Assert.NotNull(await PresenceAsync(bobs, Wait));
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = 1;
+        Hub.AfterRecomputeRead = s => s.User == bob.User.Id && Interlocked.Exchange(ref first, 0) == 1 ? HoldAsync() : Task.CompletedTask;
+        try
+        {
+            var checking = Hub.CheckAsync(TestContext.Current.CancellationToken);
+            await read.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+            using (var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = "Beete" }))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+            }
+
+            release.SetResult();
+            await checking;
+        }
+        finally
+        {
+            Hub.AfterRecomputeRead = null;
+        }
+
+        Assert.Equal("Beete", Assert.Single(Hub.Held, h => h.Subject.User == bob.User.Id && h.VaultId == vaultId).Name);
+
+        async Task HoldAsync()
+        {
+            read.SetResult();
+            await release.Task;
+        }
+    }
+
+    [Fact]
+    public async Task A_frame_checked_just_before_a_lowering_leaves_no_entry_after_it()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+        using var alices = await OpenAsync(Api, alice);
+        using var bobs = await OpenAsync(Api, bob);
+        var lowering = new TaskCompletionSource<Task<HttpResponseMessage>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Hub.BeforePresenceSet = s =>
+        {
+            if (s.User != bob.User.Id || lowering.Task.IsCompleted) return;
+            var request = alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role = "read" });
+            lowering.SetResult(request);
+            // Between Bob's frame's check and its entry: unguarded, the lowering would finish here and leave the entry.
+            ((IAsyncResult)request).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(1));
+        };
+        try
+        {
+            await EditingAsync(bobs, "garten", "plan.md", on: true);
+            using var lowered = await (await lowering.Task.WaitAsync(Wait, TestContext.Current.CancellationToken));
+            Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        }
+        finally
+        {
+            Hub.BeforePresenceSet = null;
+        }
+
+        var heard = (await DrainAsync(alices, TimeSpan.FromSeconds(1.5))).Where(m => m.Contains("\"type\":\"presence\"", StringComparison.Ordinal)).ToList();
+        Assert.NotEmpty(heard);
+        Assert.Empty(Editors(System.Text.Json.Nodes.JsonNode.Parse(heard[^1])!));
+    }
+
+    [Fact]
     public async Task A_write_ticket_used_after_lowering_to_read_announces_nothing()
     {
         var (alice, bob, _, membership) = await SharedAsync();
