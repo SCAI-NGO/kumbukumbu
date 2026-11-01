@@ -236,7 +236,10 @@ public sealed partial class VaultCatalog
 
     /// <summary>
     /// Of the memberships <paramref name="ids"/>, those active now, by id: one indexed query, read afresh on every call
-    /// and never cached, since it is what stands between a revoked member and a vault already in memory.
+    /// and never cached, since it is what stands between a revoked member and a vault already in memory. With them, in
+    /// one indexed lookup of their owners, whether each owner's account is deactivated (collab design §7.4,
+    /// <see cref="MembershipDocument.OwnerInactive"/>): read-only for the members until it is active again, which counts
+    /// from the next request on. What it finds also starts or stops the vault's indexing in this process.
     /// </summary>
     internal async Task<IReadOnlyDictionary<string, MembershipDocument>> ActiveMembershipsAsync(IEnumerable<string> ids, CancellationToken ct)
     {
@@ -245,6 +248,19 @@ public sealed partial class VaultCatalog
             .Find(f.In(m => m.Id, ids.Distinct(StringComparer.Ordinal)) & f.Eq(m => m.Status, MembershipStatus.Active))
             .Project<MembershipDocument>(Builders<MembershipDocument>.Projection.Include(m => m.Vault).Include(m => m.Owner).Include(m => m.Member).Include(m => m.Role).Include(m => m.WriterIds).Include(m => m.ProviderSeen))
             .ToListAsync(ct);
+        if (found.Count > 0)
+        {
+            var owners = found.Select(m => m.Owner).Distinct(StringComparer.Ordinal).ToList();
+            // An owner without a user document (deleted meanwhile) counts as inactive too: fails closed.
+            var active = (await Users.Find(Builders<Accounts.UserDocument>.Filter.In(u => u.Id, owners) & Builders<Accounts.UserDocument>.Filter.Eq(u => u.Active, true))
+                .Project(u => u.Id).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+            foreach (var m in found)
+            {
+                m.OwnerInactive = !active.Contains(m.Owner);
+                OwnerActive(m.Vault, !m.OwnerInactive);
+            }
+        }
+
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
 
@@ -324,7 +340,12 @@ public sealed partial class VaultCatalog
     /// <summary>A member's session on a shared vault: under her alias, at her role (collab design §3.3), writing under
     /// her sessions' writer id.</summary>
     private static VaultAccess MemberAccess(UnlockedVault vault, byte[] vaultKey, string alias, MembershipDocument membership) =>
-        new(vault, alias, LevelOf(membership), membership, IsOwner: false) { WriterId = Memberships.WriterIdOf(membership, vaultKey, Memberships.SessionWriter) };
+        ReadOnlyIfOwnerInactive(new(vault, alias, LevelOf(membership), membership, IsOwner: false) { WriterId = Memberships.WriterIdOf(membership, vaultKey, Memberships.SessionWriter) });
+
+    /// <summary>A member's access while the owner's account is deactivated (collab design §7.4): <c>Read</c>, whatever
+    /// her role and credential, with the reason for every refusal.</summary>
+    private static VaultAccess ReadOnlyIfOwnerInactive(VaultAccess access) =>
+        access.Membership is { OwnerInactive: true } ? access with { Level = Kumbu.Core.Notes.AccessLevel.Read, ReadOnlyCode = Kumbu.Core.Notes.Refusals.OwnerInactive } : access;
 
     /// <summary>A key's or a connection's access: the owner's, under the vault's name at its sealed level; a member's,
     /// under her alias, at most at her role, writing under the writer id recorded for <paramref name="credentialId"/>.</summary>
@@ -332,10 +353,10 @@ public sealed partial class VaultCatalog
         UnlockedVault vault, byte[] vaultKey, Accounts.KeyRight right, MembershipDocument? membership, string? alias, string credentialId) =>
         membership is null
             ? new(vault, vault.Name, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
-            : new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false)
+            : ReadOnlyIfOwnerInactive(new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false)
             {
                 WriterId = Memberships.WriterIdOf(membership, vaultKey, credentialId),
-            };
+            });
 
     /// <summary>The level a membership's role gives; a role that doesn't parse reads as <c>read</c>.</summary>
     private static Kumbu.Core.Notes.AccessLevel LevelOf(MembershipDocument membership) => MemberRoles.Parse(membership.Role) switch

@@ -82,12 +82,25 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
                     var keyCount = await keys.RevokeAllAsync(s, userId, token);
                     var connectionCount = await connections.RevokeAllTokensAsync(s, userId, ConnectionReasons.Deactivated, token);
                     var invitationCount = active ? 0 : await Invitations.RevokeOpenOfAsync(db, s, userId, Now, token);
+                    // Her shared vaults become read-only for their members (collab design §7.4): an event for each, which
+                    // their activity shows and their agents are told once. Nothing of the memberships changes.
+                    if (!active)
+                    {
+                        foreach (var vaultId in await SharedVaultsAsync(s, userId, token))
+                        {
+                            await Sharing.VaultEvents.RecordAsync(db, s, vaultId, Sharing.VaultEvents.OwnerInactive, null, Now, null, token);
+                        }
+                    }
+
                     return (keyCount, connectionCount, invitationCount);
                 },
                 cancellationToken: ct);
         }
 
         if (revoked is not { } count) return true;
+        // At once in this process: indexing of her shared vaults stops, or catches up again. The members' requests read
+        // her flag themselves, from the next one on, in every process.
+        foreach (var vaultId in await SharedVaultsAsync(null, userId, ct)) catalog.OwnerActive(vaultId, active);
         if (active) log.LogInformation("{Admin} reactivated user {Username}", acting.Username, target.Username);
         else
         {
@@ -99,7 +112,18 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
         return true;
     }
 
-    /// <summary>Makes a user a <c>user</c> or an <c>admin</c>; false if there is no such user. The primary admin's
+    /// <summary>The vaults <paramref name="ownerId"/> shares with anyone now (an active membership), inside
+    /// <paramref name="session"/>'s transaction if given.</summary>
+    private async Task<IReadOnlyList<string>> SharedVaultsAsync(IClientSessionHandle? session, string ownerId, CancellationToken ct)
+    {
+        var docs = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
+        var filter = Builders<Sharing.MembershipDocument>.Filter.Eq(m => m.Owner, ownerId) & Builders<Sharing.MembershipDocument>.Filter.Eq(m => m.Status, Sharing.MembershipStatus.Active);
+        var field = new StringFieldDefinition<Sharing.MembershipDocument, string>("vault");
+        return session is null ? await (await docs.DistinctAsync(field, filter, cancellationToken: ct)).ToListAsync(ct)
+            : await (await docs.DistinctAsync(session, field, filter, cancellationToken: ct)).ToListAsync(ct);
+    }
+
+        /// <summary>Makes a user a <c>user</c> or an <c>admin</c>; false if there is no such user. The primary admin's
     /// role can't be changed, and nobody can be made primary admin. Made a user, an admin's open invitations are revoked.</summary>
     public async Task<bool> SetRoleAsync(User actor, string userId, string role, CancellationToken ct)
     {

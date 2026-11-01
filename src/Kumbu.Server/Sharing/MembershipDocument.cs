@@ -120,6 +120,11 @@ public sealed class MembershipDocument
     [BsonElement("writers")]
     public byte[] Writers { get; set; } = [];
 
+    /// <summary>Not stored: whether the owner's account was found deactivated when the membership was read for a request
+    /// (collab design §7.4).</summary>
+    [BsonIgnore]
+    public bool OwnerInactive { get; set; }
+
     /// <summary>A sentinel for transactions that derive slots through the membership (design §3.4).</summary>
     [BsonElement("revision")]
     public int Revision { get; set; }

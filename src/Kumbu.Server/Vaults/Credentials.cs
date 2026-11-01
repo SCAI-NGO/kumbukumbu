@@ -160,3 +160,12 @@ public sealed class VaultSharedException() : Exception(Sentence)
 
 /// <summary>A write reached a vault that was deleted while the request was under way; nothing was written.</summary>
 public sealed class VaultDeletedException() : Exception("This vault has just been deleted; nothing was written.");
+
+/// <summary>
+/// A write reached a vault that is read-only for the caller whatever her level (<see cref="VaultAccess.ReadOnlyCode"/>):
+/// nothing was written. Answered with 403 and <see cref="Code"/>, as a refusal of the level is.
+/// </summary>
+public sealed class VaultReadOnlyException(string code, string sentence) : Exception(sentence)
+{
+    public string Code { get; } = code;
+}

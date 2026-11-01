@@ -84,7 +84,11 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status400BadRequest, e.Message);
         }
-        catch (Kumbu.Server.Vaults.VaultDeletedException e)
+        catch (Kumbu.Server.Vaults.VaultReadOnlyException e)
+        {
+            return TypedResults.Json(new ApiError(e.Message, Code: e.Code), statusCode: StatusCodes.Status403Forbidden);
+        }
+                catch (Kumbu.Server.Vaults.VaultDeletedException e)
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }

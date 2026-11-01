@@ -24,6 +24,18 @@ public sealed record VaultAccess(UnlockedVault Vault, string Name, AccessLevel L
     /// read: the request that touches the vault records "last use on this vault" on it (planner's decision 9).</summary>
     public SlotDocument? DerivedSlot { get; init; }
 
+    /// <summary>Why the vault is read-only for this caller whatever her role or credential (a <see cref="Refusals"/> code:
+    /// <c>owner-inactive</c>), or null. Her <see cref="Level"/> is <c>Read</c> then, and every write is refused with this
+    /// code (<see cref="VaultCatalog.CheckWritable(UnlockedVault, VaultAccess)"/>).</summary>
+    public string? ReadOnlyCode { get; init; }
+
+    /// <summary>The refusal's sentence for <see cref="ReadOnlyCode"/>, the vault named as the caller sees it.</summary>
+    public static string ReadOnlySentence(string code, string vault) => code switch
+    {
+        Refusals.OwnerInactive => $"vault {vault} is read-only while its owner's account is deactivated",
+        _ => $"vault {vault} is read-only",
+    };
+
     /// <summary>The vault is seen under another name than its own: its paths are translated in both directions.</summary>
     public bool Renamed => !string.Equals(Name, Vault.Name, StringComparison.Ordinal);
 

@@ -430,11 +430,11 @@ public sealed class EncryptedNoteStore(
         var id = v.BlobId(bytes.Span);
         var filter = Builders<BlobDocument>.Filter.Eq(d => d.Vault, v.Id) & Builders<BlobDocument>.Filter.Eq(d => d.BlobId, id);
 
-        catalog.CheckWritable(v);
+        catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
         await v.Gate.WaitAsync(ct);
         try
         {
-            catalog.CheckWritable(v);
+            catalog.CheckWritable(v, _byId.GetValueOrDefault(v.Id));
             var touch = Builders<BlobDocument>.Update.Set(d => d.At, catalog.Now);
             if ((await catalog.Blobs.UpdateOneAsync(filter, touch, cancellationToken: ct)).MatchedCount == 0)
             {
@@ -807,12 +807,14 @@ public sealed class EncryptedNoteStore(
 
     private async Task<bool> WriteUnderGateAsync(UnlockedVault vault, IReadOnlyList<VaultPath> paths, Func<IClientSessionHandle, Task<Action?>> work, CancellationToken ct)
     {
-        // Before waiting too: nothing queues behind a re-keying run.
-        catalog.CheckWritable(vault);
+        // Before waiting too: nothing queues behind a re-keying run. With the caller's own record of the vault: one
+        // read-only for her refuses here, whichever route came (collab design §7.4).
+        var access = _byId.GetValueOrDefault(vault.Id);
+        catalog.CheckWritable(vault, access);
         await vault.Gate.WaitAsync(ct);
         try
         {
-            catalog.CheckWritable(vault);
+            catalog.CheckWritable(vault, access);
             using var session = await catalog.StartSessionAsync(ct);
             session.StartTransaction();
             Action? apply;

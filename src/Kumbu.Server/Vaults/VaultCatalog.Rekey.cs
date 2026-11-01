@@ -127,8 +127,23 @@ public sealed partial class VaultCatalog
         if (!HasCurrentKey(vault)) throw VaultBusyException.Just();
     }
 
-    /// <summary>The condition of <see cref="CheckWritable"/>, for indexing, which does nothing rather than throw.</summary>
-    internal bool MayIndex(UnlockedVault vault) =>
+    /// <summary>
+    /// <see cref="CheckWritable(UnlockedVault)"/> for a write through <paramref name="access"/>, the caller's own record
+    /// of the vault on this request: a vault read-only for her whatever her level (collab design §7.4, its owner's
+    /// account deactivated; later §7.3, closing) refuses the write here, on every route, REST and MCP alike, with the
+    /// reason's code (<see cref="VaultReadOnlyException"/>). Every write passes here.
+    /// </summary>
+    internal void CheckWritable(UnlockedVault vault, VaultAccess? access)
+    {
+        CheckWritable(vault);
+        if (access?.ReadOnlyCode is { } code) throw new VaultReadOnlyException(code, VaultAccess.ReadOnlySentence(code, access.Name));
+    }
+
+    /// <summary>The condition of <see cref="CheckWritable(UnlockedVault)"/>, for indexing, which does nothing rather than
+    /// throw; and nothing is indexed of a shared vault whose owner's account is deactivated (collab design §7.4).</summary>
+    internal bool MayIndex(UnlockedVault vault) => IsCurrentObject(vault) && !_ownerInactive.ContainsKey(vault.Id);
+
+    private bool IsCurrentObject(UnlockedVault vault) =>
         !vault.Pending && !vault.Deleted && !IsDeleted(vault.Id) && !IsBusy(vault.Id) && HasCurrentKey(vault);
 
     /// <summary>
@@ -136,7 +151,26 @@ public sealed partial class VaultCatalog
     /// a run or its two-key period). What was meant for an older object of the vault goes to this one.
     /// </summary>
     internal UnlockedVault? Current(string vaultId) =>
-        _open.TryGetValue(vaultId, out var vault) && MayIndex(vault) ? vault : null;
+        _open.TryGetValue(vaultId, out var vault) && IsCurrentObject(vault) ? vault : null;
+
+    /// <summary>The shared vaults whose owner's account was found deactivated, in this process: not indexed. Set and
+    /// cleared by every opening method that reads the owner's flag with a membership, and by the admin's change of it.</summary>
+    private readonly ConcurrentDictionary<string, byte> _ownerInactive = new();
+
+    /// <summary>
+    /// Records whether the owner of <paramref name="vaultId"/> is active (collab design §7.4). Back to active, a vault in
+    /// memory catches up on what its indexing left while it stood still, as at an unlock.
+    /// </summary>
+    internal void OwnerActive(string vaultId, bool active)
+    {
+        if (!active)
+        {
+            _ownerInactive[vaultId] = 0;
+            return;
+        }
+
+        if (_ownerInactive.TryRemove(vaultId, out _) && Current(vaultId) is { } vault) Unlocked?.Invoke(vault);
+    }
 
     /// <summary>
     /// Inside the transaction that stores slots wrapping <paramref name="wrapped"/> (vault id → the vault key wrapped,

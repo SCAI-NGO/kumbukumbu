@@ -95,9 +95,14 @@ public sealed class RequestCaller : ICaller
 
     public bool CanWrite(string vault) => Level(vault) >= AccessLevel.Write;
 
-    /// <summary>A person's session isn't a key (planner's decision 4).</summary>
+    /// <summary>A person's session isn't a key (planner's decision 4). A vault read-only for every member (its owner
+    /// deactivated) says so instead.</summary>
     public string ReadOnlySentence(string vault) =>
-        Kind == CallerKind.Session ? $"you can only read vault {vault}" : $"this key can only read vault {vault}";
+        ReadOnlyCode(vault) is { } code ? VaultAccess.ReadOnlySentence(code, vault)
+        : Kind == CallerKind.Session ? $"you can only read vault {vault}" : $"this key can only read vault {vault}";
+
+    /// <summary>From the caller's access record of the vault on this request (collab design §7.4).</summary>
+    public string? ReadOnlyCode(string vault) => (Credential as IRightsCredential)?.Access(vault)?.ReadOnlyCode;
 
     /// <summary>The caller's vaults, each under the caller's name for it (collab design §3.2).</summary>
     public Task<IReadOnlyList<VaultAccess>> OpenVaultsAsync(CancellationToken ct) => Credential.OpenAsync(_catalog, ct);

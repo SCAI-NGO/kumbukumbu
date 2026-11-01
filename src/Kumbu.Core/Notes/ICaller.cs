@@ -35,13 +35,18 @@ public interface ICaller
     /// caller: a key's or connection's "this key can only read …"; a person's session says "you" (a session is no key).</summary>
     string ReadOnlySentence(string vault) => $"this key can only read vault {vault}";
 
+    /// <summary>Why <paramref name="vault"/> is read-only for the caller whatever her level, as a <see cref="Refusals"/>
+    /// code (<see cref="Refusals.OwnerInactive"/>), or null: her level then is <c>Read</c>, and a refusal carries this
+    /// code in place of <see cref="Refusals.ReadOnly"/>, with <see cref="ReadOnlySentence"/> saying why.</summary>
+    string? ReadOnlyCode(string vault) => null;
+
     /// <summary>The refusal for a write by <paramref name="command"/> to <paramref name="path"/>, or null if allowed.
     /// Asked once per entry point, before the store is touched: first whether the caller may write at all, then
     /// whether it may change the vault's structure (<see cref="StructuralFiles"/>).</summary>
     ShellResult? Refuse(string command, VaultPath path)
     {
         if (path.Vault is not { } vault) return null;
-        if (!CanWrite(vault)) return Refusals.Of(command, Refusals.ReadOnly, ReadOnlySentence(vault));
+        if (!CanWrite(vault)) return Refusals.Of(command, ReadOnlyCode(vault) ?? Refusals.ReadOnly, ReadOnlySentence(vault));
         if (Level(vault) >= AccessLevel.Maintain) return null;
         if (StructuralFiles.StructuralCommands.Contains(command) || StructuralFiles.IsStructural(path))
         {

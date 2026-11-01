@@ -29,10 +29,12 @@ namespace Kumbu.Server.Api;
 /// null on a vault shared with the caller, who sees no member list. <c>membership</c>: on a vault shared with the caller,
 /// her membership's id (for "OK" and "Leave this vault"). <c>providerChanged</c>: on a vault shared with her, its
 /// embedding provider (<c>embeddings</c>) isn't the one she acknowledged: the vault is left out of her searches by
-/// meaning until she OKs it (<c>POST /api/memberships/{id}/provider-seen</c>).</summary>
+/// meaning until she OKs it (<c>POST /api/memberships/{id}/provider-seen</c>). <c>ownerInactive</c>: on a vault shared
+/// with her, its owner's account is deactivated: it is read-only for every member (<c>level</c> <c>read</c>) until it is
+/// active again, and she may still export it (the banner: "Alice's account is deactivated …", <c>owner</c> named).</summary>
 public sealed record VaultView(
     string Name, int Notes, string Embeddings, bool Pending, bool CanWrite, string Level = "owner", string? Owner = null, bool Shared = false,
-    int? Members = null, string? Membership = null, bool ProviderChanged = false);
+    int? Members = null, string? Membership = null, bool ProviderChanged = false, bool OwnerInactive = false);
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
 /// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
@@ -264,7 +266,7 @@ public static class NoteApi
         var members = access.Membership is null && access.IsOwner && info?.Shared == true ? await catalog.ActiveMemberCountAsync(access.Id, ct) : access.Membership is null ? 0 : (int?)null;
         return new VaultView(
             name, notes, vault.EmbeddingProvider, vault.Pending, level >= AccessLevel.Write, level.ToString().ToLowerInvariant(), info?.Owner, info?.Shared ?? false,
-            members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access));
+            members, access.Membership?.Id, !vault.Pending && !EncryptedNoteStore.ProviderConsented(access), access.ReadOnlyCode == Refusals.OwnerInactive);
     }
 
     private static async Task<Created<VaultView>> CreateVaultAsync(CreateVaultRequest body, RequestCaller caller, VaultCatalog catalog, CancellationToken ct)
