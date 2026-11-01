@@ -23,7 +23,9 @@ public sealed class SidecarPeers(IOptions<KumbuOptions> options, ILogger<Sidecar
 
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolve = resolve ?? Dns.GetHostAddressesAsync;
 
-    private readonly string? _host = Uri.TryCreate(options.Value.Pdf.Url, UriKind.Absolute, out var url) ? url.IdnHost : null;
+    private readonly Uri? _url = Uri.TryCreate(options.Value.Pdf.Url, UriKind.Absolute, out var url) ? url : null;
+
+    private readonly string? _host = Uri.TryCreate(options.Value.Pdf.Url, UriKind.Absolute, out var u) ? u.IdnHost : null;
 
     public const int MaxAdded = 16;
 
@@ -75,10 +77,16 @@ public sealed class SidecarPeers(IOptions<KumbuOptions> options, ILogger<Sidecar
     /// <summary>
     /// The connect callback of the sidecar client's handler: resolves and connects itself, so that the address actually
     /// connected to is known, and adds it before the stream, and with it the first byte of a request, is handed back.
+    /// Only the host and port of <c>Kumbu:Pdf:Url</c> are connected to, whatever address a request names.
     /// </summary>
     public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
     {
         var host = context.DnsEndPoint.Host;
+        if (_url is null || !string.Equals(host, _url.IdnHost, StringComparison.OrdinalIgnoreCase) || context.DnsEndPoint.Port != _url.Port)
+        {
+            throw new InvalidOperationException("The PDF sidecar's client may only connect to the configured sidecar");
+        }
+
         var addresses = IPAddress.TryParse(host, out var literal) ? [literal] : await _resolve(host, ct);
         Exception? last = null;
         foreach (var address in addresses)

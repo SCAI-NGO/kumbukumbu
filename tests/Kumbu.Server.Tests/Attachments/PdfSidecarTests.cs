@@ -62,6 +62,36 @@ public sealed class PdfSidecarTests
         """)!.AsObject();
 
     [Fact]
+    public async Task A_redirect_from_the_sidecar_is_an_error()
+    {
+        // Each redirect carries what would be a good answer, so treating a 3xx as success would show.
+        var stub = new Stub((request, _) =>
+        {
+            var response = request.RequestUri!.AbsolutePath.EndsWith("analyse", StringComparison.Ordinal)
+                ? Json(HttpStatusCode.TemporaryRedirect, TwoPages().ToJsonString())
+                : Image(FakePdfSidecar.SolidPng(4, 4), "image/png", 4, 4, ("X-Kumbu-Page-Width", "595"), ("X-Kumbu-Page-Height", "842"), ("X-Kumbu-Original-Width", "4"), ("X-Kumbu-Original-Height", "4"));
+            response.StatusCode = HttpStatusCode.TemporaryRedirect;
+            response.Headers.Location = new Uri("http://elsewhere.test/collect");
+            return response;
+        });
+        var sidecar = Sidecar(stub);
+
+        foreach (var call in new Func<Task>[]
+        {
+            () => sidecar.AnalyseAsync(Pdf, 2, Ct),
+            () => sidecar.RenderPageAsync(Pdf, 1, Medium, null, Ct),
+            () => sidecar.RenderImageAsync(FakePdfSidecar.SolidPng(4, 4), Medium, null, Ct),
+        })
+        {
+            var e = await Assert.ThrowsAsync<SidecarException>(call);
+            Assert.Equal(SidecarException.Failed, e.Code);
+        }
+
+        Assert.Equal(3, stub.Seen.Count);
+        Assert.All(stub.Seen, seen => Assert.Equal("pdf.test", seen.Request.RequestUri!.Host));
+    }
+
+    [Fact]
     public async Task Without_a_url_every_call_is_unavailable()
     {
         var stub = new Stub((_, _) => throw new InvalidOperationException("no request expected"));

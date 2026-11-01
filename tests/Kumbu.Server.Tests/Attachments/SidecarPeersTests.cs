@@ -230,11 +230,11 @@ public sealed class SidecarPeersTests(KumbuAppFactory app)
 
         var old = IPAddress.Parse("10.0.0.1");
         var current = old;
-        var peers = Peers("http://pdf:8090", (_, _) => Task.FromResult<IPAddress[]>([current]));
-        await peers.RefreshAsync(Ct);
         using var listener = new TcpListener(now, 0);
         listener.Start();
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var peers = Peers($"http://pdf:{port}", (_, _) => Task.FromResult<IPAddress[]>([current]));
+        await peers.RefreshAsync(Ct);
         var refusedAtFirstByte = false;
         var server = Task.Run(async () =>
         {
@@ -276,6 +276,69 @@ public sealed class SidecarPeersTests(KumbuAppFactory app)
         var callback = sockets.ConnectCallback!;
         Assert.Same(app.Services.GetRequiredService<SidecarPeers>(), callback.Target);
         Assert.Equal(nameof(SidecarPeers.ConnectAsync), callback.Method.Name);
+    }
+
+    // A redirect would take the file, with its decrypted bytes, to an address the operator never configured.
+    [Fact]
+    public void The_sidecar_handler_follows_no_redirects()
+    {
+        var factory = app.Services.GetRequiredService<IHttpMessageHandlerFactory>();
+        HttpMessageHandler handler = factory.CreateHandler(nameof(IPdfSidecar));
+        while (handler is DelegatingHandler delegating)
+        {
+            handler = delegating.InnerHandler!;
+        }
+
+        Assert.False(Assert.IsType<SocketsHttpHandler>(handler).AllowAutoRedirect);
+    }
+
+    // A listener on the address the request names would show a connection made: none is.
+    [Theory]
+    [InlineData("other.test")]
+    [InlineData("127.0.0.1")]
+    public async Task ConnectAsync_refuses_a_host_other_than_the_configured_one(string host)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var resolved = new List<string>();
+        var peers = Peers($"http://pdf.test:{port}", (name, _) =>
+        {
+            resolved.Add(name);
+            return Task.FromResult<IPAddress[]>([IPAddress.Loopback]);
+        });
+        using var handler = new SocketsHttpHandler { ConnectCallback = peers.ConnectAsync };
+        using var http = new HttpClient(handler);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(5));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => http.GetStringAsync(new Uri($"http://{host}:{port}/"), limit.Token));
+
+        Assert.Empty(resolved);
+        Assert.False(listener.Pending());
+    }
+
+    [Fact]
+    public async Task ConnectAsync_refuses_a_port_other_than_the_configured_one()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var resolved = new List<string>();
+        var peers = Peers($"http://pdf.test:{port + 1}", (name, _) =>
+        {
+            resolved.Add(name);
+            return Task.FromResult<IPAddress[]>([IPAddress.Loopback]);
+        });
+        using var handler = new SocketsHttpHandler { ConnectCallback = peers.ConnectAsync };
+        using var http = new HttpClient(handler);
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(5));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => http.GetStringAsync(new Uri($"http://pdf.test:{port}/"), limit.Token));
+
+        Assert.Empty(resolved);
+        Assert.False(listener.Pending());
     }
 
     [Fact]
