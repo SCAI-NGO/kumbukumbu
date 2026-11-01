@@ -169,6 +169,29 @@ public sealed class CallerTests(KumbuAppFactory app)
         Assert.Equal(AccessLevel.Maintain, credential.Level("Mine"));
     }
 
+    // Hard rule 4 mustn't rest on every write path asking the level first: without an access record of the vault (its
+    // vaults not opened, or a name it doesn't have) no label and no reference is handed out, not even the owner's.
+    [Fact]
+    public async Task Without_an_access_record_a_caller_hands_out_no_label_and_no_reference()
+    {
+        var (user, userKey, vaults) = await UserWithVaultsAsync("Mine");
+        var (key, info) = await app.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            user, userKey, DateTime.UtcNow, "agent", new Dictionary<string, KeyRight> { [vaults["Mine"]] = KeyRight.Maintain }, Ct);
+        var keyCaller = await RequestCaller.ForApiKeyAsync(new ResolvedApiKey(user, info.Id, info.Name), key, app.Services.GetRequiredService<VaultCatalog>(), Ct);
+        var session = RequestCaller.ForSession(user, userKey, DateTime.UtcNow, windowOpen: true, app.Services.GetRequiredService<VaultCatalog>());
+
+        Assert.Equal("agent", keyCaller.WriterIn("Mine"));
+        Assert.Equal(keyCaller.Reference, keyCaller.ReferenceIn("Mine"));
+        foreach (var (caller, vault) in new[] { (keyCaller, "Elsewhere"), (session, "Mine") })
+        {
+            Assert.Throws<InvalidOperationException>(() => caller.WriterIn(vault));
+            Assert.Throws<InvalidOperationException>(() => caller.ReferenceIn(vault));
+        }
+
+        await session.OpenVaultsAsync(Ct);
+        Assert.Equal(user.Username, session.WriterIn("Mine"));
+    }
+
     // Names are unique per caller, but the rule must not depend on it: a name two vaults share gives no level at all
     // (the store refuses to serve them; collab design §3.2), and the name is resolved to the vault's id once.
     [Fact]
