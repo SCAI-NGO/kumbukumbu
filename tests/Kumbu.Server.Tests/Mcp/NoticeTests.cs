@@ -130,4 +130,44 @@ public sealed class NoticeTests(KumbuAppFactory app)
         Assert.Equal(TimeSpan.FromDays(30).TotalSeconds, ttl["expireAfterSeconds"].ToDouble());
         Assert.Contains(indexes, i => i["key"].AsBsonDocument == new BsonDocument { ["credential"] = 1, ["event"] = 1 } && i.GetValue("unique", false).ToBoolean());
     }
+
+    [Fact]
+    public async Task A_resumed_run_tells_each_credential_its_start_took_once()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        await alice.ShareWithAsync(bob, "garten", MemberRole.Write);
+        await alice.ShareWithAsync(carol, "beete", MemberRole.Read);
+        var vaultId = await alice.VaultIdAsync();
+        var bobs = await KeyAsync(bob, "Claude", vaultId, await bob.VaultIdAsync());
+        var carols = await KeyAsync(carol, "Claude", vaultId, await carol.VaultIdAsync());
+        var bobsOwn = await KeyAsync(bob, "Codex", await bob.VaultIdAsync());
+        using (var diary = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Diary" })) Assert.Equal(HttpStatusCode.Created, diary.StatusCode);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        // Her key on another vault of hers: one on this one is revoked whole by the run.
+        var hers = await KeyAsync(alice, "Claude", (await catalog.FindForUserAsync(alice.User.Id, alice.UserKey, "Diary", Ct))!);
+
+        // The run stops after its start and is resumed: the second start finds no slot of theirs left to take, and
+        // the notices still come, from what the first start recorded on the vault.
+        catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct));
+        }
+        finally
+        {
+            catalog.RekeyFaultAt = null;
+        }
+
+        await catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+
+        static int Lost(IReadOnlyList<string> blocks) => blocks.Count(b => b.Contains("re-encrypted a vault shared with you", StringComparison.Ordinal));
+        Assert.Equal(1, Lost(await bob.ShBlocksAsync("ls /", bobs)));
+        Assert.Equal(0, Lost(await bob.ShBlocksAsync("ls /", bobs)));
+        Assert.Equal(1, Lost(await carol.ShBlocksAsync("ls /", carols)));
+        // A key that never had the vault, and the owner's, are told nothing.
+        Assert.Equal(0, Lost(await bob.ShBlocksAsync("ls /", bobsOwn)));
+        Assert.DoesNotContain(await alice.ShBlocksAsync("ls /", hers), b => b.Contains("Notice:", StringComparison.Ordinal));
+    }
 }

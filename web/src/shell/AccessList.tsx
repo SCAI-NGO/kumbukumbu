@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
+import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { roles, useMembership, useMembershipChange, useVaultAccess, type MemberAccess, type Role } from "../api/sharing";
+import { roles, useMembership, useMembershipChange, useRekeyVault, useVaultAccess, type Departure, type MemberAccess, type Role } from "../api/sharing";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { PasswordField } from "../components/PasswordField";
 import { timeText } from "../components/Sheet";
 import { useDialog } from "../hooks/useDialog";
 import { maintainSentence } from "../routes/rights";
@@ -38,15 +41,45 @@ function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: strin
   );
 }
 
+/** The concept's sentence for the offer of a re-encryption (collab concept §10.5). */
+function ReencryptWhy({ id, who }: { id: string; who: string }) {
+  return (
+    <p id={id} className="text-sm text-text-body">
+      Only needed if {who} could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up
+      again.
+    </p>
+  );
+}
+
 /**
  * Revoking: at once, for the member and every key and app she connected. The re-encryption that would also shut out an
- * old backup is offered off by default (collab concept §10.5); until a shared vault can be re-encrypted (a later
- * step: the server refuses it while the vault is shared), the choice is shown but can't be made, and the way to it
- * once nobody else shares the vault is named.
+ * old backup is offered, off by default (collab concept §10.5); ticked, it asks for the password, which is checked
+ * before anything is revoked, and runs once the access is gone, so the new key never reaches the person revoked.
  */
-function RevokeDialog({ vault, label, pending, error, onRevoke, onClose }: { vault: string; label: string; pending: boolean; error: string | null; onRevoke(): void; onClose(): void }) {
+function RevokeDialog({ vault, member, onDone, onClose }: { vault: string; member: MemberAccess; onDone(message: string): void; onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
+  const queryClient = useQueryClient();
+  const [reencrypt, setReencrypt] = useState(false);
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  const [revoked, setRevoked] = useState(false);
+  const label = member.label;
+  const revoke = useMutation({
+    mutationFn: async () => {
+      if (reencrypt) await call(api.POST("/api/session/confirm", { body: { password } }));
+      if (!revoked) {
+        await call(api.POST("/api/vaults/{vault}/memberships/{id}/revoke", { params: { path: { vault, id: member.id } } }));
+        setRevoked(true);
+      }
+      if (reencrypt) await call(api.POST("/api/vaults/{vault}/rekey", { params: { path: { vault } }, body: { password } }));
+    },
+    onSuccess: () => {
+      setPassword("");
+      onDone(reencrypt ? `${label}'s access is revoked, and ${vault} is re-encrypted.` : `${label}'s access is revoked.`);
+    },
+    onSettled: () => Promise.all(["vault-access", "vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
+  });
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
       <form
@@ -54,9 +87,10 @@ function RevokeDialog({ vault, label, pending, error, onRevoke, onClose }: { vau
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}
+        aria-busy={revoke.isPending}
         onSubmit={(e) => {
           e.preventDefault();
-          onRevoke();
+          if (!reencrypt || password) revoke.mutate();
         }}
         className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
       >
@@ -66,24 +100,29 @@ function RevokeDialog({ vault, label, pending, error, onRevoke, onClose }: { vau
         <p className="text-text-body">
           {label}, and every key and app {label} connected, lose access to {vault} at once. What they read before stays with them.
         </p>
-        <label className="flex items-start gap-3 text-muted">
-          <input type="checkbox" checked={false} disabled aria-describedby={`${id}-why ${id}-later`} className="mt-0.5 size-5 shrink-0" />
+        <label className="flex items-start gap-3 text-text">
+          <input
+            type="checkbox"
+            checked={reencrypt}
+            disabled={revoke.isPending}
+            onChange={(e) => setReencrypt(e.target.checked)}
+            aria-describedby={`${id}-why`}
+            className="mt-0.5 size-5 shrink-0"
+          />
           <span>Also re-encrypt this vault</span>
         </label>
-        <p id={`${id}-why`} className="text-sm text-text-body">
-          Only needed if {label} could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to
-          be set up again.
-        </p>
-        <p id={`${id}-later`} className="text-sm text-muted">
-          Not possible here yet: a vault that is shared can't be re-encrypted. Once nobody else shares {vault}, Settings can re-encrypt it.
-        </p>
-        {error && <FormError>{error}</FormError>}
+        <ReencryptWhy id={`${id}-why`} who={label} />
+        {reencrypt && <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />}
+        {revoke.isPending && reencrypt && revoked && <p className="text-muted">Re-encrypting; this can take a while for a large vault.</p>}
+        {revoke.isError && (
+          <FormError>{revoked ? `${label}'s access is revoked, but ${vault} wasn't re-encrypted: ${errorText(revoke.error)}` : errorText(revoke.error)}</FormError>
+        )}
         <div className="flex gap-3">
           <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
-            Cancel
+            {revoked ? "Close" : "Cancel"}
           </button>
-          <button type="submit" disabled={pending} className={`${primaryButtonClass} flex-1`}>
-            Revoke
+          <button type="submit" disabled={revoke.isPending || (reencrypt && !password)} className={`${primaryButtonClass} flex-1`}>
+            {revoked ? "Re-encrypt" : "Revoke"}
           </button>
         </div>
       </form>
@@ -91,11 +130,62 @@ function RevokeDialog({ vault, label, pending, error, onRevoke, onClose }: { vau
   );
 }
 
+/**
+ * Who left the vault since it was last re-encrypted: the owner is offered a re-encryption, as after a revoke (collab
+ * design §6.4), and nothing runs unless she asks for it.
+ */
+function Departures({ vault, left, onDone }: { vault: string; left: Departure[]; onDone(message: string): void }) {
+  const id = useId();
+  const [asking, setAsking] = useState(false);
+  const [password, setPassword] = useState("");
+  const rekey = useRekeyVault(vault, password);
+  const who = left.map((d) => d.label).join(" or ");
+  return (
+    <section aria-labelledby={`${id}-title`} className="flex flex-col gap-2 rounded-[12px] border border-line bg-surface-2 p-3">
+      <h3 id={`${id}-title`} className="font-medium break-words text-text">
+        {left.map((d) => `${d.label} left ${vault} ${timeText(d.leftAt)}.`).join(" ")}
+      </h3>
+      <ReencryptWhy id={`${id}-why`} who={who} />
+      {!asking ? (
+        <button type="button" onClick={() => setAsking(true)} aria-describedby={`${id}-why`} className={`${secondaryButtonClass} self-start`}>
+          Re-encrypt {vault}…
+        </button>
+      ) : (
+        <form
+          aria-busy={rekey.isPending}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (password)
+              rekey.mutate(undefined, {
+                onSuccess: () => {
+                  setPassword("");
+                  onDone(`${vault} is re-encrypted.`);
+                },
+              });
+          }}
+          className="flex flex-col gap-2"
+        >
+          <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+          {rekey.isPending && <p className="text-muted">Re-encrypting; this can take a while for a large vault.</p>}
+          {rekey.isError && <FormError>{errorText(rekey.error)}</FormError>}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setAsking(false)} disabled={rekey.isPending} className={secondaryButtonClass}>
+              Cancel
+            </button>
+            <button type="submit" disabled={!password || rekey.isPending} className={primaryButtonClass}>
+              Re-encrypt vault
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
 /** One person: her role, what she connected, and what the owner can do now. */
-function Member({ vault, member }: { vault: string; member: MemberAccess }) {
+function Member({ vault, member, onRevoke }: { vault: string; member: MemberAccess; onRevoke(): void }) {
   const id = useId();
   const change = useMembershipChange(vault);
-  const [revoking, setRevoking] = useState(false);
   const role = member.role as Role;
   const invited = member.status === "pending" && !member.redeemedAt;
   const waiting = member.status === "pending" && !!member.redeemedAt;
@@ -157,25 +247,12 @@ function Member({ vault, member }: { vault: string; member: MemberAccess }) {
           ) : (
             <p className="text-sm text-muted">No keys or apps of theirs for this vault.</p>
           )}
-          <button type="button" onClick={() => setRevoking(true)} className={`${secondaryButtonClass} self-start`}>
+          <button type="button" onClick={onRevoke} className={`${secondaryButtonClass} self-start`}>
             Revoke…
           </button>
         </>
       )}
-      {change.isError && !revoking && <FormError>{errorText(change.error)}</FormError>}
-      {revoking && (
-        <RevokeDialog
-          vault={vault}
-          label={member.label}
-          pending={change.isPending}
-          error={change.isError ? errorText(change.error) : null}
-          onRevoke={() => change.mutate({ kind: "revoke", id: member.id }, { onSuccess: () => setRevoking(false) })}
-          onClose={() => {
-            change.reset();
-            setRevoking(false);
-          }}
-        />
-      )}
+      {change.isError && <FormError>{errorText(change.error)}</FormError>}
     </li>
   );
 }
@@ -186,7 +263,11 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
   const dialog = useDialog<HTMLDivElement>(onClose);
   const access = useVaultAccess(vault);
   const [inviting, setInviting] = useState(false);
+  // Held here, not by the member's row: the row goes as soon as the revoke is done, and a re-encryption may still run.
+  const [revoking, setRevoking] = useState<MemberAccess | null>(null);
+  const [done, setDone] = useState<string | null>(null);
   const members = access.data?.members ?? [];
+  const left = access.data?.left ?? [];
   return (
     <div className="absolute inset-0 z-40 flex items-end justify-center bg-black/55 sm:items-center">
       <div
@@ -201,14 +282,24 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
         </h2>
         {access.isPending && <p className="text-muted">Looking up who has access…</p>}
         {access.isError && <FormError>{errorText(access.error)}</FormError>}
+        {done && <p role="status" className="text-text-body">{done}</p>}
         {access.data && members.length === 0 && <p className="text-text-body">{vault} isn't shared with anyone.</p>}
         {members.length > 0 && (
           <ul aria-label="Members" className="flex flex-col gap-2">
             {members.map((m) => (
-              <Member key={m.id} vault={vault} member={m} />
+              <Member
+                key={m.id}
+                vault={vault}
+                member={m}
+                onRevoke={() => {
+                  setDone(null);
+                  setRevoking(m);
+                }}
+              />
             ))}
           </ul>
         )}
+        {left.length > 0 && <Departures vault={vault} left={left} onDone={setDone} />}
         <button type="button" onClick={() => setInviting(true)} className={secondaryButtonClass}>
           Invite someone…
         </button>
@@ -217,6 +308,17 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
         </button>
       </div>
       {inviting && <ShareDialog vault={vault} onClose={() => setInviting(false)} />}
+      {revoking && (
+        <RevokeDialog
+          vault={vault}
+          member={revoking}
+          onDone={(message) => {
+            setDone(message);
+            setRevoking(null);
+          }}
+          onClose={() => setRevoking(null)}
+        />
+      )}
     </div>
   );
 }

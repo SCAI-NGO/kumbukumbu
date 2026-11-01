@@ -136,4 +136,71 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         Assert.False(await events.Find(e => e.Vault == vaultId).AnyAsync(Ct));
     }
+
+    [Fact]
+    public async Task Members_are_told_to_give_their_agents_the_vault_again()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);
+        await SetDisplayAsync(alice, "Alice");
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var vaultId = await alice.VaultIdAsync();
+        await alice.ShareWithAsync(bob, "Garten", MemberRole.Write, label: "Bob");
+        var (key, info) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write, [await bob.VaultIdAsync()] = KeyRight.Write }, Ct);
+
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        }
+
+        Assert.Equal(["\"Alice\" re-encrypted Garten; your keys and apps for it were revoked. Give your agents Garten again."], await ActivityTextsAsync(bob, "Garten"));
+        var feed = Assert.Single(await FeedAsync(bob))!;
+        Assert.Equal(VaultEvents.RekeyFinished, feed["kind"]!.GetValue<string>());
+        Assert.Equal(["Gartenarbeit was re-encrypted; members' keys and apps for it were revoked."], await ActivityTextsAsync(alice, "Gartenarbeit"));
+        // One vault-wide event, naming his key that lost the vault by id only.
+        var raw = await app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName).Find(e => e.Vault == vaultId).SingleAsync(Ct);
+        Assert.Null(raw.Membership);
+        Assert.Equal([info.Id], raw.Credentials);
+        Assert.False(await app.Database.GetCollection<Kumbu.Server.Vaults.VaultDocument>("vaults").Find(v => v.Id == vaultId && v.RekeyEnded != null).AnyAsync(Ct));
+
+        // His key kept his own vault, and its next call says why it lost the shared one.
+        var blocks = await bob.ShBlocksAsync("ls /", key);
+        Assert.Equal("\nNotice: The owner (\"Alice\") re-encrypted a vault shared with you; you no longer reach it until you are given it again.", blocks[^1]);
+        Assert.StartsWith("Work/", blocks[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task After_Bob_leaves_the_owner_is_offered_a_re_encryption_until_she_re_keys()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        var vaultId = await alice.VaultIdAsync();
+        var bobs = await alice.ShareWithAsync(bob, "Garten", MemberRole.Read, label: "Bob");
+        await alice.ShareWithAsync(carol, "Beete", MemberRole.Read, label: "Carol");
+        using (var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{bobs}/leave")) Assert.Equal(HttpStatusCode.NoContent, left.StatusCode);
+
+        async Task<string[]> LeftAsync()
+        {
+            using var access = await alice.GetAsync("/api/vaults/Gartenarbeit/access");
+            Assert.Equal(HttpStatusCode.OK, access.StatusCode);
+            return [.. (await RestClient.JsonAsync(access))["left"]!.AsArray().Select(d => d!["label"]!.GetValue<string>())];
+        }
+
+        Assert.Equal(["Bob"], await LeftAsync());
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        }
+
+        // Re-encrypted after he left: nothing more to offer.
+        Assert.Empty(await LeftAsync());
+        Assert.Equal("Gartenarbeit was re-encrypted; members' keys and apps for it were revoked.", (await ActivityTextsAsync(alice, "Gartenarbeit"))[0]);
+
+        // A vault never shared records nothing when re-keyed.
+        var diaryId = await carol.VaultIdAsync();
+        using (var rekeyed = await carol.SendAsync(HttpMethod.Post, "/api/vaults/Notizen/rekey", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        Assert.False(await app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName).Find(e => e.Vault == diaryId).AnyAsync(Ct));
+    }
 }

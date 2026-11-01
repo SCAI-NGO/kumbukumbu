@@ -523,6 +523,9 @@ public sealed partial class VaultCatalog
         var theirs = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
             .Find(s, c.AnyEq(x => x.Vaults, id) & c.Ne(x => x.User, ownerId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
         var connections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, [id], Now, ct, reason: Accounts.ConnectionReasons.Rekeyed, only: theirs);
+        // Each is told at its next tool call once the run is done, if it still has a vault to call with (§8.4).
+        var ended = keyIds.OfType<string>().Concat(theirs).ToList();
+        if (ended.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEnded, ended), cancellationToken: ct);
         return new MembersCredentials(keys, connections);
     }
 
@@ -564,11 +567,18 @@ public sealed partial class VaultCatalog
             Builders<VaultDocument>.Filter.Eq(v => v.Id, id) & Builders<VaultDocument>.Filter.Eq(v => v.Meta, doc.Meta),
             Builders<VaultDocument>.Update
                 .Set(v => v.Meta, VaultCrypto.Seal(VaultCrypto.Derive(start.NewKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(meta), $"vault:{id}"))
-                .Unset(v => v.RekeyStartedAt),
+                .Unset(v => v.RekeyStartedAt).Unset(v => v.RekeyEnded),
             cancellationToken: ct);
         if (vault.MatchedCount != 1) throw Mismatch("the vault document");
         // Wrapped to the keys pinned under K, never to a key the database names (HARD RULE 3).
         await Sharing.Memberships.FinishRekeyAsync(db, log, s, id, start.OldKey, start.NewKey, members, ct);
+        // The members are told, and so are their keys and apps that lost the vault (collab design §8.3, §8.4); for the
+        // owner it ends the offer of a re-encryption after a member left (§6.4). Only of a vault ever shared.
+        if (members.Count > 0 || doc.RekeyEnded is { Count: > 0 }
+            || await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName).Find(s, m => m.Vault == id).AnyAsync(ct))
+        {
+            await Sharing.VaultEvents.RecordAsync(db, s, id, Sharing.VaultEvents.RekeyFinished, null, Now, null, ct, credentials: doc.RekeyEnded);
+        }
 
         await Users.UpdateOneAsync(
             s,

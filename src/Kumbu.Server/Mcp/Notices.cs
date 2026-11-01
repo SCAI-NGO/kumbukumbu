@@ -47,22 +47,52 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
     {
         if (caller.Kind is not (CallerKind.ApiKey or CallerKind.Connection) || caller.Reference.Id is not { } credentialId) return result;
         var shared = (await caller.OpenVaultsAsync(ct)).Where(a => a.Membership is not null).ToList();
-        if (shared.Count == 0) return result;
-
-        var pending = await PendingAsync(credentialId, shared, ct);
-        if (pending.Count == 0) return result;
+        var pending = shared.Count == 0 ? [] : await PendingAsync(credentialId, shared, ct);
+        var lost = await LostAsync(credentialId, ct);
+        if (pending.Count == 0 && lost.Count == 0) return result;
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (e, access) in pending)
         {
-            var owner = access.Membership!.Owner;
-            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = Api.WriterLabels.Quoted(await memberships.DisplayNameAsync(owner, ct) ?? "");
+            var shown = await OwnerShownAsync(access.Membership!.Owner);
             // Starts on its own line, as the version block does: some clients join the blocks without a separator.
             result.Content.Add(new TextContentBlock { Text = "\nNotice: " + VaultEvents.NoticeFor(e.Kind, shown, "/" + access.Name, e.Role, e.Until) });
         }
 
+        foreach (var (e, owner) in lost)
+        {
+            result.Content.Add(new TextContentBlock { Text = "\nNotice: " + VaultEvents.NoticeFor(e.Kind, await OwnerShownAsync(owner), "", null, null) });
+        }
+
         if (FaultBeforeMark is { } fault) await fault();
-        await MarkAsync(credentialId, pending.Select(p => p.Event.Id), ct);
+        await MarkAsync(credentialId, pending.Select(p => p.Event.Id).Concat(lost.Select(l => l.Event.Id)), ct);
         return result;
+
+        async Task<string> OwnerShownAsync(string owner)
+        {
+            if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = Api.WriterLabels.Quoted(await memberships.DisplayNameAsync(owner, ct) ?? "");
+            return shown;
+        }
+    }
+
+    /// <summary>The finished re-keyings, within <see cref="Window"/>, of vaults whose start took the credential's slot
+    /// (collab design §7.1): it no longer reaches the vault and is told so once, with the vault's owner (its
+    /// membership's, which the event's vault names).</summary>
+    private async Task<IReadOnlyList<(VaultEventDocument Event, string Owner)>> LostAsync(string credentialId, CancellationToken ct)
+    {
+        var f = Builders<VaultEventDocument>.Filter;
+        var since = time.GetUtcNow().UtcDateTime - Window;
+        var mine = f.Eq(e => e.Kind, VaultEvents.RekeyFinished) & f.AnyEq(e => e.Credentials, credentialId) & f.Gt(e => e.At, since);
+        if (!await VaultEvents.Docs(db).Find(mine).AnyAsync(ct)) return [];
+        await EnsureReadyAsync(ct);
+        var m = Builders<NoticeMarkDocument>.Filter;
+        var given = await Marks.Find(m.Eq(x => x.Credential, credentialId) & m.Gt(x => x.At, since)).Project(x => x.Event).ToListAsync(ct);
+        var events = await VaultEvents.Docs(db).Find(mine & f.Nin(e => e.Id, given)).SortBy(e => e.At).Limit(20).ToListAsync(ct);
+        var vaults = events.Select(e => e.Vault).Distinct().ToList();
+        if (vaults.Count == 0) return [];
+        // Every membership of a vault names its one owner.
+        var owners = (await db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(x => vaults.Contains(x.Vault)).Project(x => new { x.Vault, x.Owner }).ToListAsync(ct))
+            .GroupBy(x => x.Vault).ToDictionary(g => g.Key, g => g.First().Owner);
+        return [.. events.Where(e => owners.ContainsKey(e.Vault)).Select(e => (e, owners[e.Vault]))];
     }
 
     /// <summary>The events of the shared vaults <paramref name="shared"/> the credential hasn't been told, oldest first:
@@ -90,7 +120,8 @@ public sealed class Notices(IMongoDatabase db, Memberships memberships, TimeProv
     /// vault being gone.</summary>
     private static readonly string[] OwnKinds = [VaultEvents.RoleChanged];
 
-    private static readonly string[] VaultKinds = [VaultEvents.ProviderChanged, VaultEvents.RekeyFinished, VaultEvents.ClosingStarted, VaultEvents.OwnerInactive];
+    /// <summary>A finished re-keying isn't among them: no credential reaches the vault across one (<see cref="LostAsync"/>).</summary>
+    private static readonly string[] VaultKinds = [VaultEvents.ProviderChanged, VaultEvents.ClosingStarted, VaultEvents.OwnerInactive];
 
     private async Task MarkAsync(string credentialId, IEnumerable<ObjectId> events, CancellationToken ct)
     {

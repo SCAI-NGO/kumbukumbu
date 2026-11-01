@@ -605,6 +605,37 @@ public sealed partial class Memberships(
     }
 
     /// <summary>
+    /// Who left <paramref name="vaultId"/> since it was last re-encrypted (the latest <see cref="VaultEvents.RekeyFinished"/>),
+    /// oldest first, by the owner's label, for the access list's offer of a re-encryption (collab design §6.4): a
+    /// person who is back as a member or invitee isn't among them.
+    /// </summary>
+    internal async Task<IReadOnlyList<Departure>> DeparturesAsync(string vaultId, byte[] vaultKey, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        var docs = await Docs.Find(m => m.Vault == vaultId).ToListAsync(ct);
+        var left = docs.Where(m => m.Status == MembershipStatus.Left && m.RevokedAt is not null).ToList();
+        if (left.Count == 0) return [];
+        var e = Builders<VaultEventDocument>.Filter;
+        var rekeyed = await VaultEvents.Docs(db).Find(e.Eq(x => x.Vault, vaultId) & e.Eq(x => x.Kind, VaultEvents.RekeyFinished))
+            .SortByDescending(x => x.At).Project(x => (DateTime?)x.At).FirstOrDefaultAsync(ct);
+        var back = docs.Where(m => Live.Contains(m.Status) && m.Member is not null).Select(m => m.Member!).ToHashSet(StringComparer.Ordinal);
+        var result = new List<Departure>();
+        foreach (var doc in left.Where(m => !(m.RevokedAt <= rekeyed) && !back.Contains(m.Member ?? "")).OrderBy(m => m.RevokedAt))
+        {
+            try
+            {
+                result.Add(new Departure(Encoding.UTF8.GetString(VaultCatalog.OpenForVault(vaultKey, vaultId, LabelPurpose, doc.Label, $"membership-label:{vaultId}:{doc.Id}")), doc.RevokedAt!.Value));
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("Membership {MembershipId} of vault {VaultId} does not open", doc.Id, vaultId);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// The memberships of <paramref name="vaultId"/> that give or wait to give access, for its owner's access list
     /// (collab design §8.6): pending and active, each with her label for the person and the member's credentials on
     /// the vault, by the name and the kind <c>writers</c> holds (sealed under the vault key, which the owner holds; the
@@ -887,6 +918,9 @@ internal sealed record MembershipNames(
     string Id, string Owner, string Status, string Label, IReadOnlyDictionary<string, string> Writers, IReadOnlyDictionary<string, string> WriterIds);
 
 /// <summary>A membership on its owner's access list: her label, the role, the status, and the member's credentials on the vault.</summary>
+/// <summary>A member who left the vault: the owner's label for her, and when.</summary>
+internal sealed record Departure(string Label, DateTime LeftAt);
+
 internal sealed record MemberAccess(
     string Id, string Label, MemberRole Role, string Status, bool Confirm, DateTime? AcceptedAt, DateTime? RedeemedAt, DateTime? ExpiresAt,
     IReadOnlyList<MemberCredential> Credentials);

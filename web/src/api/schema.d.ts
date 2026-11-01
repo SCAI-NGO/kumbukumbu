@@ -7912,6 +7912,11 @@ export interface components {
             configured: boolean;
             restored: components["schemas"]["RestoredUserView"][];
         };
+        DepartureView: {
+            label: string;
+            /** Format: date-time */
+            leftAt: string;
+        };
         EarlierResultView: {
             path: string;
             version: string;
@@ -8349,6 +8354,7 @@ export interface components {
             apiKeys: string[];
             connections: string[];
             members: components["schemas"]["MemberAccessView"][];
+            left: components["schemas"]["DepartureView"][];
         };
         VaultEventView: {
             kind: string;

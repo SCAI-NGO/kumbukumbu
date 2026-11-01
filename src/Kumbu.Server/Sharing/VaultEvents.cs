@@ -43,7 +43,8 @@ public static class VaultEvents
     // The vault's, for every member: no membership.
     public const string ProviderChanged = "provider-changed";
 
-    /// <summary>A re-keying of the shared vault finished; members' credentials on it were revoked (phase 4).</summary>
+    /// <summary>A re-keying of the shared vault finished; members' credentials on it were revoked (collab design §7.1);
+    /// <see cref="VaultEventDocument.Credentials"/> are those that lost it, for their notices.</summary>
     public const string RekeyFinished = "rekey-finished";
 
     /// <summary>The owner deleted her account and the vault is closing; <see cref="VaultEventDocument.Until"/> is when it
@@ -67,8 +68,12 @@ public static class VaultEvents
     /// <paramref name="membershipId"/> is null for a vault-wide one.</summary>
     internal static Task RecordAsync(
         IMongoDatabase db, IClientSessionHandle session, string vaultId, string kind, string? membershipId, DateTime at, string? role, CancellationToken ct,
-        DateTime? until = null) =>
-        Docs(db).InsertOneAsync(session, New(vaultId, kind, membershipId, at, role, until), cancellationToken: ct);
+        DateTime? until = null, IReadOnlyCollection<string>? credentials = null)
+    {
+        var e = New(vaultId, kind, membershipId, at, role, until);
+        if (credentials is { Count: > 0 }) e.Credentials = [.. credentials];
+        return Docs(db).InsertOneAsync(session, e, cancellationToken: ct);
+    }
 
     /// <summary>One event on its own, for what isn't a transaction of the sharing's: an export, a provider change.</summary>
     internal static Task RecordAsync(IMongoDatabase db, string vaultId, string kind, string? membershipId, DateTime at, CancellationToken ct) =>
@@ -86,9 +91,13 @@ public static class VaultEvents
     }
 
     internal static Task EnsureIndexAsync(IMongoDatabase db, CancellationToken ct) =>
-        Docs(db).Indexes.CreateOneAsync(
-            new CreateIndexModel<VaultEventDocument>(Builders<VaultEventDocument>.IndexKeys.Ascending(e => e.Vault).Ascending(e => e.Membership).Descending(e => e.At)),
-            cancellationToken: ct);
+        Docs(db).Indexes.CreateManyAsync(
+            [
+                new CreateIndexModel<VaultEventDocument>(Builders<VaultEventDocument>.IndexKeys.Ascending(e => e.Vault).Ascending(e => e.Membership).Descending(e => e.At)),
+                // The notices look up a credential's finished re-keyings at each tool call (Mcp.Notices).
+                new CreateIndexModel<VaultEventDocument>(Builders<VaultEventDocument>.IndexKeys.Ascending(e => e.Credentials), new CreateIndexOptions { Sparse = true }),
+            ],
+            ct);
 
     /// <summary>
     /// The events <paramref name="memberId"/> sees of <paramref name="vaultId"/>: only those of her own memberships of
@@ -187,7 +196,7 @@ public static class VaultEvents
         (false, MembershipLeft) => $"You left {vault}.",
         (false, RoleChanged) => $"{person} changed your role to {role}.",
         (false, ProviderChanged) => $"{person} changed the embedding provider of {vault}.",
-        (false, RekeyFinished) => $"{person} re-encrypted {vault}; your keys and apps for it were revoked.",
+        (false, RekeyFinished) => $"{person} re-encrypted {vault}; your keys and apps for it were revoked. Give your agents {vault} again.",
         // The owner is gone: she isn't named.
         (false, ClosingStarted) => $"The owner deleted their account; {vault} will be deleted{Until(until)}. Export a copy to keep its notes.",
         (false, OwnerInactive) => $"{person}'s account is deactivated; {vault} is read-only until it is active again.",
@@ -200,7 +209,8 @@ public static class VaultEvents
     {
         RoleChanged => $"Your role in {vault} is now {role}.",
         ProviderChanged => $"The owner ({owner}) changed the embedding provider of {vault}.",
-        RekeyFinished => $"The owner ({owner}) re-encrypted {vault}.",
+        // The credential no longer reaches the vault, so it can't be named by the member's alias (§2.3).
+        RekeyFinished => $"The owner ({owner}) re-encrypted a vault shared with you; you no longer reach it until you are given it again.",
         ClosingStarted => $"{vault} will be deleted{Until(until)}; export a copy to keep its notes.",
         OwnerInactive => $"The owner of {vault} ({owner}) is deactivated; {vault} is read-only until the account is active again.",
         _ => $"The sharing of {vault} changed.",
@@ -276,4 +286,9 @@ public sealed class VaultEventDocument
     /// <summary>A closing period's end.</summary>
     [BsonElement("until"), BsonIgnoreIfNull]
     public DateTime? Until { get; set; }
+
+    /// <summary>Of a finished re-keying: the ids of the members' keys and connections that lost the vault, each to be
+    /// told once (<see cref="Mcp.Notices"/>). Ids only, which no viewer is shown.</summary>
+    [BsonElement("credentials"), BsonIgnoreIfNull]
+    public List<string>? Credentials { get; set; }
 }

@@ -21,6 +21,11 @@ public sealed class VaultDocument
     [BsonElement("rekeyStartedAt"), BsonIgnoreIfNull]
     public DateTime? RekeyStartedAt { get; set; }
 
+    /// <summary>The ids of the members' API keys and connections whose slots on the vault the start of its run took
+    /// (collab design §7.1); the finish moves them into its event, so that each is told once (§8.4), also after a resume.</summary>
+    [BsonElement("rekeyEnded"), BsonIgnoreIfNull]
+    public List<string>? RekeyEnded { get; set; }
+
     /// <summary>Written by every transaction that creates or activates a membership, so that two at once conflict and
     /// the member limits hold (collab design §13 M8).</summary>
     [BsonElement("membershipsChanged"), BsonIgnoreIfDefault]

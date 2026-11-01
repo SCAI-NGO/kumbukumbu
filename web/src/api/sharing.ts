@@ -6,6 +6,7 @@ import type { components } from "./schema";
 
 export type MemberAccess = components["schemas"]["MemberAccessView"];
 export type Membership = components["schemas"]["MembershipView"];
+export type Departure = components["schemas"]["DepartureView"];
 
 /** A member's role, in rising order: what an invitation offers and the owner can change. */
 export type Role = "read" | "write" | "maintain";
@@ -53,6 +54,22 @@ export function useMembershipChange(vault: string) {
       queryClient.removeQueries({ queryKey: ["membership", vault, change.id] });
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
     },
+  });
+}
+
+/**
+ * Re-encrypting the owner's vault, after a revoke or a departure (collab design §6.4): the password is checked first, so
+ * that a wrong one changes nothing, then the answer waits for the vault. `password` is read through the closure, not
+ * passed as the mutation's variables, which the mutation cache would keep.
+ */
+export function useRekeyVault(vault: string, password: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await call(api.POST("/api/session/confirm", { body: { password } }));
+      return call(api.POST("/api/vaults/{vault}/rekey", { params: { path: { vault } }, body: { password } }));
+    },
+    onSettled: () => Promise.all(["vault-access", "vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
   });
 }
 

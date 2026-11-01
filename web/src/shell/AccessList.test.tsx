@@ -94,7 +94,7 @@ describe("AccessList", () => {
     expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Gartenarbeit/memberships/m1/confirm"]);
   });
 
-  it("revokes", async () => {
+  it("offers re-encryption after revoke, off by default, with its sentence", async () => {
     members = [member({ role: "write" })];
     const fetch = accessApi({
       "POST /api/vaults/Gartenarbeit/memberships/m1/revoke": () => {
@@ -105,16 +105,88 @@ describe("AccessList", () => {
     renderList();
     await userEvent.click(within(await bob()).getByRole("button", { name: "Revoke…" }));
     const dialog = screen.getByRole("alertdialog", { name: "Revoke Bob's access to Gartenarbeit?" });
-    // Offered, off, and not yet possible while the vault is shared; with the concept's sentence.
     const rekey = within(dialog).getByRole("checkbox", { name: "Also re-encrypt this vault" });
     expect(rekey).not.toBeChecked();
-    expect(rekey).toBeDisabled();
-    expect(rekey).toHaveAccessibleDescription(/^Only needed if Bob could get hold of an old backup of this server\. Everyone's app connections and keys for this vault stop working and need to be set up again\./);
+    expect(rekey).toBeEnabled();
+    expect(rekey).toHaveAccessibleDescription(
+      "Only needed if Bob could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up again.",
+    );
+    // Off, it asks for no password and runs nothing but the revoke.
+    expect(within(dialog).queryByLabelText("Your password")).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
 
     expect(await screen.findByText("Gartenarbeit isn't shared with anyone.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Bob's access is revoked.");
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Gartenarbeit/memberships/m1/revoke"]);
+  });
+
+  it("re-encrypts once the revoke is done, the password checked before anything", async () => {
+    members = [member({ role: "write" })];
+    let confirms = 0;
+    const fetch = accessApi({
+      "POST /api/session/confirm": () => (confirms++ === 0 ? json(400, { error: "The password is wrong." }) : noContent()),
+      "POST /api/vaults/Gartenarbeit/memberships/m1/revoke": () => {
+        members = [];
+        return noContent();
+      },
+      "POST /api/vaults/Gartenarbeit/rekey": () => json(200, { documents: 3, damaged: 0, revokedApiKeys: 0, disconnectedApps: 0 }),
+    });
+    renderList();
+    await userEvent.click(within(await bob()).getByRole("button", { name: "Revoke…" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Revoke Bob's access to Gartenarbeit?" });
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "Also re-encrypt this vault" }));
+    expect(within(dialog).getByRole("button", { name: "Revoke" })).toBeDisabled();
+
+    // A wrong password revokes nothing.
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "not it");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/session/confirm"]);
+
+    await userEvent.clear(within(dialog).getByLabelText("Your password"));
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Bob's access is revoked, and Gartenarbeit is re-encrypted.");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    const sent = requests(fetch, "POST");
+    expect(sent.map((r) => new URL(r.url).pathname)).toEqual([
+      "/api/session/confirm",
+      "/api/session/confirm",
+      "/api/vaults/Gartenarbeit/memberships/m1/revoke",
+      "/api/vaults/Gartenarbeit/rekey",
+    ]);
+    expect(await sent[3].json()).toEqual({ password: "correct horse" });
+  });
+
+  it("offers the owner re-encryption after a member left, and runs nothing until she asks", async () => {
+    members = [];
+    let left = [{ label: "Bob", leftAt: "2026-10-31T08:15:00Z" }];
+    const fetch = fakeApi({
+      "GET /api/vaults/Gartenarbeit/access": () => json(200, { apiKeys: [], connections: [], members, left }),
+      "GET /api/vaults": () => json(200, []),
+      "POST /api/session/confirm": () => noContent(),
+      "POST /api/vaults/Gartenarbeit/rekey": () => {
+        left = [];
+        return json(200, { documents: 3, damaged: 0, revokedApiKeys: 0, disconnectedApps: 0 });
+      },
+    });
+    renderList();
+    const offer = await screen.findByRole("region", { name: /^Bob left Gartenarbeit 31 Oct 2026/ });
+    const button = within(offer).getByRole("button", { name: "Re-encrypt Gartenarbeit…" });
+    expect(button).toHaveAccessibleDescription(
+      "Only needed if Bob could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up again.",
+    );
+    expect(requests(fetch, "POST")).toHaveLength(0);
+
+    await userEvent.click(button);
+    await userEvent.type(within(offer).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(offer).getByRole("button", { name: "Re-encrypt vault" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Gartenarbeit is re-encrypted.");
+    await waitFor(() => expect(screen.queryByRole("region")).not.toBeInTheDocument());
+    expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/session/confirm", "/api/vaults/Gartenarbeit/rekey"]);
   });
 
   it("lists a member's keys and apps with their last use on this vault, and maintain in the warning colour", async () => {
