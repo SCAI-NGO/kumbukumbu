@@ -394,4 +394,70 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         Assert.False(garten.Vault.Pending);
         Assert.Contains(garten.Vault.Notes.Keys, p => p.Value.EndsWith("plan.md", StringComparison.Ordinal));
     }
+    /// <summary>Runs <paramref name="during"/> the first time an issuing reaches <paramref name="point"/>.</summary>
+    private void OnceAtIssue(string point, Func<Task> during)
+    {
+        var done = 0;
+        Catalog.IssueFaultAt = async p =>
+        {
+            if (p == point && Interlocked.Exchange(ref done, 1) == 0) await during();
+        };
+    }
+
+    [Fact]
+    public async Task A_member_key_wrapped_with_the_old_key_during_a_finish_is_refused()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        var oldKey = await alice.VaultKeyAsync();
+        // Bob's key is wrapped from his member slot, under the old key; then Alice's whole run, start to finish, commits
+        // before the key's transaction. The vault is out of its period again, but his slot opens to another key now.
+        OnceAtIssue("after-wrap", () => Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct));
+        try
+        {
+            var refused = await Assert.ThrowsAsync<VaultBusyException>(() => KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }));
+            Assert.Equal(VaultBusyException.JustReencrypted, refused.Message);
+        }
+        finally
+        {
+            Catalog.IssueFaultAt = null;
+        }
+
+        Assert.NotEqual(oldKey, await alice.VaultKeyAsync());
+        Assert.False(await Slots.Find(s => s.Vault == vaultId && s.GrantedVia != null).AnyAsync(Ct));
+        Assert.False(await app.Database.GetCollection<ApiKeyDocument>(ApiKeys.CollectionName).Find(k => k.User == bob.User.Id).AnyAsync(Ct));
+        Assert.Empty(Kumbu.Server.Sharing.Memberships.OpenWriters(await Share.MembershipAsync(app.Database, bobs), await alice.VaultKeyAsync()));
+
+        // Tried again, it wraps the new key, and reads.
+        var (key, _) = await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write });
+        using var read = await bob.GetAsync("/api/notes/garten/plan.md", bearer: key);
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.Equal("# Beete\n", (await RestClient.JsonAsync(read))["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_member_code_wrapped_with_the_old_key_during_a_run_gets_no_slot_on_the_vault()
+    {
+        var (alice, bob, vaultId, _) = await SharedAsync();
+        var bobsWork = await bob.VaultIdAsync();
+        const string callback = "https://claude.test/cb";
+        var connectionId = await ConnectionAsync(bob, "claude app", new Dictionary<string, string> { ["garten"] = "write", ["Work"] = "write" });
+        var flow = await Kumbu.Server.Tests.OAuth.OAuthFlow.StartAsync(Api, bob, connectionId, await Kumbu.Server.Tests.OAuth.OAuthFlow.RegisterAsync(Api, callback), callback);
+        // The consent wraps both vaults' keys, the shared one's from Bob's member slot; Alice's whole run commits before
+        // the code's transaction. Its start took the vault from Bob's connection, so the code carries his own vault only.
+        OnceAtIssue("after-wrap", () => Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct));
+        try
+        {
+            await flow.AllowAsync();
+        }
+        finally
+        {
+            Catalog.IssueFaultAt = null;
+        }
+
+        Assert.Empty(await Slots.Find(s => s.Vault == vaultId && s.Kind == SlotDocument.Connection).ToListAsync(Ct));
+        Assert.Contains(await Slots.Find(s => s.ConnectionId == connectionId).ToListAsync(Ct), s => s.Vault == bobsWork);
+        Assert.Equal([bobsWork], (await ConnectionDocAsync(connectionId)).Vaults);
+        using var tokens = await flow.TokenAsync();
+        Assert.Equal(HttpStatusCode.OK, tokens.StatusCode);
+    }
 }
