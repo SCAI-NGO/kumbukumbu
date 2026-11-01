@@ -43,7 +43,7 @@ public sealed class OwnershipTests(MongoFixture fixture)
     private Admin Admin() => new(Db, Catalog(), new Sessions(Db, _time), Keys(), Connections(), Hub(), _time, NullLogger<Admin>.Instance);
 
     /// <summary>A hub without sockets, for what is told it.</summary>
-    private SyncHub Hub() => new(Catalog(), Keys(), new Sessions(Db, _time), NullLogger<SyncHub>.Instance);
+    private SyncHub Hub() => new(Catalog(), Keys(), new Sessions(Db, _time), _time, NullLogger<SyncHub>.Instance);
 
     private Deletion Deletion()
     {

@@ -42,7 +42,7 @@ public sealed class DeletionTests(MongoFixture fixture)
     private Admin Admin() => new(_db, Catalog(), Sessions(), Keys(), new Connections(_db, Catalog(), _time, NullLogger<Connections>.Instance), Hub(), _time, NullLogger<Admin>.Instance);
 
     /// <summary>A hub without sockets, for what is told it.</summary>
-    private SyncHub Hub() => new(Catalog(), Keys(), Sessions(), NullLogger<SyncHub>.Instance);
+    private SyncHub Hub() => new(Catalog(), Keys(), Sessions(), _time, NullLogger<SyncHub>.Instance);
 
     private string? _listPath;
 

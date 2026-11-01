@@ -8,6 +8,7 @@ using Kumbu.Core.Paths;
 using Kumbu.Core.Sh;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Auth;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -60,9 +61,10 @@ public static class SyncApi
 
     /// <summary>
     /// API keys and web sessions (collab design §9.1); the dev token and connections don't sync. The ticket holds the
-    /// caller's vaults as it opens them now, each under its name for it and at its level.
+    /// caller's vaults as it opens them now, each under its name for it and at its level; a session also holds, for its
+    /// vaults shared with it, the owner's label for her, for the owner's presence lines.
     /// </summary>
-    private static async Task<Ok<WsTicketView>> TicketAsync(HttpContext http, RequestCaller caller, SyncTickets tickets, CancellationToken ct)
+    private static async Task<Ok<WsTicketView>> TicketAsync(HttpContext http, RequestCaller caller, SyncTickets tickets, Memberships memberships, CancellationToken ct)
     {
         var subject = caller switch
         {
@@ -72,8 +74,14 @@ public static class SyncApi
             _ => throw new ApiException(StatusCodes.Status403Forbidden, "Only an API key or a web session gets a WebSocket ticket."),
         };
 
-        var vaults = await caller.OpenVaultsAsync(ct);
-        var (ticket, expiresAt) = tickets.Issue(new TicketGrant(subject, [.. vaults.Select(a => new TicketVault(a.Id, a.Name, a.Membership?.Id, a.Level))]));
+        var vaults = new List<TicketVault>();
+        foreach (var access in await caller.OpenVaultsAsync(ct))
+        {
+            var label = subject.Kind == SubjectKind.Session && access.Membership is { } m ? (await memberships.NamesAsync(access.Vault, m.Id, ct)).FirstOrDefault()?.Label ?? "" : "";
+            vaults.Add(new TicketVault(access.Id, access.Name, access.Membership?.Id, access.Level) { Label = label });
+        }
+
+        var (ticket, expiresAt) = tickets.Issue(new TicketGrant(subject, vaults) { Display = caller.User!.Display });
         return TypedResults.Ok(new WsTicketView(ticket, expiresAt));
     }
 

@@ -18,12 +18,22 @@ public enum SubjectKind
 /// and the user either belongs to. Two sessions of one user are two subjects.</summary>
 public sealed record Subject(SubjectKind Kind, string Id, string User);
 
-/// <summary>One vault of a ticket, as the subject had it when the ticket was made: the subject's name for it (a
-/// member's alias), the membership it came through (null for the owner), and the level.</summary>
-public sealed record TicketVault(string VaultId, string VaultName, string? Membership, AccessLevel Level);
+/// <summary>
+/// One vault of a ticket, as the subject had it when the ticket was made: the subject's name for it (a member's
+/// alias), the membership it came through (null for the owner), and the level. <c>Label</c>, for a member's
+/// session only: the owner's label for her, which the owner's presence lines show (collab design §8.2).
+/// </summary>
+public sealed record TicketVault(string VaultId, string VaultName, string? Membership, AccessLevel Level)
+{
+    public string Label { get; init; } = "";
+}
 
-/// <summary>What a ticket lets its WebSocket hear about: the subject and the vaults it opened when the ticket was made.</summary>
-public sealed record TicketGrant(Subject Subject, IReadOnlyList<TicketVault> Vaults);
+/// <summary>What a ticket lets its WebSocket hear about: the subject and the vaults it opened when the ticket was made.
+/// <c>Display</c>: the user's display name, which members see when she, their vault's owner, is editing.</summary>
+public sealed record TicketGrant(Subject Subject, IReadOnlyList<TicketVault> Vaults)
+{
+    public string Display { get; init; } = "";
+}
 
 /// <summary>
 /// One-time tickets for the sync WebSocket (sync spec §5). A WebSocket can't carry an <c>Authorization</c> header from

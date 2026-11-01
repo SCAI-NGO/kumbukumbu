@@ -555,15 +555,21 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
     public async Task Lowering_to_read_stops_Bobs_presence_frames_at_once()
     {
         var (alice, bob, _, membership) = await SharedAsync();
+        using var alices = await SyncSockets.OpenAsync(Api, alice);
         using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        await SyncSockets.EditingAsync(bobs, "garten", "plan.md", on: true);
+        Assert.Equal([bob.Username], SyncSockets.Editors((await SyncSockets.PresenceAsync(alices, TimeSpan.FromSeconds(3)))!));
 
         using (var lowered = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role = "read" }))
         {
             Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
         }
 
-        // Read with the answer: too low to announce editing (the presence frames of collab design §9.2).
+        // Gone with the answer, and nothing new from him.
+        Assert.Empty(SyncSockets.Editors((await SyncSockets.PresenceAsync(alices, TimeSpan.FromMilliseconds(300)))!));
         Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
+        await SyncSockets.EditingAsync(bobs, "garten", "beete.md", on: true);
+        Assert.Null(await SyncSockets.PresenceAsync(alices, TimeSpan.FromSeconds(1)));
     }
 
     [Fact]
@@ -574,6 +580,8 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         await alice.ShareWithAsync(carol, "beete");
         using var bobs = await SyncSockets.OpenAsync(Api, bob);
         using var carols = await SyncSockets.OpenAsync(Api, carol);
+        await SyncSockets.EditingAsync(bobs, "garten", "plan.md", on: true);
+        Assert.Equal([Kumbu.Server.Api.WriterLabels.AnotherUser], SyncSockets.Editors((await SyncSockets.PresenceAsync(carols, TimeSpan.FromSeconds(3)))!));
         var admin = await NewAsync(Api, vault: "Admin", role: Roles.Admin);
 
         using (var deactivated = await admin.SendAsync(HttpMethod.Patch, $"/api/admin/users/{alice.User.Id}", new { active = false }))
@@ -581,6 +589,7 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
             Assert.Equal(HttpStatusCode.NoContent, deactivated.StatusCode);
         }
 
+        Assert.Empty(SyncSockets.Editors((await SyncSockets.PresenceAsync(carols, TimeSpan.FromMilliseconds(300)))!));
         Assert.Contains(("garten", AccessLevel.Read), SessionVaults(bob));
         Assert.Contains(("beete", AccessLevel.Read), SessionVaults(carol));
         // Her own sockets went with her sessions; reactivated, the members are at their roles again.
