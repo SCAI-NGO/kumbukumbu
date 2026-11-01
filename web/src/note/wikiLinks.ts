@@ -14,8 +14,11 @@ interface MdNode {
   data?: { hName?: string; hProperties?: Record<string, unknown> };
 }
 
-// What the server never reports, so never a note: a URL with a scheme (`https:`, `mailto:`) or a network path.
-const external = /^([A-Za-z][A-Za-z0-9+.-]*:|\/\/)/;
+// What the server never reports, so never a note: a URL with a scheme (`https:`, `mailto:`) or a network path
+// (`//host`, which browsers also read as `/\host`).
+const external = /^([A-Za-z][A-Za-z0-9+.-]*:|[/\\]{2})/;
+
+export const isExternalUrl = (url: string | undefined) => !!url && external.test(url);
 
 // As the server finds them (Kumbu.Core WikiLink): `[[target#Heading|alias]]`, an embed with `!`.
 const wikiLink = /!?\[\[([^[\]\n]+?)\]\]/g;

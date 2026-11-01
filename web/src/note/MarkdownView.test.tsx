@@ -200,6 +200,13 @@ describe("MarkdownView", () => {
     });
   });
 
+  it("opens a network-path link (//host) in a new tab, like any external link", () => {
+    show("[x](//host.example/a)");
+    const a = screen.getByRole("link", { name: "x" });
+    expect(a).toHaveAttribute("target", "_blank");
+    expect(a.getAttribute("rel")).toContain("noopener");
+  });
+
   describe("lists", () => {
     const bulleted = (li: HTMLElement) => li.closest("ul")!.classList.contains("list-disc") && !li.classList.contains("list-none");
 

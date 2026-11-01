@@ -155,6 +155,10 @@ describe("safeNext", () => {
     ["https://evil.example/", "/"],
     ["javascript:alert(1)", "/"],
     ["notes/x", "/"],
+    ["/.//evil.example", "/"],
+    ["/%2e//evil.example", "/"],
+    ["/..//evil.example", "/"],
+    ["/notes/a", "/notes/a"],
   ])("%s → %s", (next, expected) => {
     expect(safeNext(next)).toBe(expected);
   });

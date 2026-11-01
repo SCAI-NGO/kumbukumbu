@@ -16,7 +16,7 @@ import { remarkCallouts, type CalloutKind } from "./callouts";
 import { remarkFind } from "./findInNote";
 import { section } from "./outline";
 import { splitFrontmatter } from "./properties";
-import { embedHeading, remarkWikiLinks, type LinkView } from "./wikiLinks";
+import { embedHeading, isExternalUrl, remarkWikiLinks, type LinkView } from "./wikiLinks";
 
 /** The blocks an agent changed: their 1-based source lines (or all of them), and the key that wrote them. */
 export interface Highlight {
@@ -71,8 +71,6 @@ function taskChecked(node: HastNode): boolean {
   const found = node.children.map(input).find(Boolean);
   return found?.type === "element" && !!found.properties.checked;
 }
-
-const external = (href: string | undefined) => !!href && /^(https?:|mailto:)/i.test(href);
 
 interface Props {
   source: string;
@@ -396,7 +394,7 @@ const components: Components = {
     <a
       href={href}
       {...props}
-      {...(external(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      {...(isExternalUrl(href) ? { target: "_blank", rel: "noopener noreferrer" } : {})}
       className="text-accent-text underline decoration-accent/45 underline-offset-[3px]"
     >
       {children}
