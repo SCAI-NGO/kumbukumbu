@@ -285,6 +285,7 @@ public sealed class Deletion(
         if (membershipCount > 0) log.LogInformation("{Count} memberships of deleted user {UserId} ended", membershipCount, userId);
         foreach (var (vaultId, at) in closing) log.LogInformation("Vault {VaultId} of deleted user {UserId} is closing until {ClosingAt:O}", vaultId, userId, at);
         if (withdrawn > 0) log.LogInformation("{Count} vault invitations of deleted user {UserId} withdrawn", withdrawn, userId);
+        for (var i = 0; i < withdrawn; i++) Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Withdrawn);
         if (noticeCount > 0) log.LogInformation("{Count} members of the shared vaults of deleted user {UserId} were left a notice", noticeCount, userId);
 
         // A vault the user made between the read above and the transaction (from another tab, say) has an owner

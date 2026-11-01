@@ -109,6 +109,7 @@ public sealed partial class Memberships
             },
             cancellationToken: ct);
         log.LogInformation("Vault {VaultId} has a new invitation, membership {MembershipId}, valid until {ExpiresAt:u}", vaultId, id, expiresAt);
+        Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Created);
         return new CreatedInvite(inviteSecret, id, expiresAt);
     }
 
@@ -195,11 +196,19 @@ public sealed partial class Memberships
                 },
                 cancellationToken: ct);
         }
+        catch (Exception e) when (e is SharingRefusedException or VaultNameTakenException or AlreadyMemberException or MemberLimitException or NotPermittedException)
+        {
+            // Counted by the kind of refusal only, never by its text.
+            Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Refused);
+            throw;
+        }
         finally
         {
             CryptographicOperations.ZeroMemory(bytes);
         }
 
+        // After the commit: a transaction retried on a conflict counts once.
+        Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Accepted);
         log.LogInformation("User {UserId} accepted the invitation of membership {MembershipId} ({Status})", userId, accepted!.MembershipId, accepted.Status);
         return accepted;
     }
@@ -306,6 +315,7 @@ public sealed partial class Memberships
             },
             cancellationToken: ct);
         log.LogInformation("Membership {MembershipId} of vault {VaultId} was {Ended}", membershipId, vaultId, redeemed ? "declined" : "withdrawn");
+        Metrics.KumbuMetrics.Invitation(redeemed ? Metrics.KumbuMetrics.InvitationOutcome.Declined : Metrics.KumbuMetrics.InvitationOutcome.Withdrawn);
     }
 
     /// <summary>
@@ -361,6 +371,7 @@ public sealed partial class Memberships
                 return true;
             },
             cancellationToken: ct);
+        if (lapsed) Metrics.KumbuMetrics.Invitation(Metrics.KumbuMetrics.InvitationOutcome.Expired);
         if (lapsed) log.LogInformation("Membership {MembershipId} lapsed: {Why}", membershipId, slotKind == SlotDocument.Invite ? "its invitation expired" : "the owner didn't confirm it in time");
         return lapsed;
     }

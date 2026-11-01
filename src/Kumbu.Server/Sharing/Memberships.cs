@@ -389,12 +389,13 @@ public sealed partial class Memberships(
         var bound = BoundFilter(membershipId, MembershipScope.OfVault(vaultId), MembershipStatus.Active, MembershipStatus.Active);
         var text = MemberRoles.ToText(role);
         using var session = await catalog.StartSessionAsync(ct);
-        await session.WithTransactionAsync(
+        var raised = await session.WithTransactionAsync<bool?>(
             async (s, token) =>
             {
                 var doc = await Docs.Find(s, bound).FirstOrDefaultAsync(token) ?? throw new MembershipNotFoundException();
-                if (doc.Role == text) return false;
-                if (role > (MemberRoles.Parse(doc.Role) ?? MemberRole.Read)) raising();
+                if (doc.Role == text) return null;
+                var up = role > (MemberRoles.Parse(doc.Role) ?? MemberRole.Read);
+                if (up) raising();
                 var now = Now;
                 // On the role it had: a change in between conflicts, and is decided afresh on the retry.
                 var changed = await Docs.UpdateOneAsync(
@@ -403,10 +404,11 @@ public sealed partial class Memberships(
                     cancellationToken: token);
                 if (changed.MatchedCount == 0) throw new MembershipNotFoundException();
                 await VaultEvents.RecordAsync(db, s, vaultId, VaultEvents.RoleChanged, membershipId, now, text, token);
-                return true;
+                return up;
             },
             cancellationToken: ct);
         log.LogInformation("Membership {MembershipId} of vault {VaultId} has the role {Role} now", membershipId, vaultId, text);
+        if (raised is { } r) Metrics.KumbuMetrics.MembershipChanged(r ? Metrics.KumbuMetrics.MembershipChange.RoleRaised : Metrics.KumbuMetrics.MembershipChange.RoleLowered);
         return await OwnersViewAsync(await Docs.Find(m => m.Id == membershipId).FirstAsync(ct), vaultKey, ct);
     }
 
@@ -432,6 +434,7 @@ public sealed partial class Memberships(
             },
             cancellationToken: ct);
         log.LogInformation("Membership {MembershipId} of vault {VaultId} is {Status}", ended!.Id, ended.Vault, to);
+        Metrics.KumbuMetrics.MembershipChanged(to == MembershipStatus.Left ? Metrics.KumbuMetrics.MembershipChange.Left : Metrics.KumbuMetrics.MembershipChange.Revoked);
         return new EndedMembership(ended.Id, ended.Vault, ended.Member!);
     }
 
@@ -643,6 +646,18 @@ public sealed partial class Memberships(
         foreach (var id in due) log.LogInformation("Vault {VaultId} reached the end of its closing period and was deleted", id);
         log.LogInformation("{Count} closed vaults deleted ({Documents} documents)", due.Count, documents);
         return due.Count;
+    }
+
+    /// <summary>The database's name: hosts on one database count its memberships once (<see cref="Metrics.KumbuMetrics"/>).</summary>
+    internal string DatabaseName => db.DatabaseNamespace.DatabaseName;
+
+    /// <summary>For the metrics, read at each scrape: the vaults with an active member, and the memberships by status.
+    /// Counts only, in two queries the indexes on status serve.</summary>
+    internal async Task<(long SharedVaults, IReadOnlyDictionary<string, long> ByStatus)> CountsAsync(CancellationToken ct)
+    {
+        var shared = await Docs.Aggregate().Match(m => m.Status == MembershipStatus.Active).Group(m => m.Vault, g => new { g.Key }).Count().FirstOrDefaultAsync(ct);
+        var byStatus = await Docs.Aggregate().Group(m => m.Status, g => new { Status = g.Key, Count = g.LongCount() }).ToListAsync(ct);
+        return (shared?.Count ?? 0, byStatus.ToDictionary(x => x.Status, x => x.Count, StringComparer.Ordinal));
     }
 
     internal const string LiveMemberIndex = "vault_1_member_1_live";

@@ -1933,6 +1933,188 @@
     },
     {
       "type": "row",
+      "id": 45,
+      "title": "Sharing",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 102
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 46,
+      "title": "Vault invitations per hour by outcome",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 103
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (outcome) (increase(kumbu_invitations_total[1h]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        }
+      ],
+      "description": "Vault invitations created, accepted, declined, withdrawn, expired, and acceptances refused, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 47,
+      "title": "Membership changes per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 103
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (event) (increase(kumbu_membership_changes_total[1h]))",
+          "legendFormat": "{{event}}",
+          "range": true
+        }
+      ],
+      "description": "Members removed, members who left, and roles raised or lowered, in the hour before each point."
+    },
+    {
+      "type": "timeseries",
+      "id": 48,
+      "title": "Shared vaults and memberships",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 103
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(kumbu_shared_vaults)",
+          "legendFormat": "shared vaults",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (status) (kumbu_memberships)",
+          "legendFormat": "{{status}}",
+          "range": true
+        }
+      ],
+      "description": "Vaults with an active member now, and memberships by status (revoked and left ones are kept as tombstones until the vault or the member goes)."
+    },
+    {
+      "type": "row",
       "id": 23,
       "title": "Runtime",
       "collapsed": false,
@@ -1941,7 +2123,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 102
+        "y": 111
       }
     },
     {
@@ -1956,7 +2138,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 103
+        "y": 112
       },
       "fieldConfig": {
         "defaults": {
@@ -2009,7 +2191,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 103
+        "y": 112
       },
       "fieldConfig": {
         "defaults": {
@@ -2061,7 +2243,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 103
+        "y": 112
       },
       "fieldConfig": {
         "defaults": {
@@ -2113,7 +2295,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 111
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {
@@ -2175,7 +2357,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 111
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {

@@ -170,7 +170,7 @@ builder.Services.AddMcpServer(o =>
     .WithTools([typeof(ShTool), typeof(WriteTools), typeof(BoardTool)]);
 
 var app = builder.Build();
-if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>());
+if (metricsEnabled) KumbuMetrics.ReadOnScrape(app.Services.GetRequiredService<SearchIndex>(), app.Services.GetRequiredService<VaultCatalog>(), app.Services.GetRequiredService<Kumbu.Server.Sharing.Memberships>());
 
 if (bootstrapCommand)
 {
