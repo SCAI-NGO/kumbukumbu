@@ -60,10 +60,9 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
     private Task<List<SlotDocument>> SlotsOfAsync(string vaultId, string kind) => Slots.Find(s => s.Vault == vaultId && s.Kind == kind).ToListAsync(Ct);
 
     /// <summary>A run of the vault that stops after its start, as a crash there would: the vault is left in its
-    /// two-key period. The refusal of shared vaults (task 1.13) is lifted for it until task 4.3 lifts it for good.</summary>
+    /// two-key period.</summary>
     private async Task StopAfterStartAsync(RestClient owner, string vaultId)
     {
-        Catalog.RefusesShared = false;
         Catalog.RekeyFaultAt = p => p == "after-start" ? throw new InvalidOperationException("crash after the start") : Task.CompletedTask;
         try
         {
@@ -72,7 +71,6 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         finally
         {
             Catalog.RekeyFaultAt = null;
-            Catalog.RefusesShared = true;
         }
     }
 
@@ -257,5 +255,143 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         }
 
         Assert.Equal("# Aufgaben\n", (await bob.ReadAsync("tasks.md"))["content"]!.GetValue<string>());
+    }
+    private async Task<System.Security.Cryptography.ECDiffieHellman> PrivateOfAsync(string userId, byte[] userKey) =>
+        MemberKeys.OpenPrivate(await app.Database.GetCollection<UserDocument>("users").Find(u => u.Id == userId).SingleAsync(Ct), userKey);
+
+    /// <summary>The vault key the member slot of <paramref name="membershipId"/> opens to with the private key; null if it doesn't.</summary>
+    private async Task<byte[]?> MemberSlotKeyAsync(string membershipId, System.Security.Cryptography.ECDiffieHellman privateKey)
+    {
+        var slot = await Slots.Find(s => s.Kind == SlotDocument.Member && s.Membership == membershipId).SingleOrDefaultAsync(Ct);
+        try
+        {
+            return slot is null ? null : VaultCatalog.OpenMemberSlot(privateKey, slot);
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Runs <paramref name="during"/> with the attempt's number each time the run is about to try its finish.</summary>
+    private Func<int> BeforeFinish(Func<int, Task> during)
+    {
+        var attempts = 0;
+        Catalog.RekeyFaultAt = async p =>
+        {
+            if (p == "before-finish") await during(Interlocked.Increment(ref attempts));
+        };
+        return () => Volatile.Read(ref attempts);
+    }
+
+    [Fact]
+    public async Task Bob_reads_the_vault_after_the_owners_re_key()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        using (var wrote = await bob.SendAsync(HttpMethod.Put, "/api/notes/garten/bob.md", new { content = "# Bob\n" })) Assert.Equal(HttpStatusCode.Created, wrote.StatusCode);
+        var oldKey = await alice.VaultKeyAsync();
+        var revision = (await Share.MembershipAsync(app.Database, bobs)).Revision;
+
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        }
+
+        var newKey = await alice.VaultKeyAsync();
+        Assert.NotEqual(oldKey, newKey);
+        using var bobsPrivate = await PrivateOfAsync(bob.User.Id, bob.UserKey);
+        Assert.Equal(newKey, await MemberSlotKeyAsync(bobs, bobsPrivate));
+        // The start and the finish each raised it.
+        Assert.Equal(revision + 2, (await Share.MembershipAsync(app.Database, bobs)).Revision);
+
+        // His session reads and writes, and so does a new one.
+        using (var read = await bob.GetAsync("/api/notes/garten/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            Assert.Equal("# Beete\n", (await RestClient.JsonAsync(read))["content"]!.GetValue<string>());
+        }
+
+        var again = await bob.SignInAgainAsync();
+        using (var read = await again.GetAsync("/api/notes/garten/bob.md")) Assert.Equal("# Bob\n", (await RestClient.JsonAsync(read))["content"]!.GetValue<string>());
+        using (var wrote = await again.SendAsync(HttpMethod.Put, "/api/notes/garten/after.md", new { content = "# Danach\n" })) Assert.Equal(HttpStatusCode.Created, wrote.StatusCode);
+        Assert.Equal("# Danach\n", (await alice.ReadAsync("after.md"))["content"]!.GetValue<string>());
+        // He gives his agent the vault again: a key derived from his slot, under the new key.
+        var (key, _) = await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read });
+        using var byKey = await bob.GetAsync("/api/notes/garten/plan.md", bearer: key);
+        Assert.Equal(HttpStatusCode.OK, byKey.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_revoke_during_the_run_conflicts_with_the_finish_and_Bob_gets_no_new_key()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        var carols = await alice.ShareWithAsync(carol, "garten");
+        using var bobsPrivate = await PrivateOfAsync(bob.User.Id, bob.UserKey);
+        using var carolsPrivate = await PrivateOfAsync(carol.User.Id, carol.UserKey);
+        // Before the first finish Carol's role changes (written as another process would, the route needing the vault
+        // key the run holds); before the second Bob is revoked, his cleanup not yet run. Each conflicts with the finish.
+        var attempts = BeforeFinish(async attempt =>
+        {
+            if (attempt == 1) await Share.SetRoleAsync(app.Database, carols, MemberRole.Read);
+            if (attempt == 2) await Memberships.RevokeAsync(vaultId, bobs, Ct);
+        });
+        try
+        {
+            await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+
+        Assert.Equal(3, attempts());
+        var newKey = await alice.VaultKeyAsync();
+        // Bob: no slot, and nothing his key opens to the new vault key; his session no longer has the vault.
+        Assert.Empty(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Membership == bobs).ToListAsync(Ct));
+        foreach (var slot in await Slots.Find(s => s.Vault == vaultId && s.Kind == SlotDocument.Member).ToListAsync(Ct))
+        {
+            Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(() => VaultCatalog.OpenMemberSlot(bobsPrivate, slot));
+        }
+
+        Assert.Equal(MembershipStatus.Revoked, (await Share.MembershipAsync(app.Database, bobs)).Status);
+        using (var read = await bob.GetAsync("/api/notes/garten/plan.md")) Assert.Equal(HttpStatusCode.NotFound, read.StatusCode);
+        // Carol gets the new key, at the role she has now.
+        Assert.Equal(newKey, await MemberSlotKeyAsync(carols, carolsPrivate));
+        Assert.Equal("read", (await Share.MembershipAsync(app.Database, carols)).Role);
+        using (var read = await carol.GetAsync("/api/notes/garten/plan.md")) Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        using (var write = await carol.SendAsync(HttpMethod.Put, "/api/notes/garten/new.md", new { content = "# Neu\n" })) Assert.Equal(HttpStatusCode.Forbidden, write.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_members_rotation_during_the_run_is_seen_by_the_finish()
+    {
+        var (alice, bob, vaultId, bobs) = await SharedAsync();
+        using var oldPrivate = await PrivateOfAsync(bob.User.Id, bob.UserKey);
+        byte[]? newUserKey = null;
+        // Bob re-encrypts his own vaults while Alice's run is under way: a new keypair, his slot wrapped to it under the
+        // old vault key, and his pin sealed again for it. The finish must wrap the new vault key to that key, not the old.
+        var attempts = BeforeFinish(async attempt =>
+        {
+            if (attempt == 1) newUserKey = (await Api.Services.GetRequiredService<UserKeyRotation>().RotateAsync(bob.User, bob.UserKey, RestClient.Password, null, Ct))!.NewUserKey;
+        });
+        try
+        {
+            await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+
+        Assert.Equal(2, attempts());
+        var newKey = await alice.VaultKeyAsync();
+        using var newPrivate = await PrivateOfAsync(bob.User.Id, newUserKey!);
+        Assert.Equal(newKey, await MemberSlotKeyAsync(bobs, newPrivate));
+        Assert.Null(await MemberSlotKeyAsync(bobs, oldPrivate));
+        Assert.Equal(MemberKeys.PublicFromPrivate(newPrivate), Kumbu.Server.Sharing.Memberships.PinnedKey(await Share.MembershipAsync(app.Database, bobs), newKey));
+        var garten = Assert.Single(await Catalog.OpenForUserAsync(bob.User.Id, newUserKey!, Ct), a => a.Name == "garten");
+        Assert.False(garten.Vault.Pending);
+        Assert.Contains(garten.Vault.Notes.Keys, p => p.Value.EndsWith("plan.md", StringComparison.Ordinal));
     }
 }

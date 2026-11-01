@@ -74,8 +74,9 @@ public sealed partial class VaultCatalog
     /// the runner resumes it.</summary>
     public event Action<string, string, byte[]>? RekeyPendingFound;
 
-    /// <summary>For tests: awaited at <c>"inside-start"</c>, <c>"after-start"</c>, <c>"after-batch"</c>, <c>"inside-finish"</c>
-    /// and <c>"after-finish"</c>; a throw there is a crash at that point.</summary>
+    /// <summary>For tests: awaited at <c>"inside-start"</c>, <c>"after-start"</c>, <c>"after-batch"</c>, <c>"before-finish"</c>
+    /// (before each attempt of the finish transaction), <c>"inside-finish"</c> and <c>"after-finish"</c>; a throw there
+    /// is a crash at that point.</summary>
     internal Func<string, Task>? RekeyFaultAt { get; set; }
 
     /// <summary>For tests: called after each batch of a run commits, with the vault id, its documents and sealed bytes.</summary>
@@ -270,7 +271,7 @@ public sealed partial class VaultCatalog
     /// <summary>
     /// Re-keys the vault, or resumes a run that stopped in its two-key period (rekeying design §3). Only with a user slot
     /// of <paramref name="userId"/> on the vault that opens with <paramref name="userKey"/>, the user key in force, else
-    /// <see cref="VaultNotRekeyableException"/>; <see cref="VaultSharedException"/> for a shared vault, with nothing changed.
+    /// <see cref="VaultNotRekeyableException"/>. A shared vault's members keep it (collab design §7.1).
     /// <see cref="VaultDeletedException"/> for a vault deleted, or being deleted
     /// (a deletion wins within one batch); <see cref="VaultBusyException"/> while another run holds it, or when the finish
     /// finds something changed: the vault then stays in its two-key period, for the next run to resume.
@@ -279,10 +280,6 @@ public sealed partial class VaultCatalog
     {
         await EnsureReadyAsync(ct);
         if (IsDeleted(vaultId)) throw new VaultDeletedException();
-        // Before the mark, the interrupt and the gates: a shared vault stays pending until the finish wraps the new key
-        // to its members (task 4.3) and is tried at every trigger, which must not cut its embedding short or evict its
-        // working set each time. The start checks again inside its transaction, for a grant that commits meanwhile.
-        if (RefusesShared && await IsSharedAsync(null, vaultId, ct)) throw new VaultSharedException();
         if (!_rekeying.TryAdd(vaultId, 0)) throw VaultBusyException.Being();
         var locks = LocksFor(vaultId);
         var (gate, indexGate) = (false, false);
@@ -305,10 +302,6 @@ public sealed partial class VaultCatalog
             if (gate) locks.Gate.Release();
         }
     }
-
-    /// <summary>Until the finish wraps the new key to the members (task 4.3), a shared vault is refused (task 1.13);
-    /// tests of the start turn it off.</summary>
-    internal bool RefusesShared { get; set; } = true;
 
     /// <summary>What the start transaction found or made; <c>Members</c> what it did to the vault's memberships.</summary>
     private sealed record RekeyStart(
@@ -336,7 +329,7 @@ public sealed partial class VaultCatalog
             {
                 start = await session.WithTransactionAsync((s, token) => StartRekeyAsync(s, id, userId, userKey, token), cancellationToken: ct);
             }
-            catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or VaultSharedException or MongoWriteException)
+            catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or MongoWriteException)
             {
                 // Refused inside the transaction, which was aborted: this start began nothing. A resume refused (a key
                 // a rotation replaced, say) leaves the vault in its period, and the mark of the run that began it.
@@ -363,23 +356,42 @@ public sealed partial class VaultCatalog
         var next = new UnlockedVault(id, "", start.NewKey, Now, locks);
         var (documents, damaged) = await RekeyPassesAsync(old, next, ct);
 
-        await _loading.WaitAsync(ct);
-        try
+        // The active memberships as the start left them; a revocation, departure, role change or a member's rotation
+        // since then makes the finish conflict, and it is tried again with them as they are now.
+        var members = start.Members.Active;
+        for (var attempt = 1; ; attempt++)
         {
-            using (var session = await StartSessionAsync(ct))
+            await FaultAsync("before-finish");
+            await _loading.WaitAsync(ct);
+            try
             {
-                await session.WithTransactionAsync((s, token) => FinishRekeyAsync(s, id, userId, userKey, start, old, next, token), cancellationToken: ct);
-            }
+                using (var session = await StartSessionAsync(ct))
+                {
+                    await session.WithTransactionAsync((s, token) => FinishRekeyAsync(s, id, userId, userKey, start, members, token), cancellationToken: ct);
+                }
 
-            // Under _loading, so a load after this sees K′ current, and an object made with K is refused from now on.
-            _keyIds[id] = next.KeyId;
-            _rekeyed[id] = 0;
-            _open.TryRemove(id, out _);
-            _pending.TryRemove(id, out _);
-        }
-        finally
-        {
-            _loading.Release();
+                // Under _loading, so a load after this sees K′ current, and an object made with K is refused from now on.
+                _keyIds[id] = next.KeyId;
+                _rekeyed[id] = 0;
+                _open.TryRemove(id, out _);
+                _pending.TryRemove(id, out _);
+                break;
+            }
+            catch (Sharing.MembershipsChangedException)
+            {
+                if (attempt >= MaxFinishAttempts)
+                {
+                    log.LogWarning("The memberships of vault {VaultId} kept changing during the finish of its re-keying; the vault stays pending", id);
+                    throw VaultBusyException.Being();
+                }
+
+                log.LogInformation("The memberships of vault {VaultId} changed during its re-keying; the finish reads them again", id);
+                members = await ActiveMembershipRevisionsAsync(id, ct);
+            }
+            finally
+            {
+                _loading.Release();
+            }
         }
 
         log.LogInformation(
@@ -390,6 +402,15 @@ public sealed partial class VaultCatalog
     }
 
     private Task FaultAsync(string point) => RekeyFaultAt?.Invoke(point) ?? Task.CompletedTask;
+
+    /// <summary>A finish whose memberships keep changing is tried this many times before the run gives up.</summary>
+    private const int MaxFinishAttempts = 5;
+
+    /// <summary>The active memberships of the vault with their revisions, for a finish tried again.</summary>
+    private async Task<IReadOnlyDictionary<string, int>> ActiveMembershipRevisionsAsync(string vaultId, CancellationToken ct) =>
+        (await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+            .Find(m => m.Vault == vaultId && m.Status == Sharing.MembershipStatus.Active).Project(m => new { m.Id, m.Revision }).ToListAsync(ct))
+        .ToDictionary(m => m.Id, m => m.Revision, StringComparer.Ordinal);
 
     /// <summary>
     /// The start transaction: a new key in a <c>user-next</c> slot, <c>rekeyStartedAt</c> on the vault, every API key
@@ -408,11 +429,6 @@ public sealed partial class VaultCatalog
         var userSlot = await Slots.Find(s, f.Eq(sl => sl.Vault, id) & f.Eq(sl => sl.Kind, SlotDocument.User) & f.Eq(sl => sl.Lookup, lookup)).FirstOrDefaultAsync(ct)
             ?? throw new VaultNotRekeyableException();
         var oldKey = OpenUserSlot(userKey, userSlot) ?? throw new VaultNotRekeyableException();
-
-        // Until the finish wraps the new key to members (task 4.3), a shared vault is left as it is. Inside the
-        // transaction, so that a grant committing meanwhile conflicts with the vault document's write below, and the
-        // retry sees it.
-        if (RefusesShared && await IsSharedAsync(s, id, ct)) throw new VaultSharedException();
 
         await FaultAsync("inside-start");
 
@@ -514,10 +530,12 @@ public sealed partial class VaultCatalog
     /// The finish transaction: the user slot wraps K′ (if it still wraps what the run started from), the <c>user-next</c>
     /// slot goes, the vault's meta is sealed under K′ without <c>rekeyStartedAt</c>, and the vault is no longer pending.
     /// The three slot and vault writes must each match exactly one document: otherwise the transaction aborts and the
-    /// vault stays in its two-key period.
+    /// vault stays in its two-key period. In the same transaction each active member's slot is wrapped to K′ through
+    /// her pin, and the memberships are sealed again under K′ (<see cref="Sharing.Memberships.FinishRekeyAsync"/>): a
+    /// membership other than <paramref name="members"/> says aborts it with <see cref="Sharing.MembershipsChangedException"/>.
     /// </summary>
     private async Task<bool> FinishRekeyAsync(
-        IClientSessionHandle s, string id, string userId, byte[] userKey, RekeyStart start, UnlockedVault old, UnlockedVault next, CancellationToken ct)
+        IClientSessionHandle s, string id, string userId, byte[] userKey, RekeyStart start, IReadOnlyDictionary<string, int> members, CancellationToken ct)
     {
         var doc = await Vaults.Find(s, v => v.Id == id).FirstOrDefaultAsync(ct) ?? throw new VaultDeletedException();
         var f = Builders<SlotDocument>.Filter;
@@ -549,6 +567,8 @@ public sealed partial class VaultCatalog
                 .Unset(v => v.RekeyStartedAt),
             cancellationToken: ct);
         if (vault.MatchedCount != 1) throw Mismatch("the vault document");
+        // Wrapped to the keys pinned under K, never to a key the database names (HARD RULE 3).
+        await Sharing.Memberships.FinishRekeyAsync(db, log, s, id, start.OldKey, start.NewKey, members, ct);
 
         await Users.UpdateOneAsync(
             s,

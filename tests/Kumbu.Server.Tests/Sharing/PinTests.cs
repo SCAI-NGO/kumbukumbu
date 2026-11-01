@@ -287,6 +287,158 @@ public sealed class PinTests(MongoFixture fixture)
         Assert.Empty(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == workId).ToListAsync(Ct));
     }
 
+    /// <summary>The owner's re-keying of the vault, start to finish; the vault's key afterwards.</summary>
+    private async Task<byte[]> RekeyAsync(Person owner, string vaultId)
+    {
+        await Catalog().RekeyAsync(vaultId, owner.Id, owner.Key, Ct);
+        return await VaultKeyAsync(owner, vaultId);
+    }
+
+    private static byte[] Open(byte[] vaultKey, MembershipDocument doc, string purpose, byte[] sealedBlob, string context) =>
+        VaultCatalog.OpenForVault(vaultKey, doc.Vault, purpose, sealedBlob, $"{context}:{doc.Vault}:{doc.Id}");
+
+    [Fact]
+    public async Task The_finish_wraps_the_new_key_to_the_pinned_key_not_the_users_document()
+    {
+        var (alice, vaultId, vaultKey) = await AlicesVaultAsync();
+        var bob = await PersonAsync("bob");
+        var membershipId = await GrantAsync(alice, vaultId, bob, "Garten");
+        using var bobs = await PrivateOfAsync(bob);
+        var bobsPublic = MemberKeys.PublicFromPrivate(bobs);
+        // An attacker with the database puts his key into Bob's user document before the owner re-keys.
+        using var attacker = MemberSlotCrypto.NewKeyPair();
+        await _db.GetCollection<UserDocument>("users").UpdateOneAsync(
+            u => u.Id == bob.Id, Builders<UserDocument>.Update.Set(u => u.PublicKey, MemberSlotCrypto.PublicOf(attacker)), cancellationToken: Ct);
+
+        var newKey = await RekeyAsync(alice, vaultId);
+
+        Assert.NotEqual(vaultKey, newKey);
+        var slot = Assert.Single(await MemberSlotsAsync(membershipId));
+        AssertOpensWith(bobs, slot, newKey);
+        Assert.ThrowsAny<CryptographicException>(() => MemberSlotCrypto.Unwrap(attacker, slot.Wrapped, $"slot:{vaultId}:member:{membershipId}"));
+        // The pin names Bob's key still, under the new key only.
+        Assert.Equal(bobsPublic, Kumbu.Server.Sharing.Memberships.PinnedKey(await MembershipAsync(membershipId), newKey));
+        Assert.Null(Kumbu.Server.Sharing.Memberships.PinnedKey(await MembershipAsync(membershipId), vaultKey));
+        Assert.False(LoggedDamaged(membershipId));
+    }
+
+    [Fact]
+    public async Task The_finish_creates_no_member_slot_for_a_forged_membership()
+    {
+        var (alice, vaultId, vaultKey) = await AlicesVaultAsync();
+        var bob = await PersonAsync("bob");
+        var carol = await PersonAsync("carol");
+        var dave = await PersonAsync("dave");
+        var erin = await PersonAsync("erin");
+        var mallory = await PersonAsync("mallory");
+        var bobs = await GrantAsync(alice, vaultId, bob, "Garten");
+        var bobsPublic = await PublicOfAsync(bob);
+
+        // Written by someone with the database but without the vault key: an active membership for Mallory, its pin
+        // sealed under a key of his own, and a member slot naming his key.
+        var mallorysPublic = await PublicOfAsync(mallory);
+        var forged = new MembershipDocument
+        {
+            Id = "forged-membership",
+            Vault = vaultId,
+            Owner = alice.Id,
+            Member = mallory.Id,
+            Role = "write",
+            Status = MembershipStatus.Active,
+            Pin = Kumbu.Server.Sharing.Memberships.SealPin(VaultCrypto.NewKey(), vaultId, "forged-membership", mallory.Id, mallorysPublic),
+            CreatedAt = _time.GetUtcNow().UtcDateTime,
+        };
+        await Docs.InsertOneAsync(forged, cancellationToken: Ct);
+        await Slots.InsertOneAsync(Catalog().MemberSlot(vaultId, forged.Id, mallory.Id, mallory.Key, mallorysPublic, VaultCrypto.NewKey(), "Garten"), cancellationToken: Ct);
+        // Carol's membership is valid, but her member slot is gone: the finish doesn't give her one.
+        var carols = await GrantAsync(alice, vaultId, carol, "Garten");
+        await Slots.DeleteManyAsync(s => s.Membership == carols, Ct);
+        // Pins sealed properly under the vault key, but naming Bob's membership, or Bob as the member with his key.
+        var daves = await GrantAsync(alice, vaultId, dave, "Garten");
+        await SetPinAsync(daves, ForgedPin(vaultKey, vaultId, daves, new(bobs, vaultId, dave.Id, MemberSlotCrypto.P256, await PublicOfAsync(dave))));
+        var erins = await GrantAsync(alice, vaultId, erin, "Garten");
+        await SetPinAsync(erins, ForgedPin(vaultKey, vaultId, erins, new(erins, vaultId, bob.Id, MemberSlotCrypto.P256, bobsPublic)));
+
+        var newKey = await RekeyAsync(alice, vaultId);
+
+        // Only Bob's slot is left, wrapped to his key; every other membership's slot is gone, and none was made.
+        using var bobsPrivate = await PrivateOfAsync(bob);
+        var left = Assert.Single(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).ToListAsync(Ct));
+        Assert.Equal(bobs, left.Membership);
+        AssertOpensWith(bobsPrivate, left, newKey);
+        foreach (var id in new[] { forged.Id, carols, daves, erins }) Assert.Empty(await MemberSlotsAsync(id));
+        foreach (var id in new[] { forged.Id, daves, erins }) Assert.True(LoggedDamaged(id), id);
+        // Mallory's key opens nothing of the vault, neither key.
+        using var mallorys = await PrivateOfAsync(mallory);
+        foreach (var slot in await Slots.Find(s => s.Kind == SlotDocument.Member).ToListAsync(Ct))
+        {
+            Assert.ThrowsAny<CryptographicException>(() => MemberSlotCrypto.Unwrap(mallorys, slot.Wrapped, $"slot:{slot.Vault}:member:{slot.Membership}"));
+        }
+
+        // The memberships whose pins didn't hold have none now; Carol's, which did, is sealed again under the new key.
+        Assert.Null((await MembershipAsync(forged.Id)).Pin);
+        Assert.Null((await MembershipAsync(daves)).Pin);
+        Assert.Equal(await PublicOfAsync(carol), Kumbu.Server.Sharing.Memberships.PinnedKey(await MembershipAsync(carols), newKey));
+        // A second run makes nothing either.
+        await RekeyAsync(alice, vaultId);
+        Assert.Single(await Slots.Find(s => s.Kind == SlotDocument.Member && s.Vault == vaultId).ToListAsync(Ct));
+    }
+
+    [Fact]
+    public async Task The_finish_reseals_pin_label_writers_and_writerIds_under_the_new_key()
+    {
+        var (alice, vaultId, vaultKey) = await AlicesVaultAsync();
+        var bob = await PersonAsync("bob");
+        var carol = await PersonAsync("carol");
+        var bobs = await GrantAsync(alice, vaultId, bob, "Garten");
+        var carols = await Memberships().GrantAsync(alice.Id, alice.Key, vaultId, carol.Id, carol.Key, "Garten", "Carol", MemberRole.Write, Ct);
+        await RecordAsync(bobs, vaultId, "key-of-bob", "Claude", vaultKey);
+        await RecordAsync(carols, vaultId, "key-of-carol", "Laptop", vaultKey);
+        // Carol leaves: her tombstone keeps her label and writers, for the owner's history.
+        await Memberships().LeaveAsync(carol.Id, carols, Ct);
+        var bobsWriterIds = Kumbu.Server.Sharing.Memberships.OpenWriterIds(await MembershipAsync(bobs), vaultKey);
+        var carolsWriterIds = Kumbu.Server.Sharing.Memberships.OpenWriterIds(await MembershipAsync(carols), vaultKey);
+
+        var newKey = await RekeyAsync(alice, vaultId);
+
+        var bobsDoc = await MembershipAsync(bobs);
+        Assert.Equal("Bob", System.Text.Encoding.UTF8.GetString(Open(newKey, bobsDoc, Kumbu.Server.Sharing.Memberships.LabelPurpose, bobsDoc.Label, "membership-label")));
+        Assert.Equal(new Dictionary<string, string> { ["key-of-bob"] = "Claude" }, Kumbu.Server.Sharing.Memberships.OpenWriters(bobsDoc, newKey));
+        // The same writer ids: what the vault's notes carry still resolves.
+        Assert.Equal(bobsWriterIds, Kumbu.Server.Sharing.Memberships.OpenWriterIds(bobsDoc, newKey));
+        Assert.Equal(await PublicOfAsync(bob), Kumbu.Server.Sharing.Memberships.PinnedKey(bobsDoc, newKey));
+
+        var carolsDoc = await MembershipAsync(carols);
+        Assert.Equal(MembershipStatus.Left, carolsDoc.Status);
+        Assert.Equal("Carol", System.Text.Encoding.UTF8.GetString(Open(newKey, carolsDoc, Kumbu.Server.Sharing.Memberships.LabelPurpose, carolsDoc.Label, "membership-label")));
+        Assert.Equal(new Dictionary<string, string> { ["key-of-carol"] = "Laptop" }, Kumbu.Server.Sharing.Memberships.OpenWriters(carolsDoc, newKey));
+        Assert.Equal(carolsWriterIds, Kumbu.Server.Sharing.Memberships.OpenWriterIds(carolsDoc, newKey));
+        Assert.Null(carolsDoc.Pin);
+
+        // Under the old key nothing of either opens any more.
+        foreach (var doc in new[] { bobsDoc, carolsDoc })
+        {
+            Assert.ThrowsAny<CryptographicException>(() => Open(vaultKey, doc, Kumbu.Server.Sharing.Memberships.LabelPurpose, doc.Label, "membership-label"));
+            Assert.ThrowsAny<CryptographicException>(() => Kumbu.Server.Sharing.Memberships.OpenWriters(doc, vaultKey));
+            Assert.ThrowsAny<CryptographicException>(() => Kumbu.Server.Sharing.Memberships.OpenWriterIds(doc, vaultKey));
+        }
+
+        Assert.Null(Kumbu.Server.Sharing.Memberships.PinnedKey(bobsDoc, vaultKey));
+    }
+
+    /// <summary>A credential of the member recorded in the membership, as creating a key through it does.</summary>
+    private async Task RecordAsync(string membershipId, string vaultId, string credentialId, string name, byte[] vaultKey)
+    {
+        using var session = await Catalog().StartSessionAsync(Ct);
+        await session.WithTransactionAsync(
+            async (s, token) =>
+            {
+                await Kumbu.Server.Sharing.Memberships.RecordCredentialAsync(_db, s, membershipId, vaultId, credentialId, name, vaultKey, "An API key", token);
+                return true;
+            },
+            cancellationToken: Ct);
+    }
+
     [Fact]
     public void Nothing_but_WrapToPinAsync_wraps_a_member_slot()
     {

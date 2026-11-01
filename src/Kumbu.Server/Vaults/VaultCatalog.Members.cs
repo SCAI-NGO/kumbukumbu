@@ -213,8 +213,8 @@ public sealed partial class VaultCatalog
         VaultCrypto.Open(VaultCrypto.Derive(vaultKey, purpose, Encoding.UTF8.GetBytes(vaultId)), sealedBlob, aad);
 
     /// <summary>
-    /// Whether the vault has a membership or an invitation that is neither revoked nor left: shared, for what phase 1
-    /// still refuses on shared vaults (re-keying, pairing a device). Inside <paramref name="session"/>'s transaction if given.
+    /// Whether the vault has a membership or an invitation that is neither revoked nor left: shared, for what is still
+    /// refused on shared vaults (pairing a device). Inside <paramref name="session"/>'s transaction if given.
     /// </summary>
     internal async Task<bool> IsSharedAsync(IClientSessionHandle? session, string vaultId, CancellationToken ct)
     {

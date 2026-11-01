@@ -267,6 +267,79 @@ public sealed partial class Memberships(
         return new StartedRekey(active, withdrawn, declined);
     }
 
+    /// <summary>
+    /// The memberships' part of a re-keying's finish (collab design §7.1, §5.4, §13 C1 and L1), inside the transaction
+    /// that wraps the owner's slot to <paramref name="newKey"/>. Every active membership, re-read and written with a
+    /// filter on its status and the revision in <paramref name="expected"/>: its member slot is wrapped to the key its
+    /// pin holds under <paramref name="oldKey"/> (<see cref="WrapToPinAsync"/>; one without a valid pin loses its slot,
+    /// logged as damaged), and its pin, label, writers and writer ids are sealed again under the new key, with
+    /// <c>revision</c> raised. A tombstone keeps its label and writers, sealed again, so the owner still reads
+    /// "Bob (left) · Claude". No member slot is ever created; one left without an active membership goes.
+    /// <see cref="MembershipsChangedException"/> if an active membership isn't as expected (a revocation, departure,
+    /// role change or rotation committed during the run), or another is active: the transaction aborts.
+    /// </summary>
+    internal static async Task FinishRekeyAsync(
+        IMongoDatabase db, ILogger log, IClientSessionHandle s, string vaultId, byte[] oldKey, byte[] newKey, IReadOnlyDictionary<string, int> expected,
+        CancellationToken ct)
+    {
+        var docs = db.GetCollection<MembershipDocument>(CollectionName);
+        var f = Builders<MembershipDocument>.Filter;
+        var all = await docs.Find(s, f.Eq(m => m.Vault, vaultId)).ToListAsync(ct);
+        var active = all.Where(m => m.Status == MembershipStatus.Active).ToList();
+        if (!active.Select(m => m.Id).ToHashSet(StringComparer.Ordinal).SetEquals(expected.Keys)) throw new MembershipsChangedException();
+
+        foreach (var read in active)
+        {
+            var bound = f.Eq(m => m.Id, read.Id) & f.Eq(m => m.Vault, vaultId) & f.Eq(m => m.Status, MembershipStatus.Active) & f.Eq(m => m.Revision, expected[read.Id]);
+            var doc = await docs.Find(s, bound).FirstOrDefaultAsync(ct) ?? throw new MembershipsChangedException();
+            var update = Resealed(log, doc, oldKey, newKey).Inc(m => m.Revision, 1);
+            var pinned = PinnedKey(doc, oldKey);
+            await WrapToPinAsync(db, log, s, doc, oldKey, newKey, null, ct);
+            update = pinned is null ? update.Unset(m => m.Pin) : update.Set(m => m.Pin, SealPin(newKey, vaultId, doc.Id, doc.Member!, pinned));
+            if ((await docs.UpdateOneAsync(s, bound, update, cancellationToken: ct)).MatchedCount != 1) throw new MembershipsChangedException();
+        }
+
+        foreach (var doc in all.Where(m => m.Status != MembershipStatus.Active))
+        {
+            // Nothing writes a tombstone but its cleanup, which leaves these fields alone; the filter keeps it so.
+            await docs.UpdateOneAsync(
+                s, f.Eq(m => m.Id, doc.Id) & f.Eq(m => m.Status, doc.Status) & f.Eq(m => m.Revision, doc.Revision),
+                Resealed(log, doc, oldKey, newKey).Unset(m => m.Pin).Inc(m => m.Revision, 1), cancellationToken: ct);
+        }
+
+        // A revocation whose cleanup hasn't run yet: its member slot would hold the old key, and goes now.
+        var sl = Builders<SlotDocument>.Filter;
+        var stray = await db.GetCollection<SlotDocument>("slots").DeleteManyAsync(
+            s, sl.Eq(x => x.Vault, vaultId) & sl.Eq(x => x.Kind, SlotDocument.Member) & sl.Nin(x => x.Membership, expected.Keys), cancellationToken: ct);
+        if (stray.DeletedCount > 0) log.LogInformation("Vault {VaultId} had {Count} member slots without an active membership; they were deleted with its re-keying", vaultId, stray.DeletedCount);
+    }
+
+    /// <summary>A membership's label, writers and writer ids, opened under <paramref name="oldKey"/> and sealed under
+    /// <paramref name="newKey"/>; one that doesn't open is left as it is (it opened nothing before either), logged.</summary>
+    private static UpdateDefinition<MembershipDocument> Resealed(ILogger log, MembershipDocument doc, byte[] oldKey, byte[] newKey)
+    {
+        var update = Builders<MembershipDocument>.Update;
+        var fields = new List<UpdateDefinition<MembershipDocument>>();
+        if (Reseal(LabelPurpose, doc.Label, "membership-label") is { } label) fields.Add(update.Set(m => m.Label, label));
+        if (Reseal(WritersPurpose, doc.Writers, "membership-writers") is { } writers) fields.Add(update.Set(m => m.Writers, writers));
+        if (Reseal(WriterIdsPurpose, doc.WriterIds, "membership-writer-ids") is { } writerIds) fields.Add(update.Set(m => m.WriterIds, writerIds));
+        return fields.Count == 0 ? update.Set(m => m.Vault, doc.Vault) : update.Combine(fields);
+
+        byte[]? Reseal(string purpose, byte[] sealedBlob, string context)
+        {
+            var aad = $"{context}:{doc.Vault}:{doc.Id}";
+            try
+            {
+                return VaultCatalog.SealForVault(newKey, doc.Vault, purpose, VaultCatalog.OpenForVault(oldKey, doc.Vault, purpose, sealedBlob, aad), aad);
+            }
+            catch (CryptographicException)
+            {
+                log.LogWarning("The {Field} of membership {MembershipId} of vault {VaultId} does not open; it is left as it is", context, doc.Id, doc.Vault);
+                return null;
+            }
+        }
+    }
+
     /// <summary>The grant's writes, inside the caller's transaction.</summary>
     private async Task GrantInAsync(
         IClientSessionHandle s, string ownerId, byte[] ownerKey, byte[] vaultKey, MembershipDocument doc, SlotDocument slot, string alias, CancellationToken ct)
@@ -799,6 +872,10 @@ public sealed class MemberLimitException(int limit) : Exception($"A vault can be
 
 /// <summary>The vault has as many pending invitations as it may.</summary>
 public sealed class PendingLimitException(int limit) : Exception($"A vault can have at most {limit} open invitations; withdraw one first.");
+
+/// <summary>A re-keying's finish found the vault's active memberships other than it expected: one was revoked, left,
+/// changed or wrapped again during the run. The finish reads them again and retries.</summary>
+internal sealed class MembershipsChangedException() : Exception("The memberships of the vault changed during its re-keying.");
 
 /// <summary>The person already has a membership of the vault.</summary>
 public sealed class AlreadyMemberException() : Exception("This person is already a member of the vault.");
