@@ -185,4 +185,42 @@ public sealed class OwnerInactiveTests(KumbuAppFactory app)
         // Memberships were never touched.
         Assert.Equal(MembershipStatus.Active, (await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Vault == w.VaultId).SingleAsync(Ct)).Status);
     }
+
+    [Fact]
+    public async Task Reactivation_resumes_indexing_even_when_every_member_left_meanwhile()
+    {
+        var w = await DeactivatedAsync();
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        await GartenAsync(w.Bob);
+        Assert.False(catalog.MayIndex(catalog.Current(w.VaultId)!));
+        await Api.Services.GetRequiredService<Memberships>().LeaveAsync(w.Bob.User.Id, await Share.MembershipOfAsync(app.Database, w.Bob, w.VaultId), Ct);
+
+        await SetActiveAsync(w.Alice, true);
+
+        // At once, before any request of hers: no member is left to clear it.
+        Assert.True(catalog.MayIndex(catalog.Current(w.VaultId)!));
+        var alice = await w.Alice.SignInAgainAsync();
+        await IndexedAsync();
+        await alice.CreateAsync("neu.md", "Kartoffeln legen\n");
+        await IndexedAsync();
+        var embeddings = app.Database.GetCollection<BsonDocument>("embeddings");
+        Assert.Equal(2, await embeddings.CountDocumentsAsync(new BsonDocument("vault", w.VaultId), cancellationToken: Ct));
+    }
+
+    [Fact]
+    public async Task The_owners_own_request_clears_a_stale_mark()
+    {
+        // Another process marked the vault while she was deactivated and never heard of her reactivation.
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var key = await alice.KeyAsync("Claude", KeyRight.Write);
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var vaultId = await alice.VaultIdAsync();
+        foreach (var request in new Func<Task>[] { async () => { using var r = await alice.GetAsync("/api/vaults"); Assert.Equal(HttpStatusCode.OK, r.StatusCode); }, async () => Assert.False((await alice.ShAsync("ls /", key)).IsError) })
+        {
+            catalog.OwnerActive(vaultId, false);
+            Assert.False(catalog.MayIndex(catalog.Current(vaultId)!));
+            await request();
+            Assert.True(catalog.MayIndex(catalog.Current(vaultId)!));
+        }
+    }
 }

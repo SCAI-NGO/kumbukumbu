@@ -264,6 +264,11 @@ public sealed partial class VaultCatalog
         return found.ToDictionary(m => m.Id, StringComparer.Ordinal);
     }
 
+    /// <summary>The vaults whose user slot names <paramref name="ownerId"/> as their owner.</summary>
+    internal async Task<IReadOnlyList<string>> OwnedVaultIdsAsync(string ownerId, CancellationToken ct) =>
+        await Slots.Distinct(s => s.Vault, Builders<SlotDocument>.Filter.Eq(s => s.Kind, SlotDocument.User) & Builders<SlotDocument>.Filter.Eq(s => s.Owner, ownerId), cancellationToken: ct)
+            .ToListAsync(ct);
+
     /// <summary>The display name of user <paramref name="userId"/> as typed, or null: for a member's view of her vault's owner.</summary>
     internal Task<string?> DisplayNameAsync(string userId, CancellationToken ct) =>
         Users.Find(u => u.Id == userId).Project(u => (string?)u.Display).FirstOrDefaultAsync(ct);

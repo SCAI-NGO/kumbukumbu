@@ -236,6 +236,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             if (vault is null) continue;
             result.Add(alias is null ? VaultAccess.Owned(vault) : MemberAccess(vault, vaultKey, alias, active![slot.Membership!]));
+            // The owner's own session: she is active, so a mark left from her deactivation goes (collab design §7.4).
+            if (alias is null) OwnerActive(vault.Id, true);
             // Only a session meets a placeholder: the start of a run deleted every API key and connection slot. Only the
             // owner's resumes the run.
             if (vault.Pending && slot.Kind == SlotDocument.User) RekeyPendingFound?.Invoke(vault.Id, userId, userKey);
@@ -598,6 +600,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             if (await LoadAsync(key.Vault, key.VaultKey, ct) is { } vault)
             {
                 result.Add(CredentialAccess(vault, key.VaultKey, key.Right, key.Membership, key.Alias, connectionId) with { DerivedSlot = key.Slot });
+                if (key.Membership is null) OwnerActive(vault.Id, true);
             }
         }
 
@@ -653,6 +656,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             if (await LoadAsync(slot.Vault, payload.VaultKey, ct) is { } vault)
             {
                 result.Add(CredentialAccess(vault, payload.VaultKey, right, membership, alias, keyId) with { DerivedSlot = slot.GrantedVia is null ? null : slot });
+                if (membership is null) OwnerActive(vault.Id, true);
             }
         }
 

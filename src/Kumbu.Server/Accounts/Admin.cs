@@ -99,8 +99,9 @@ public sealed class Admin(IMongoDatabase db, VaultCatalog catalog, Sessions sess
 
         if (revoked is not { } count) return true;
         // At once in this process: indexing of her shared vaults stops, or catches up again. The members' requests read
-        // her flag themselves, from the next one on, in every process.
-        foreach (var vaultId in await SharedVaultsAsync(null, userId, ct)) catalog.OwnerActive(vaultId, active);
+        // her flag themselves, from the next one on, in every process. Reactivated, every vault of hers is cleared, not
+        // only those shared now: one whose members all left meanwhile would otherwise stay unindexed here.
+        foreach (var vaultId in active ? await catalog.OwnedVaultIdsAsync(userId, ct) : await SharedVaultsAsync(null, userId, ct)) catalog.OwnerActive(vaultId, active);
         if (active) log.LogInformation("{Admin} reactivated user {Username}", acting.Username, target.Username);
         else
         {
