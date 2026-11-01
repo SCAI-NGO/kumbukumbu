@@ -765,7 +765,8 @@ public sealed partial class Memberships(
     /// The filter of every write a route makes to a membership (HARD RULE 2, collab design §6.0): its id, the scope the
     /// caller may write in, which is the vault resolved from the owner's own slot (<see cref="MembershipScope.OfVault"/>)
     /// or the caller as the member (<see cref="MembershipScope.OfMember"/>), and the status it may move from towards
-    /// <paramref name="to"/> (<paramref name="to"/> equal to <paramref name="from"/>: a change within it, as of a role).
+    /// <paramref name="to"/> (<paramref name="to"/> equal to <paramref name="from"/>: a change within it, as of a role,
+    /// which only an active membership has).
     /// An id of another vault's or another member's membership matches nothing, and the route answers 404.
     /// </summary>
     internal static FilterDefinition<MembershipDocument> BoundFilter(string membershipId, MembershipScope scope, string from, string to)
@@ -777,7 +778,7 @@ public sealed partial class Memberships(
             (null, { Length: > 0 } member) => f.Eq(m => m.Member, member),
             _ => throw new ArgumentException("A membership write is bound to one vault or one member.", nameof(scope)),
         };
-        var status = from == to
+        var status = from == to && from == MembershipStatus.Active
             ? f.Eq(m => m.Status, from)
             : TransitionFilter(from, to) ?? throw new InvalidOperationException($"A membership doesn't move from {from} to {to}.");
         return f.Eq(m => m.Id, membershipId) & bound & status;

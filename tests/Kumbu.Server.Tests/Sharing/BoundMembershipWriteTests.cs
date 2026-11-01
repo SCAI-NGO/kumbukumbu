@@ -157,4 +157,17 @@ public sealed class BoundMembershipWriteTests(KumbuAppFactory app)
         Assert.Equal(before, await SnapshotAsync(membership));
         Assert.Equal(status, (await Share.MembershipAsync(app.Database, membership)).Status);
     }
+
+    // A change within a status (a role, the provider seen, an alias) is one of an active membership only: no route
+    // writes to a pending one or a tombstone in place.
+    [Theory]
+    [InlineData(MembershipStatus.Pending)]
+    [InlineData(MembershipStatus.Revoked)]
+    [InlineData(MembershipStatus.Left)]
+    public void Only_an_active_membership_changes_within_its_status(string status)
+    {
+        Assert.Throws<InvalidOperationException>(() => Memberships.BoundFilter("m", MembershipScope.OfVault("v"), status, status));
+        Assert.Throws<InvalidOperationException>(() => Memberships.BoundFilter("m", MembershipScope.OfMember("u"), status, status));
+        Assert.NotNull(Memberships.BoundFilter("m", MembershipScope.OfVault("v"), MembershipStatus.Active, MembershipStatus.Active));
+    }
 }
