@@ -5,6 +5,7 @@ import { inVault, vaultOf } from "./paths";
 import type { components } from "./schema";
 
 export type ActivityRow = components["schemas"]["ActivityRowView"];
+export type VaultEvent = components["schemas"]["VaultEventView"];
 export type ActivityFile = components["schemas"]["ActivityFileView"];
 
 /**
@@ -21,6 +22,22 @@ export const useActivity = (vault: string) =>
       return last.more && end ? { before: end.to, key: end.key } : undefined;
     },
   });
+
+/** A row of the activity: a changeset, or a sharing event with the server's sentence. */
+export type ActivityItem = { type: "row"; at: string; row: ActivityRow } | { type: "event"; at: string; event: VaultEvent };
+
+/**
+ * The rows and the events of every page loaded, newest first. The server gives each page the events of the span of
+ * its rows (the oldest page, everything older), so the pages' events never overlap; one sort by time orders them all.
+ * At the same instant a row precedes the event.
+ */
+export function mergeActivity(pages: { rows: ActivityRow[]; events?: VaultEvent[] | null }[]): ActivityItem[] {
+  const items: ActivityItem[] = pages.flatMap((p) => [
+    ...p.rows.map((row): ActivityItem => ({ type: "row", at: row.to, row })),
+    ...(p.events ?? []).map((event): ActivityItem => ({ type: "event", at: event.at, event })),
+  ]);
+  return items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
 
 /**
  * A note's text now, read once each time a comparison asks for it (not again on refocus or reconnect), and kept
