@@ -462,3 +462,46 @@ describe("deleting the vault from its menu", () => {
     expect(items).not.toContain("Delete vault…");
   });
 });
+
+describe("leaving the vault from its menu", () => {
+  const shared = (level: string) => ({ name: "Work", notes: 2, embeddings: "internal", canWrite: level !== "read", level, owner: '"Alice"', shared: true, membership: "m1" });
+
+  it.each(["read", "write", "maintain"])("a member (%s) has Leave this vault… last in the vault menu", async (level) => {
+    api({ "GET /api/vaults": () => json(200, [shared(level)]) });
+    await openDrawer();
+    const items = await menuOf("Work");
+    expect(items.at(-1)).toBe("Leave this vault…");
+    expect(items).toContain("Shared with you…");
+  });
+
+  it("Leave this vault… opens the dialog and leaves", async () => {
+    let vaults = [shared("write")];
+    const fetch = api({
+      "GET /api/vaults": () => json(200, vaults),
+      "POST /api/memberships/m1/leave": () => {
+        vaults = [];
+        return noContent();
+      },
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    await menuOf("Work");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Leave this vault…" }));
+
+    const dialog = screen.getByRole("alertdialog", { name: "Leave Work?" });
+    expect(requests(fetch, "POST")).toEqual([]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Leave vault" }));
+
+    await waitFor(() => expect(requests(fetch, "POST").map((r) => new URL(r.url).pathname)).toEqual(["/api/memberships/m1/leave"]));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    // Away from its note, which she can no longer read.
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("the owner's vault menu has no Leave this vault…", async () => {
+    api();
+    await openDrawer();
+    expect(await menuOf("Work")).not.toContain("Leave this vault…");
+  });
+});

@@ -20,7 +20,7 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
-import MemberPanel from "./MemberPanel";
+import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
@@ -338,6 +338,7 @@ export default function TreeDrawer(props: {
   const [sharing, setSharing] = useState(false);
   const [member, setMember] = useState(false);
   const [deletingVault, setDeletingVault] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<{ vault: string; membership: string } | null>(null);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
@@ -403,6 +404,8 @@ export default function TreeDrawer(props: {
     ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
     // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
     ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
+    // A member's way out, last for the same reason. Held as chosen: leaving forgets the active vault before the dialog closes.
+    ...(active?.membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership: active.membership! }) }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
@@ -479,6 +482,7 @@ export default function TreeDrawer(props: {
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
+      {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />
