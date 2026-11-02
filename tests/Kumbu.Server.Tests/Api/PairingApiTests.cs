@@ -253,6 +253,29 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(("Garten", "Garten – Obsidian Laptop"), (body["vault"]!.GetValue<string>(), body["keyName"]!.GetValue<string>()));
     }
 
+    /// <summary>A rename that fails with an outcome unknown may have committed all the same: its codes go too.</summary>
+    [Fact]
+    public async Task A_rename_whose_outcome_is_unknown_drops_open_pairing_codes()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await user.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" });
+            Assert.Equal(HttpStatusCode.InternalServerError, renamed.StatusCode);
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.False(IsOpen(code));
+        using var old = await RedeemAsync(code, "Laptop");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
     [Fact]
     public async Task An_old_device_gets_404_by_the_old_name()
     {
