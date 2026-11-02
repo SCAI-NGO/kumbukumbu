@@ -180,13 +180,21 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
 
     private static async Task<string> VersionAsync(World w, string path) => (await NoteAsync(w, path))["version"]!.GetValue<string>();
 
-    /// <summary>One <c>sh</c> command as the key: it works, and names no new vault.</summary>
+    /// <summary>One <c>sh</c> command as the key: it works, and none of its text blocks names the new vault.</summary>
     private static async Task<string> ShAsync(World w, string command)
     {
-        var (failed, text) = await w.Alice.ShAsync(command, w.Key);
+        var (failed, text) = await ShAnyAsync(w, command);
         Assert.False(failed, $"{command}: {text}");
         Assert.DoesNotContain(Decoy, text, StringComparison.Ordinal);
         return text;
+    }
+
+    /// <summary>One <c>sh</c> command as the key, worked or not, with every text block of its answer: the notices
+    /// appended to it as well, not only the first (<see cref="RestClient.ShAsync"/>).</summary>
+    private static async Task<(bool Failed, string Text)> ShAnyAsync(World w, string command)
+    {
+        var result = await w.Alice.ToolAsync("sh", new Dictionary<string, object?> { ["command"] = command }, w.Key);
+        return (result.IsError ?? false, string.Join('\n', result.Content.OfType<TextContentBlock>().Select(b => b.Text)));
     }
 
     /// <summary>A tool call as the key; its text names no new vault.</summary>
@@ -239,7 +247,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     public Task KeySh_reads() => WithRenamedAsync(async w =>
     {
         Assert.Contains("Beete", await ShAsync(w, "cat /Garten/plan.md"), StringComparison.Ordinal);
-        var (failed, text) = await w.Alice.ShAsync("cat /Gartenarbeit/plan.md", w.Key);
+        var (failed, text) = await ShAnyAsync(w, "cat /Gartenarbeit/plan.md");
         Assert.True(failed, text);
         Assert.DoesNotContain("Andere", text, StringComparison.Ordinal);
     });
@@ -248,9 +256,12 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
 
     private Task ListsAsync(bool key) => WithRenamedAsync(async w =>
     {
+        // The session's list names the new vault on purpose; the renamed vault's entry still mustn't.
         var vaults = await OkAsync(w, HttpMethod.Get, "/api/vaults", bearer: w.Bearer(key), decoy: !key);
         string[] expected = key ? ["Garten"] : ["Garten", "Gartenarbeit"];
         Assert.Equal(expected, vaults.Json.AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal));
+        var garten = vaults.Json.AsArray().Single(v => v!["name"]!.GetValue<string>() == "Garten")!.ToJsonString();
+        Assert.DoesNotContain(Decoy, garten, StringComparison.Ordinal);
         var tree = (await GetAsync(w, "/api/vaults/Garten/tree", w.Bearer(key))).Json;
         Assert.Equal("/Garten", tree["root"]!["path"]!.GetValue<string>());
         AssertSomeUnderGarten(tree);
@@ -341,7 +352,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     public Task KeySh_moves() => WithRenamedAsync(async w =>
     {
         await ShAsync(w, "mv /Garten/plan.md /Garten/p/plan.md");
-        var (failed, gone) = await w.Alice.ShAsync("cat /Garten/plan.md", w.Key);
+        var (failed, gone) = await ShAnyAsync(w, "cat /Garten/plan.md");
         Assert.True(failed, gone);
         Assert.Contains("/Garten/p/plan.md", gone, StringComparison.Ordinal);
         Assert.DoesNotContain(Decoy, gone, StringComparison.Ordinal);
@@ -432,8 +443,28 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     public Task Session_searches_across_vaults() => WithRenamedAsync(async w =>
     {
         var found = await OkAsync(w, HttpMethod.Get, "/api/search?q=e&mode=exact&n=50", decoy: true);
-        var hits = found.Json["results"]!.AsArray().Where(r => r!["path"]!.GetValue<string>().EndsWith("/plan.md", StringComparison.Ordinal)).Select(r => (r!["path"]!.GetValue<string>(), r["snippet"]!.GetValue<string>())).Order().ToArray();
+        var results = found.Json["results"]!.AsArray();
+        var hits = results.Where(r => r!["path"]!.GetValue<string>().EndsWith("/plan.md", StringComparison.Ordinal)).Select(r => (r!["path"]!.GetValue<string>(), r["snippet"]!.GetValue<string>())).Order().ToArray();
         Assert.Equal([("/Garten/plan.md", "Beete"), ("/Gartenarbeit/plan.md", "Andere")], hits);
+
+        // The answer names the new vault on purpose, in its own hit and nowhere else.
+        Assert.All(results, r =>
+        {
+            var (path, hit) = (r!["path"]!.GetValue<string>(), r.ToJsonString());
+            if (path == "/Gartenarbeit/plan.md")
+            {
+                Assert.Equal("Andere", r["snippet"]!.GetValue<string>());
+                return;
+            }
+
+            Assert.StartsWith("/Garten/", path, StringComparison.Ordinal);
+            AssertUnderGarten(r);
+            Assert.DoesNotContain(Decoy, hit, StringComparison.Ordinal);
+            Assert.DoesNotContain("Andere", hit, StringComparison.Ordinal);
+        });
+        var rest = found.Json.DeepClone().AsObject();
+        rest.Remove("results");
+        Assert.DoesNotContain(Decoy, rest.ToJsonString(), StringComparison.Ordinal);
     });
 
     [Fact]
@@ -447,15 +478,28 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
 
     // --- searches by meaning ---
 
-    private Task IndexedAsync() => Api.Services.GetRequiredService<SearchIndex>().IdleAsync(TimeSpan.FromSeconds(10), Ct);
+    /// <summary>The index may not have queued the notes yet when it reports idle, so the search is asked again until it
+    /// finds <c>plan.md</c>; each answer is checked as it comes.</summary>
+    private async Task<T> FoundByMeaningAsync<T>(Func<Task<T>> search, Func<T, bool> found)
+    {
+        await app.IndexedAsync();
+        var answer = await search();
+        await PdfJobTests.EventuallyAsync(async () => found(answer) || found(answer = await search()), "plan.md is found by meaning");
+        return answer;
+    }
 
     private Task SearchesByMeaningAsync(bool key) => WithRenamedAsync(async w =>
     {
-        await IndexedAsync();
-        var found = await GetAsync(w, "/api/search?q=Beete&mode=meaning&path=/Garten", w.Bearer(key));
-        Assert.Contains("/Garten/plan.md", found.Json["results"]!.AsArray().Select(r => r!["path"]!.GetValue<string>()));
+        var found = await FoundByMeaningAsync(
+            async () =>
+            {
+                var answer = await GetAsync(w, "/api/search?q=Beete&mode=meaning&path=/Garten", w.Bearer(key));
+                AssertUnderGarten(answer.Json);
+                Assert.DoesNotContain("Andere", answer.Body, StringComparison.Ordinal);
+                return answer;
+            },
+            answer => answer.Json["results"]!.AsArray().Any(r => r!["path"]!.GetValue<string>() == "/Garten/plan.md"));
         AssertSomeUnderGarten(found.Json);
-        Assert.DoesNotContain("Andere", found.Body, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -467,10 +511,14 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     [Fact]
     public Task KeySh_searches_by_meaning() => WithRenamedAsync(async w =>
     {
-        await IndexedAsync();
-        var found = await ShAsync(w, "semsearch -n 3 --meaning Beete");
-        Assert.Contains("/Garten/plan.md", found, StringComparison.Ordinal);
-        Assert.DoesNotContain("Andere", found, StringComparison.Ordinal);
+        await FoundByMeaningAsync(
+            async () =>
+            {
+                var answer = await ShAsync(w, "semsearch -n 3 --meaning Beete");
+                Assert.DoesNotContain("Andere", answer, StringComparison.Ordinal);
+                return answer;
+            },
+            answer => answer.Contains("/Garten/plan.md", StringComparison.Ordinal));
     });
 
     // --- history ---
@@ -672,10 +720,19 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         Assert.Equal("/Garten/Bilder/b.png", put.Json["path"]!.GetValue<string>());
         Assert.Equal(png, (await GetAsync(w, "/api/files/Garten/Bilder/b.png")).Bytes);
 
-        var upload = await OkAsync(w, HttpMethod.Post, "/api/upload/Garten/Bilder", new { files = new[] { new { path = "c.md", content = "Notiz\n" } } }, w.Bearer(key));
+        // The upload takes Markdown only, and its answer names files relative to the folder: no path of it may leave /Garten.
+        var files = new[] { new { path = "c.md", content = "Notiz\n" }, new { path = "d.png", content = "kein Bild\n" } };
+        var upload = await OkAsync(w, HttpMethod.Post, "/api/upload/Garten/Bilder", new { files }, w.Bearer(key));
         Assert.Equal(1, upload.Json["written"]!.GetValue<int>());
+        Assert.Equal(["d.png"], upload.Json["skipped"]!.AsArray().Select(s => s!["path"]!.GetValue<string>()));
+        AssertUnderGarten(upload.Json);
         var note = await NoteAsync(w, "Bilder/c.md");
         Assert.Equal(("/Garten/Bilder/c.md", "Notiz\n"), (note["path"]!.GetValue<string>(), note["content"]!.GetValue<string>()));
+
+        var again = await OkAsync(w, HttpMethod.Post, "/api/upload/Garten/Bilder", new { files = new[] { new { path = "c.md", content = "Anders\n" } } }, w.Bearer(key));
+        var conflict = Assert.Single(again.Json["conflicts"]!.AsArray())!;
+        Assert.Equal(("c.md", note["version"]!.GetValue<string>()), (conflict["path"]!.GetValue<string>(), conflict["version"]!.GetValue<string>()));
+        AssertUnderGarten(again.Json);
     });
 
     [Fact]
@@ -924,7 +981,11 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         await CheckpointAsync(w, "gfd");
         foreach (var url in new[] { "/api/vaults/Garten/export", "/api/vaults/Garten/checkpoints/gfd/export", "/api/files/Garten/zip?path=Bilder/a.png", "/api/export?vault=Garten" })
         {
-            Assert.Equal(HttpStatusCode.Forbidden, (await CallAsync(w, HttpMethod.Get, url, bearer: w.Key)).Status);
+            // Refused for being a key, not for lacking a ticket: a key never gets as far as the ticket.
+            var refused = await CallAsync(w, HttpMethod.Get, url, bearer: w.Key);
+            Assert.Equal(HttpStatusCode.Forbidden, refused.Status);
+            Assert.Contains("needs a signed-in session", refused.Body, StringComparison.Ordinal);
+            Assert.DoesNotContain("ticket", refused.Body, StringComparison.OrdinalIgnoreCase);
         }
     });
 
@@ -960,7 +1021,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     public Task KeySh_is_told_of_damage() => WithRenamedAsync(async w =>
     {
         await DamagedAsync(w);
-        var (failed, text) = await w.Alice.ShAsync("cat /Garten/plan.md", w.Key);
+        var (failed, text) = await ShAnyAsync(w, "cat /Garten/plan.md");
         Assert.True(failed, text);
         Assert.Contains("/Garten/plan.md: damaged", text, StringComparison.Ordinal);
         Assert.DoesNotContain(Decoy, text, StringComparison.Ordinal);
@@ -979,6 +1040,9 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         [.. (await app.Database.GetCollection<BsonDocument>(collection).Find(filter).SortBy(d => d["_id"]).ToListAsync(Ct)).Select(d => d.ToBson())];
 
     private static FilterDefinition<BsonDocument> Of(string vaultId) => Builders<BsonDocument>.Filter.Eq("vault", vaultId);
+
+    /// <summary>The documents of <paramref name="user"/> alone: the "app" database is shared by every test of the collection.</summary>
+    private static FilterDefinition<BsonDocument> OfUser(RestClient user) => Builders<BsonDocument>.Filter.Eq("user", user.User.Id);
 
     private static async Task<string[]> NamesAsync(RestClient user, string? bearer = null)
     {
@@ -999,8 +1063,12 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         await alice.ShareWithAsync(bob, "Beet", MemberRole.Write);
         var bobKey = await KeyForAsync(bob, w.Id, "Claude", KeyRight.Write);
         var device = await KeyForAsync(alice, w.Id, "Work", KeyRight.Write, ApiKeyKind.Device);
-        var bobHistory = await bob.GetAsync("/api/history/Beet/plan.md");
-        var historyBefore = await bobHistory.Content.ReadAsStringAsync(Ct);
+        string historyBefore;
+        using (var bobHistory = await bob.GetAsync("/api/history/Beet/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, bobHistory.StatusCode);
+            historyBefore = await bobHistory.Content.ReadAsStringAsync(Ct);
+        }
         var notesBefore = await RawAsync("notes", Of(w.Id));
 
         using (var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten"))
@@ -1024,7 +1092,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         Assert.Contains("Beete", await ShAsync(w, "cat /Garten/plan.md"), StringComparison.Ordinal);
         Assert.Contains("gfd", await ShAsync(w, "lscp /Garten"), StringComparison.Ordinal);
         Assert.Contains("Garten", await ShAsync(w, "board /Garten"), StringComparison.Ordinal);
-        var (unknown, unknownText) = await alice.ShAsync("cat /Gartenarbeit/plan.md", w.Key);
+        var (unknown, unknownText) = await ShAnyAsync(w, "cat /Gartenarbeit/plan.md");
         Assert.True(unknown, unknownText);
 
         // 5. Bob sees Beet as before; his history and his agent don't notice.
@@ -1037,11 +1105,13 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
 
         using (var history = await bob.GetAsync("/api/history/Beet/plan.md"))
         {
+            Assert.Equal(HttpStatusCode.OK, history.StatusCode);
             Assert.Equal(historyBefore, await history.Content.ReadAsStringAsync(Ct));
         }
 
         using (var events = await bob.GetAsync("/api/vault-events"))
         {
+            Assert.Equal(HttpStatusCode.OK, events.StatusCode);
             Assert.DoesNotContain("Garten", await events.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
         }
 
@@ -1131,15 +1201,17 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
 
             slotFilter = Builders<BsonDocument>.Filter.Eq("vault", before.Id) & Builders<BsonDocument>.Filter.In("kind", new[] { SlotDocument.ApiKey, SlotDocument.Connection });
             slots = await RawAsync("slots", slotFilter);
-            keys = await RawAsync("api_keys", Builders<BsonDocument>.Filter.Empty);
-            connections = await RawAsync(Connections.CollectionName, Builders<BsonDocument>.Filter.Empty);
+            keys = await RawAsync("api_keys", OfUser(before.Alice));
+            connections = await RawAsync(Connections.CollectionName, OfUser(before.Alice));
         });
 
         // Read before anything uses the key or the connection again, which records their use.
         Assert.True(slots.Length >= 3, $"{slots.Length} slots");
         Assert.Equal(slots, await RawAsync("slots", slotFilter));
-        Assert.Equal(keys, await RawAsync("api_keys", Builders<BsonDocument>.Filter.Empty));
-        Assert.Equal(connections, await RawAsync(Connections.CollectionName, Builders<BsonDocument>.Filter.Empty));
+        Assert.NotEmpty(keys);
+        Assert.NotEmpty(connections);
+        Assert.Equal(keys, await RawAsync("api_keys", OfUser(w.Alice)));
+        Assert.Equal(connections, await RawAsync(Connections.CollectionName, OfUser(w.Alice)));
 
         var listedKeys = (await GetAsync(w, "/api/keys")).Json.AsArray();
         Assert.All(listedKeys, k => Assert.Equal(["Garten"], k!["vaults"]!.AsObject().Select(v => v.Key)));
@@ -1168,6 +1240,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
     [Fact]
     public async Task Stored_documents_do_not_change()
     {
+        // No new vault under the old name here: renaming back needs the name free.
         var w = await BeforeRenameAsync();
         await AnalysedAsync(w, "Gartenarbeit");
         using (var gfd = await w.Alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/checkpoints", new { name = "gfd" })) Assert.Equal(HttpStatusCode.Created, gfd.StatusCode);
