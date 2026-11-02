@@ -2,6 +2,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useEditor } from "../state/editor";
@@ -20,8 +21,21 @@ function dialogApi(extra: Parameters<typeof fakeApi>[0] = {}) {
   return fakeApi({ "GET /api/vaults/Gartenarbeit/access": () => access([]), ...extra });
 }
 
+/** The dialog, and a button outside it that takes it away, as closing the drawer does. */
+function Hideable({ onClose }: { onClose(): void }) {
+  const [shown, setShown] = useState(true);
+  return (
+    <>
+      <button type="button" onClick={() => setShown(false)}>
+        Hide
+      </button>
+      {shown && <RenameVaultDialog vault="Gartenarbeit" onClose={onClose} />}
+    </>
+  );
+}
+
 function renderDialog({ at = "/", onClose = () => {}, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }) } = {}) {
-  const element = <RenameVaultDialog vault="Gartenarbeit" onClose={onClose} />;
+  const element = <Hideable onClose={onClose} />;
   const router = createMemoryRouter(
     [
       { path: "/", element },
@@ -95,16 +109,57 @@ describe("RenameVaultDialog", () => {
   });
 
   it("goes on showing the same note under the new name", async () => {
-    dialogApi({ "PUT /api/vaults/Gartenarbeit/name": () => noContent() });
-    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md", "/Work/a.md"] });
+    const order: string[] = [];
+    dialogApi({
+      "PUT /api/vaults/Gartenarbeit/name": () => {
+        order.push("rename");
+        return noContent();
+      },
+    });
+    const save = vi.fn(async () => {
+      order.push("save");
+      return true;
+    });
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md", "/Work/a.md"], beforeRead: save });
     const onClose = vi.fn();
     const { router, dialog } = renderDialog({ at: "/notes/Gartenarbeit/plan.md", onClose });
     await rename(await dialog, "Garten");
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+    // Its pending text saved first, under the old name, which still finds it.
+    expect(order).toEqual(["save", "rename"]);
     expect(router.state.location.pathname).toBe("/notes/Garten/plan.md");
     expect(useEditor.getState().activeVault).toBe("Garten");
     expect(useEditor.getState().currentPath).toBe("/Garten/plan.md");
     expect(useEditor.getState().recentPaths).toEqual(["/Garten/plan.md", "/Work/a.md"]);
+  });
+
+  it("saves the open note's pending text first, and renames nothing if that fails", async () => {
+    const fetch = dialogApi({ "PUT /api/vaults/Gartenarbeit/name": () => noContent() });
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", beforeRead: async () => false });
+    const onClose = vi.fn();
+    const { router, dialog } = renderDialog({ at: "/notes/Gartenarbeit/plan.md", onClose });
+    const shown = await dialog;
+    await rename(shown, "Garten");
+    expect(await within(shown).findByRole("alert")).toHaveTextContent("The open note has changes that can't be saved yet. Resolve them first.");
+    expect(sent(fetch, "PUT")).toEqual([]);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/notes/Gartenarbeit/plan.md");
+    expect(useEditor.getState().activeVault).toBe("Gartenarbeit");
+  });
+
+  it("follows the note also if the dialog went away while the rename was on its way", async () => {
+    let answer!: () => void;
+    dialogApi({ "PUT /api/vaults/Gartenarbeit/name": () => new Promise<Response>((resolve) => (answer = () => resolve(noContent()))) });
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md"] });
+    const { router, dialog } = renderDialog({ at: "/notes/Gartenarbeit/plan.md" });
+    await rename(await dialog, "Garten");
+    await waitFor(() => expect(answer).toBeDefined());
+    await userEvent.click(screen.getByRole("button", { name: "Hide" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    answer();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/plan.md"));
+    expect(useEditor.getState().currentPath).toBe("/Garten/plan.md");
+    expect(useEditor.getState().activeVault).toBe("Garten");
   });
 
   it("on a page with no note open, only the active vault changes", async () => {
@@ -124,14 +179,20 @@ describe("RenameVaultDialog", () => {
     queryClient.setQueryData(["tree", "Gartenarbeit"], { damaged: 0 });
     queryClient.setQueryData(["note", "/Gartenarbeit/plan.md"], { content: "Text." });
     queryClient.setQueryData(["tree", "Work"], { damaged: 0 });
+    // A vault whose name begins with the old one's keeps its notes.
+    queryClient.setQueryData(["note", "/Gartenarbeit2/a.md"], { content: "Text." });
     queryClient.setQueryData(["vaults"], []);
+    queryClient.setQueryData(["search", "Beet"], []);
+    queryClient.setQueryData(["changes"], []);
     const onClose = vi.fn();
     await rename(await renderDialog({ onClose, queryClient }).dialog, "Garten");
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(queryClient.getQueryData(["tree", "Gartenarbeit"])).toBeUndefined();
     expect(queryClient.getQueryData(["note", "/Gartenarbeit/plan.md"])).toBeUndefined();
     expect(queryClient.getQueryData(["tree", "Work"])).toBeDefined();
-    expect(queryClient.getQueryState(["vaults"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryData(["note", "/Gartenarbeit2/a.md"])).toBeDefined();
+    // Results and changes name the vault's paths, under the old name.
+    for (const key of [["vaults"], ["search", "Beet"], ["changes"]]) expect(queryClient.getQueryState(key)?.isInvalidated, key.join(" ")).toBe(true);
   });
 
   it("shows a taken name and stays open", async () => {

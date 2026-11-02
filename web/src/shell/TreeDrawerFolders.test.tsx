@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { QueryClient } from "@tanstack/react-query";
 import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -494,7 +495,8 @@ describe("renaming the vault from its menu", () => {
         return noContent();
       },
     });
-    const router = renderApp("/notes/Work/inbox.md");
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const router = renderApp("/notes/Work/inbox.md", queryClient);
     await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
     await within(drawer()).findByText("Drafts");
     await menuOf("Work");
@@ -514,6 +516,13 @@ describe("renaming the vault from its menu", () => {
     expect(useEditor.getState().activeVault).toBe("Garten");
     // Nor did it turn into a dialog for the new name while it closed.
     expect(requests(fetch, "GET").map((r) => new URL(r.url).pathname)).not.toContain("/api/vaults/Garten/access");
+    // Nothing asked again under the old name: not the note still shown as it went, nor the dialog's access list.
+    const after = () => fetch.mock.calls.map(([r]) => new URL((r as Request).url).pathname).slice(fetch.mock.calls.findIndex(([r]) => (r as Request).method === "PUT") + 1);
+    await waitFor(() => expect(after()).toContain("/api/notes/Garten/inbox.md"));
+    expect(after().filter((p) => /^\/api\/[a-z]+\/Work\//.test(p))).toEqual([]);
+    // And nothing of the old name stays in the caches, once nothing shows it.
+    const old = (k: unknown) => typeof k === "string" && (k === "Work" || k.startsWith("/Work/"));
+    await waitFor(() => expect(queryClient.getQueryCache().findAll({ predicate: (q) => q.queryKey.some(old) }).map((q) => q.queryKey)).toEqual([]));
   });
 });
 
