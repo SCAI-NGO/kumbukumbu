@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pencil } from "lucide-react";
 import { Menu } from "./Menu";
 import { useDialog } from "../hooks/useDialog";
@@ -24,7 +24,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const onSelect = vi.fn();
+let onSelect = vi.fn();
+beforeEach(() => {
+  onSelect = vi.fn();
+});
 const menu = (placement: "above" | "below" = "below") => (
   <Menu label="Actions" placement={placement} className="b" items={[{ label: "Rename", icon: Pencil, onSelect }]}>
     ⋯
@@ -96,7 +99,7 @@ describe("Menu", () => {
     expect(button).toHaveFocus();
 
     await userEvent.click(button);
-    await userEvent.click(document.body.querySelector("[aria-hidden='true'].fixed")!);
+    await userEvent.click(screen.getByTestId("menu-backdrop"));
     expect(screen.queryByRole("menu")).toBeNull();
 
     await userEvent.click(button);
@@ -137,6 +140,30 @@ describe("Menu", () => {
   });
 
   describe("inside an aria-modal dialog", () => {
+    it("inside an aria-modal dialog it is portalled into that dialog, outside its scrolling list", async () => {
+      layout({ top: 100, bottom: 130, left: 900, right: 940 });
+      render(
+        <div role="dialog" aria-modal="true" aria-label="Drawer">
+          <ul className="overflow-y-auto" data-testid="clip">
+            <li>{menu()}</li>
+          </ul>
+        </div>,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Actions" }));
+      const open = screen.getByRole("menu");
+      expect(screen.getByRole("dialog").contains(open)).toBe(true);
+      expect(screen.getByTestId("clip").contains(open)).toBe(false);
+    });
+
+    it("Tab out of the button without entering the list closes it", async () => {
+      layout({ top: 100, bottom: 130, left: 900, right: 940 });
+      render(<Clipped />);
+      const button = screen.getByRole("button", { name: "Actions" });
+      await userEvent.click(button);
+      await userEvent.tab({ shift: true });
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
     it("Escape closes the menu first and the dialog second; Tab stays with the menu", async () => {
       layout({ top: 100, bottom: 130, left: 900, right: 940 });
       const onClose = vi.fn();

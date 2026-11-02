@@ -203,13 +203,14 @@ describe("new folders", () => {
 });
 
 describe("a menu inside the phone drawer", () => {
-  it("is drawn outside the drawer, Escape closes it before the drawer and Tab stays within the dialog", async () => {
+  it("is drawn inside the drawer but outside its scrolling list, Escape closes it before the drawer and Tab stays within the dialog", async () => {
     api();
     await openDrawer();
     const trigger = within(drawer()).getByRole("button", { name: "Actions for Work" });
     await userEvent.click(trigger);
     const menu = screen.getByRole("menu");
-    expect(drawer().contains(menu)).toBe(false);
+    expect(drawer().contains(menu)).toBe(true);
+    expect(menu.closest("ul")).toBeNull();
 
     await userEvent.tab();
     expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();

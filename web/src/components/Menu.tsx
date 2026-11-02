@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import type { LucideIcon } from "lucide-react";
 
 /** One entry of a small menu; later steps add theirs to the same list (Upload, for one). */
@@ -12,12 +12,14 @@ export interface MenuItem {
 }
 
 /**
- * A button that opens a short list of actions; a tap outside or Escape closes it. The list is drawn on `document.body`
- * at the button's position, so no scrolling or clipping container around the button can cut it off; it turns upward
- * where there is no room below. Scrolling closes it, a resize repositions it.
+ * A button that opens a short list of actions; a tap outside or Escape closes it. The list is `position: fixed` at the
+ * button's position, in `document.body` or, for a button inside an `aria-modal` dialog, in that dialog (so assistive
+ * technology that keeps to the dialog still reaches it), so no scrolling or clipping container around the button can
+ * cut it off; it turns upward where there is no room below. Any scroll on the page closes it, a resize repositions it.
  */
 export function Menu(props: { label: string; items: MenuItem[]; placement: "above" | "below"; className: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [host, setHost] = useState<HTMLElement>(document.body);
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -33,7 +35,10 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
   };
 
   useLayoutEffect(() => {
-    if (!open) return setAt(null);
+    if (!open) {
+      setAt(null);
+      return;
+    }
     place();
     const onScroll = (e: Event) => {
       if (!list.current?.contains(e.target as Node)) setOpen(false);
@@ -46,7 +51,7 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
     };
   }, [open]);
 
-  // The list is outside the dialog or drawer the button may sit in, so Tab is handled here: it moves between the items
+  // The list sits at the end of its host, not next to the button, so Tab is handled here: it moves between the items
   // and, past either end, hands the focus back to the button for the dialog's own trap to carry on from.
   const itemButtons = () => [...(list.current?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? [])];
   const onItemKey = (e: React.KeyboardEvent) => {
@@ -61,7 +66,8 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
       next.focus();
     } else if (isTab) {
       if (e.shiftKey) e.preventDefault();
-      setOpen(false);
+      // Gone from the DOM before the dialog's trap looks for its last control.
+      flushSync(() => setOpen(false));
       button.current?.focus();
     }
   };
@@ -83,11 +89,17 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
         aria-label={props.label}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setHost(button.current?.closest<HTMLElement>('[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]') ?? document.body);
+          setOpen(!open);
+        }}
         onKeyDown={(e) => {
-          if (e.key !== "Tab" || e.shiftKey || !open) return;
-          const first = itemButtons()[0];
-          if (!first) return;
+          if (e.key !== "Tab" || !open) return;
+          const first = e.shiftKey ? undefined : itemButtons()[0];
+          if (!first) {
+            setOpen(false);
+            return;
+          }
           e.preventDefault();
           e.stopPropagation();
           first.focus();
@@ -99,7 +111,7 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
       {open &&
         createPortal(
           <>
-            <div className="fixed inset-0 z-[60]" aria-hidden onClick={() => setOpen(false)} />
+            <div data-testid="menu-backdrop" className="fixed inset-0 z-[60]" aria-hidden onClick={() => setOpen(false)} />
             <div
               ref={list}
               role="menu"
@@ -128,7 +140,7 @@ export function Menu(props: { label: string; items: MenuItem[]; placement: "abov
               ))}
             </div>
           </>,
-          document.body,
+          host,
         )}
     </div>
   );
