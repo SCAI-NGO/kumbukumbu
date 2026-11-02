@@ -56,7 +56,7 @@ async function openDrawer() {
 
 async function menuOf(name: string) {
   await userEvent.click(within(drawer()).getByRole("button", { name: `Actions for ${name}` }));
-  return within(drawer()).getAllByRole("menuitem").map((i) => i.textContent);
+  return screen.getAllByRole("menuitem").map((i) => i.textContent);
 }
 
 async function createFolder(name: string) {
@@ -85,7 +85,7 @@ describe("new folders", () => {
     await openDrawer();
     const items = await menuOf("Drafts");
     expect(items.indexOf("New folder…")).toBe(items.indexOf("New note here") + 1);
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     const dialog = await createFolder("  Inbox ");
 
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
@@ -103,7 +103,7 @@ describe("new folders", () => {
     api({ "PUT /api/files/Work/Drafts/Inbox/.vaultkeep": makes(() => root.folders[1], "/Work/Drafts/Inbox") });
     await openDrawer();
     await menuOf("Drafts");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     await createFolder("Inbox");
     await waitFor(() => expect(folderRow("Inbox")).toHaveFocus());
 
@@ -131,7 +131,7 @@ describe("new folders", () => {
     });
     await openDrawer();
     await menuOf("Work");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     await createFolder("Ideas");
     await waitFor(() => expect(folderRow("Ideas")).toHaveAttribute("aria-current", "true"));
 
@@ -151,7 +151,7 @@ describe("new folders", () => {
     const fetch = api();
     await openDrawer();
     await menuOf("Work");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     const dialog = await createFolder("Drafts");
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent('A folder named "Drafts" exists already.');
@@ -165,7 +165,7 @@ describe("new folders", () => {
     const fetch = api();
     await openDrawer();
     await menuOf("Drafts");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     const dialog = await createFolder(".");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A folder name can't be empty, “.” or “..”.");
 
@@ -183,7 +183,7 @@ describe("new folders", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await menuOf("Work");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     const again = await createFolder("Drafts/");
     expect(await within(again).findByRole("alert")).toHaveTextContent('A folder named "Drafts" exists already.');
     expect(folderRow("Drafts")).toHaveAttribute("aria-current", "true");
@@ -194,11 +194,39 @@ describe("new folders", () => {
     api({ "PUT /api/files/Work/Drafts/con/.vaultkeep": () => json(400, { error: "A name can't be con." }) });
     await openDrawer();
     await menuOf("Drafts");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "New folder…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
     const dialog = await createFolder("con");
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("A name can't be con.");
     expect(useEditor.getState().selectedFolder).toBeNull();
+  });
+});
+
+describe("a menu inside the phone drawer", () => {
+  it("is drawn outside the drawer, Escape closes it before the drawer and Tab stays within the dialog", async () => {
+    api();
+    await openDrawer();
+    const trigger = within(drawer()).getByRole("button", { name: "Actions for Work" });
+    await userEvent.click(trigger);
+    const menu = screen.getByRole("menu");
+    expect(drawer().contains(menu)).toBe(false);
+
+    await userEvent.tab();
+    expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(drawer()).toBeInTheDocument();
+
+    await userEvent.click(trigger);
+    await userEvent.tab();
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    for (let i = 1; i <= items.length; i++) await userEvent.tab();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(drawer().contains(document.activeElement)).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "File tree" })).toBeNull();
   });
 });
 
@@ -228,7 +256,7 @@ describe("removing a folder", () => {
     await openDrawer();
     await userEvent.click(folderRow("A"));
     await menuOf("B");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Remove folder" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove folder" }));
 
     await waitFor(() => expect(within(drawer()).queryByRole("button", { name: /^B\s*\d/ })).not.toBeInTheDocument());
     expect(requests(fetch, "DELETE").map((r) => new URL(r.url).pathname + new URL(r.url).search)).toEqual(["/api/files/Work/A/B/.vaultkeep"]);
@@ -240,11 +268,11 @@ describe("removing a folder", () => {
     await openDrawer();
     await userEvent.click(folderRow("A"));
     await menuOf("B");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Remove folder" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove folder" }));
     await waitFor(() => expect(requests(fetch, "DELETE")).toHaveLength(1));
 
     await menuOf("B");
-    expect(within(drawer()).getByRole("menuitem", { name: "Remove folder" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Remove folder" })).toBeDisabled();
     root.folders[0].folders = [];
     answer(noContent());
     await waitFor(() => expect(within(drawer()).queryByRole("button", { name: /^B\s*\d/ })).not.toBeInTheDocument());
@@ -260,7 +288,7 @@ describe("removing a folder", () => {
     await openDrawer();
     await userEvent.click(folderRow("A"));
     await menuOf("B");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Remove folder" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove folder" }));
 
     await waitFor(() => expect(within(drawer()).queryByRole("button", { name: /^B\s*\d/ })).not.toBeInTheDocument());
     expect(within(drawer()).queryByRole("alert")).not.toBeInTheDocument();
@@ -315,7 +343,7 @@ describe("deleting the vault from its menu", () => {
     await within(drawer()).findByText("Drafts");
     const items = await menuOf("Work");
     expect(items.at(-1)).toBe("Delete vault…");
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Delete vault…" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete vault…" }));
 
     // The dialog Settings has: the name typed and the password.
     const dialog = screen.getByRole("alertdialog", { name: "Delete Work?" });

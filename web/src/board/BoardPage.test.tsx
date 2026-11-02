@@ -347,6 +347,15 @@ describe("the board", () => {
     await waitFor(async () => expect(await bodies(fetch, "/api/vaults/Work/board/move")).toEqual([{ card: "Plan", column: "Done", position: "bottom" }]));
   });
 
+  it("draws a card's menu outside the lane's scrolling list", async () => {
+    api();
+    renderApp("/board/Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Actions for Write spec" }));
+    const menu = screen.getByRole("menu", { name: "Actions for Write spec" });
+    expect(lane("Backlog").contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(document.body);
+  });
+
   it("renames a column", async () => {
     const fetch = api({
       "POST /api/vaults/Work/board/rename-column": () => {
