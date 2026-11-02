@@ -159,9 +159,10 @@ export function resolvePath(path: string, cwd: string): string {
   return `/${segments.join("/")}${section}`;
 }
 
+const known = (name: string) => Object.hasOwn(commandTable, name);
+
 function resolveStage(stage: string[], cwd: string, starts: boolean): string[] {
-  const entry = Object.hasOwn(commandTable, stage[0]) ? commandTable[stage[0]] : undefined;
-  if (!entry) return stage;
+  const entry = commandTable[stage[0]];
 
   const args = stage.slice(1);
   const parsed = parse(args, entry);
@@ -182,7 +183,9 @@ function resolveStage(stage: string[], cwd: string, starts: boolean): string[] {
 /** The line to send for `line` typed in `cwd`: as typed if no path changed, else re-joined with its paths absolute. */
 export function resolveLine(line: string, cwd: string): string {
   const stages = tokenise(line);
-  if (!stages) return line;
+  // A command the table doesn't know, in any stage, sends the whole line as typed: the shell's error or the
+  // refusal answers it.
+  if (!stages || !stages.every((stage) => known(stage[0]))) return line;
 
   const resolved = stages.map((stage, i) => resolveStage(stage, cwd, i === 0));
   const changed = resolved.some(
