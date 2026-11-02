@@ -320,6 +320,174 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Help_names_a_refused_command()
+    {
+        var user = await WorkAsync();
+        var key = await user.KeyAsync("read", KeyRight.Read);
+
+        var view = await ConsoleAsync(user, "help rm");
+
+        Assert.False(IsError(view), Text(view));
+        Assert.Equal((await user.ShAsync("help rm", key)).Text, Text(view));
+        Assert.StartsWith("rm ", Text(view), StringComparison.Ordinal);
+    }
+
+    private static Task<HttpResponseMessage> CdAsync(RestClient user, string path) =>
+        user.SendAsync(HttpMethod.Post, "/api/console", new { call = "cd", path });
+
+    private static async Task<JsonNode> CdViewAsync(RestClient user, string path)
+    {
+        using var response = await CdAsync(user, path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await RestClient.JsonAsync(response);
+    }
+
+    /// <summary>A vault <c>Work</c> with a note, a folder of notes, a kept empty folder and a folder holding only a picture.</summary>
+    private async Task<RestClient> FoldersAsync()
+    {
+        var user = await WorkAsync();
+        await user.CreateAsync("projects/garden.md", "# Garden\n");
+        using (var kept = await user.PutFileAsync("Drafts/.vaultkeep", []))
+        {
+            Assert.Equal(HttpStatusCode.Created, kept.StatusCode);
+        }
+
+        await user.CreateFileAsync("Pictures/shot.png", FileApiTests.Png(4, 4));
+        return user;
+    }
+
+    [Theory]
+    [InlineData("/", "/")]
+    [InlineData("/Work", "/Work")]
+    [InlineData("/Work/projects", "/Work/projects")]
+    [InlineData("/Work/Drafts", "/Work/Drafts")]
+    [InlineData("/Work/Pictures", "/Work/Pictures")]
+    [InlineData("/Work/projects/../Drafts/", "/Work/Drafts")]
+    public async Task Cd_takes_folders(string path, string directory)
+    {
+        var user = await FoldersAsync();
+
+        var view = await CdViewAsync(user, path);
+
+        Assert.False(IsError(view), Text(view));
+        Assert.Equal(directory, Text(view));
+        Assert.Single(view["parts"]!.AsArray());
+    }
+
+    [Theory]
+    [InlineData("/Work/plan.md")]
+    [InlineData("/Work/Pictures/shot.png")]
+    [InlineData("/Work/nope")]
+    [InlineData("/Nope")]
+    [InlineData("Work")]
+    [InlineData("/Work/Drafts/.vaultkeep")]
+    public async Task Cd_refuses_the_rest(string path)
+    {
+        var user = await FoldersAsync();
+
+        var view = await CdViewAsync(user, path);
+
+        Assert.True(IsError(view));
+        Assert.Equal($"cd: {path}: not a folder", Text(view));
+    }
+
+    [Fact]
+    public async Task Cd_without_a_path_is_400()
+    {
+        var user = await WorkAsync();
+
+        using var response = await user.SendAsync(HttpMethod.Post, "/api/console", new { call = "cd" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cd_on_a_busy_vault_is_503()
+    {
+        var user = await FoldersAsync();
+
+        await using (await user.HoldRekeyAsync())
+        {
+            using var during = await CdAsync(user, "/Work/projects");
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, during.StatusCode);
+            Assert.True(during.Headers.RetryAfter is not null);
+            Assert.Equal(Kumbu.Server.Vaults.VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(during));
+        }
+    }
+
+    [Fact]
+    public async Task Cd_sees_a_member_s_name()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("Saat/tomaten.md", "# Tomaten\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var membership = await alice.ShareWithAsync(bob, "garten");
+        using (var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = "Beete" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        var vault = await CdViewAsync(bob, "/Beete");
+        var folder = await CdViewAsync(bob, "/Beete/Saat");
+        var hers = await CdViewAsync(bob, "/Gartenarbeit");
+        var former = await CdViewAsync(bob, "/garten/Saat");
+
+        Assert.Equal(("/Beete", "/Beete/Saat"), (Text(vault), Text(folder)));
+        Assert.False(IsError(vault) || IsError(folder));
+        Assert.Equal(("cd: /Gartenarbeit: not a folder", "cd: /garten/Saat: not a folder"), (Text(hers), Text(former)));
+        Assert.True(IsError(hers) && IsError(former));
+    }
+
+    [Fact]
+    public async Task A_vault_of_another_user_is_not_a_folder()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "AlicesVault");
+        await alice.CreateAsync("Saat/tomaten.md", "# Tomaten\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+
+        foreach (var (path, missing) in new[] { ("/AlicesVault", "/Nope"), ("/AlicesVault/Saat", "/Nope/Saat") })
+        {
+            var theirs = await CdViewAsync(bob, path);
+            var none = await CdViewAsync(bob, missing);
+
+            Assert.True(IsError(theirs) && IsError(none));
+            Assert.Equal(Text(none).Replace(missing, path, StringComparison.Ordinal), Text(theirs));
+        }
+
+        Assert.Equal("/AlicesVault/Saat", Text(await CdViewAsync(alice, "/AlicesVault/Saat")));
+    }
+
+    [Fact]
+    public async Task History_takes_a_permit()
+    {
+        var user = await WorkAsync();
+
+        // Refused before anything runs, so it takes no permit.
+        Assert.Equal("rm: not in this console, which only reads", Text(await ConsoleAsync(user, "history /Work | rm /Work/plan.md")));
+        for (var i = 0; i < AccountLimits.HistoryScansPerUser - 2; i++)
+        {
+            Assert.False(IsError(await ConsoleAsync(user, "history /Work")));
+        }
+
+        // The shell refuses it (history reads no pipe), but the permit is taken first.
+        var piped = await ConsoleAsync(user, "cat /Work/plan.md | history /Work");
+        Assert.True(IsError(piped));
+        Assert.Contains("does not read from a pipe", Text(piped), StringComparison.Ordinal);
+        Assert.False(IsError(await ConsoleAsync(user, "history /Work")));
+
+        Assert.False(IsError(await ConsoleAsync(user, "cat /Work/plan.md")));
+        Assert.False(IsError(await ConsoleAsync(user, "cat /Work/plan.md | head")));
+        using var limited = await ShAsync(user, "history /Work");
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.True(limited.Headers.RetryAfter?.Delta > TimeSpan.Zero);
+        Assert.Equal(AccountLimits.HistoryScansRefused, await RestClient.ErrorAsync(limited));
+        using var laterStage = await ShAsync(user, "cat /Work/plan.md | history /Work");
+        Assert.Equal(HttpStatusCode.TooManyRequests, laterStage.StatusCode);
+        Assert.Equal("rm: not in this console, which only reads", Text(await ConsoleAsync(user, "history /Work | rm /Work/plan.md")));
+    }
+
+    [Fact]
     public void Images_become_image_parts()
     {
         byte[] png = [0x89, 0x50, 0x4e, 0x47];

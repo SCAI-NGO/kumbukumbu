@@ -175,6 +175,12 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
             await http.GetAsync($"/api/notes/{Marker}/x.md", Ct);
         }
 
+        var console = await Api.RestClient.NewAsync(app.PublicApi, vault: "Work");
+        foreach (var body in new object[] { new { call = "sh", command = $"rg {Marker} /" }, new { call = "sh", command = Marker }, new { call = "cd", path = $"/Work/{Marker}" } })
+        {
+            using var _ = await console.SendAsync(HttpMethod.Post, "/api/console", body);
+        }
+
         using var publicClient = app.PublicApi.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
         {
             HandleCookies = false,
