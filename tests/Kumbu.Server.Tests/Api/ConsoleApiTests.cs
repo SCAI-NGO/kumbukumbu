@@ -392,6 +392,29 @@ public sealed class ConsoleApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_note_or_file_with_notes_below_its_path_is_not_a_folder()
+    {
+        // Writing refuses a path below a note or a file, but restoring one from the trash doesn't look below it.
+        var user = await FoldersAsync();
+        var key = await user.KeyAsync("maintain", KeyRight.Maintain);
+        foreach (var path in new[] { "/Work/plan.md", "/Work/Pictures/shot.png" })
+        {
+            Assert.False((await user.ShAsync($"rm {path}", key)).IsError);
+            await user.CreateAsync($"{path["/Work/".Length..]}/below.md", "# Below\n");
+            var restored = await user.ShAsync($"restore {path}", key);
+            Assert.False(restored.IsError, restored.Text);
+        }
+
+        foreach (var path in new[] { "/Work/plan.md", "/Work/Pictures/shot.png" })
+        {
+            var view = await CdViewAsync(user, path);
+
+            Assert.True(IsError(view), path);
+            Assert.Equal($"cd: {path}: not a folder", Text(view));
+        }
+    }
+
+    [Fact]
     public async Task Cd_without_a_path_is_400()
     {
         var user = await WorkAsync();
