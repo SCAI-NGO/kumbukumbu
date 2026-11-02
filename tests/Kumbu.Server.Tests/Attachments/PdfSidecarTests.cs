@@ -376,6 +376,11 @@ public sealed class PdfSidecarTests
         var huge = new Stub((_, _) => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Endless()) });
 
         Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(huge).TextBoxesAsync(Pdf, SevenAndTwelve, Ct))).Code);
+
+        // Valid JSON, over the limit: only the limit refuses it.
+        var padded = TwoPagesOfBoxes().ToJsonString() + new string(' ', PdfSidecar.MaxTextBoxBytes);
+        var over = new Stub((_, _) => Json(HttpStatusCode.OK, padded));
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(over).TextBoxesAsync(Pdf, SevenAndTwelve, Ct))).Code);
     }
 
     [Fact]
