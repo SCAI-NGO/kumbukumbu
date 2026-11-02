@@ -66,6 +66,8 @@ export const commandTable: Record<string, CommandEntry> = {
     // Semsearch.cs: the last of several operands is the scope; the rest, unquoted, is the query.
     find: (o) => {
       if (o.length === 0) return { paths: [] };
+      // A lone absolute operand is the shell's "missing query" error, not a query to scope.
+      if (o.length === 1 && o[0].startsWith("/")) return { paths: [] };
       return o.length > 1 && looksLikePath(o[o.length - 1]) ? { paths: [o.length - 1] } : { paths: [], missing: "cwd" };
     },
   },

@@ -77,6 +77,7 @@ const grammar: [string, string][] = [
   ["rg -m", "rg -m"],
   ["semsearch", "semsearch"],
   ["semsearch Tomaten /Work", "semsearch Tomaten /Work"],
+  ["semsearch /Work", "semsearch /Work"],
   ["semsearch Tomaten ../plan.md", "semsearch Tomaten /Gartenarbeit/plan.md"],
   ["tags x /Work", "tags x /Work"],
   ["tags /Work x", "tags /Work x"],
