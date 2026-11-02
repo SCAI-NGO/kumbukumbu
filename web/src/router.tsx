@@ -122,6 +122,7 @@ export const routes: RouteObject[] = [
           { path: "/view/:vault/*", lazy: lazyPage(() => import("./attachments/Lightbox")) },
           { path: "/keys", lazy: lazyPage(() => import("./routes/Keys")) },
           { path: "/settings", lazy: lazyPage(() => import("./routes/Settings")) },
+          { path: "/console", lazy: lazyPage(() => import("./console/ConsolePage")) },
           { path: "/admin/users", lazy: lazyPage(() => import("./routes/admin/Users")) },
           { path: "/admin/invitations", lazy: lazyPage(() => import("./routes/admin/Invitations")) },
         ],
