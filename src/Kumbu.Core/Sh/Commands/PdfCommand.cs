@@ -22,7 +22,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     // Room left under the output limit for what follows the pages: a picture block, the line naming where to go on.
     private const int Reserve = 1_000;
 
-    private static readonly Option[] Spec = [new(null, "images"), new(null, "size", TakesValue: true), new(null, "crop", TakesValue: true)];
+    private static readonly Option[] Spec = [new(null, "images"), new(null, "size", TakesValue: true), new(null, "rotate", TakesValue: true), new(null, "crop", TakesValue: true)];
 
     private enum Show { Text, Images, All }
 
@@ -33,7 +33,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     public string Summary => "read a PDF page by page: text, rendered pages, a part of one";
 
     public string Help => $"""
-        pdf <path> [pages] [--images | --images=all] [--crop x,y,w,h] [--size small|medium|large]
+        pdf <path> [pages] [--images | --images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]
         pdf info <path>
           Read a PDF page by page. pages is N, N-M or N- (to the end), all pages if omitted. Each page
           starts with a line naming it, its type and what was found on it, followed by its text:
@@ -56,6 +56,11 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                             but a photo in the PDF has only the detail it was stored with; in points of the
                             page as displayed (1 pt = 1/72 inch), x and y from the top left, as 'pdf info'
                             gives the regions, which leave out a figure's labels and legend when those are text
+          --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
+                            on its side; needs --images, --images=all or --crop, and leaves the text as it is. With
+                            it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
+                            'rg --regions' are for the page not turned: x,y,w,h on a page W×H, with W and H rounded
+                            down, is H-y-h,x,h,w when turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
           --size S          the step for images, medium if omitted:
         {SizeSteps.Table}
           At most {MaxImages} images come from one call, and at most {MaxPages} pages, fewer when their text would pass
@@ -108,7 +113,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         if (parsed.Operands[0] == "info")
         {
             var example = parsed.Operands.Count > 1 ? parsed.Operands[1] : "/Work/Papers/paper.pdf";
-            if (parsed.Operands.Count != 2 || show != Show.Text || parsed.Has("size") || parsed.Has("crop"))
+            if (parsed.Operands.Count != 2 || show != Show.Text || parsed.Has("size") || parsed.Has("crop") || parsed.Has("rotate"))
             {
                 return Invalid($"pdf: info takes a path and nothing else, e.g. pdf info {example}");
             }
@@ -124,12 +129,20 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             return Invalid($"pdf: --size is small, medium or large, not '{size}' (see 'help pdf')");
         }
 
+        var rotate = 0;
+        if (parsed.Value("rotate") is { } turn && !Rotation.TryParse(turn, out rotate))
+        {
+            return Invalid($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees, not '{turn}' (leave it out for no turn)");
+        }
+
         Crop? crop = null;
         if (parsed.Value("crop") is { } cropText)
         {
             if (!Crop.TryParse(cropText, out var c, out var cropError)) return Invalid($"pdf: {cropError}");
             crop = c;
         }
+
+        if (rotate != 0 && show == Show.Text && crop is null) return Invalid("pdf: --rotate turns the pictures of a page; add --images, --images=all or --crop");
 
         var range = PageRange.All;
         if (parsed.Operands.Count == 2 && !PageRange.TryParse(parsed.Operands[1], out range, out var rangeError)) return Invalid($"pdf: {rangeError}");
@@ -142,7 +155,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             return Invalid($"pdf: --crop takes a single page, e.g. pdf {SectionLookup.Quote(path)} {range.First} --crop {parsed.Value("crop")}");
         }
 
-        var call = new Call(path, state, step, crop, show, range);
+        var call = new Call(path, state, step, crop, rotate, show, range);
         pixels.Count(new PdfCalled(call.Mode));
         PdfAnalysis? analysis;
         try
@@ -167,7 +180,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         return crop is not null ? await CropAsync(call, analysis, ct) : await PagesAsync(call with { Range = pages }, analysis, range.Last is null, ct);
     }
 
-    private sealed record Call(VaultPath Path, AttachmentState State, SizeStep Step, Crop? Crop, Show Show, PageRange Range)
+    private sealed record Call(VaultPath Path, AttachmentState State, SizeStep Step, Crop? Crop, int Rotate, Show Show, PageRange Range)
     {
         public PdfMode Mode => Crop is not null ? PdfMode.Crop : Show switch { Show.All => PdfMode.ImagesAll, Show.Images => PdfMode.Images, _ => PdfMode.Text };
     }
@@ -184,6 +197,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     {
         pixels.Count(new PdfPageDelivered(PageDelivery.Image));
         pixels.Count(new PdfPageRendered(KindOf(page), call.Mode));
+        if (call.Rotate != 0) pixels.Count(new PictureTurned(TurnCommand.Pdf));
     }
 
     private static ShellResult Invalid(string message) => ShellResult.Error(message) with { Kind = ShellErrorKind.Invalid };
@@ -401,7 +415,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             {
                 try
                 {
-                    picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, null, 0, ct);
+                    picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, null, call.Rotate, ct);
                 }
                 catch (PixelsUnavailableException e)
                 {
@@ -423,7 +437,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             {
                 CountPicture(call, page);
                 var what = page is null ? "" : $" ({AttachmentText.TypeName(page.Type)})";
-                output.Append(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {count}{what}", PageSize(picture), call.Step, null, picture));
+                output.Append(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {count}{what}", PageSize(picture), call.Step, null, picture, call.Rotate));
                 output.Add(picture);
                 if (output.Images == MaxImages && n < last) return Stop(output, call, n, $"at most {MaxImages} images per call", n + 1, open);
             }
@@ -455,10 +469,11 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     {
         var range = new PageRange(next, open ? null : call.Range.Last);
         var flag = call.Show switch { Show.Images => " --images", Show.All => " --images=all", _ => "" };
+        var turn = call.Rotate == 0 ? "" : $" --rotate {call.Rotate}";
         var size = call.Step == SizeStep.Medium ? "" : $" --size {SizeSteps.Name(call.Step)}";
         var shown = range.Last == next ? $"{next}" : range.ToString();
         var lead = unsure ? "If the PDF has more pages, continue with" : "Continue with";
-        output.Add($"--- Stopped after page {after}: {why}. {lead}: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{size} ---");
+        output.Add($"--- Stopped after page {after}: {why}. {lead}: pdf {SectionLookup.Quote(call.Path)} {shown}{flag}{turn}{size} ---");
         return output.Result();
     }
 
@@ -467,15 +482,21 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var n = call.Range.First;
         var crop = call.Crop!;
         var page = analysis.Pages.FirstOrDefault(p => p.Number == n);
-        if (page is not null && (crop.X + crop.Width > page.Width + 1e-6 || crop.Y + crop.Height > page.Height + 1e-6))
+        if (page is not null)
         {
-            return Invalid($"pdf: the crop {crop} lies outside page {n} ({Point(page.Width)}×{Point(page.Height)} pt)");
+            // With --rotate the crop counts in the turned page.
+            var (width, height) = Rotation.SwapsSides(call.Rotate) ? (page.Height, page.Width) : (page.Width, page.Height);
+            if (crop.X + crop.Width > width + 1e-6 || crop.Y + crop.Height > height + 1e-6)
+            {
+                var turned = call.Rotate == 0 ? "" : $" as turned by --rotate {call.Rotate}";
+                return Invalid($"pdf: the crop {crop} lies outside page {n}{turned} ({Point(width)}×{Point(height)} pt)");
+            }
         }
 
         Picture picture;
         try
         {
-            picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, crop, 0, ct);
+            picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, crop, call.Rotate, ct);
         }
         catch (PixelsUnavailableException e)
         {
@@ -485,7 +506,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         CountPicture(call, page);
         var what = page is null ? "" : $" ({AttachmentText.TypeName(page.Type)})";
         var output = new Output();
-        output.Add(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {analysis.PageCount}{what}", PageSize(picture), call.Step, crop, picture));
+        output.Add(PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n} of {analysis.PageCount}{what}", PageSize(picture), call.Step, crop, picture, call.Rotate));
         output.Add(picture);
         return output.Result();
     }
@@ -508,7 +529,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             Picture picture;
             try
             {
-                picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, call.Crop, 0, ct);
+                picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, call.Crop, call.Rotate, ct);
             }
             catch (PixelsUnavailableException e)
             {
@@ -518,7 +539,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             }
 
             CountPicture(call, null);
-            var text = PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n}", PageSize(picture), call.Step, call.Crop, picture);
+            var text = PictureText.For($"{call.Path.Value} (version {call.State.Version}), page {n}", PageSize(picture), call.Step, call.Crop, picture, call.Rotate);
             if (call.Crop is null)
             {
                 output.Add($"--- Page {n} of ?: {status} ---");

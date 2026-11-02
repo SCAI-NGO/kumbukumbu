@@ -144,4 +144,24 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         Assert.Contains("page 2 of 3 (mixed): page 595×842 pt; crop 72,300,451,260; large: ", Text(result.Content[0]));
         Assert.Equal((2, SizeSteps.Of(SizeStep.Large), (Crop?)new Crop(72, 300, 451, 260)), Assert.Single(sidecar.PageRequests));
     }
+
+    [Fact]
+    public async Task Rotate_passes_through_to_the_sidecar()
+    {
+        var sidecar = new FakePdfSidecar { Analysis = _ => Paper() };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a paper lying on its side"));
+        var key = await user.KeyAsync("pdf", KeyRight.Read);
+        var path = $"/{user.Vault}/Samples/paper.pdf";
+
+        var result = await ShAsync(host, key, $"pdf {path} 2 --images=all --rotate 90");
+
+        Assert.False(result.IsError, Text(result.Content[0]));
+        Assert.Equal(2, result.Content.Count);
+        Assert.Contains("page 2 of 3 (mixed): page 595×842 pt, turned 90° clockwise to 842×595 pt; medium: 1303×920 px PNG, ", Text(result.Content[0]));
+        Assert.Contains("\nWith --rotate 90, --crop counts from the top left of this turned page, in its points.\n", Text(result.Content[0]));
+        Assert.Equal(FakePdfSidecar.SolidPng(1303, 920), Assert.IsType<ImageContentBlock>(result.Content[1]).DecodedData.ToArray());
+        Assert.Equal(90, Assert.Single(sidecar.PageRotations));
+    }
 }

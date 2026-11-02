@@ -197,6 +197,25 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Turned_pages_count_for_pdf()
+    {
+        const string series = "kumbu_pictures_turned_total{command=\"pdf\"}";
+        await using var host = Host(app, new FakePdfSidecar { Analysis = _ => Paper() });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a paper lying on its side"));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var pdf = $"/{user.Vault}/Samples/paper.pdf";
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"pdf {pdf} 2 --images=all --rotate 90");
+        await ShAsync(host, key, $"pdf {pdf} 2 --images=all");
+        await ShAsync(host, key, $"pdf {pdf} 2 --rotate 90");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+    }
+
+    [Fact]
     public async Task A_refused_rotate_has_its_own_reason()
     {
         const string series = "kumbu_img_refusals_total{reason=\"bad_rotate\"}";

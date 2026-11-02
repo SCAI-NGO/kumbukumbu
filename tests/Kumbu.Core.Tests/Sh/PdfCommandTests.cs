@@ -35,6 +35,11 @@ public class PdfCommandTests
 
         public List<(int Page, SizeStep Step, Crop? Crop)> PageRequests { get; } = [];
 
+        /// <summary>The turn each page request asked for, beside <see cref="PageRequests"/>.</summary>
+        public List<int> Rotations { get; } = [];
+
+        public List<AttachmentUse> Used { get; } = [];
+
         public List<bool> AnalysisRequests { get; } = [];
 
         public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, CancellationToken ct) => throw new NotSupportedException();
@@ -42,6 +47,7 @@ public class PdfCommandTests
         public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct)
         {
             PageRequests.Add((page, step, crop));
+            Rotations.Add(rotate);
             if (PageFails(page) is { } e) throw e;
             return Task.FromResult(PagePicture ?? new Picture(new byte[1024 + page], "image/png", 1109, 1568, 595, 842));
         }
@@ -60,12 +66,10 @@ public class PdfCommandTests
             return Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(text)]);
         }
 
-        public void Count(AttachmentUse use)
-        {
-        }
+        public void Count(AttachmentUse use) => Used.Add(use);
     }
 
-    private readonly InMemoryNoteStore _store = new(("/Papers/plan.md", "a note\n"));
+    private readonly InMemoryNoteStore _store = new(("/Papers/plan.md", "a note\n"), ("/Work/plan.md", "a note\n"));
     private readonly FakeTimeProvider _time = new(new DateTime(2026, 10, 29, 11, 0, 0, DateTimeKind.Utc));
     private readonly FakePixels _pixels = new();
     private readonly AttachmentWriter _files;
@@ -632,7 +636,7 @@ public class PdfCommandTests
         Assert.Contains("— add --images=all or --crop to see it ---", help);
         Assert.Contains("1 small image ≈ 3 %", help);
         Assert.Contains("figures of each page that has more than small ones", help);
-        Assert.All(help.Split('\n'), line => Assert.True(line.Length <= 106, line));
+        Assert.All(help.Split('\n'), line => Assert.True(line.Length <= 107, line));
         Assert.Contains("A client may drop images", help);
         Assert.Contains("'help img'", help);
         Assert.Contains("pdf /Work/Papers/paper.pdf 4 --crop", help);
@@ -652,5 +656,228 @@ public class PdfCommandTests
 
         Assert.StartsWith("command not found: pdf", (await plain.RunAsync("pdf /Papers/a.pdf", Ct)).Output);
         Assert.Equal("a.pdf: PDF, 2 KB", (await plain.RunAsync("cat /Papers/a.pdf", Ct)).Output);
+    }
+
+    private const string TurnedPage = "With --rotate 90, --crop counts from the top left of this turned page, in its points.";
+
+    /// <summary>15 pages of text, page 7 a scan photographed sideways.</summary>
+    private static PdfAnalysis Mix() => new("a", 15, 15, null, null, [.. Enumerable.Range(1, 15).Select(n => n == 7 ? Scan(n) : Text(n))]);
+
+    private async Task<string> UploadMix()
+    {
+        var version = await Upload("/Work/Scans/mix.pdf", Mix());
+        _pixels.Texts["/Work/Scans/mix.pdf"] = n => n == 7 ? "" : $"Text of page {n}";
+        return version;
+    }
+
+    [Fact]
+    public async Task Rotate_goes_to_the_pixels_for_every_page_of_a_range()
+    {
+        await Upload("/Work/b.pdf", Figures());
+
+        var result = await Run("pdf /Work/b.pdf 1-6 --images --rotate 270");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal([2, 4], _pixels.PageRequests.Select(r => r.Page));
+        Assert.Equal([270, 270], _pixels.Rotations);
+        Assert.Equal(2, _pixels.Used.Count(u => u == new PictureTurned(TurnCommand.Pdf)));
+    }
+
+    [Fact]
+    public async Task The_last_rotate_wins()
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run("pdf /Work/a.pdf 4 --images=all --rotate 90 --rotate 180");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(180, Assert.Single(_pixels.Rotations));
+    }
+
+    [Theory]
+    [InlineData("pdf /Work/a.pdf 4 --images --rotate 45", "45")]
+    [InlineData("pdf /Work/a.pdf 4 --crop 1,1,10,10 --rotate=0", "0")]
+    [InlineData("pdf /Work/none.pdf 4 --images=all --rotate=-90", "-90")]
+    public async Task A_bad_rotate_is_refused(string line, string angle)
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run(line);
+
+        Assert.Equal(ShellResult.Error($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees, not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Empty(_pixels.PageRequests);
+        Assert.Empty(_pixels.AnalysisRequests);
+    }
+
+    [Theory]
+    [InlineData("pdf /Work/a.pdf 4 --rotate 90")]
+    [InlineData("pdf /Work/a.pdf --rotate 180 --size large")]
+    [InlineData("pdf /Work/none.pdf 4 --rotate 90")]
+    public async Task Rotate_without_pictures_is_refused(string line)
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run(line);
+
+        Assert.Equal(ShellResult.Error("pdf: --rotate turns the pictures of a page; add --images, --images=all or --crop") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Empty(_pixels.PageRequests);
+        Assert.Empty(_pixels.AnalysisRequests);
+    }
+
+    [Theory]
+    [InlineData("pdf info /Work/a.pdf --rotate 90")]
+    [InlineData("pdf info /Work/a.pdf --rotate 45")]
+    public async Task Info_refuses_rotate(string line)
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run(line);
+
+        Assert.Equal(ShellResult.Error("pdf: info takes a path and nothing else, e.g. pdf info /Work/a.pdf") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Empty(_pixels.AnalysisRequests);
+    }
+
+    [Fact]
+    public async Task The_text_block_names_the_turn()
+    {
+        var version = await UploadMix();
+        _pixels.PagePicture = new Picture(new byte[318 * 1024], "image/jpeg", 1303, 920, 595, 842);
+
+        var result = await Run("pdf /Work/Scans/mix.pdf 7 --images=all --rotate 90");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("TI", Kinds(result));
+        Assert.Equal($"""
+            --- Page 7 of 15: image (no text layer; one image covers the page) ---
+            /Work/Scans/mix.pdf (version {version}), page 7 of 15 (image): page 595×842 pt, turned 90° clockwise to 842×595 pt; medium: 1303×920 px JPEG, 318 KB
+            {TurnedPage}
+            {Dropped}
+            """.ReplaceLineEndings("\n"), Texts(result)[0]);
+    }
+
+    [Fact]
+    public async Task A_crop_says_it_is_of_the_turned_page()
+    {
+        var version = await UploadMix();
+        _pixels.PagePicture = new Picture(new byte[88 * 1024], "image/png", 1350, 541, 595, 842);
+
+        var result = await Run("pdf /Work/Scans/mix.pdf 7 --rotate 90 --crop 646,491,162,65 --size large");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal((7, SizeStep.Large, (Crop?)new Crop(646, 491, 162, 65)), Assert.Single(_pixels.PageRequests));
+        Assert.Equal(90, Assert.Single(_pixels.Rotations));
+        Assert.Equal(
+            $"/Work/Scans/mix.pdf (version {version}), page 7 of 15 (image): page 595×842 pt, turned 90° clockwise to 842×595 pt; crop 646,491,162,65 of the turned page; large: 1350×541 px PNG, 88 KB\n{TurnedPage}\n{Dropped}",
+            Texts(result)[0]);
+        Assert.Contains(new PictureTurned(TurnCommand.Pdf), _pixels.Used);
+    }
+
+    [Theory]
+    [InlineData("700,500,300,200")]
+    [InlineData("0,500,500,200")]
+    public async Task A_crop_outside_the_turned_page_is_refused_without_a_round_trip(string crop)
+    {
+        await UploadMix();
+
+        var result = await Run($"pdf /Work/Scans/mix.pdf 7 --rotate 90 --crop {crop}");
+
+        Assert.Equal(ShellResult.Error($"pdf: the crop {crop} lies outside page 7 as turned by --rotate 90 (842×595 pt)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Empty(_pixels.PageRequests);
+    }
+
+    [Fact]
+    public async Task A_crop_inside_the_turned_page_passes_though_outside_the_page()
+    {
+        await UploadMix();
+
+        var turned = await Run("pdf /Work/Scans/mix.pdf 7 --crop 600,0,200,500 --rotate 270");
+        var upright = await Run("pdf /Work/Scans/mix.pdf 7 --crop 0,600,700,200 --rotate 180");
+
+        Assert.False(turned.IsError, turned.Output);
+        Assert.Equal(ShellResult.Error("pdf: the crop 0,600,700,200 lies outside page 7 as turned by --rotate 180 (595×842 pt)") with { Kind = ShellErrorKind.Invalid }, upright);
+        Assert.Equal([270], _pixels.Rotations);
+    }
+
+    [Fact]
+    public async Task Continue_with_keeps_the_turn()
+    {
+        await Upload("/Work/a.pdf", Plain(20));
+
+        var result = await Run("pdf /Work/a.pdf 1-20 --images=all --rotate 90");
+
+        Assert.Equal([90, 90, 90, 90], _pixels.Rotations);
+        Assert.Equal("--- Stopped after page 4: at most 4 images per call. Continue with: pdf /Work/a.pdf 5-20 --images=all --rotate 90 ---", Texts(result)[^1]);
+    }
+
+    [Fact]
+    public async Task Continue_with_names_turn_before_size()
+    {
+        await Upload("/Work/b.pdf", Figures());
+
+        var result = await Run("pdf /Work/b.pdf 1-12 --size large --rotate 270 --images");
+
+        Assert.Equal("--- Stopped after page 9: at most 4 images per call. Continue with: pdf /Work/b.pdf 10-12 --images --rotate 270 --size large ---", Texts(result)[^1]);
+    }
+
+    [Fact]
+    public async Task Without_an_analysis_the_turn_still_goes_along()
+    {
+        var version = await Upload("/Work/a.pdf", null);
+
+        var result = await Run("pdf /Work/a.pdf --images=all --rotate 90");
+
+        Assert.Equal([90, 90, 90, 90], _pixels.Rotations);
+        Assert.Equal(
+            $"--- Page 1 of ?: not analysed yet ---\n/Work/a.pdf (version {version}), page 1: page 595×842 pt, turned 90° clockwise to 842×595 pt; medium: 1109×1568 px PNG, 1 KB\n{TurnedPage}\n{Dropped}",
+            Texts(result)[0]);
+        Assert.Equal("--- Stopped after page 4: at most 4 images per call. If the PDF has more pages, continue with: pdf /Work/a.pdf 5- --images=all --rotate 90 ---", Texts(result)[^1]);
+        Assert.Equal(4, _pixels.Used.Count(u => u == new PictureTurned(TurnCommand.Pdf)));
+    }
+
+    [Fact]
+    public async Task Rotate_leaves_the_page_text_as_it_is()
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var plain = await Run("pdf /Work/a.pdf 2-4 --images=all");
+        var turned = await Run("pdf /Work/a.pdf 2-4 --images=all --rotate 90");
+
+        Assert.False(turned.IsError, turned.Output);
+        var lines = turned.Output.Split('\n').Where(l => l != TurnedPage).Select(l => l.Replace(", turned 90° clockwise to 842×595 pt", ""));
+        Assert.Equal(plain.Output, string.Join('\n', lines));
+        Assert.Contains("--- Page 3 of 12: text ---\nText of page 3\n", turned.Output);
+    }
+
+    [Fact]
+    public async Task Without_rotate_the_text_block_is_as_it_was()
+    {
+        var version = await Upload("/Work/a.pdf", Twelve());
+
+        var page = await Run("pdf /Work/a.pdf 4 --images");
+        var crop = await Run("pdf /Work/a.pdf 4 --crop 72,300,451,260");
+
+        Assert.Equal($"--- Page 4 of 12: mixed (text; vector drawing ≈ 35 % of the page) ---\nText of page 4\n/Work/a.pdf (version {version}), page 4 of 12 (mixed): page 595×842 pt; medium: 1109×1568 px PNG, 1 KB\n{Dropped}", Texts(page)[0]);
+        Assert.Equal($"/Work/a.pdf (version {version}), page 4 of 12 (mixed): page 595×842 pt; crop 72,300,451,260; medium: 1109×1568 px PNG, 1 KB\n{Dropped}", Texts(crop)[0]);
+        Assert.Equal([0, 0], _pixels.Rotations);
+        Assert.DoesNotContain(_pixels.Used, u => u is PictureTurned);
+    }
+
+    [Fact]
+    public async Task The_help_names_rotate_and_its_conversions()
+    {
+        var help = (await Run("help pdf")).Output;
+
+        Assert.StartsWith("pdf <path> [pages] [--images | --images=all] [--crop x,y,w,h] [--rotate D] [--size small|medium|large]\n", help);
+        Assert.Contains("""
+              --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
+                                on its side; needs --images, --images=all or --crop, and leaves the text as it is. With
+                                it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
+                                'rg --regions' are for the page not turned: x,y,w,h on a page W×H, with W and H rounded
+                                down, is H-y-h,x,h,w when turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
+            """.ReplaceLineEndings("\n"), help);
+        Assert.Contains("x,y,w,h on a page W×H, with W and H rounded\n", help);
+        Assert.Contains("\n                    down, is H-y-h,x,h,w when turned by 90", help);
+        Assert.True(help.IndexOf("  --crop x,y,w,h", StringComparison.Ordinal) < help.IndexOf("  --rotate D", StringComparison.Ordinal));
+        Assert.True(help.IndexOf("  --rotate D", StringComparison.Ordinal) < help.IndexOf("  --size S", StringComparison.Ordinal));
     }
 }
