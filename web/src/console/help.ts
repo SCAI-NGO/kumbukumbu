@@ -17,7 +17,7 @@ export const localHelp: Record<string, string> = {
   . and .. work, and .. at / stays at /. The other commands' relative paths start here.
   A note, an attachment or nothing there: cd: <path>: not a folder.
 
-  cd /Demo
+  cd /Work
   cd projects
   cd ..`,
   pwd: `pwd

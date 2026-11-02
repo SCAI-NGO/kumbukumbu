@@ -318,8 +318,9 @@ describe("the output", () => {
   });
 
   it.each([
-    [429, "Too many history scans at once. Try again in a minute."],
-    [503, "The vault is busy. Try again in a moment."],
+    // AccountLimits.HistoryScansRefused and VaultBusyException.BeingReencrypted.
+    [429, "Too many searches of earlier versions or reads of activity; try again in a minute."],
+    [503, "This vault is being re-encrypted; try again in a moment."],
   ])("prints the sentence of a %i", async (status, sentence) => {
     consoleApi(() => json(status, { error: sentence }));
     await open();
@@ -416,7 +417,8 @@ describe("the end of a session", () => {
     expect(useConsole.getState()).toMatchObject({ cwd: "/", entries: [], history: [], running: null });
 
     await act(async () => pending.answer(text("/Work/projects")));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The answer's promise chain settles within act.
+    await act(async () => {});
     expect(useConsole.getState()).toMatchObject({ cwd: "/", entries: [], history: [], running: null });
   });
 

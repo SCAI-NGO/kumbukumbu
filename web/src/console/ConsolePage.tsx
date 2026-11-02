@@ -29,13 +29,16 @@ export default function ConsolePage() {
   useEffect(() => {
     if (!running) input.current?.focus();
   }, [running]);
-  useLayoutEffect(() => {
+  // To the newest answer, unless the user scrolled up; again once an image has its height.
+  const follow = () => {
     if (following.current && log.current) log.current.scrollTop = log.current.scrollHeight;
-  }, [entries, running]);
+  };
+  useLayoutEffect(follow, [entries, running]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (running) return;
+    // Read from the store, not this render: a running command's controller must stay the one leaving aborts.
+    if (useConsole.getState().running) return;
     controller.current = new AbortController();
     setValue("");
     setWalk(null);
@@ -60,7 +63,7 @@ export default function ConsolePage() {
   };
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-5xl flex-col gap-4 px-4 pt-10 pb-4">
+    <main className="mx-auto flex h-dvh w-full max-w-5xl flex-col gap-4 px-4 pt-10 pb-[max(16px,env(safe-area-inset-bottom))]">
       <header className="flex flex-col gap-2">
         <Link to="/" className="flex min-h-11 items-center self-start text-accent-text">
           Back to the notes
@@ -82,9 +85,9 @@ export default function ConsolePage() {
       >
         <p className={`mb-4 text-text-body ${wrap}`}>{welcome}</p>
         {entries.map((entry, i) => (
-          <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} />
+          <EntryView key={entry.id} entry={entry} withPath={i === 0 || entries[i - 1].cwd !== entry.cwd} onImage={follow} />
         ))}
-        {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} />}
+        {running && <EntryView entry={running} withPath={entries.length === 0 || entries[entries.length - 1].cwd !== running.cwd} onImage={follow} />}
       </div>
       <form aria-label="Command line" onSubmit={submit} className="font-mono text-sm">
         <PathLine cwd={cwd} />
@@ -125,30 +128,34 @@ function PathLine({ cwd }: { cwd: string }) {
   );
 }
 
-function EntryView({ entry, withPath }: { entry: Entry | Running; withPath: boolean }) {
+function EntryView({ entry, withPath, onImage }: { entry: Entry | Running; withPath: boolean; onImage(): void }) {
   return (
     <div className="mb-2">
       {withPath && <PathLine cwd={entry.cwd} />}
       <div data-line className={wrap}>
-        <span className="select-none text-muted">{"> "}</span>
+        <span aria-hidden className="select-none text-muted">
+          {"> "}
+        </span>
         {entry.typed}
       </div>
       {entry.sent !== undefined && (
         <div data-line className={`text-dim ${wrap}`}>
-          <span className="select-none">{"→ "}</span>
+          <span aria-hidden className="select-none">
+            {"→ "}
+          </span>
           {entry.sent}
         </div>
       )}
-      {"output" in entry && entry.output.map((output, i) => <OutputView key={i} output={output} />)}
+      {"output" in entry && entry.output.map((output, i) => <OutputView key={i} output={output} onImage={onImage} />)}
     </div>
   );
 }
 
-function OutputView({ output }: { output: Output }) {
+function OutputView({ output, onImage }: { output: Output; onImage(): void }) {
   if (output.kind === "image") {
     return (
       <div data-line>
-        <img src={output.src} alt={output.alt} className="my-1 h-auto max-w-full" />
+        <img src={output.src} alt={output.alt} onLoad={onImage} className="my-1 h-auto max-w-full" />
       </div>
     );
   }

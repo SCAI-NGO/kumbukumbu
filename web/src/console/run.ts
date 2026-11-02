@@ -59,7 +59,7 @@ export async function run(line: string, signal: AbortSignal) {
     }
     return ask({ call: "cd", path }, entry, generation, signal, (view) => {
       if (view.isError) return done(view.parts.map((part) => error(part.text ?? "")));
-      useConsole.setState({ cwd: view.parts[0]?.text ?? path });
+      useConsole.setState({ cwd: view.parts[0]?.text || path });
       done([]);
     });
   }
