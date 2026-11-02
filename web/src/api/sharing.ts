@@ -127,3 +127,10 @@ export function useDismissNotice() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["member-notices"] }),
   });
 }
+
+/** The caller's own events as a member across the vaults shared with her, newest first; `vault` is null for one she has lost. */
+export const useVaultEvents = () =>
+  useQuery({
+    queryKey: ["vault-events"],
+    queryFn: async () => (await call(api.GET("/api/vault-events"))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+  });

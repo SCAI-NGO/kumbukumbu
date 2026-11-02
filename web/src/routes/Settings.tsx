@@ -12,6 +12,7 @@ import { useDialog } from "../hooks/useDialog";
 import { usePreferences } from "../attachments/downloadFiles";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
+import SharedVaultsSection from "./SharedVaultsSection";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -32,6 +33,9 @@ export default function Settings() {
       <ReencryptSection />
       <SessionsSection />
       <VaultsSection />
+      <Section title="Shared vaults">
+        <SharedVaultsSection />
+      </Section>
       <YourDataSection />
       <DownloadsSection />
       <DeleteAccountSection />

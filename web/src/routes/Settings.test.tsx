@@ -26,6 +26,7 @@ function api(overrides: Record<string, (r: Request) => Response | Promise<Respon
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3 }, { name: "Diary", notes: 1 }]),
     "GET /api/account/preferences": () => json(200, { askPasswordForDownloads: true }),
+    "GET /api/vault-events": () => json(200, []),
     ...overrides,
   });
 }
@@ -133,7 +134,7 @@ describe("Settings", () => {
     expect(localStorage.length).toBe(0);
   });
 
-  it("has a section Your data after Vaults, with the export of one's vaults", async () => {
+  it("has a section Your data after Vaults and Shared vaults, with the export of one's vaults", async () => {
     mockSystem(true);
     api();
     renderApp("/settings");
@@ -141,7 +142,8 @@ describe("Settings", () => {
     expect(within(yourData).getByRole("button", { name: "Export my vaults…" })).toBeInTheDocument();
     expect(yourData).toHaveTextContent(/each folder opens in Obsidian as a vault \(no history, trash or checkpoints\)/);
     const titles = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(titles.indexOf("Your data")).toBe(titles.indexOf("Vaults") + 1);
+    expect(titles.indexOf("Shared vaults")).toBe(titles.indexOf("Vaults") + 1);
+    expect(titles.indexOf("Your data")).toBe(titles.indexOf("Shared vaults") + 1);
   });
 
   it("groups the schemes as dark and light, each with a swatch", async () => {
