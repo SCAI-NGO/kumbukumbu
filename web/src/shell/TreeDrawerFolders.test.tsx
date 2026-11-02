@@ -484,14 +484,18 @@ describe("renaming the vault from its menu", () => {
 
   it("Rename vault… renames the vault and goes on showing the note under the new name", async () => {
     let vaults = [{ name: "Work", notes: 2, embeddings: "internal" }];
+    // The list asked for again after the rename answers only when told to.
+    let renamed = false;
+    let answer: (() => void) | undefined;
     const fetch = api({
-      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/vaults": () => (renamed ? new Promise<Response>((resolve) => (answer = () => resolve(json(200, vaults)))) : json(200, vaults)),
       "GET /api/keys": () => json(200, []),
       "GET /api/connections": () => json(200, []),
       "GET /api/vaults/Work/access": () => json(200, { apiKeys: [], deviceKeys: [], connections: [], members: [], left: [] }),
       "GET /api/vaults/Garten/tree": () => json(200, { damaged: 0, root: folder("/Garten", [], [note("/Garten/inbox.md")]) }),
       "PUT /api/vaults/Work/name": () => {
         vaults = [{ name: "Garten", notes: 2, embeddings: "internal" }];
+        renamed = true;
         return noContent();
       },
     });
@@ -509,9 +513,12 @@ describe("renaming the vault from its menu", () => {
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "Rename vault" })).toBeEnabled());
     await userEvent.click(within(dialog).getByRole("button", { name: "Rename vault" }));
 
-    // The dialog was held as chosen: the active vault changing under it doesn't drop its success handler.
+    // The dialog was held as chosen: the active vault changing under it doesn't drop its success handler. The note
+    // follows at once, not once the refetches are in.
     await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/inbox.md"));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Rename / })).not.toBeInTheDocument());
+    expect(answer).toBeDefined();
+    answer!();
     expect(requests(fetch, "PUT").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Work/name"]);
     expect(useEditor.getState().activeVault).toBe("Garten");
     // Nor did it turn into a dialog for the new name while it closed.
