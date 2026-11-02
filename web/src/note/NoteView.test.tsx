@@ -525,3 +525,24 @@ describe("Outline and find in the note", () => {
     expect(useEditor.getState().noteTool).toBeNull();
   });
 });
+
+describe("the board's own note", () => {
+  const BOARD = "/Work/Board/Board.md";
+  const definition = ["---", "kumbu-board: 1", "columns: [Ideas, Doing]", "---", "## Instructions", "", "Keep it small."].join("\n");
+
+  it("Board.md opens with a link to the board above it", async () => {
+    noteApi({ [`GET /api/notes${BOARD}`]: () => json(200, noteView(BOARD, definition)) });
+    renderApp(`/notes${BOARD}`);
+    const link = await screen.findByRole("link", { name: "Open the board" });
+    expect(link).toHaveAttribute("href", "/board/Work");
+    expect(link.compareDocumentPosition(await screen.findByRole("article")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no other note has the link, not even a Board.md elsewhere", async () => {
+    const elsewhere = "/Work/Board/Archive/Board.md";
+    noteApi({ [`GET /api/notes${elsewhere}`]: () => json(200, noteView(elsewhere, definition)) });
+    renderApp(`/notes${elsewhere}`);
+    await screen.findByRole("article");
+    expect(screen.queryByRole("link", { name: "Open the board" })).not.toBeInTheDocument();
+  });
+});

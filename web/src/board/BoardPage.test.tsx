@@ -245,6 +245,61 @@ describe("the board", () => {
     expect(within(problems).getByRole("link", { name: "Stray" })).toHaveAttribute("href", "/notes/Work/Board/Stray.md");
   });
 
+  it("a note left unplaced offers Put in a column, which moves it", async () => {
+    const stray = { path: "/Work/Board/Stray.md", what: "no column" };
+    const fetch = api({
+      "GET /api/vaults/Work/board": () => json(200, board([stray, { path: "/Work/Board/Old/Note.md", what: "in a sub-folder of Board; cards belong directly in Board" }])),
+      "POST /api/vaults/Work/board/move": () => {
+        const b = board();
+        b.columns[1].cards = [card("Stray")];
+        return json(200, b);
+      },
+    });
+    renderApp("/board/Work");
+
+    const problems = await screen.findByRole("region", { name: "Problems" });
+    const [first, second] = within(problems).getAllByRole("listitem");
+    // A note in a sub-folder is no card wherever it says it belongs: it has to move out first.
+    expect(within(second).queryByRole("button", { name: "Put in a column" })).not.toBeInTheDocument();
+    await userEvent.click(within(first).getByRole("button", { name: "Put in a column" }));
+    const sheet = await screen.findByRole("dialog", { name: "Move Stray" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Doing" }));
+    await userEvent.click(within(sheet).getByRole("button", { name: "To the top" }));
+
+    expect(await within(lane("Doing")).findByRole("link", { name: "Stray" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Problems" })).not.toBeInTheDocument();
+    expect(await bodies(fetch, "/api/vaults/Work/board/move")).toEqual([{ card: "/Work/Board/Stray.md", column: "Doing", position: "top" }]);
+  });
+
+  it("asks for the reason when an unplaced note goes into a reason column", async () => {
+    const fetch = api({
+      "GET /api/vaults/Work/board": () => json(200, board([{ path: "/Work/Board/Stray.md", what: "no column" }])),
+      "POST /api/vaults/Work/board/move": () => json(200, board()),
+    });
+    renderApp("/board/Work");
+    await userEvent.click(await screen.findByRole("button", { name: "Put in a column" }));
+    const sheet = await screen.findByRole("dialog", { name: "Move Stray" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Waiting" }));
+    await userEvent.click(within(sheet).getByRole("button", { name: "To the bottom" }));
+
+    const ask = await screen.findByRole("dialog", { name: "Why does Stray go to Waiting?" });
+    await userEvent.type(within(ask).getByRole("textbox", { name: "Reason" }), "Parts missing");
+    await userEvent.click(within(ask).getByRole("button", { name: "Move" }));
+    await userEvent.click(within(ask).getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await bodies(fetch, "/api/vaults/Work/board/move")).toEqual([{ card: "/Work/Board/Stray.md", column: "Waiting", position: "bottom", reason: "Parts missing" }]);
+  });
+
+  it("offers no Put in a column in a checkpoint's board", async () => {
+    api({
+      "GET /api/vaults/Work/board": () => json(200, board([{ path: "/Work/Board/Stray.md", what: "no column" }])),
+    });
+    renderApp("/board/Work?checkpoint=before");
+    await screen.findByRole("region", { name: "Problems" });
+    expect(screen.queryByRole("button", { name: "Put in a column" })).not.toBeInTheDocument();
+  });
+
   it("adds a card to a lane with + Card", async () => {
     const fetch = api({
       "POST /api/vaults/Work/board/cards": () => {

@@ -2,13 +2,13 @@
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
 import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
-import { crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { boardUrl, crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -297,8 +297,18 @@ export default function NoteView({ path }: { path: string }) {
   const failedText = newer && refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>;
   const bannerHasIt = sameWrite(newer);
 
+  // The board's own note is mostly its frontmatter (and, below `maintain`, refused for writing): the board is what is wanted.
+  const boardOfNote = path === `/${vaultOf(path)}/Board/Board.md` ? vaultOf(path) : null;
+
   return (
     <>
+      {boardOfNote && (
+        <nav aria-label="Board" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-sm">
+          <Link to={boardUrl(boardOfNote)} className="font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
+            Open the board
+          </Link>
+        </nav>
+      )}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
         {bannerHasIt && failedText}
       </AgentBanner>

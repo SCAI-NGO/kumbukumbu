@@ -325,6 +325,99 @@ describe("folders of a vault shared with the user", () => {
   });
 });
 
+describe("a new note in the board's folder", () => {
+  const column = (name: string, needsReason = false) => ({ name, archivable: false, needsReason, cards: [] as unknown[] });
+  const boardView = (columns = [column("Ideas"), column("Doing")]) => ({ title: "Work", instructions: null, columns, problems: [] });
+  const withCard = (title: string) => {
+    const b = boardView();
+    b.columns[0].cards = [{ path: `/Work/Board/${title}.md`, title, due: null, overdue: false, tags: [], reason: null }];
+    return b;
+  };
+  /** The vault at `level` (the owner's own without one), with a board whose folder holds `notes`. */
+  function boardApi(level: string | null, extra: Parameters<typeof fakeApi>[0] = {}, notes = [note("/Work/Board/Board.md"), note("/Work/Board/Plan.md")]) {
+    const vault = level ? { name: "Work", notes: 2, embeddings: "internal", canWrite: level !== "read", level, owner: '"Alice"', shared: true } : { name: "Work", notes: 2, embeddings: "internal" };
+    const fetch = api({ "GET /api/vaults": () => json(200, [vault]), "GET /api/vaults/Work/board": () => json(200, boardView()), ...extra });
+    root.folders.push(folder("/Work/Board", [folder("/Work/Board/Archive")], notes));
+    return fetch;
+  }
+  const posts = (fetch: ReturnType<typeof fakeApi>) =>
+    Promise.all(requests(fetch, "POST").filter((r) => new URL(r.url).pathname === "/api/vaults/Work/board/cards").map((r) => r.clone().json()));
+
+  async function newNoteIn(name: string) {
+    await menuOf(name);
+    await userEvent.click(screen.getByRole("menuitem", { name: "New note here" }));
+  }
+
+  it.each([["owner", null], ["write", "write"]])("becomes a card in the first column (%s)", async (_, level) => {
+    const fetch = boardApi(level, { "POST /api/vaults/Work/board/cards": () => json(201, withCard("Untitled")) });
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Board");
+    await newNoteIn("Board");
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Work/Board/Untitled.md"));
+    expect(await posts(fetch)).toEqual([{ title: "Untitled", column: "Ideas" }]);
+    expect(requests(fetch, "PUT")).toEqual([]);
+    expect(useEditor.getState().mode).toBe("write");
+  });
+
+  it("goes into the first column a card can start in", async () => {
+    const fetch = boardApi(null, {
+      "GET /api/vaults/Work/board": () => json(200, boardView([column("Blocked", true), column("Ideas")])),
+      "POST /api/vaults/Work/board/cards": () => json(201, withCard("Untitled")),
+    });
+    await openDrawer();
+    await newNoteIn("Board");
+    await waitFor(async () => expect(await posts(fetch)).toEqual([{ title: "Untitled", column: "Ideas" }]));
+  });
+
+  it("a new note with a name that clashes says so, and changes nothing", async () => {
+    const fetch = boardApi(null, {
+      "POST /api/vaults/Work/board/cards": () => json(409, { error: "'Untitled' exists already (/Work/Board/Untitled.md); move or update it instead" }),
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Board");
+    await newNoteIn("Board");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("'Untitled' exists already (/Work/Board/Untitled.md); move or update it instead");
+    // The note there, maybe a card already, isn't written over by a plain note.
+    expect(requests(fetch, "PUT")).toEqual([]);
+    expect(router.state.location.pathname).toBe("/notes/Work/inbox.md");
+  });
+
+  it("a refusal for the level shows the server's sentence and writes no plain note instead", async () => {
+    // The role was lowered to read since the vault list was read.
+    const fetch = boardApi("write", {
+      "POST /api/vaults/Work/board/cards": () => json(403, { error: "board add: you can only read vault Work", code: "read-only" }),
+    });
+    await openDrawer();
+    await newNoteIn("Board");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("you can only read vault Work");
+    expect(requests(fetch, "PUT")).toEqual([]);
+  });
+
+  it("a reader is offered no new note in the board's folder", async () => {
+    boardApi("read");
+    await openDrawer();
+    expect(within(drawer()).queryByRole("button", { name: "Actions for Board" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a sub-folder of the board's", "Archive", "/api/notes/Work/Board/Archive/Untitled.md", [note("/Work/Board/Board.md")]],
+    ["a Board folder without a board", "Board", "/api/notes/Work/Board/Untitled.md", [note("/Work/Board/Plan.md")]],
+  ])("in %s it stays a plain note", async (_, name, put, notes) => {
+    const fetch = boardApi(null, { [`PUT ${put}`]: () => json(201, { path: decodeURIComponent(put.slice("/api/notes".length)), content: "", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T10:00:00Z" }) }, notes);
+    await openDrawer();
+    if (name === "Archive") await userEvent.click(folderRow("Board"));
+    await newNoteIn(name);
+
+    await waitFor(() => expect(requests(fetch, "PUT").map((r) => new URL(r.url).pathname)).toEqual([put]));
+    expect(await posts(fetch)).toEqual([]);
+  });
+});
+
 describe("deleting the vault from its menu", () => {
   it("the owner's vault menu offers Delete vault…, a member's doesn't", async () => {
     const bodies: unknown[] = [];

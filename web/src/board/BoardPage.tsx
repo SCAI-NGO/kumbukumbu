@@ -5,7 +5,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useBoard, useBoardAction, type BoardCard, type BoardView } from "../api/board";
 import { HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
-import { checkpointUrl, noteUrl, titleOf } from "../api/paths";
+import { checkpointUrl, folderOf, noteUrl, titleOf } from "../api/paths";
 import { FormError, primaryButtonClass } from "../components/form";
 import { useDesktop } from "../hooks/useDesktop";
 import CardTile, { DRAG_TYPE, type CardActions } from "./CardTile";
@@ -76,14 +76,15 @@ export default function BoardPage() {
   );
 }
 
-type Asking = { card: string; column: string; position: string };
+/** `card` is what the move names (a title, or a path for a note the board can't place); `label` what is shown, if not that. */
+type Asking = { card: string; label?: string; column: string; position: string };
 
 function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string | null; view: BoardView }) {
   const id = useId();
   const desktop = useDesktop();
   const action = useBoardAction(vault);
   const [active, setActive] = useState(0);
-  const [moving, setMoving] = useState<{ card: string; from: string } | null>(null);
+  const [moving, setMoving] = useState<{ card: string; label?: string; from: string } | null>(null);
   const [asking, setAsking] = useState<Asking | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [editing, setEditing] = useState<BoardCard | null>(null);
@@ -151,6 +152,16 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
                   {titleOf(p.path)}
                 </Link>
                 : {p.what}
+                {/* Directly in Board: a sub-folder's note is no card wherever it says it belongs. */}
+                {!readOnly && folderOf(p.path) === `/${vault}/Board` && (
+                  <button
+                    type="button"
+                    onClick={() => setMoving({ card: p.path, label: titleOf(p.path), from: "" })}
+                    className="ml-2 inline-flex min-h-11 items-center rounded-[8px] border border-white/40 px-2.5 font-medium focus-visible:outline-2 focus-visible:outline-white"
+                  >
+                    Put in a column
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -210,14 +221,14 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
 
       {moving && (
         <MoveToSheet
-          card={moving.card}
+          card={moving.label ?? moving.card}
           from={moving.from}
           columns={view.columns}
           onClose={() => setMoving(null)}
           onMove={async (column, position) => {
             if (asksReason(moving.card, column)) {
               setMoving(null);
-              setAsking({ card: moving.card, column, position });
+              setAsking({ card: moving.card, label: moving.label, column, position });
               return;
             }
             await send(moving.card, column, position);
@@ -247,7 +258,7 @@ function Board({ vault, checkpoint, view }: { vault: string; checkpoint: string 
       )}
       {asking && (
         <ReasonDialog
-          card={asking.card}
+          card={asking.label ?? asking.card}
           column={asking.column}
           onCancel={() => setAsking(null)}
           onMove={async (reason) => {
