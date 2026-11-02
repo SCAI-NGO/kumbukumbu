@@ -19,7 +19,7 @@ public sealed record ColumnView(string Name, bool Archivable, bool NeedsReason, 
 /// <summary>A note in the board's folder the board can't place, with what is wrong.</summary>
 public sealed record ProblemView(string Path, string What);
 
-/// <summary>The board of a vault: <c>title</c> is the definition's, else the vault's name.</summary>
+/// <summary>The board of a vault: <c>title</c> is the definition's, else the caller's name for the vault.</summary>
 public sealed record BoardView(string Title, string? Instructions, IReadOnlyList<ColumnView> Columns, IReadOnlyList<ProblemView> Problems);
 
 /// <summary><c>position</c>: top, bottom (the default), <c>before:&lt;card&gt;</c> or <c>after:&lt;card&gt;</c>.</summary>
@@ -133,7 +133,7 @@ public static class BoardApi
     }
 
     private static BoardView View(BoardModel board, string vault, DateOnly today) => new(
-        board.Columns.Title ?? vault,
+        board.Columns.TitleFor(vault),
         board.Columns.Instructions,
         [.. board.Lanes.Select(lane => new ColumnView(
             lane.Column.Name, lane.Column.Archivable, lane.Column.NeedsReason,

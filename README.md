@@ -164,8 +164,6 @@ columns:
   - Rejected: [archivable, reason]
 archive: { after: 30, minDays: 14 }
 ---
-# Work
-
 ## Instructions
 
 Don't let ideas go stale: when Today and Backlog run short, look at Ideas. Reject a card only with a reason.
@@ -175,6 +173,7 @@ Don't let ideas go stale: when Today and Backlog run short, look at Ideas. Rejec
 - `columns` in order, each a name or `Name: [flags]`; names are unique ignoring case, 1 to 64 characters, no `/`. `archivable`: the column tidies itself into the archive; `reason`: a card goes there only with a reason.
 - `archive`: `after` cards an archivable column holds before it tidies (default 30), `minDays` a card stays in it at least (default 14).
 - `## Instructions` is printed first by the `board` reader, so an agent works the board the way it is meant to be worked.
+- An H1, if the note has one, is the board's title in the web app. The template has none: each person then sees her own name for the vault, which for a member may be an alias the others never see.
 
 A card's own keys, which the server writes line by line and leaves every other frontmatter line as it is:
 

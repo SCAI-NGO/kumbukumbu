@@ -16,6 +16,10 @@ public sealed record BoardDefinition(IReadOnlyList<BoardColumn> Columns, Archive
 {
     public const int MaxNameLength = 64;
 
+    /// <summary>What the board is called for a caller who knows the vault as <paramref name="vault"/>: the note's H1, else
+    /// her own name for it, which may be an alias that is hers alone and so is never stored (collab design §2.3).</summary>
+    public string TitleFor(string vault) => Title ?? vault;
+
     public BoardColumn? Find(string name) =>
         Columns.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
 

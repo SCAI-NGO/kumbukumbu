@@ -262,6 +262,42 @@ public class BoardServiceTests
         Assert.True((await service.CreateAsync("Nowhere", Ct)).IsError);
     }
 
+    [Fact]
+    public async Task The_board_shows_the_callers_name_for_the_vault_without_a_title()
+    {
+        var store = new InMemoryNoteStore(("/Gartenarbeit/plan.md", "Plan\n"));
+        Assert.False((await Service(store).CreateAsync("Gartenarbeit", Ct)).IsError);
+
+        var (board, _) = await BoardReader.ReadAsync(store, "Gartenarbeit", Ct);
+
+        // The owner sees her vault's name, a member his alias; the note stores neither.
+        Assert.Equal("Gartenarbeit", board!.Columns.TitleFor("Gartenarbeit"));
+        Assert.Equal("garten", board.Columns.TitleFor("garten"));
+        Assert.DoesNotContain("Gartenarbeit", await Content(store, "/Gartenarbeit/Board/Board.md"));
+    }
+
+    [Fact]
+    public async Task An_older_board_keeps_its_title()
+    {
+        var (board, _) = await BoardReader.ReadAsync(Store(), "Work", Ct);
+
+        Assert.Equal("Work", board!.Columns.TitleFor("garten"));
+    }
+
+    [Fact]
+    public async Task Add_leaves_a_note_that_already_has_a_column_unchanged()
+    {
+        var card = Card("Doing", "V", "Mine.\n");
+        var store = Store(("/Work/Board/Untitled.md", card));
+        var service = Service(store);
+
+        var result = await service.AddAsync("Work", "Untitled", "Ideas", "", null, null, null, Ct);
+
+        Assert.Equal(ShellErrorKind.Conflict, result.Kind);
+        Assert.Equal("board: 'Untitled' exists already (/Work/Board/Untitled.md); move or update it instead", result.Output);
+        Assert.Equal(card, await Content(store, "/Work/Board/Untitled.md"));
+    }
+
     private static ICaller WriteLevel => new FixedCaller("bob", LevelOf: _ => AccessLevel.Write);
 
     [Fact]
