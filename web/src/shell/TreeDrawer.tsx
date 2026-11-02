@@ -392,9 +392,9 @@ export default function TreeDrawer(props: {
           ...(owner
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
-                { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
               ]
             : []),
+          { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
           // Her side of a vault shared with her: owner, role, provider, her name for it, and leaving.
           ...(active?.membership ? [{ label: "Shared with you…", icon: Users, onSelect: () => setMember(true) }] : []),
           { label: "Export as ZIP…", icon: Download, onSelect: () => setExporting(true) },
