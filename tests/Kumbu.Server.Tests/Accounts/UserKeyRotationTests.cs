@@ -640,6 +640,20 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_rotation_reseals_a_rekey_notice()
+    {
+        var (alice, bob, vaultId, _) = await SharedByAliceAsync();
+        await Keys().CreateAsync(bob.User, bob.Key, bob.ReadAt, "claude", Grant(vaultId), Ct);
+        await Catalog().RekeyAsync(vaultId, alice.User.Id, alice.Key, Ct);
+
+        var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        var (notice, alias) = Assert.Single(await Kumbu.Server.Sharing.MemberNotices.ListAsync(_db, bob.User.Id, key, Now, Ct));
+        Assert.Equal(("vault-rekeyed", "garten"), (notice.Kind, alias));
+    }
+
+    [Fact]
     public async Task A_member_slot_whose_alias_does_not_open_is_left_as_it_is()
     {
         var (bob, vaultId, _) = await SharedAsync();

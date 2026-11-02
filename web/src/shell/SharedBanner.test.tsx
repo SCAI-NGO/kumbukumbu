@@ -114,4 +114,13 @@ describe("SharedBanner", () => {
     await waitFor(() => expect(screen.queryByRole("list", { name: "Notices" })).not.toBeInTheDocument());
     expect(fetch.mock.calls.some(([r]) => (r as Request).method === "DELETE")).toBe(true);
   });
+
+  it("shows a re-encryption notice with its Dismiss", async () => {
+    const text = `"Alice" re-encrypted Beet; your keys and apps for it were revoked. Give your agents Beet again.`;
+    fakeApi({ "GET /api/member-notices": () => json(200, [{ id: "n2", kind: "vault-rekeyed", at: "2026-11-02T10:00:00Z", vault: "Beet", text }]) });
+    renderIt(<MemberNotices />);
+    const list = await screen.findByRole("list", { name: "Notices" });
+    expect(list).toHaveTextContent(text);
+    expect(within(list).getByRole("button", { name: `Dismiss: ${text}` })).toBeInTheDocument();
+  });
 });

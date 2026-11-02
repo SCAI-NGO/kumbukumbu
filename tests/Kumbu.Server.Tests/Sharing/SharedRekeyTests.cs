@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Collections.Concurrent;
 using System.Net;
+using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
@@ -643,5 +644,188 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
         using var notices = await bob.GetAsync("/api/member-notices");
         Assert.Equal(HttpStatusCode.OK, notices.StatusCode);
         Assert.Equal("The owner has deleted garten.", (await RestClient.JsonAsync(notices)).AsArray().Single()!["text"]!.GetValue<string>());
+    }
+
+    /// <summary>Alice ("Alice") shares "Gartenarbeit" with Bob as "Beet" and with Carol as "Kräuter"; Bob's key reaches
+    /// it, Carol has nothing on it.</summary>
+    private async Task<(RestClient Alice, RestClient Bob, RestClient Carol, string VaultId, string Bobs, string Carols)> NoticeWorldAsync(bool bobsKey = true)
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await app.Database.GetCollection<UserDocument>("users").UpdateOneAsync(u => u.Id == alice.User.Id, Builders<UserDocument>.Update.Set(u => u.Display, "Alice"), cancellationToken: Ct);
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        var bobs = await alice.ShareWithAsync(bob, "Beet");
+        var carols = await alice.ShareWithAsync(carol, "Kräuter");
+        var vaultId = await alice.VaultIdAsync();
+        if (bobsKey) await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read });
+        return (alice, bob, carol, vaultId, bobs, carols);
+    }
+
+    private const string BobsRekeyNotice = "\"Alice\" re-encrypted Beet; your keys and apps for it were revoked. Give your agents Beet again.";
+
+    private static async Task RekeyOverRestAsync(RestClient owner)
+    {
+        using var rekeyed = await owner.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+    }
+
+    private static async Task<JsonArray> NoticesAsync(RestClient user)
+    {
+        using var response = await user.GetAsync("/api/member-notices");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await RestClient.JsonAsync(response)).AsArray();
+    }
+
+    private IMongoCollection<BsonDocument> RawNotices => app.Database.GetCollection<BsonDocument>(MemberNotices.CollectionName);
+
+    private Task<long> StoredNoticesAsync(string membershipId) => RawNotices.CountDocumentsAsync(new BsonDocument("membership", membershipId), cancellationToken: Ct);
+
+    [Fact]
+    public async Task A_member_whose_key_ended_gets_a_notice()
+    {
+        var (alice, bob, carol, _, _, _) = await NoticeWorldAsync();
+
+        await RekeyOverRestAsync(alice);
+
+        using (var response = await bob.GetAsync("/api/member-notices"))
+        {
+            var text = await response.Content.ReadAsStringAsync(Ct);
+            Assert.DoesNotContain("Gartenarbeit", text, StringComparison.Ordinal);
+            var notice = Assert.Single(JsonNode.Parse(text)!.AsArray())!;
+            Assert.Equal("vault-rekeyed", notice["kind"]!.GetValue<string>());
+            Assert.Equal("Beet", notice["vault"]!.GetValue<string>());
+            Assert.Equal(BobsRekeyNotice, notice["text"]!.GetValue<string>());
+        }
+
+        // Carol had no key or app on it: nothing to do, no notice.
+        Assert.Empty(await NoticesAsync(carol));
+    }
+
+    [Fact]
+    public async Task A_member_whose_connection_ended_gets_a_notice()
+    {
+        var (alice, bob, carol, vaultId, _, _) = await NoticeWorldAsync(bobsKey: false);
+        await ConnectionAsync(bob, "garden app", new Dictionary<string, string> { ["Beet"] = "read" });
+        // Never authorised: the connection has no slot on the vault, only the vault in its list.
+        Assert.False(await Slots.Find(s => s.Vault == vaultId && s.GrantedVia != null).AnyAsync(Ct));
+
+        await RekeyOverRestAsync(alice);
+
+        Assert.Equal(BobsRekeyNotice, Assert.Single(await NoticesAsync(bob))!["text"]!.GetValue<string>());
+        Assert.Empty(await NoticesAsync(carol));
+    }
+
+    [Fact]
+    public async Task A_member_who_left_during_the_period_gets_no_notice()
+    {
+        var (alice, bob, _, vaultId, bobs, _) = await NoticeWorldAsync();
+        await StopAfterStartAsync(alice, vaultId);
+        using (var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{bobs}/leave")) Assert.Equal(HttpStatusCode.NoContent, left.StatusCode);
+
+        await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+
+        Assert.Equal(0, await StoredNoticesAsync(bobs));
+        Assert.Empty(await NoticesAsync(bob));
+    }
+
+    [Fact]
+    public async Task The_notice_survives_a_crash_after_the_start()
+    {
+        var (alice, bob, _, vaultId, bobs, carols) = await NoticeWorldAsync();
+
+        await StopAfterStartAsync(alice, vaultId);
+
+        // His key's slot is gone already; the vault document remembers whose it was.
+        var during = await app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == vaultId).SingleAsync(Ct);
+        Assert.Equal([bobs], during.RekeyEndedMembers);
+        Assert.Equal(0, await StoredNoticesAsync(bobs));
+
+        await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+
+        Assert.Equal(1, await StoredNoticesAsync(bobs));
+        Assert.Equal(0, await StoredNoticesAsync(carols));
+        Assert.Equal(BobsRekeyNotice, Assert.Single(await NoticesAsync(bob))!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_finish_that_fails_leaves_no_notice_and_its_retry_one()
+    {
+        var (alice, bob, _, vaultId, bobs, _) = await NoticeWorldAsync();
+        var failed = 0;
+        Catalog.RekeyFaultAt = p => p == "inside-finish" && Interlocked.Exchange(ref failed, 1) == 0 ? throw new InvalidOperationException("the finish fails") : Task.CompletedTask;
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct));
+            Assert.Equal(0, await StoredNoticesAsync(bobs));
+            Assert.Empty(await NoticesAsync(bob));
+
+            await Catalog.RekeyAsync(vaultId, alice.User.Id, alice.UserKey, Ct);
+        }
+        finally
+        {
+            Catalog.RekeyFaultAt = null;
+        }
+
+        Assert.Equal(1, await StoredNoticesAsync(bobs));
+        Assert.Equal(BobsRekeyNotice, Assert.Single(await NoticesAsync(bob))!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task The_finish_clears_the_list()
+    {
+        var (alice, _, _, vaultId, bobs, _) = await NoticeWorldAsync();
+
+        await RekeyOverRestAsync(alice);
+
+        Assert.Equal(1, await StoredNoticesAsync(bobs));
+        var raw = await app.Database.GetCollection<BsonDocument>("vaults").Find(new BsonDocument("_id", vaultId)).SingleAsync(Ct);
+        Assert.False(raw.Contains("rekeyEndedMembers"));
+    }
+
+    [Fact]
+    public async Task A_rekey_notice_goes_once_the_membership_ended()
+    {
+        var (alice, bob, carol, vaultId, bobs, carols) = await NoticeWorldAsync();
+        await KeyAsync(carol, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read });
+        await RekeyOverRestAsync(alice);
+        Assert.Single(await NoticesAsync(bob));
+        Assert.Single(await NoticesAsync(carol));
+
+        // Once he has left, or she was removed, "give your agents it again" is wrong.
+        using (var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{bobs}/leave")) Assert.Equal(HttpStatusCode.NoContent, left.StatusCode);
+        Assert.Empty(await NoticesAsync(bob));
+        using (var revoked = await alice.SendAsync(HttpMethod.Post, $"/api/vaults/Gartenarbeit/memberships/{carols}/revoke")) Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.Empty(await NoticesAsync(carol));
+
+        // Deleted for everyone: only the deletion is left to tell.
+        var (owner, member, _, _, _, _) = await NoticeWorldAsync();
+        await RekeyOverRestAsync(owner);
+        Assert.Single(await NoticesAsync(member));
+        using (var deleted = await owner.SendAsync(
+            HttpMethod.Post, "/api/account/delete", new { password = RestClient.Password, confirm = owner.Username, sharedVaults = SharedVaultChoices.DeleteNow }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        }
+
+        Assert.Equal("The owner has deleted Beet.", Assert.Single(await NoticesAsync(member))!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_notice_can_be_dismissed_and_names_no_owner_in_the_database()
+    {
+        var (alice, bob, _, _, bobs, _) = await NoticeWorldAsync();
+        await RekeyOverRestAsync(alice);
+
+        var stored = await RawNotices.Find(new BsonDocument("membership", bobs)).SingleAsync(Ct);
+        Assert.Equal("vault-rekeyed", stored["kind"].AsString);
+        Assert.False(stored.Contains("owner"));
+        var json = stored.ToJson();
+        foreach (var name in new[] { "Alice", alice.Username, alice.User.Id, "Beet" }) Assert.DoesNotContain(name, json, StringComparison.Ordinal);
+
+        var id = Assert.Single(await NoticesAsync(bob))!["id"]!.GetValue<string>();
+        using (var dismissed = await bob.SendAsync(HttpMethod.Delete, $"/api/member-notices/{id}")) Assert.Equal(HttpStatusCode.NoContent, dismissed.StatusCode);
+        Assert.Empty(await NoticesAsync(bob));
+        Assert.Equal(0, await StoredNoticesAsync(bobs));
     }
 }

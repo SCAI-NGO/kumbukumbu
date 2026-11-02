@@ -8,11 +8,13 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Sharing;
 
 /// <summary>
-/// What a member is told once a vault shared with her is gone for good (collab design §7.3, §14): "The owner has deleted
-/// gartenarbeit." The vault and its slots are gone with it, so the notice (collection <c>member_notices</c>) keeps a copy
-/// of her member slot's alias ciphertext and its alias key, sealed under her user key: only her session opens it, the
-/// server needn't read it, and nothing in it names the owner. Deleted when she dismisses it, or after <see cref="Window"/>.
-/// A rotation of her user key seals its alias key again (<see cref="PrepareResealAsync"/>).
+/// What a member is told of a vault shared with her (collab design §7.3, §14), in two kinds: once it is gone for good
+/// ("The owner has deleted gartenarbeit."), and once a re-encryption ended her keys and apps on it (spec §3). The
+/// notice (collection <c>member_notices</c>) keeps a copy of her member slot's alias ciphertext and its alias key,
+/// sealed under her user key: only her session opens it, the server needn't read it, and nothing in it names the owner.
+/// A re-encryption's notice is shown only while her membership is active, naming the owner as she is then. Deleted when
+/// she dismisses it, or after <see cref="Window"/>. A rotation of her user key seals its alias key again
+/// (<see cref="PrepareResealAsync"/>).
 /// </summary>
 public static class MemberNotices
 {
@@ -28,12 +30,29 @@ public static class MemberNotices
     /// every member of an active membership, with her member slot's alias and alias key. A membership whose member slot is
     /// missing still gets one, without the alias ("a shared vault"). Returns how many.
     /// </summary>
-    internal static async Task<int> LeaveForDeletedAsync(IMongoDatabase db, IClientSessionHandle s, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct)
+    internal static async Task<int> LeaveForDeletedAsync(IMongoDatabase db, IClientSessionHandle s, IReadOnlyCollection<string> vaultIds, DateTime now, CancellationToken ct) =>
+        vaultIds.Count == 0 ? 0 : await LeaveAsync(db, s, Builders<MembershipDocument>.Filter.In(x => x.Vault, vaultIds), MemberNoticeDocument.VaultDeleted, now, ct);
+
+    /// <summary>
+    /// Inside the finish transaction of a re-encryption of <paramref name="vaultId"/>: a notice for each of
+    /// <paramref name="membershipIds"/>, the memberships whose keys and apps its start ended, that is still active.
+    /// Returns how many.
+    /// </summary>
+    internal static async Task<int> LeaveForRekeyAsync(
+        IMongoDatabase db, IClientSessionHandle s, string vaultId, IReadOnlyCollection<string> membershipIds, DateTime now, CancellationToken ct)
     {
-        if (vaultIds.Count == 0) return 0;
+        if (membershipIds.Count == 0) return 0;
+        var m = Builders<MembershipDocument>.Filter;
+        return await LeaveAsync(db, s, m.Eq(x => x.Vault, vaultId) & m.In(x => x.Id, membershipIds), MemberNoticeDocument.VaultRekeyed, now, ct);
+    }
+
+    /// <summary>A notice of <paramref name="kind"/> for each active membership with a member that <paramref name="which"/>
+    /// finds, with her member slot's alias and alias key where it has one.</summary>
+    private static async Task<int> LeaveAsync(IMongoDatabase db, IClientSessionHandle s, FilterDefinition<MembershipDocument> which, string kind, DateTime now, CancellationToken ct)
+    {
         var m = Builders<MembershipDocument>.Filter;
         var members = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-            .Find(s, m.In(x => x.Vault, vaultIds) & m.Eq(x => x.Status, MembershipStatus.Active) & m.Ne(x => x.Member, null))
+            .Find(s, which & m.Eq(x => x.Status, MembershipStatus.Active) & m.Ne(x => x.Member, null))
             .Project(x => new { x.Id, x.Vault, x.Member }).ToListAsync(ct);
         if (members.Count == 0) return 0;
         var f = Builders<SlotDocument>.Filter;
@@ -44,7 +63,7 @@ public static class MemberNotices
             var slot = slots.GetValueOrDefault(x.Id);
             return new MemberNoticeDocument
             {
-                User = x.Member!, Vault = x.Vault, Membership = x.Id, Kind = MemberNoticeDocument.VaultDeleted,
+                User = x.Member!, Vault = x.Vault, Membership = x.Id, Kind = kind,
                 Alias = slot?.Vault == x.Vault ? slot.Alias : null, AliasKey = slot?.Vault == x.Vault ? slot.AliasKey : null, At = now,
             };
         }).ToList();
@@ -61,8 +80,26 @@ public static class MemberNotices
         return [.. docs.Select(n => (n, AliasOf(n, userKey)))];
     }
 
-    /// <summary>The sentence of a notice.</summary>
-    internal static string TextFor(string? alias) => $"The owner has deleted {alias ?? "a shared vault"}.";
+    /// <summary>Of <paramref name="membershipIds"/>, those of <paramref name="userId"/> that are active, each with its
+    /// vault's owner.</summary>
+    internal static async Task<IReadOnlyDictionary<string, string>> ActiveOwnersAsync(
+        IMongoDatabase db, string userId, IReadOnlyCollection<string> membershipIds, CancellationToken ct)
+    {
+        if (membershipIds.Count == 0) return new Dictionary<string, string>();
+        var m = Builders<MembershipDocument>.Filter;
+        return (await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+                .Find(m.In(x => x.Id, membershipIds) & m.Eq(x => x.Member, userId) & m.Eq(x => x.Status, MembershipStatus.Active))
+                .Project(x => new { x.Id, x.Owner }).ToListAsync(ct))
+            .ToDictionary(x => x.Id, x => x.Owner, StringComparer.Ordinal);
+    }
+
+    /// <summary>The sentence of a notice; <paramref name="owner"/> is the owner as members are shown her
+    /// (<see cref="Api.WriterLabels.Owner"/>), and only a re-encryption's names her.</summary>
+    internal static string TextFor(string kind, string? alias, string owner) => kind switch
+    {
+        MemberNoticeDocument.VaultRekeyed => VaultEvents.TextFor(VaultEvents.RekeyFinished, toOwner: false, owner, alias ?? "a vault shared with you", null, null),
+        _ => $"The owner has deleted {alias ?? "a shared vault"}.",
+    };
 
     private static string? AliasOf(MemberNoticeDocument notice, byte[] userKey)
     {
@@ -143,6 +180,9 @@ public sealed class MemberNoticeDocument
 {
     /// <summary>The vault shared with her was deleted for everyone.</summary>
     public const string VaultDeleted = "vault-deleted";
+
+    /// <summary>A re-encryption of the vault shared with her ended her keys and apps on it.</summary>
+    public const string VaultRekeyed = "vault-rekeyed";
 
     [BsonId]
     public ObjectId Id { get; set; }
