@@ -1106,6 +1106,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                                 s, f.Eq(x => x.Id, slot.Id) & f.Eq(x => x.Wrapped, slot.Wrapped),
                                 Builders<SlotDocument>.Update.Set(x => x.NameId, VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(newName))),
                                 cancellationToken: token);
+                            // A guard: a write since the snapshot is a write conflict, and the transaction is retried.
                             if (named.MatchedCount == 0) throw VaultBusyException.Just();
                         }
                         catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
@@ -1117,13 +1118,14 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         var updated = await Vaults.UpdateOneAsync(
                             s, v.Eq(x => x.Id, vault.Id) & v.Eq(x => x.Meta, doc.Meta), Builders<VaultDocument>.Update.Set(x => x.Meta, vault.SealMeta(meta with { DisplayName = display })),
                             cancellationToken: token);
+                        // A guard, as above.
                         if (updated.MatchedCount == 0) throw VaultBusyException.Just();
                         await VaultEvents.RecordAsync(db, s, vault.Id, VaultEvents.VaultRenamed, null, Now, null, token);
                         return true;
                     },
                     cancellationToken: ct);
             }
-            catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException or ArgumentException))
+            catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException) && e.GetType() != typeof(ArgumentException))
             {
                 // Failed or cancelled, the commit may have landed all the same: read the vault again rather than guess. A
                 // reason of its own, as Forget logs it and this one's message could hold the name.

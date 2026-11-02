@@ -69,7 +69,8 @@ public sealed class UnlockedVault
     public string Name { get; }
 
     /// <summary>The name its owner renamed the vault to (rename spec §1.2), or null; <see cref="Name"/>, in every stored
-    /// path, never changes. Set under <see cref="Gate"/>.</summary>
+    /// path, never changes. Set under <see cref="Gate"/>; after a rename, on the object current then, under the catalog's
+    /// loading lock instead, under which a load publishes its object.</summary>
     public string? DisplayName { get; set; }
 
     /// <summary>The name the owner and her credentials see the vault under.</summary>
@@ -597,7 +598,7 @@ internal sealed record MovePayload(
 /// otherwise. Name, in every stored path, never changes after creation.</remarks>
 internal sealed record VaultMeta(
     string Name,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName = null)
 {
     [JsonIgnore]

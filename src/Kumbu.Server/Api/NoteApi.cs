@@ -283,7 +283,8 @@ public static class NoteApi
         {
             await catalog.RenameVaultAsync(caller.User.Id, caller.UserKey!, access.Vault, name, ct);
         }
-        catch (ArgumentException)
+        // Exactly ArgumentException, her slot not found, as ApiErrors maps it: its subclasses come from bugs.
+        catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
         {
             throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         }

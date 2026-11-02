@@ -344,10 +344,10 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
 
         // As a cancellation or a lost answer after the commit: the exception's message may hold the name asked for.
-        catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer to renaming to Beet was lost.") : Task.CompletedTask;
+        catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer to renaming to Zq7Rename was lost.") : Task.CompletedTask;
         try
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.RenameVaultAsync(alice.User.Id, alice.UserKey, catalog.Current(id)!, "Beet", Ct));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.RenameVaultAsync(alice.User.Id, alice.UserKey, catalog.Current(id)!, "Zq7Rename", Ct));
         }
         finally
         {
@@ -356,7 +356,7 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         Assert.Null(catalog.Current(id));
         Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
-        Assert.DoesNotContain(log.Lines, line => line.Contains("Beet", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Lines, line => line.Contains("Zq7Rename", StringComparison.Ordinal));
 
         // A refusal as taken is an outcome known: the object stays.
         using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Work" }))
@@ -663,6 +663,60 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
 
         // Another process, which loads the vault from what is stored.
         Assert.Equal([("Garten", true)], await world.Catalog().RecoverAsync(recovery!, "a-new-token-0123456789abcdef", Ct));
+    }
+
+    [Fact]
+    public async Task A_bug_inside_the_rename_is_not_answered_as_not_found()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        // An ArgumentException's subclass comes from a bug, not from a vault that isn't hers.
+        Catalog.MetaFaultAt = point => point == "inside-rename" ? throw new ArgumentNullException("vault") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
+
+            Assert.Equal(HttpStatusCode.InternalServerError, renamed.StatusCode);
+        }
+        finally
+        {
+            Catalog.MetaFaultAt = null;
+        }
+
+        // Not an outcome known: the object is let go and read again.
+        Assert.Null(Catalog.Current(id));
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task A_case_variant_of_the_stored_name_is_a_display_name_until_renamed_back_exactly()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+
+        using (var renamed = await RenameAsync(alice, "Gartenarbeit", "gartenarbeit"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        Assert.Equal(["gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(("Gartenarbeit", "gartenarbeit", null), Fields(await RawMetaAsync(id, vaultKey)));
+        Assert.Equal("gartenarbeit", Catalog.Current(id)!.DisplayName);
+        using (var read = await alice.GetAsync("/api/notes/gartenarbeit/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            Assert.Equal("/gartenarbeit/plan.md", (await RestClient.JsonAsync(read))["path"]!.GetValue<string>());
+        }
+
+        using (var back = await RenameAsync(alice, "gartenarbeit", "Gartenarbeit"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, back.StatusCode);
+        }
+
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+        Assert.Null(Catalog.Current(id)!.DisplayName);
+        Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Gartenarbeit/plan.md"));
     }
 
     [Fact]
