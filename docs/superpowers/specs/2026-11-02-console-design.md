@@ -1,6 +1,6 @@
 # A read-only console in the web app
 
-Date: 2026-11-02. Status: draft for review.
+Date: 2026-11-02. Status: approved by the maintainer.
 
 A page in the web app where a signed-in person types what an agent would send to the `sh` tool, and reads the answer. It looks like a kind of shell without pretending to be bash. It only reads: nothing typed here changes a vault.
 
@@ -64,7 +64,7 @@ Decided:
 - **The prompt has two lines:** the working directory, then `> `. It always shows the full path, the vault included.
 - **Colour:** the vault segment in the accent colour, the rest of the path muted. It must read in the light and the dark theme, and nothing depends on colour alone.
 - **Scrollback:** the path line is repeated only when the directory changed. It stays visible above the input. The `→` line is quiet, and `>` and `→` line up, so the two commands can be compared.
-- **The `→` line** appears for everything that goes to the server, identical to what was typed or not, and can be pasted as it is into a hand-test guide or an `sh` call.
+- **The `→` line** appears for every shell command that goes to the server, identical to what was typed or not, and can be pasted as it is into a hand-test guide or an `sh` call.
 - **The working directory starts at `/`.** A vault is the top directory, so `cd /Gartenarbeit` is how one is chosen; there is no separate command.
 - **Plain DOM:** an input and a list of output. No terminal emulator such as xterm.js, so escape sequences in a note can't do anything.
 
