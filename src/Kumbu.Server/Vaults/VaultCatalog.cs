@@ -1583,9 +1583,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
     /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
-    /// under the new key, from the name its owner sees it under in the vault's meta, and a <c>member</c> slot the alias's hash, from the alias
-    /// opened with the old key, and its alias key sealed under the new one (collab design §2.3); its <c>Wrapped</c> is
-    /// wrapped to the member's public key and stays (the private key is sealed again with the user document). Writes nothing. A slot that doesn't open is skipped and
+    /// under the new key, from the vault's shown name (its display name, else its name), and a <c>member</c> slot the
+    /// alias's hash, from the alias opened with the old key, and its alias key sealed under the new one (collab design
+    /// §2.3); its <c>Wrapped</c> is wrapped to the member's public key and stays (the private key is sealed again with the
+    /// user document). Writes nothing. A slot that doesn't open is skipped and
     /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
     /// logged; one without a vault document is an orphan of a creation that failed half way, to be deleted if older
     /// than <see cref="OrphanGrace"/>, else <see cref="Accounts.RotationConflictException"/>: it may belong to a
@@ -1595,6 +1596,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     internal static async Task<PreparedUserSlots> PrepareUserSlotsAsync(
         IMongoDatabase db, string userId, byte[] oldUserKey, byte[] newUserKey, DateTime now, ILogger log, CancellationToken ct)
     {
+        // The slots before the vault documents, which makes OldNameId sound: a rename between the two reads leaves the old
+        // hash in OldNameId, and apply conflicts; the other way round, a new hash could go with an old meta.
         var slots = await db.GetCollection<SlotDocument>("slots").Find(Builders<SlotDocument>.Filter.Eq(s => s.Lookup, UserLookup(oldUserKey, userId))).ToListAsync(ct);
         var ids = slots.Select(s => s.Vault).Distinct().ToList();
         var vaults = (await db.GetCollection<VaultDocument>("vaults").Find(Builders<VaultDocument>.Filter.In(v => v.Id, ids)).ToListAsync(ct)).ToDictionary(v => v.Id);
@@ -1663,6 +1666,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             {
                 OldAlias = slot.Kind == SlotDocument.Member ? slot.Alias : null,
                 OldNameId = slot.Kind == SlotDocument.User ? slot.NameId : null,
+                CheckNameId = slot.Kind == SlotDocument.User,
                 NewAliasKey = aliasKey,
             });
         }

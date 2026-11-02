@@ -690,6 +690,22 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_vault_rename_between_prepare_and_apply_conflicts_on_a_slot_without_a_name_hash()
+    {
+        var bob = await AccountAsync("Gartenarbeit");
+        var vaultId = bob.Vaults["Gartenarbeit"];
+        // As a rotation leaves a slot whose meta didn't open: without its name hash.
+        await Slots.UpdateOneAsync(s => s.Vault == vaultId && s.Kind == SlotDocument.User, Builders<SlotDocument>.Update.Unset(s => s.NameId), cancellationToken: Ct);
+        var prepared = await Rotation().PrepareAsync(bob.User, bob.Key, Password, null, null, Ct);
+
+        var vault = (await Catalog().OpenForUserAsync(bob.User.Id, bob.Key, Ct)).Single(v => v.Id == vaultId).Vault;
+        await Catalog().RenameVaultAsync(bob.User.Id, bob.Key, vault, "Garten", Ct);
+
+        await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
+        Assert.Equal(vaultId, await Catalog().FindForUserAsync(bob.User.Id, bob.Key, "Garten", Ct));
+    }
+
+    [Fact]
     public async Task A_rotation_reseals_a_rekey_notice()
     {
         var (alice, bob, vaultId, _) = await SharedByAliceAsync();

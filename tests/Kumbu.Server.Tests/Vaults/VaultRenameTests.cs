@@ -589,16 +589,18 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_concurrent_provider_change_is_kept()
+    public async Task A_rename_keeps_a_provider_written_meanwhile()
     {
         await using var api = RemoteApi();
         var catalog = api.Services.GetRequiredService<VaultCatalog>();
         var (alice, id, vaultKey, _) = await AliceAsync(api);
-        var written = 0;
+        var (written, runs) = (0, 0);
         // A direct write, outside the rename's session: the rename holds the gate a real provider change would wait on.
         catalog.MetaFaultAt = async point =>
         {
-            if (point != "inside-rename" || Interlocked.Exchange(ref written, 1) == 1) return;
+            if (point != "inside-rename") return;
+            Interlocked.Increment(ref runs);
+            if (Interlocked.Exchange(ref written, 1) == 1) return;
             var c = catalog.Current(id)!;
             await WriteMetaAsync(id, c.SealMeta(c.OpenMeta(await StoredMetaAsync(id)) with { Embeddings = "remote" }));
         };
@@ -611,7 +613,8 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
             catalog.MetaFaultAt = null;
         }
 
-        Assert.Equal(1, written);
+        // The write conflicted, and the transaction ran again from the new bytes.
+        Assert.Equal((1, 2), (written, runs));
         Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
     }
 
