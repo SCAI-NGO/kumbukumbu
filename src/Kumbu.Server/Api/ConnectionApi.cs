@@ -173,10 +173,10 @@ public static class ConnectionApi
         // A meta that doesn't open with the user key was changed in the database: nothing to show or to authorise.
         if (connections.OpenMeta(caller.User!, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
 
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
+        var open = await caller.OpenVaultsAsync(ct);
         var view = new ConsentConnectionView(
             meta.Name,
-            OAuthTokens.Rights(doc, meta, request.ReadOnly).Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+            Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), open),
             doc.ExpiresAt,
             meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null);
         var renewal = doc.AuthorisedAt is not null || meta.Client is not null;
@@ -194,39 +194,48 @@ public static class ConnectionApi
 
     private static async Task<Ok<ConnectionView[]>> ListAsync(HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
+        var open = await caller.OpenVaultsAsync(ct);
         var list = await connections.ListAsync(caller.User!, caller.UserKey!, ct);
         var origin = OAuthUrls.Origin(http, options.Value.PublicUrl);
-        return TypedResults.Ok(list.Select(c => View(c, names, origin)).ToArray());
+        return TypedResults.Ok(list.Select(c => View(c, open, origin)).ToArray());
     }
 
     private static async Task<Created<ConnectionView>> CreateAsync(
         CreateConnectionRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var open = await caller.OpenVaultsAsync(ct);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
         var info = await connections.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
-        return TypedResults.Created($"/api/connections/{info.Id}", View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
+        return TypedResults.Created($"/api/connections/{info.Id}", View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<Ok<ConnectionView>> SetVaultsAsync(
         string id, SetConnectionVaultsRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var open = await caller.OpenVaultsAsync(ct);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
         var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
-        return TypedResults.Ok(View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
+        return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");
 
-    /// <summary>A vault the connection was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
-    private static ConnectionView View(ConnectionInfo info, Dictionary<string, string> names, string origin) => new(
+    /// <summary>The rights as the connection will act: by the caller's name for each vault, and on a shared vault no
+    /// higher than her role (collab design §3.3). A vault that no longer opens for the user isn't listed: it has no name to show.</summary>
+    private static Dictionary<string, string> Shown(IEnumerable<KeyValuePair<string, KeyRight>> rights, IReadOnlyList<VaultAccess> open)
+    {
+        var byId = open.ToDictionary(v => v.Id, StringComparer.Ordinal);
+        return rights.Where(v => byId.ContainsKey(v.Key)).ToDictionary(
+            v => byId[v.Key].Name,
+            v => KeyRights.ToText(byId[v.Key].Membership is { } membership ? VaultCatalog.Capped(v.Value, membership) : v.Value));
+    }
+
+    private static ConnectionView View(ConnectionInfo info, IReadOnlyList<VaultAccess> open, string origin) => new(
         info.Id,
         info.Name,
         OAuthUrls.Resource(origin, info.Id),
-        info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+        Shown(info.Vaults, open),
         info.CreatedAt,
         info.LastUsedAt,
         info.ExpiresAt,

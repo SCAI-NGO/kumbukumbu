@@ -2,6 +2,8 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Kumbu.Server.Tests.Api;
@@ -66,6 +68,34 @@ public sealed class ConnectionApiTests(KumbuAppFactory app)
         Assert.Equal("revoked", revoked["state"]!.GetValue<string>());
         Assert.Equal("revoked", revoked["reason"]!.GetValue<string>());
         Assert.NotNull(revoked["revokedAt"]?.GetValue<DateTime>());
+    }
+
+    [Fact]
+    public async Task A_members_connection_shows_rights_capped_by_her_role()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api);
+        await alice.ShareWithAsync(bob, "Garten", MemberRole.Read);
+        using var own = await bob.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Work" });
+        Assert.Equal(HttpStatusCode.Created, own.StatusCode);
+
+        using var created = await bob.SendAsync(
+            HttpMethod.Post, "/api/connections", new { name = "phone", vaults = new Dictionary<string, string> { ["Garten"] = "write", ["Work"] = "write" } });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var json = await JsonAsync(created);
+        var id = json["id"]!.GetValue<string>();
+        Assert.Equal("read", json["vaults"]!["Garten"]!.GetValue<string>());
+        Assert.Equal("write", json["vaults"]!["Work"]!.GetValue<string>());
+
+        using var list = await bob.GetAsync("/api/connections");
+        var listed = Assert.Single((await JsonAsync(list)).AsArray())!;
+        Assert.Equal("read", listed["vaults"]!["Garten"]!.GetValue<string>());
+        Assert.Equal("write", listed["vaults"]!["Work"]!.GetValue<string>());
+
+        using var changed = await bob.SendAsync(
+            HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Garten"] = "write" } });
+        Assert.Equal("read", (await JsonAsync(changed))["vaults"]!["Garten"]!.GetValue<string>());
     }
 
     [Fact]
