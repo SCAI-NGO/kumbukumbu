@@ -272,6 +272,26 @@ public class AttachmentWriterTests
     }
 
     [Fact]
+    public async Task A_write_after_a_restore_from_trash_keeps_the_restored_state_in_history()
+    {
+        // x.png has a history, so the next write in its changeset coalesces.
+        var writer = Writer();
+        var v1 = await Write(writer, "/Work/x.png", Png(1), null);
+        var v2 = await Write(writer, "/Work/x.png", Png(2), v1);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await writer.RemoveAsync("/Work/x.png", Ct);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await writer.RestoreAsync("/Work/x.png", null, Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        var v3 = await Write(writer, "/Work/x.png", Png(3), v2);
+
+        var attachment = await Get("/Work/x.png");
+        Assert.Equal(v3, attachment.Version);
+        Assert.Equal([v2, v1], attachment.History.Select(h => h.State.Version));
+    }
+
+    [Fact]
     public async Task Restore_from_history_makes_an_earlier_version_current_and_keeps_the_replaced_one()
     {
         var writer = Writer();

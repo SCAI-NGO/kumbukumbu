@@ -28,7 +28,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
     /// unless it belongs to the same changeset: then it was an intermediate step of the same session.
     /// The state a note was created with is the exception, a version of its own even within the changeset (a
     /// conflict copy's first state is the evidence of the conflict).
-    /// Without a changeset (a restore), the new state joins none, so it stays a version of its own.
+    /// Without a changeset (a restore of a version or a checkpoint), the new state joins none, so it stays a version of its own.
     /// </summary>
     public static StoredNote Next(
         StoredNote current, string content, string writer, WriterRef reference, DateTime now, Changeset? changeset = null, bool keepCurrent = false)
@@ -47,6 +47,14 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             Ref = reference,
         };
     }
+
+    /// <summary>
+    /// A note back from the trash, in the writer's <paramref name="changeset"/>. Its state also goes on top of its
+    /// history, as a restore keeps the state it replaces: a later write in the changeset coalesces with it, and the
+    /// restored text, no longer in the trash, would be lost.
+    /// </summary>
+    public static StoredNote Restored(StoredNote trashed, string writer, WriterRef reference, DateTime now, Changeset changeset) =>
+        Next(trashed, trashed.Content, writer, reference, now, changeset, keepCurrent: true);
 
     /// <summary>
     /// The rule of <see cref="Next"/> for any kind of history (notes', attachments'): the history after a write in

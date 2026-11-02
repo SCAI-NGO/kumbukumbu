@@ -776,7 +776,7 @@ public sealed class EncryptedNoteStore(
             if (latest.Trashed is null) return null;
 
             var note = latest.Trashed.Note;
-            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = changeset, Ref = reference };
+            restored = NoteWriter.Restored(note, writer, reference, at, changeset);
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(restored.Ref);
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;

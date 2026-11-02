@@ -256,7 +256,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             .FirstOrDefault();
         if (latest is null || _notes.ContainsKey(path)) return Task.FromResult<StoredNote?>(null);
 
-        var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = changeset, Ref = reference };
+        var restored = NoteWriter.Restored(latest.Note, writer, reference, at, changeset);
         _trash.Remove(latest);
         _notes[path] = restored;
         return Task.FromResult<StoredNote?>(restored);

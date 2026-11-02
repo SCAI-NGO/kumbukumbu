@@ -21,7 +21,7 @@ public static class Writers
 /// <summary>
 /// Writes by one writer close together in time (concept §4): each note usually gets one version per changeset,
 /// whichever tool wrote it (a write that keeps the current state, such as an upload's, can leave two). A state without
-/// a changeset (a restore, a seed) never joins one.
+/// a changeset (a restore of a version or a checkpoint, a seed) never joins one.
 /// </summary>
 public sealed record Changeset(string Id, DateTime Started)
 {
