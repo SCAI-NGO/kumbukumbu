@@ -150,7 +150,7 @@ public static class AccountApi
         var open = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).AllowAnonymous();
         open.MapPost("/session", SignInAsync).Errors(400, 401, 403, 429);
         // POST with the code in the body, never in the path: request lines end up in logs.
-        open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404);
+        open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404, 429);
         open.MapPost("/join", JoinAsync).Errors(400, 403, 409, 429);
         open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 409, 429);
 
@@ -181,8 +181,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
-        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, ILoggerFactory logs,
-        CancellationToken ct)
+        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
+        ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -195,7 +195,12 @@ public static class AccountApi
         var (user, userKey, readAt) = signedIn;
 
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
-        if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
+        // Its codes go with it, whoever's session it was.
+        if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old) && await sessions.EndAsync(old, ct) is { } replaced)
+        {
+            pairings.DropAll(replaced);
+        }
+
         SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct, body.Remember), body.Remember);
         KumbuMetrics.SignedIn(KumbuMetrics.Outcome.Success);
         if (body.Remember) Log(logs).LogInformation("User {UserId} signed in and is kept signed in on this device", user.Id);
@@ -205,8 +210,10 @@ public static class AccountApi
         return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true));
     }
 
-    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(PeekInvitationRequest body, Invitations invitations, CancellationToken ct)
+    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
+        PeekInvitationRequest body, HttpContext http, Invitations invitations, AccountLimits limits, CancellationToken ct)
     {
+        if (limits.AccountInvitationPeek(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var info = await invitations.PeekAsync(body.Code, ct) ?? throw ApiErrors.NotFound("This is not a valid invitation.");
         return TypedResults.Ok(new InvitationPeekView(info.Role, info.ExpiresAt, info.Valid, info.Valid ? null : StateText(info.State)));
     }
@@ -570,14 +577,16 @@ public static class AccountApi
     }
 
     /// <summary>The counterpart of <see cref="PasswordGivenAsync"/>: a wrong one counts against the session, which
-    /// ends if it is remembered and this is the fifth in a row. Called by <see cref="ApiErrors.Filter"/> for every
-    /// <see cref="WrongPasswordException"/>, so a check only has to throw that.</summary>
+    /// ends if it is remembered and this is the fifth in a row or the tenth in all; the user's open pairing codes go
+    /// with it. Called by <see cref="ApiErrors.Filter"/> for every <see cref="WrongPasswordException"/>, so a check
+    /// only has to throw that.</summary>
     internal static async Task PasswordWrongAsync(HttpContext http, CancellationToken ct)
     {
         if (!http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var secret)) return;
         if (await http.RequestServices.GetRequiredService<Sessions>().PasswordWrongAsync(secret, ct) is { } userId)
         {
-            Log(http.RequestServices.GetRequiredService<ILoggerFactory>()).LogInformation("Ended a remembered session of user {UserId} after 5 wrong passwords", userId);
+            http.RequestServices.GetRequiredService<Pairings>().DropAll(userId);
+            Log(http.RequestServices.GetRequiredService<ILoggerFactory>()).LogInformation("Ended a remembered session of user {UserId} after too many wrong passwords", userId);
         }
     }
 }

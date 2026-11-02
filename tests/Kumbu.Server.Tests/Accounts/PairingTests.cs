@@ -35,9 +35,14 @@ public sealed class PairingTests(MongoFixture fixture)
 
     private UserCatalog Users() => new(_db, _kdf, Keys(), Connections(), _time, NullLogger<UserCatalog>.Instance, Rotation());
 
-    private Pairings Pairings() => _pairings ??= new(Keys(), _time, NullLogger<Pairings>.Instance);
+    private Sessions? _sessions;
 
-    private sealed record Account(User User, byte[] Key, DateTime ReadAt, string VaultId);
+    private Sessions Sessions() => _sessions ??= new(_db, _time);
+
+    private Pairings Pairings() => _pairings ??= new(Keys(), Sessions(), _time, NullLogger<Pairings>.Instance);
+
+    /// <summary><c>Secret</c>: the cookie of the session the codes are made from; <c>Session</c>: its subject.</summary>
+    private sealed record Account(User User, byte[] Key, DateTime ReadAt, string VaultId, string Secret, string Session);
 
     private async Task<Account> AccountAsync(string vault = "Work")
     {
@@ -48,12 +53,13 @@ public sealed class PairingTests(MongoFixture fixture)
         _time.Advance(TimeSpan.FromSeconds(1));
         var (user, key, readAt) = (await users.TrySignInAsync(username, Password, Ct))!.Value;
         _time.Advance(TimeSpan.FromSeconds(1));
+        var secret = await Sessions().StartAsync(user, key, readAt, Ct);
         var id = (await Catalog().CreateForUserAsync(vault, user.Id, key, Ct)).Id;
-        return new Account(user, key, readAt, id);
+        return new Account(user, key, readAt, id, secret, Kumbu.Server.Accounts.Sessions.SubjectOf(secret)!);
     }
 
     private PairingCode Code(Account a, int? expiresInDays = null, string vault = "Work") =>
-        Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.VaultId, vault, expiresInDays);
+        Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.Session, a.VaultId, vault, expiresInDays);
 
     [Fact]
     public async Task Codes_use_crockford_without_I_L_O_U()
@@ -206,7 +212,7 @@ public sealed class PairingTests(MongoFixture fixture)
     {
         var a = await AccountAsync();
         var copy = (byte[])a.Key.Clone();
-        Pairings().Create(a.User, copy, a.ReadAt, a.VaultId, "Work", null);
+        Pairings().Create(a.User, copy, a.ReadAt, a.Session, a.VaultId, "Work", null);
 
         _time.Advance(Kumbu.Server.Accounts.Pairings.Lifetime + TimeSpan.FromMinutes(1));
 
@@ -220,7 +226,7 @@ public sealed class PairingTests(MongoFixture fixture)
         var a = await AccountAsync();
         var b = await AccountAsync();
         var copy = (byte[])a.Key.Clone();
-        var mine = Pairings().Create(a.User, copy, a.ReadAt, a.VaultId, "Work", null);
+        var mine = Pairings().Create(a.User, copy, a.ReadAt, a.Session, a.VaultId, "Work", null);
         var theirs = Code(b);
 
         Pairings().DropAll(a.User.Id);
@@ -231,6 +237,62 @@ public sealed class PairingTests(MongoFixture fixture)
         Assert.Null(await Pairings().RedeemAsync(mine.Code, "Laptop", Ct));
     }
 
+    /// <summary>
+    /// A code is redeemed only while the session that made it is alive (<see cref="Sessions.AliveAsync"/>), else it
+    /// dies with its copy of the user key. The paths that end a session on purpose drop the user's codes at once
+    /// (<c>PairingApiTests</c>); these are the ones that only time out, which nothing announces. Making a code here
+    /// doesn't touch the session, so it can lapse while the code is young.
+    /// </summary>
+    [Theory]
+    [InlineData("idle")]
+    [InlineData("absolute")]
+    public async Task A_pairing_code_dies_with_its_session(string how)
+    {
+        var a = await AccountAsync();
+        var copy = (byte[])a.Key.Clone();
+        PairingCode code;
+        if (how == "idle")
+        {
+            _time.Advance(Kumbu.Server.Accounts.Sessions.IdleTimeout - TimeSpan.FromMinutes(5));
+            code = Pairings().Create(a.User, copy, a.ReadAt, a.Session, a.VaultId, "Work", null);
+            _time.Advance(TimeSpan.FromMinutes(6));
+        }
+        else
+        {
+            // Used every 25 minutes, so it never idles, up to 5 minutes before its 12 hours.
+            for (var used = TimeSpan.Zero; used < Kumbu.Server.Accounts.Sessions.AbsoluteTimeout - TimeSpan.FromMinutes(30); used += TimeSpan.FromMinutes(25))
+            {
+                _time.Advance(TimeSpan.FromMinutes(25));
+                Assert.NotNull(await Sessions().ResolveAsync(a.Secret, Ct));
+            }
+
+            _time.SetUtcNow(a.ReadAt + Kumbu.Server.Accounts.Sessions.AbsoluteTimeout - TimeSpan.FromMinutes(5));
+            Assert.NotNull(await Sessions().ResolveAsync(a.Secret, Ct));
+            code = Pairings().Create(a.User, copy, a.ReadAt, a.Session, a.VaultId, "Work", null);
+            _time.Advance(TimeSpan.FromMinutes(6));
+        }
+
+        Assert.True(Pairings().IsOpen(code.Code));
+        Assert.Null(await Sessions().AliveAsync(a.Session, Ct));
+
+        Assert.Null(await Pairings().RedeemAsync(code.Code, "Laptop", Ct));
+        Assert.Equal(0, Pairings().Count);
+        Assert.All(copy, b => Assert.Equal(0, b));
+        Assert.Empty(await Keys().ListAsync(a.User, a.Key, Ct));
+    }
+
+    [Fact]
+    public async Task A_code_redeems_while_its_session_lives_though_another_of_the_user_ended()
+    {
+        var a = await AccountAsync();
+        var other = await Sessions().StartAsync(a.User, a.Key, a.ReadAt, Ct);
+        var code = Code(a);
+
+        await Sessions().EndAsync(other, Ct);
+
+        Assert.NotNull(await Pairings().RedeemAsync(code.Code, "Laptop", Ct));
+    }
+
     [Fact]
     public async Task A_long_vault_name_pairs_with_a_long_device_name()
     {
@@ -238,8 +300,8 @@ public sealed class PairingTests(MongoFixture fixture)
         var a = await AccountAsync(vault);
         var device = new string('D', 32);
 
-        var first = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.VaultId, vault, null).Code, device, Ct);
-        var second = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.VaultId, vault, null).Code, device, Ct);
+        var first = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.Session, a.VaultId, vault, null).Code, device, Ct);
+        var second = await Pairings().RedeemAsync(Pairings().Create(a.User, (byte[])a.Key.Clone(), a.ReadAt, a.Session, a.VaultId, vault, null).Code, device, Ct);
 
         Assert.NotNull(first);
         Assert.NotNull(second);

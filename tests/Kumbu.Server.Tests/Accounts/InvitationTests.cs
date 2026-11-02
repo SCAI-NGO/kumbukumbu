@@ -220,6 +220,62 @@ public sealed class InvitationTests(MongoFixture fixture)
         Assert.Equal("lea2", user.Username);
     }
 
+    /// <summary>
+    /// The clock of a user catalogue that holds its first reading, the account's creation after the invitation is
+    /// claimed, until <see cref="Release"/>: so a revocation can land while a redeem is in flight.
+    /// </summary>
+    private sealed class HoldingTime(TimeProvider inner) : TimeProvider
+    {
+        private readonly ManualResetEventSlim _released = new();
+        private int _held;
+
+        public TaskCompletionSource Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _released.Set();
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            if (Interlocked.Exchange(ref _held, 1) == 0)
+            {
+                Reached.SetResult();
+                _released.Wait(TimeSpan.FromSeconds(30));
+            }
+
+            return inner.GetUtcNow();
+        }
+    }
+
+    [Fact]
+    public async Task Revoking_an_invitation_in_flight_sticks()
+    {
+        var admin = await AdminAsync();
+        await Users().CreateAsync("lea", Password, Roles.User, Ct);
+        var (code, info) = await Invitations().CreateAsync(admin, Roles.User, null, null, Ct);
+        var holding = new HoldingTime(_time);
+        var held = new Invitations(
+            _db, new ServerSecret(_db), new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(1024, 1, 1)), Keys(), new Connections(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<Connections>.Instance), holding, NullLogger<UserCatalog>.Instance), _time, NullLogger<Invitations>.Instance);
+
+        // Claimed, and the account not yet made: a taken username will give the claim back.
+        var redeem = Task.Run(() => held.RedeemAsync(code, "Lea", Password, Ct), Ct);
+        await holding.Reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        bool revoked;
+        try
+        {
+            revoked = await Invitations().RevokeAsync(admin, info.Id, Ct);
+        }
+        finally
+        {
+            holding.Release();
+        }
+
+        await Assert.ThrowsAsync<UsernameTakenException>(() => redeem);
+        Assert.True(revoked);
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(code, Ct))!.State);
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "lea2", Password, Ct));
+        Assert.Equal(InvitationState.Revoked, refused.State);
+        Assert.Null(await Users().TrySignInAsync("lea2", Password, Ct));
+    }
+
     /// <summary>Throws on the "Created user" log line, i.e. right after the user is inserted: a fault there
     /// (a dropped connection, a cancelled request) must not hand the invitation out a second time.</summary>
     private sealed class FailAfterInsert : Microsoft.Extensions.Logging.ILogger<UserCatalog>

@@ -124,7 +124,8 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status400BadRequest, Sentence(e));
         }
-        // Counted before the answer, whatever happens to the request now: a remembered session ends at the fifth in a row.
+        // Counted before the answer, whatever happens to the request now: a remembered session ends at the fifth in a row
+        // or the tenth in all.
         catch (WrongPasswordException e)
         {
             await AccountApi.PasswordWrongAsync(context.HttpContext, CancellationToken.None);

@@ -201,7 +201,8 @@ public static class Security
 /// password change or of a new recovery key 5 per minute per username (together). Every attempt counts,
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
-/// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL.
+/// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL. Peeking at an
+/// account invitation, 20 per minute per network.
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
@@ -248,6 +249,12 @@ public sealed class AccountLimits : IDisposable
     public const int InvitePeeksPerNetwork = 60;
 
     /// <summary>
+    /// Peeks at an account invitation (the join page's), a minute per network: anonymous, so there is no account to
+    /// count. A code is 256 random bits, so this bounds the work a stranger makes the server do, not guessing.
+    /// </summary>
+    public const int AccountInvitationPeeksPerNetwork = 20;
+
+    /// <summary>
     /// Fetches of a client's metadata document that an anonymous <c>/oauth/authorize</c> starts, a minute per address
     /// and per host of the <c>client_id</c> URL: each is a request to an address a stranger picks. A document in the
     /// cache needs no fetch and isn't counted, so a known app keeps working while a host is held back.
@@ -272,6 +279,7 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
     private readonly PartitionedRateLimiter<string> _invitePeekByAccount;
     private readonly PartitionedRateLimiter<string> _invitePeekByNetwork;
+    private readonly PartitionedRateLimiter<string> _accountInvitationPeekByNetwork = Limiter(AccountInvitationPeeksPerNetwork);
     private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
     private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
 
@@ -313,6 +321,9 @@ public sealed class AccountLimits : IDisposable
     /// limit uses up nothing of its network's.</summary>
     public TimeSpan? InvitePeek(HttpContext context, string userId) =>
         Take(_invitePeekByAccount, userId) ?? Take(_invitePeekByNetwork, Network(context));
+
+    /// <summary>A peek at an account invitation, counted per network.</summary>
+    public TimeSpan? AccountInvitationPeek(HttpContext context) => Take(_accountInvitationPeekByNetwork, Network(context));
 
     /// <summary>A fetch of a client's metadata document from <paramref name="host"/>: the address is asked first, so
     /// one over its own limit uses up nothing of the host's.</summary>
@@ -394,6 +405,7 @@ public sealed class AccountLimits : IDisposable
         _historyScanByUser.Dispose();
         _invitePeekByAccount.Dispose();
         _invitePeekByNetwork.Dispose();
+        _accountInvitationPeekByNetwork.Dispose();
         _metadataFetchByAddress.Dispose();
         _metadataFetchByHost.Dispose();
     }
