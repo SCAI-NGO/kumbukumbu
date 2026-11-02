@@ -167,6 +167,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["PUT /api/account/preferences"] = "turning the download password off needs the password; on is safe",
         ["POST /api/vaults"] = "a new empty vault reaches nothing new",
         ["PUT /api/vaults/{vault}/embeddings"] = "deliberate exception, security-architecture.md",
+        ["PUT /api/vaults/{vault}/name"] = "the owner's name for her vault: undone by renaming again, it removes no access (rename spec §1.4)",
         ["GET /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/oauth/requests/{id}/decision"] = GrantingInline,
