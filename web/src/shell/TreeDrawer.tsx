@@ -476,7 +476,13 @@ export default function TreeDrawer(props: {
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />
       )}
       {choosingEmbeddings && activeVault && embeddings && providers.data && (
-        <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
+        <EmbeddingsDialog
+          vault={activeVault}
+          current={embeddings}
+          providers={providers.data}
+          members={Number(active?.members ?? 0)}
+          onClose={() => setChoosingEmbeddings(false)}
+        />
       )}
     </>
   );

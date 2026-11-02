@@ -273,6 +273,53 @@ describe("the shell", () => {
     expect(dialog).toHaveTextContent("TensorX (now, default on this server)");
   });
 
+  it("tells the owner of a shared vault that its members' notes go too, and that they will be told", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", level: "owner", shared: true, members: 2 }]),
+      "GET /api/embeddings": () => json(200, [internalProvider, tensorx]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+    expect(dialog).not.toHaveTextContent("shared with");
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /TensorX/ }));
+    expect(within(dialog).getByRole("note")).toHaveTextContent("Work is shared with 2 people. Their notes, too, go to TensorX from now on. They will be told.");
+    expect(within(dialog).getByRole("button", { name: "Send to TensorX" })).toHaveAccessibleDescription(expect.stringContaining("Work is shared with 2 people."));
+  });
+
+  it("says the same when a shared vault goes back to this server", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "tensorx", level: "owner", shared: true, members: 1 }]),
+      "GET /api/embeddings": () => json(200, [internalProvider, tensorx]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+    await waitFor(() => expect(within(dialog).getByRole("radio", { name: /TensorX/ })).toBeChecked());
+    await userEvent.click(within(dialog).getByRole("radio", { name: /On this server/ }));
+    expect(within(dialog).getByRole("note")).toHaveTextContent("Work is shared with 1 person. Their notes, too, are embedded on this server again. They will be told.");
+  });
+
+  it("says nothing of members for a vault shared with nobody", async () => {
+    signedInApi({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal", level: "owner", shared: false, members: 0 }]),
+      "GET /api/embeddings": () => json(200, [internalProvider, tensorx]),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(await within(drawer()).findByRole("button", { name: "Actions for Work" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Search by meaning…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Search by meaning in Work" });
+    await userEvent.click(within(dialog).getByRole("radio", { name: /TensorX/ }));
+    expect(within(dialog).getByRole("note")).toHaveTextContent("The text of every section in Work is sent to TensorX");
+    expect(within(dialog).getByRole("note")).not.toHaveTextContent("shared with");
+  });
+
   it("shows why a choice failed and keeps the dialog open", async () => {
     signedInApi({
       "GET /api/vaults": () => json(200, [{ name: "Work", notes: 6, embeddings: "internal" }]),

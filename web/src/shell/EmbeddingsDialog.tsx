@@ -13,16 +13,20 @@ const sentence = (text: string) => text.replace(/[.\s]+$/, "") + ".";
 /**
  * Where a vault's search by meaning runs: on this server, or at one of the external providers the admin set up. Before
  * an external one is chosen, the dialog says in plain words what that sends, to whom, and that their promise is theirs.
+ * A shared vault's members wrote notes in it too, which go along, either way (collab concept §8): the owner is told
+ * how many share it, and that they will be told.
  */
 export default function EmbeddingsDialog({
   vault,
   current,
   providers,
+  members = 0,
   onClose,
 }: {
   vault: string;
   current: string;
   providers: EmbeddingProvider[];
+  members?: number;
   onClose(): void;
 }) {
   const id = useId();
@@ -31,6 +35,7 @@ export default function EmbeddingsDialog({
   const [chosen, setChosen] = useState(current);
   const picked = providers.find((p) => p.name === chosen);
   const before = providers.find((p) => p.name === current);
+  const sharedWith = members > 0 && `${vault} is shared with ${members === 1 ? "1 person" : `${members} people`}.`;
   const save = useMutation({
     mutationFn: () => call(api.PUT("/api/vaults/{vault}/embeddings", { params: { path: { vault } }, body: { provider: chosen } })),
     onSuccess: async () => {
@@ -103,6 +108,11 @@ export default function EmbeddingsDialog({
               make it or an agent with a key for {vault} does.
             </p>
             <p>It is sent encrypted on the way, but {picked.label} reads it in order to answer.</p>
+            {sharedWith && (
+              <p>
+                {sharedWith} Their notes, too, go to {picked.label} from now on. They will be told.
+              </p>
+            )}
             {picked.description && <p>What {picked.label} promises: {sentence(picked.description)}</p>}
             <p>
               That promise is theirs: Kumbu² can't check or enforce what happens to your text there. The notes of your other vaults are not sent; only
@@ -113,6 +123,7 @@ export default function EmbeddingsDialog({
         {!picked?.external && chosen !== current && before?.external && (
           <p id={`${id}-warning`} role="note" className="rounded-[12px] border border-line bg-surface-2 p-3 text-text-body">
             The notes are embedded on this server again, and nothing more is sent to {before.label}. What was sent before stays under their terms.
+            {sharedWith && ` ${sharedWith} Their notes, too, are embedded on this server again. They will be told.`}
           </p>
         )}
 
