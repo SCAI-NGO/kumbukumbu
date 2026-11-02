@@ -68,6 +68,13 @@ public sealed class UnlockedVault
 
     public string Name { get; }
 
+    /// <summary>The name its owner renamed the vault to (rename spec §1.2), or null; <see cref="Name"/>, in every stored
+    /// path, never changes. Set under <see cref="Gate"/>.</summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>The name the owner and her credentials see the vault under.</summary>
+    public string Shown => DisplayName ?? Name;
+
     /// <summary>Writes of the vault, one at a time.</summary>
     public SemaphoreSlim Gate { get; }
 
@@ -165,7 +172,11 @@ public sealed class UnlockedVault
 
     /// <summary>The vault's name and the embedding provider its owner chose. An explicit <c>internal</c> is kept as
     /// such, so that the vault stays on this server whatever the instance's default.</summary>
-    public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider));
+    public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider, DisplayName));
+
+    internal VaultMeta OpenMeta(byte[] blob) => Open<VaultMeta>($"vault:{Id}", blob);
+
+    internal byte[] SealMeta(VaultMeta meta) => Seal($"vault:{Id}", meta);
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>
         Seal($"trash:{Id}:{docId}", new TrashPayload(
@@ -583,10 +594,16 @@ internal sealed record MovePayload(
 
 /// <remarks>Embeddings: the embedding provider the owner chose; missing (vaults before the overnight round, or never
 /// chosen) or null is the instance's default (<see cref="EmbeddingsOptions.Default"/>). Up to 0.2.2 an explicit
-/// <c>internal</c> was stored as null too.</remarks>
+/// <c>internal</c> was stored as null too. DisplayName: what callers see the vault as, once its owner renamed it; missing
+/// otherwise. Name, in every stored path, never changes after creation.</remarks>
 internal sealed record VaultMeta(
     string Name,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Embeddings = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DisplayName = null)
+{
+    [JsonIgnore]
+    public string Shown => DisplayName ?? Name;
+}
 
 internal sealed record EmbeddedChunkPayload(int StartLine, string Hash, string Vector);
 

@@ -373,8 +373,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         {
             var vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
             var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
-            // The name hash is case-insensitive; the name asked for must match exactly.
-            return string.Equals(meta.Name, name, StringComparison.Ordinal) ? doc.Id : null;
+            // The name hash is case-insensitive; the name asked for must match exactly, as the owner sees it.
+            return string.Equals(meta.Shown, name, StringComparison.Ordinal) ? doc.Id : null;
         }
         catch (Exception e) when (e is CryptographicException or JsonException)
         {
@@ -1054,6 +1054,121 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>For tests, as <see cref="RekeyFaultAt"/>: a point between reading a vault's meta and writing it.</summary>
+    internal Func<string, Task>? MetaFaultAt { get; set; }
+
+    /// <summary>
+    /// The owner renames her vault (rename spec §1.4): in one transaction her user slot's <c>nameId</c>, whose unique index
+    /// refuses a name she already uses (<see cref="VaultNameTakenException"/>), and the meta's <c>DisplayName</c>. The stored
+    /// name stays, in every path. Back to the stored name, the display name goes. Under the vault's gate, as a provider
+    /// change is. <see cref="VaultBusyException"/> while the vault is re-keyed, <see cref="ArgumentException"/> if she has
+    /// no user slot on it.
+    /// </summary>
+    internal async Task RenameVaultAsync(string userId, byte[] userKey, UnlockedVault vault, string newName, CancellationToken ct)
+    {
+        await EnsureReadyAsync(ct);
+        await RequireNoneRekeyingAsync([vault.Id], ct);
+        CheckWritable(vault);
+        await vault.Gate.WaitAsync(ct);
+        var gateHeld = true;
+        try
+        {
+            CheckWritable(vault);
+            var f = Builders<SlotDocument>.Filter;
+            string? display = null;
+            using var session = await StartSessionAsync(ct);
+            try
+            {
+                await session.WithTransactionAsync(
+                    async (s, token) =>
+                    {
+                        var slot = await Slots.Find(s, f.Eq(x => x.Kind, SlotDocument.User) & f.Eq(x => x.Vault, vault.Id) & f.Eq(x => x.Lookup, UserLookup(userKey, userId))).FirstOrDefaultAsync(token)
+                            ?? throw new ArgumentException("You have no such vault.", nameof(vault));
+                        var doc = await Vaults.Find(s, v => v.Id == vault.Id).FirstOrDefaultAsync(token) ?? throw new VaultDeletedException();
+                        if (doc.RekeyStartedAt is not null) throw VaultBusyException.Being();
+                        // The stored meta, not this object's idea of it: a vault that follows the admin's default provider goes on following it.
+                        var meta = OpenStoredMeta(vault, doc.Meta);
+                        display = string.Equals(newName, meta.Name, StringComparison.Ordinal) ? null : newName;
+                        if (MetaFaultAt is { } fault) await fault("inside-rename");
+                        try
+                        {
+                            var named = await Slots.UpdateOneAsync(
+                                s, f.Eq(x => x.Id, slot.Id) & f.Eq(x => x.Wrapped, slot.Wrapped),
+                                Builders<SlotDocument>.Update.Set(x => x.NameId, VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(newName))),
+                                cancellationToken: token);
+                            if (named.MatchedCount == 0) throw VaultBusyException.Just();
+                        }
+                        catch (MongoWriteException e) when (e.WriteError.Category == ServerErrorCategory.DuplicateKey)
+                        {
+                            throw new VaultNameTakenException(newName);
+                        }
+
+                        var v = Builders<VaultDocument>.Filter;
+                        var updated = await Vaults.UpdateOneAsync(
+                            s, v.Eq(x => x.Id, vault.Id) & v.Eq(x => x.Meta, doc.Meta), Builders<VaultDocument>.Update.Set(x => x.Meta, vault.SealMeta(meta with { DisplayName = display })),
+                            cancellationToken: token);
+                        if (updated.MatchedCount == 0) throw VaultBusyException.Just();
+                        await VaultEvents.RecordAsync(db, s, vault.Id, VaultEvents.VaultRenamed, null, Now, null, token);
+                        return true;
+                    },
+                    cancellationToken: ct);
+            }
+            catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException or ArgumentException))
+            {
+                // Failed or cancelled, the commit may have landed all the same: read the vault again rather than guess. A
+                // reason of its own, as Forget logs it and this one's message could hold the name.
+                await UnderLoadingAsync(() =>
+                {
+                    if (Current(vault.Id) is { } unknown) Forget(unknown, new InvalidOperationException("The outcome of a rename isn't known."));
+                });
+                throw;
+            }
+
+            vault.DisplayName = display;
+            // A load that read the meta before the commit has published by the time _loading is ours. A request may hold an
+            // older object: the current one must not lose the name either.
+            await UnderLoadingAsync(() =>
+            {
+                if (Current(vault.Id) is { } current) current.DisplayName = display;
+            });
+        }
+        finally
+        {
+            if (gateHeld) vault.Gate.Release();
+        }
+
+        // Queued before the gate goes, which keeps renames in order; not waited for under it. A re-key finish of another
+        // vault can hold _loading for minutes, and this vault's writers, who never need it, would wait on the gate meanwhile.
+        async Task UnderLoadingAsync(Action action)
+        {
+            var loading = _loading.WaitAsync(CancellationToken.None);
+            vault.Gate.Release();
+            gateHeld = false;
+            await loading;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                _loading.Release();
+            }
+        }
+    }
+
+    /// <summary>A stored meta as <paramref name="vault"/> opens it. One that doesn't was re-keyed by another process since.</summary>
+    private static VaultMeta OpenStoredMeta(UnlockedVault vault, byte[] blob)
+    {
+        try
+        {
+            return vault.OpenMeta(blob);
+        }
+        catch (CryptographicException)
+        {
+            throw VaultBusyException.Just();
+        }
+    }
+
     /// <summary>How many vaults are unlocked now.</summary>
     public int UnlockedCount => _open.Count;
 
@@ -1176,12 +1291,13 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
 
             // In its two-key period: named, so that it isn't reported missing or created again, and nothing else.
             // Never in the working set, never with a current key id, never announced to the search index.
-            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider };
+            // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
+            if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, DisplayName = meta.DisplayName };
             // Outside its period (under _loading, as every start and finish): a start whose commit went unanswered didn't
             // commit after all.
             _pending.TryRemove(id, out _);
 
-            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider };
+            var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, DisplayName = meta.DisplayName };
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))

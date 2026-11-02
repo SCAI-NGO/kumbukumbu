@@ -382,12 +382,12 @@ public sealed partial class VaultCatalog
         _ => access,
     };
 
-    /// <summary>A key's or a connection's access: the owner's, under the vault's name at its sealed level; a member's,
+    /// <summary>A key's or a connection's access: the owner's, under the vault's shown name at its sealed level; a member's,
     /// under her alias, at most at her role, writing under the writer id recorded for <paramref name="credentialId"/>.</summary>
     private static VaultAccess CredentialAccess(
         UnlockedVault vault, byte[] vaultKey, Accounts.KeyRight right, MembershipDocument? membership, string? alias, string credentialId) =>
         membership is null
-            ? new(vault, vault.Name, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
+            ? new(vault, vault.Shown, Accounts.KeyRights.ToLevel(right), null, IsOwner: true)
             : ReadOnlyIfOwnerInactive(new(vault, alias!, Accounts.KeyRights.ToLevel(Capped(right, membership)), membership, IsOwner: false)
             {
                 WriterId = Memberships.WriterIdOf(membership, vaultKey, credentialId),

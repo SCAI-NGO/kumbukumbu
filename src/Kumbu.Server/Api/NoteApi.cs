@@ -76,6 +76,9 @@ public sealed record SetEmbeddingsRequest(string Provider);
 
 public sealed record CreateVaultRequest(string Name);
 
+/// <summary>The name the owner sees her vault under from now on; the vault's stored paths keep the name it was made with.</summary>
+public sealed record RenameVaultRequest(string Name);
+
 /// <summary>The owner's current password, and <c>confirm</c>: the vault's name, typed out exactly.</summary>
 public sealed record DeleteVaultRequest(string Password, string Confirm);
 
@@ -191,6 +194,7 @@ public static class NoteApi
         api.MapPost("/vaults/{vault}/rekey", RekeyVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
         api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapPut("/vaults/{vault}/name", RenameVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
@@ -261,6 +265,30 @@ public static class NoteApi
         }
 
         return TypedResults.Ok(await ViewAsync(store, catalog, unlocked.Notes.Count, access, caller, ct));
+    }
+
+    /// <summary>The owner renames her vault (rename spec §1.4): no password, since it is undone by renaming again and
+    /// removes no access. A member's alias answers 404, as on the other owner-only endpoints.</summary>
+    private static async Task<NoContent> RenameVaultAsync(
+        string vault, RenameVaultRequest body, EncryptedNoteStore store, VaultCatalog catalog, RequestCaller caller, AccountLimits limits, CancellationToken ct)
+    {
+        if (limits.AliasRename(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var name = VaultNames.Check(body.Name);
+        var root = ApiPaths.Parse(vault, null, note: false);
+        var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
+            ?? throw ApiErrors.NotFound($"You have no vault named '{root.Segments[0]}'.");
+        if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        if (string.Equals(name, access.Name, StringComparison.Ordinal)) return TypedResults.NoContent();
+        try
+        {
+            await catalog.RenameVaultAsync(caller.User.Id, caller.UserKey!, access.Vault, name, ct);
+        }
+        catch (ArgumentException)
+        {
+            throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        }
+
+        return TypedResults.NoContent();
     }
 
     /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
