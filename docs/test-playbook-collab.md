@@ -8,7 +8,7 @@ For each step, tick it or note what differed. Note also every moment you hesitat
 
 - The instance runs `0.3.0-pre.2` or newer, with test data only.
 - Three browser profiles or private windows, signed in separately. Private windows of a Firefox-based browser share one session, so there use separate profiles, or different browsers. **Alice** is an existing account with admin rights. **Bob** and **Carol** are made in part A.
-- The sidebar's vault menu is the vault's ⋯ menu in the drawer. Vaults are switched in the popout at the bottom of the sidebar ("Switch vault: <name>").
+- The sidebar's vault menu is the vault's ⋯ menu in the drawer. Vaults are switched in the popout at the bottom of the sidebar (`Switch vault: <name>`).
 
 Already known, so no need to note them (overnighter report, section 8):
 
@@ -49,12 +49,12 @@ Bob has write and Carol read.
 
 17. As Carol: open `plan.md`. *Expected:* reads it, also `early.md` from before she joined. Write mode isn't offered, or says why. No uploading, renaming, deleting.
 18. As Bob: edit `plan.md`, add a note, upload an image, delete a note and restore it from the trash. *Expected:* all work.
-19. As Bob: on the board, add and move a card. *Expected:* works. Rename a column, and open `Board/Board.md` in Write mode. *Expected:* refused, with the sentence that only those who may maintain can change the board's columns.
+19. As Bob: on the board, add and move a card. *Expected:* works. Rename a column, and open `Board/Board.md`. *Expected:* in Read mode it shows an **Open the board** link, which leads back to the board. Go to Write mode. *Expected:* the rename and Write mode are refused, with the sentence that only those who may maintain can change the board's columns.
 20. As Bob: make a checkpoint. *Expected:* refused for the same reason.
 21. As Alice: raise Bob to maintain. *Expected:* the password is asked, every time, even within the password window, and maintain stands in the warning colour. As Bob, without reloading: renaming the column and the checkpoint now work.
-22. As Alice: lower Bob to write. *Expected:* no password, lowering never asks. As Bob: the next attempt is refused, and the vault's activity says Alice changed his role, among the other rows and in time order. In Settings, "Shared vaults", Bob's own events show it too.
+22. As Alice: lower Bob to write. *Expected:* no password, lowering never asks. As Bob: the next attempt is refused. The vault's activity says Alice changed his role, among the other rows and in time order. In Settings, "Shared vaults", Bob's own events say so too.
 23. As a member: vault menu. *Expected:* **Shared with you…** with role, owner and provider; no Share, no access list, no member list, no re-encrypt, no delete.
-24. As Bob: rename `Garten Alice` to `Beet`. *Expected:* only Bob's name changes. Alice and Carol keep theirs.
+24. As Bob: rename `Garten Alice` to `Beet`, through **Your name for this vault…** in the vault popout. *Expected:* only Bob's name changes. Alice and Carol keep theirs.
 
 ## E. Names and live updates
 
@@ -83,7 +83,7 @@ Give the agent time to finish before the next step.
 ## G. Ending it
 
 33. As Alice: revoke Carol, with the re-encrypt box off. *Expected:* an open tab of Carol's loses the vault at once, without a reload, and she gets a sentence, not a crash. Carol's old links to its notes lead nowhere.
-34. As Bob: **Leave this vault**, confirmed. *Expected:* gone from Bob's list; Bob's key loses the vault, and is revoked if it has no vault left. As Alice: the activity says Bob left, among the rows and in time order, and offers re-encryption with an honest sentence. In Settings, "Shared vaults", Bob still sees his own events for this vault, including that he left. Tell the agent to `ls /`. *Expected:* `Beet` is gone.
+34. As Bob: **Leave this vault**, confirmed. *Expected:* gone from Bob's list; Bob's key loses the vault, and is revoked if it has no vault left. The vault's activity says Bob left, among the other rows and in time order, and offers Alice re-encryption with an honest sentence. In Settings, "Shared vaults", Bob's own events say so too, though the vault is no longer his to open. Tell the agent to `ls /`. *Expected:* `Beet` is gone.
 35. As Alice: invite Bob again and accept. Then re-encrypt the vault. *Expected:* during the run Bob sees "being re-encrypted"; after it he can read again, and is told to give his agents the vault again. An invitation still open at the start is withdrawn, and Alice is told.
 36. As Carol: make a vault `Carols Notizen` with a note, and share it with Bob as write. As Alice, in Admin: deactivate Carol. *Expected as Bob:* a banner that the vault is read-only until her account is active again, and export still works. Reactivate Carol. *Expected:* writing works on the next request.
 37. As Bob, pair Obsidian with plugin 0.1.x to the shared vault. *Expected:* "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault." An Obsidian already paired to one of Alice's own vaults goes on syncing.
