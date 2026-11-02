@@ -74,8 +74,8 @@ public static class SharingApi
         api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
-        api.MapPut("/memberships/{id}/alias", RenameAliasAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409);
-        api.MapPost("/memberships/{id}/provider-seen", ProviderSeenAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404);
+        api.MapPut("/memberships/{id}/alias", RenameAliasAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
+        api.MapPost("/memberships/{id}/provider-seen", ProviderSeenAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
         api.MapGet("/member-notices", NoticesAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapDelete("/member-notices/{id}", DismissNoticeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/invitations", CreateAsync).WithMetadata(SessionOnlyMetadata.Instance, PasswordWindowMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
@@ -217,9 +217,12 @@ public static class SharingApi
 
     /// <summary>The member renames a vault shared with her (collab design §2.3, §10.1): her name for it, in her own
     /// namespace, so it widens nothing and needs no password window. Bound to her as the member; a name she has for an
-    /// own vault or another alias answers 409 and the old alias stays.</summary>
-    private static async Task<NoContent> RenameAliasAsync(string id, RenameAliasRequest body, RequestCaller caller, VaultCatalog catalog, SyncHub hub, CancellationToken ct)
+    /// own vault or another alias answers 409 and the old alias stays. Limited per user
+    /// (<see cref="AccountLimits.AliasRenamesPerUser"/>), and 503 while the vault is re-keyed.</summary>
+    private static async Task<NoContent> RenameAliasAsync(
+        string id, RenameAliasRequest body, RequestCaller caller, AccountLimits limits, VaultCatalog catalog, SyncHub hub, CancellationToken ct)
     {
+        if (limits.AliasRename(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var alias = VaultNames.Check(body.Alias);
         try
         {

@@ -156,7 +156,8 @@ public sealed partial class VaultCatalog
     /// she has for an own vault or another alias (<see cref="VaultNameTakenException"/>), and the old alias stays.
     /// Her keys and connections read the alias through the alias key, which doesn't change: from the next request on
     /// they see the new name too, and none of them keeps the old one, which is free for an own vault now.
-    /// <see cref="ArgumentException"/> if no such membership is hers. Returns the alias as stored.
+    /// <see cref="ArgumentException"/> if no such membership is hers, <see cref="VaultBusyException"/> while the vault is
+    /// re-keyed. Returns the alias as stored.
     /// </summary>
     internal async Task<string> RenameAliasAsync(string memberId, byte[] memberKey, string membershipId, string newAlias, CancellationToken ct)
     {
@@ -165,6 +166,12 @@ public sealed partial class VaultCatalog
         if (alias.Length == 0 || alias.Contains('/')) throw new ArgumentException("That can't be a vault name.", nameof(newAlias));
         var f = Builders<SlotDocument>.Filter;
         var notYours = new ArgumentException("No vault is shared with you under that membership.", nameof(membershipId));
+        // Her slot is what a run's finish writes: refused before the write while one holds the vault or it is in its
+        // two-key period, so a rename loop can't make the finish conflict (spec §1.3). Bound to her first, so someone
+        // else's membership answers as an unknown one.
+        var own = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
+            .Find(m => m.Id == membershipId && m.Member == memberId && m.Status == MembershipStatus.Active).FirstOrDefaultAsync(ct) ?? throw notYours;
+        await RequireNoneRekeyingAsync([own.Vault], ct);
         using var session = await StartSessionAsync(ct);
         await session.WithTransactionAsync(
             async (s, token) =>

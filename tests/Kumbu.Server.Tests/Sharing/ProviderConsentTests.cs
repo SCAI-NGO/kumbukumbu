@@ -6,6 +6,7 @@ using Kumbu.Server.Search;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Search;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -167,5 +168,42 @@ public sealed class ProviderConsentTests(KumbuAppFactory app) : IAsyncDisposable
         var doc = await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Id == membershipId).SingleAsync(Ct);
         Assert.Equal("internal", doc.ProviderSeen);
         Assert.True((await GartenAsync(bob))["providerChanged"]!.GetValue<bool>());
+    }
+
+    /// <summary>Her OK writes her membership, which the finish of a run writes too (spec §1.3): while a run holds the
+    /// vault, or it is in its two-key period, it answers 503 before it writes; someone else's membership still 404.</summary>
+    [Fact]
+    public async Task Provider_seen_during_a_run_answers_being_reencrypted()
+    {
+        var (alice, bob, membershipId, _) = await ChangedAsync();
+        var carol = await RestClient.NewAsync(Api, vault: "Privat");
+        var vaultId = await alice.VaultIdAsync();
+
+        async Task RefusedAsync()
+        {
+            using var during = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/provider-seen", new { provider = "remote" });
+            using var byCarol = await carol.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/provider-seen", new { provider = "remote" });
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, during.StatusCode);
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(during));
+            Assert.Equal(HttpStatusCode.NotFound, byCarol.StatusCode);
+        }
+
+        await Share.SetRekeyStartedAsync(app.Database, vaultId, DateTime.UtcNow);
+        try
+        {
+            await RefusedAsync();
+        }
+        finally
+        {
+            await Share.SetRekeyStartedAsync(app.Database, vaultId, null);
+        }
+
+        await using (await alice.HoldRekeyAsync()) await RefusedAsync();
+
+        var doc = await app.Database.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(m => m.Id == membershipId).SingleAsync(Ct);
+        Assert.Equal("internal", doc.ProviderSeen);
+        using var ok = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/provider-seen", new { provider = "remote" });
+        Assert.Equal(HttpStatusCode.NoContent, ok.StatusCode);
     }
 }

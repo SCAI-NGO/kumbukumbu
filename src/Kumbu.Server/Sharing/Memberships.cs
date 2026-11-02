@@ -481,12 +481,16 @@ public sealed partial class Memberships(
     /// <summary>
     /// The member acknowledges <paramref name="provider"/> as the embedding provider of the vault of her active membership
     /// <paramref name="membershipId"/> (collab design §8.5): her searches go to it again once it is the vault's. Bound
-    /// to her as the member (HARD RULE 2); <see cref="MembershipNotFoundException"/> for anyone else's membership.
+    /// to her as the member (HARD RULE 2); <see cref="MembershipNotFoundException"/> for anyone else's membership, and
+    /// <see cref="Vaults.VaultBusyException"/> while the vault is re-keyed.
     /// </summary>
     public async Task ProviderSeenAsync(string memberId, string membershipId, string provider, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var bound = BoundFilter(membershipId, MembershipScope.OfMember(memberId), MembershipStatus.Active, MembershipStatus.Active);
+        // Her membership is what a run's finish writes: refused before the write during a run (spec §1.3), as a rename is.
+        var doc = await Docs.Find(bound).FirstOrDefaultAsync(ct) ?? throw new MembershipNotFoundException();
+        await catalog.RequireNoneRekeyingAsync([doc.Vault], ct);
         var updated = await Docs.UpdateOneAsync(bound, Builders<MembershipDocument>.Update.Set(m => m.ProviderSeen, provider), cancellationToken: ct);
         if (updated.MatchedCount == 0) throw new MembershipNotFoundException();
     }
