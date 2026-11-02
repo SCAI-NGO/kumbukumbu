@@ -170,12 +170,11 @@ public sealed class UnlockedVault
         return note;
     }
 
-    /// <summary>The vault's name and the embedding provider its owner chose. An explicit <c>internal</c> is kept as
-    /// such, so that the vault stays on this server whatever the instance's default.</summary>
-    public byte[] SealMeta(string embeddingProvider) => Seal($"vault:{Id}", new VaultMeta(Name, embeddingProvider, DisplayName));
-
     internal VaultMeta OpenMeta(byte[] blob) => Open<VaultMeta>($"vault:{Id}", blob);
 
+    /// <summary>The vault's meta: its name, the embedding provider its owner chose (an explicit <c>internal</c> is kept as
+    /// such, so that the vault stays on this server whatever the instance's default) and its display name. Written from
+    /// the stored meta, opened with <see cref="OpenMeta"/>, never from this object's idea of it.</summary>
     internal byte[] SealMeta(VaultMeta meta) => Seal($"vault:{Id}", meta);
 
     public byte[] SealTrash(ObjectId docId, TrashedNote trashed) =>

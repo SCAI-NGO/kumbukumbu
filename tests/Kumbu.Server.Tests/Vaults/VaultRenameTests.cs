@@ -5,11 +5,13 @@ using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Search;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Tests.Search;
 using Kumbu.Server.Tests.Sharing;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 
@@ -416,6 +418,251 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         {
             await vaults.UpdateOneAsync(v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.Meta, meta), cancellationToken: Ct);
         }
+    }
+
+    /// <summary>The public instance with a second embedding provider, "remote", as <c>EmbeddingApiTests</c> has it.</summary>
+    private WebApplicationFactory<Program> RemoteApi() => app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(services =>
+    {
+        services.RemoveAll<EmbeddingProviders>();
+        services.AddSingleton(sp => EmbeddingProviders.Of(
+            sp.GetRequiredService<IEmbeddingDriver>(), new EmbeddingProvider("remote", "Remote AI", "EU, zero data retention", new FakeEmbedder(model: "remote:qwen3@64"))));
+    }));
+
+    private Task<byte[]> StoredMetaAsync(string id) =>
+        app.Database.GetCollection<VaultDocument>("vaults").Find(v => v.Id == id).Project(v => v.Meta).SingleAsync(Ct);
+
+    private Task WriteMetaAsync(string id, byte[] meta) =>
+        app.Database.GetCollection<VaultDocument>("vaults").UpdateOneAsync(v => v.Id == id, Builders<VaultDocument>.Update.Set(v => v.Meta, meta), cancellationToken: Ct);
+
+    private static async Task RenamedToGartenAsync(RestClient alice)
+    {
+        using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+    }
+
+    private static async Task ChooseAsync(RestClient alice, string vault, string provider)
+    {
+        using var chosen = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/{vault}/embeddings", new { provider });
+        Assert.Equal(HttpStatusCode.OK, chosen.StatusCode);
+    }
+
+    private static (string? Name, string? DisplayName, string? Embeddings) Fields(JsonObject meta) =>
+        (meta["Name"]?.GetValue<string>(), meta["DisplayName"]?.GetValue<string>(), meta["Embeddings"]?.GetValue<string>());
+
+    [Fact]
+    public async Task Reencrypting_keeps_the_name()
+    {
+        var (alice, id, _, _) = await AliceAsync();
+        await RenamedToGartenAsync(alice);
+
+        using (var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Garten/rekey", new { password = RestClient.Password }))
+        {
+            Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        }
+
+        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Catalog.Forget(Catalog.Current(id)!, new InvalidOperationException("test"));
+        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
+        // Opened by the object loaded under the new key.
+        var meta = Catalog.Current(id)!.OpenMeta(await StoredMetaAsync(id));
+        Assert.Equal(("Gartenarbeit", "Garten"), (meta.Name, meta.DisplayName));
+    }
+
+    [Fact]
+    public async Task A_provider_change_keeps_the_name()
+    {
+        await using var api = RemoteApi();
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        await RenamedToGartenAsync(alice);
+
+        await ChooseAsync(alice, "Garten", "remote");
+
+        Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
+        catalog.Forget(catalog.Current(id)!, new InvalidOperationException("test"));
+        Assert.Equal(["Garten"], await NamesAsync(alice));
+        Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Garten/plan.md"));
+    }
+
+    [Fact]
+    public async Task A_rename_keeps_the_provider_chosen()
+    {
+        await using var api = RemoteApi();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        await ChooseAsync(alice, "Gartenarbeit", "remote");
+
+        await RenamedToGartenAsync(alice);
+
+        Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task A_rename_does_not_pin_the_default_provider()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+
+        await RenamedToGartenAsync(alice);
+
+        // Never chosen, it goes on following the admin's default.
+        Assert.Equal(("Gartenarbeit", "Garten", null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task A_provider_change_through_an_older_object_keeps_the_name()
+    {
+        await using var api = RemoteApi();
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        var old = catalog.Current(id)!;
+        catalog.Forget(old, new InvalidOperationException("test"));
+        // Through a new object: the old one is told nothing.
+        await RenamedToGartenAsync(alice);
+        Assert.Null(old.DisplayName);
+
+        await catalog.SetEmbeddingProviderAsync(old, "remote", Ct);
+
+        Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
+        Assert.Equal("Garten", old.DisplayName);
+        // With the stored name a second time, a reload would give her two vaults of one name.
+        using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        }
+
+        catalog.Forget(catalog.Current(id)!, new InvalidOperationException("test"));
+        Assert.Equal(["Garten", "Gartenarbeit"], await NamesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_provider_change_on_a_meta_that_does_not_open_answers_just_reencrypted()
+    {
+        await using var api = RemoteApi();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        await RenamedToGartenAsync(alice);
+        var meta = await StoredMetaAsync(id);
+        var flipped = (byte[])meta.Clone();
+        flipped[^1] ^= 0x01;
+        await WriteMetaAsync(id, flipped);
+        try
+        {
+            using var chosen = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Garten/embeddings", new { provider = "remote" });
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, chosen.StatusCode);
+            Assert.Equal(VaultBusyException.JustReencrypted, await RestClient.ErrorAsync(chosen));
+            Assert.Equal(flipped, await StoredMetaAsync(id));
+        }
+        finally
+        {
+            await WriteMetaAsync(id, meta);
+        }
+
+        Assert.Equal(("Gartenarbeit", "Garten", null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task A_provider_change_conflicts_with_another_writer()
+    {
+        await using var api = RemoteApi();
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        await RenamedToGartenAsync(alice);
+        var vault = catalog.Current(id)!;
+        var written = 0;
+        // Another writer between the read and the write: here an explicit internal, which a blind write would overwrite.
+        catalog.MetaFaultAt = async point =>
+        {
+            if (point != "before-provider-write" || Interlocked.Exchange(ref written, 1) == 1) return;
+            await WriteMetaAsync(id, vault.SealMeta(vault.OpenMeta(await StoredMetaAsync(id)) with { Embeddings = EmbeddingProviders.Internal }));
+        };
+        try
+        {
+            await Assert.ThrowsAsync<VaultBusyException>(() => catalog.SetEmbeddingProviderAsync(vault, "remote", Ct));
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal(1, written);
+        Assert.Equal(("Gartenarbeit", "Garten", EmbeddingProviders.Internal), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task A_concurrent_provider_change_is_kept()
+    {
+        await using var api = RemoteApi();
+        var catalog = api.Services.GetRequiredService<VaultCatalog>();
+        var (alice, id, vaultKey, _) = await AliceAsync(api);
+        var written = 0;
+        // A direct write, outside the rename's session: the rename holds the gate a real provider change would wait on.
+        catalog.MetaFaultAt = async point =>
+        {
+            if (point != "inside-rename" || Interlocked.Exchange(ref written, 1) == 1) return;
+            var c = catalog.Current(id)!;
+            await WriteMetaAsync(id, c.SealMeta(c.OpenMeta(await StoredMetaAsync(id)) with { Embeddings = "remote" }));
+        };
+        try
+        {
+            await RenamedToGartenAsync(alice);
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal(1, written);
+        Assert.Equal(("Gartenarbeit", "Garten", "remote"), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task Renaming_during_a_run_answers_being_reencrypted()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+        var nameId = await NameIdAsync(id);
+
+        async Task RefusedAsync()
+        {
+            using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, renamed.StatusCode);
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(renamed));
+        }
+
+        await Share.SetRekeyStartedAsync(app.Database, id, DateTime.UtcNow);
+        try
+        {
+            await RefusedAsync();
+        }
+        finally
+        {
+            await Share.SetRekeyStartedAsync(app.Database, id, null);
+        }
+
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+        await using (await alice.HoldRekeyAsync())
+        {
+            await RefusedAsync();
+        }
+
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(nameId, await NameIdAsync(id));
+    }
+
+    [Fact]
+    public async Task Recovery_names_a_vault_by_its_shown_name()
+    {
+        var world = new VaultWorld(app.NewDatabase());
+        var catalog = world.Catalog();
+        string? recovery = null;
+        var vault = await catalog.CreateAsync("Gartenarbeit", VaultWorld.Token, (_, key) => { recovery = key; return Task.CompletedTask; }, Ct);
+        // Renamed as a test may: the meta written directly.
+        var vaults = world.Db.GetCollection<VaultDocument>("vaults");
+        var stored = await vaults.Find(v => v.Id == vault.Id).Project(v => v.Meta).SingleAsync(Ct);
+        await vaults.UpdateOneAsync(
+            v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(vault.OpenMeta(stored) with { DisplayName = "Garten" })), cancellationToken: Ct);
+
+        // Another process, which loads the vault from what is stored.
+        Assert.Equal([("Garten", true)], await world.Catalog().RecoverAsync(recovery!, "a-new-token-0123456789abcdef", Ct));
     }
 
     [Fact]

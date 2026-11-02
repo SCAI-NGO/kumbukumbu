@@ -396,6 +396,42 @@ public sealed class InvitationApiTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Peek_at_a_renamed_vault_shows_its_shown_name()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        // Taken before the rename: RestClient.Vault stays Gartenarbeit.
+        var vaultId = await alice.VaultIdAsync();
+        var before = await InviteDirectAsync(alice);
+        using (var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        var after = await Memberships.InviteAsync(alice.User.Id, alice.UserKey, vaultId, "Carol", MemberRole.Write, TimeSpan.FromDays(7), false, Ct);
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+
+        string? proposed = null;
+        foreach (var invite in new[] { before, after })
+        {
+            using var peek = await PeekAsync(bob, invite.Secret);
+            Assert.Equal(HttpStatusCode.OK, peek.StatusCode);
+            var json = await RestClient.JsonAsync(peek);
+            Assert.Equal(("Garten", "Garten", true), (json["vault"]!.GetValue<string>(), json["alias"]!.GetValue<string>(), json["aliasFree"]!.GetValue<bool>()));
+            proposed = json["alias"]!.GetValue<string>();
+        }
+
+        using var accepted = await AcceptAsync(bob, before.Secret, proposed!);
+
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal("Garten", (await RestClient.JsonAsync(accepted))["vault"]!.GetValue<string>());
+        Assert.Equal(["Garten", "Work"], await VaultNamesAsync(bob));
+        using var note = await bob.GetAsync("/api/notes/Garten/plan.md");
+        Assert.Equal(HttpStatusCode.OK, note.StatusCode);
+        Assert.Equal("/Garten/plan.md", (await RestClient.JsonAsync(note))["path"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_taken_alias_keeps_the_link_usable()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");

@@ -904,7 +904,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             var added = !await Slots.Find(Builders<SlotDocument>.Filter.Eq(s => s.Vault, slot.Vault) & Builders<SlotDocument>.Filter.Eq(s => s.Lookup, lookup)).AnyAsync(ct);
             if (added) await AddKeySlotAsync(slot.Vault, vaultKey, secret, ct);
 
-            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) names.Add((vault.Name, added));
+            if (await LoadAsync(slot.Vault, vaultKey, ct) is { } vault) names.Add((vault.Shown, added));
         }
 
         return names;
@@ -1032,8 +1032,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     public string DefaultEmbeddingProvider => options.Value.Embeddings.Default;
 
     /// <summary>
-    /// Points the vault at another embedding provider: its meta is sealed again with the choice, then the working set
-    /// follows. The search index re-embeds the vault afterwards (<see cref="Search.SearchIndex.CatchUp"/>).
+    /// Points the vault at another embedding provider: the stored meta is sealed again with the choice, conditional on
+    /// the bytes read (<see cref="VaultBusyException"/> if another writer came between, or it doesn't open), then the
+    /// working set follows. The search index re-embeds the vault afterwards (<see cref="Search.SearchIndex.CatchUp"/>).
     /// </summary>
     internal async Task SetEmbeddingProviderAsync(UnlockedVault vault, string provider, CancellationToken ct)
     {
@@ -1044,9 +1045,18 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // Deleted since the request read it (here, or in another process: then only its document is gone), or
             // re-keyed meanwhile.
             CheckWritable(vault);
-            var result = await Vaults.UpdateOneAsync(v => v.Id == vault.Id, Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(provider)), cancellationToken: ct);
-            if (result.MatchedCount == 0) throw new VaultDeletedException();
+            var doc = await Vaults.Find(v => v.Id == vault.Id).FirstOrDefaultAsync(ct) ?? throw new VaultDeletedException();
+            // The stored meta, not this object's: it may be older than a rename, and sealing from it would lose the name.
+            var meta = OpenStoredMeta(vault, doc.Meta);
+            if (MetaFaultAt is { } fault) await fault("before-provider-write");
+            var f = Builders<VaultDocument>.Filter;
+            var result = await Vaults.UpdateOneAsync(
+                f.Eq(v => v.Id, vault.Id) & f.Eq(v => v.Meta, doc.Meta),
+                Builders<VaultDocument>.Update.Set(v => v.Meta, vault.SealMeta(meta with { Embeddings = provider })),
+                cancellationToken: ct);
+            if (result.MatchedCount == 0) throw VaultBusyException.Just();
             vault.EmbeddingProvider = provider;
+            vault.DisplayName = meta.DisplayName;
         }
         finally
         {
@@ -1571,7 +1581,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>
     /// For a rotation of the user key: every slot found by the old key's lookup, whatever its kind, wrapped again under
     /// <paramref name="newUserKey"/> with the AAD of its own kind; a <c>user</c> slot also gets the vault name hash
-    /// under the new key, from the name in the vault's meta, and a <c>member</c> slot the alias's hash, from the alias
+    /// under the new key, from the name its owner sees it under in the vault's meta, and a <c>member</c> slot the alias's hash, from the alias
     /// opened with the old key, and its alias key sealed under the new one (collab design §2.3); its <c>Wrapped</c> is
     /// wrapped to the member's public key and stays (the private key is sealed again with the user document). Writes nothing. A slot that doesn't open is skipped and
     /// logged (it opened nothing before either); one whose meta doesn't open is wrapped again without a name hash and
@@ -1638,7 +1648,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 try
                 {
                     var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey!, "kumbu/v1/content", []), vault.Meta, $"vault:{vault.Id}"))!;
-                    nameId = VaultCrypto.Mac(nameKey, NormaliseVaultName(meta.Name));
+                    nameId = VaultCrypto.Mac(nameKey, NormaliseVaultName(meta.Shown));
                 }
                 catch (Exception e) when (e is CryptographicException or JsonException)
                 {
@@ -1650,6 +1660,7 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             rewraps.Add(new Accounts.SlotRewrap(slot.Id, slot.Wrapped, wrapped, nameId)
             {
                 OldAlias = slot.Kind == SlotDocument.Member ? slot.Alias : null,
+                OldNameId = slot.Kind == SlotDocument.User ? slot.NameId : null,
                 NewAliasKey = aliasKey,
             });
         }

@@ -77,7 +77,7 @@ public sealed partial class VaultCatalog
         try
         {
             var meta = System.Text.Json.JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
-            return new InviteVaultMeta(meta.Name, meta.Embeddings ?? DefaultEmbeddingProvider, doc.ClosingAt is not null);
+            return new InviteVaultMeta(meta.Shown, meta.Embeddings ?? DefaultEmbeddingProvider, doc.ClosingAt is not null);
         }
         catch (Exception e) when (e is CryptographicException or System.Text.Json.JsonException)
         {

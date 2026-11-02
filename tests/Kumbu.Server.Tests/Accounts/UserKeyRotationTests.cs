@@ -639,6 +639,56 @@ public sealed class UserKeyRotationTests(MongoFixture fixture)
         await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
     }
 
+    /// <summary>Bob's own vault, renamed from <c>Gartenarbeit</c> to <c>Garten</c> through the catalog.</summary>
+    private async Task<(Account Bob, string VaultId)> RenamedAsync()
+    {
+        var bob = await AccountAsync("Gartenarbeit");
+        var vaultId = bob.Vaults["Gartenarbeit"];
+        var vault = (await Catalog().OpenForUserAsync(bob.User.Id, bob.Key, Ct)).Single(v => v.Id == vaultId).Vault;
+        await Catalog().RenameVaultAsync(bob.User.Id, bob.Key, vault, "Garten", Ct);
+        return (bob, vaultId);
+    }
+
+    /// <summary>The name index under <paramref name="key"/> holds the vault under <c>Garten</c>, and the old name is free.</summary>
+    private async Task AssertIndexedAsGartenAsync(Account bob, string vaultId, byte[] key)
+    {
+        Assert.Equal(vaultId, await Catalog().FindForUserAsync(bob.User.Id, key, "Garten", Ct));
+        Assert.Equal("Garten", (await NamesAsync(bob, key))[vaultId]);
+        await Assert.ThrowsAsync<VaultNameTakenException>(() => Catalog().CreateForUserAsync("garten", bob.User.Id, key, Ct, Now));
+        await Catalog().CreateForUserAsync("Gartenarbeit", bob.User.Id, key, Ct, Now);
+    }
+
+    [Fact]
+    public async Task A_rotation_keeps_a_renamed_vaults_name_in_the_index()
+    {
+        var (bob, vaultId) = await RenamedAsync();
+
+        var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await AssertIndexedAsGartenAsync(bob, vaultId, key);
+    }
+
+    [Fact]
+    public async Task A_vault_rename_between_prepare_and_apply_makes_apply_fail()
+    {
+        var bob = await AccountAsync("Gartenarbeit");
+        var vaultId = bob.Vaults["Gartenarbeit"];
+        var prepared = await Rotation().PrepareAsync(bob.User, bob.Key, Password, null, null, Ct);
+
+        var vault = (await Catalog().OpenForUserAsync(bob.User.Id, bob.Key, Ct)).Single(v => v.Id == vaultId).Vault;
+        await Catalog().RenameVaultAsync(bob.User.Id, bob.Key, vault, "Garten", Ct);
+
+        await Assert.ThrowsAsync<RotationConflictException>(() => Rotation().CommitAsync(prepared, Ct));
+        // The rename stands, under the old key.
+        Assert.Equal(vaultId, await Catalog().FindForUserAsync(bob.User.Id, bob.Key, "Garten", Ct));
+        Assert.Null(await Catalog().FindForUserAsync(bob.User.Id, bob.Key, "Gartenarbeit", Ct));
+
+        var key = (await Rotation().RotateAsync(bob.User, bob.Key, Password, null, Ct))!.NewUserKey;
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await AssertIndexedAsGartenAsync(bob, vaultId, key);
+    }
+
     [Fact]
     public async Task A_rotation_reseals_a_rekey_notice()
     {
