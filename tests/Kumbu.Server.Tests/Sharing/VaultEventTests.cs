@@ -138,6 +138,22 @@ public sealed class VaultEventTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_owner_is_told_how_many_open_invitations_a_re_encryption_withdrew()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        using (var invited = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/invitations", new { password = RestClient.Password, label = "Carol", role = "read", expiresInDays = 7, confirm = false }))
+        {
+            Assert.Equal(HttpStatusCode.Created, invited.StatusCode);
+        }
+
+        using var rekeyed = await alice.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password });
+
+        Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+        Assert.Equal(1, (await RestClient.JsonAsync(rekeyed))["withdrawnInvitations"]!.GetValue<int>());
+    }
+
+    [Fact]
     public async Task Members_are_told_to_give_their_agents_the_vault_again()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);

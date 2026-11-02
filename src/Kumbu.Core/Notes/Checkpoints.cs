@@ -266,8 +266,8 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
         return StructuralRefusal(vault);
     }
 
-    private static ShellResult StructuralRefusal(string vault) => Refusals.Of("restore", Refusals.Structural,
-        $"This checkpoint changes the board's structure; only those who may maintain *{vault}* can restore it.");
+    private ShellResult StructuralRefusal(string vault) => Refusals.Of("restore", Refusals.Structural,
+        $"This checkpoint changes the board's structure; only those who may maintain *{vault}* can restore it. {writer.Caller.StructuralLimit(vault)}".TrimEnd());
 
     /// <summary>
     /// The same refusal for what the plan does outside its scope: a note moved back out of the board's place, a link

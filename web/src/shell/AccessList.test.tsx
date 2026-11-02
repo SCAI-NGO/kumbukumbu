@@ -301,6 +301,7 @@ describe("AccessList", () => {
     expect(await screen.findByText("Gartenarbeit isn't shared with anyone.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Invite someone…" }));
     await userEvent.type(screen.getByLabelText("Who it is for"), "Bob");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     await userEvent.type(screen.getByLabelText("Your password"), "correct horse");
     await userEvent.click(screen.getByRole("button", { name: "Create link" }));
     const share = await screen.findByRole("dialog", { name: "Share Gartenarbeit" });

@@ -68,6 +68,22 @@ public sealed class WriterViewTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_key_tells_its_own_writes_from_the_members_other_keys()
+    {
+        var (_, bob, vaultId, _) = await BobWroteAsync();
+        var writing = await KeyAsync(bob, "Writing", vaultId);
+        var reading = await KeyAsync(bob, "Reading", vaultId);
+        await PutAsync(bob, "/api/notes/garten/w.md", "Kohl\n", writing);
+
+        var (_, own) = await bob.ShAsync("history /garten/w.md", writing);
+        var (_, other) = await bob.ShAsync("history /garten/w.md", reading);
+
+        Assert.Contains("Writing (this key)", own, StringComparison.Ordinal);
+        Assert.Contains("Writing", other, StringComparison.Ordinal);
+        Assert.DoesNotContain("this key", other, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task The_owner_sees_Bob_left_dot_Claude_from_a_tombstone()
     {
         var (alice, _, _, membershipId) = await BobWroteAsync();

@@ -84,11 +84,11 @@ Give the agent time to finish before the next step.
 
 33. As Alice: revoke Carol, with the re-encrypt box off. *Expected:* an open tab of Carol's loses the vault at once, without a reload, and she gets a sentence, not a crash. Carol's old links to its notes lead nowhere.
 34. As Bob: **Leave this vault**, confirmed. *Expected:* gone from Bob's list; Bob's key loses the vault, and is revoked if it has no vault left. The vault's activity says Bob left, among the other rows and in time order, and offers Alice re-encryption with an honest sentence. In Settings, "Shared vaults", Bob's own events say so too, though the vault is no longer his to open. Tell the agent to `ls /`. *Expected:* `Beet` is gone.
-35. As Alice: invite Bob again and accept. Then re-encrypt the vault. *Expected:* during the run Bob sees "being re-encrypted"; after it he can read again, and is told to give his agents the vault again. An invitation still open at the start is withdrawn, and Alice is told.
+35. As Alice: invite Bob again and accept. Then re-encrypt the vault. *Expected:* during the run Bob sees "being re-encrypted"; after it he can read again, and Settings, "Shared vaults", tells him to give his agents the vault again. An invitation still open at the start is withdrawn, and the sentence after the run tells Alice.
 36. As Carol: make a vault `Carols Notizen` with a note, and share it with Bob as write. As Alice, in Admin: deactivate Carol. *Expected as Bob:* a banner that the vault is read-only until her account is active again, and export still works. Reactivate Carol. *Expected:* writing works on the next request.
-37. As Bob, pair Obsidian with plugin 0.1.x to the shared vault. *Expected:* "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault." An Obsidian already paired to one of Alice's own vaults goes on syncing.
+37. As Alice, pair Obsidian with plugin 0.1.x to `Garten Alice`, which is shared (a member's menu offers this only with plugin 0.2.0). *Expected:* "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault." An Obsidian already paired to one of Alice's own vaults goes on syncing.
 38. As Carol: delete her account. *Expected:* the dialog lists `Carols Notizen` and offers two choices, "Give members 7 days" (the default) or "Delete it for everyone now". Take the 7 days. *Expected as Bob:* a banner with the date, read only, and export works. As Alice in Admin, delete Bob's account with a privacy request; the admin's dialog offers the same two choices for vaults he owns and shares. *Expected:* the receipt counts what ended. Old entries in Alice's vault show "a former member" and nowhere Bob's name.
-39. Dashboard: the Sharing row counts invitations and membership changes.
+39. Grafana, if the monitoring runs (`compose.monitoring.yaml`): the Sharing row of the dashboard counts invitations and membership changes.
 
 ---
 
@@ -105,9 +105,9 @@ For each step, say what you called, what came back, and **PASS**, **FAIL** or **
 ### B. Working
 
 4. Write `/Beet/agent-test/note.md`, then edit it. *Expected:* works.
-5. `history /Beet/agent-test/note.md` and `history /Beet`. *Expected:* your own writes are marked as yours. The owner has her name. Other members are "another user", with no name, key or device.
+5. `history /Beet/agent-test/note.md` and `history /Beet`. *Expected:* your own writes are marked as this key's. The owner has her name. Other members are "another user", with no name, key or device.
 6. `board /Beet`, and add a card to the first column. *Expected:* works.
-7. Rename a column, and edit `/Board/Board.md`. *Expected:* both refused. Your key is set to maintain, but the role is write: does the sentence make that clear?
+7. Rename a column, and edit `/Beet/Board/Board.md`. *Expected:* both refused. Your key is set to maintain, but the role is write: does the sentence make that clear?
 8. `mkcp /Beet agent-test`. *Expected:* refused for the same reason.
 
 ### C. Your view

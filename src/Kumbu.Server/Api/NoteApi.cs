@@ -64,7 +64,7 @@ public sealed record MemberCredentialView(string Name, string Kind, DateTime? La
 public sealed record RekeyVaultRequest(string Password);
 
 /// <summary>How many API keys were revoked and apps disconnected because they had the vault.</summary>
-public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps);
+public sealed record RekeyVaultView(int RevokedApiKeys, int DisconnectedApps, int WithdrawnInvitations = 0);
 
 /// <summary>An embedding provider of this server. <c>external</c>: the text of every section and every search query of
 /// a vault that uses it is sent to it. <c>available</c> false with a <c>reason</c> while it can't embed (still loading,
@@ -341,7 +341,7 @@ public static class NoteApi
 
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));
+        return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count, summary.WithdrawnInvitations));
     }
 
     private static async Task<Ok<TreeView>> TreeAsync(string vault, INoteStore store, CancellationToken ct)

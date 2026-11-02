@@ -20,7 +20,7 @@ public sealed class VaultLocks
 /// What a re-keying run did: how many documents of the vault open under the new key, how many open under neither key
 /// and were left as they are, and the API keys revoked and connections disconnected by its start (empty for a resumed run).
 /// </summary>
-public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections);
+public sealed record RekeySummary(long Documents, long Damaged, IReadOnlyList<string> RevokedApiKeys, IReadOnlyList<string> DisconnectedConnections, int WithdrawnInvitations = 0);
 
 /// <summary>
 /// Stage 2 of re-keying (rekeying design §3): a vault gets a new vault key K′, and everything sealed under its key K is
@@ -398,7 +398,7 @@ public sealed partial class VaultCatalog
             "Re-keyed vault {VaultId}: {Documents} documents under the new key, {Damaged} damaged, in {Seconds:0.0} s",
             id, documents, damaged, (Now - started).TotalSeconds);
         await FaultAsync("after-finish");
-        return new RekeySummary(documents, damaged, start.RevokedApiKeys, start.Disconnected);
+        return new RekeySummary(documents, damaged, start.RevokedApiKeys, start.Disconnected, start.Members.Withdrawn.Count + start.Members.Declined.Count);
     }
 
     private Task FaultAsync(string point) => RekeyFaultAt?.Invoke(point) ?? Task.CompletedTask;

@@ -105,7 +105,23 @@ public sealed class RequestCaller : ICaller
     /// deactivated) says so instead.</summary>
     public string ReadOnlySentence(string vault) =>
         ReadOnlyCode(vault) is { } code ? VaultAccess.ReadOnlySentence(code, vault)
-        : Kind == CallerKind.Session ? $"you can only read vault {vault}" : $"this key can only read vault {vault}";
+        : Kind == CallerKind.Session ? $"you can only read vault {vault}"
+        : RoleHoldsBack(vault) ? $"your role in vault {vault} is read, and a key never acts above your role; only the owner can change it"
+        : $"this key can only read vault {vault}";
+
+    /// <summary>A person's role and a key's right are changed by different people, so the refusal says which it is.</summary>
+    public string StructuralLimit(string vault)
+    {
+        if ((Credential as IRightsCredential)?.Access(vault) is not { } access) return "";
+        var level = access.Level.ToString().ToLowerInvariant();
+        return Kind == CallerKind.Session ? $"Your role there is {level}; only the owner can change it."
+            : RoleHoldsBack(vault) ? $"Your role there is {level}, and a key never acts above your role; only the owner can change it."
+            : $"This key is set to {level}; it takes a key with maintain.";
+    }
+
+    /// <summary>Whether a member's role, not the credential's sealed right, is what she acts at (<c>min(role, sealed)</c>).</summary>
+    private bool RoleHoldsBack(string vault) =>
+        (Credential as IRightsCredential)?.Access(vault) is { Membership: { } membership } access && VaultCatalog.LevelOf(membership) <= access.Level;
 
     /// <summary>From the caller's access record of the vault on this request (collab design §7.4).</summary>
     public string? ReadOnlyCode(string vault) => (Credential as IRightsCredential)?.Access(vault)?.ReadOnlyCode;

@@ -112,6 +112,25 @@ describe("the vault's activity", () => {
     expect(agent).toHaveTextContent(/^Agent ada/);
   });
 
+  it("words an agent by whose it is, for the writers without a name", async () => {
+    api(() =>
+      json(200, {
+        rows: [
+          row("a former member", "agent", [{ path: "/Work/a.md", kind: "changed" }]),
+          row("another user", "agent", [{ path: "/Work/b.md", kind: "changed" }], "2026-10-25T09:00:00Z", "2026-10-25T09:00:00Z"),
+          row('"Alice"\'s agent', "agent", [{ path: "/Work/c.md", kind: "changed" }], "2026-10-24T09:00:00Z", "2026-10-24T09:00:00Z"),
+        ],
+        more: false,
+      }),
+    );
+    const dialog = await openActivity();
+
+    const [former, other, owners] = await rowsOf(dialog);
+    expect(former).toHaveTextContent(/^Agent of a former member/);
+    expect(other).toHaveTextContent(/^Agent of another user/);
+    expect(owners).toHaveTextContent(/^"Alice"'s agent/);
+  });
+
   it("expands_a_row_into_its_files", async () => {
     api(() =>
       json(200, {

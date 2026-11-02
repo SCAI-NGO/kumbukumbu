@@ -40,6 +40,10 @@ public interface ICaller
     /// code in place of <see cref="Refusals.ReadOnly"/>, with <see cref="ReadOnlySentence"/> saying why.</summary>
     string? ReadOnlyCode(string vault) => null;
 
+    /// <summary>What holds the caller back from a structural change in <paramref name="vault"/>, a sentence for the end
+    /// of the refusal: her role or this key, which take different people to change. Empty if there is nothing to say.</summary>
+    string StructuralLimit(string vault) => "";
+
     /// <summary>The refusal for a write by <paramref name="command"/> to <paramref name="path"/>, or null if allowed.
     /// Asked once per entry point, before the store is touched: first whether the caller may write at all, then
     /// whether it may change the vault's structure (<see cref="StructuralFiles"/>).</summary>
@@ -50,7 +54,7 @@ public interface ICaller
         if (Level(vault) >= AccessLevel.Maintain) return null;
         if (StructuralFiles.StructuralCommands.Contains(command) || StructuralFiles.IsStructural(path))
         {
-            return Refusals.StructuralChange(command, vault);
+            return Refusals.StructuralChange(command, vault, StructuralLimit(vault));
         }
 
         return null;
@@ -61,7 +65,7 @@ public interface ICaller
     ShellResult? RefuseFolder(string command, VaultPath folder) =>
         Refuse(command, folder)
         ?? (folder.Vault is { } vault && StructuralFiles.ContainsStructural(folder) && Level(vault) < AccessLevel.Maintain
-            ? Refusals.StructuralChange(command, vault)
+            ? Refusals.StructuralChange(command, vault, StructuralLimit(vault))
             : null);
 }
 

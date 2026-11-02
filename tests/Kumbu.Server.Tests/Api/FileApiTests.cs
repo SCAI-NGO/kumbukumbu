@@ -622,7 +622,7 @@ public sealed class FileApiTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.OK, r.StatusCode);
             var state = await JsonAsync(r);
             replaced = state["version"]!.GetValue<string>();
-            Assert.Equal("Bobs-Agent", state["writtenBy"]!.GetValue<string>());
+            Assert.Equal("Bobs-Agent (this key)", state["writtenBy"]!.GetValue<string>());
         }
 
         using var history = await carol.GetAsync("/api/history/garten/beet.png");

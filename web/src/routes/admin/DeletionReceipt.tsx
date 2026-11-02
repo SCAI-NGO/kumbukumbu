@@ -45,13 +45,21 @@ export function receiptText(r: Receipt): string {
 /** Only when the id is on the deletion list can the server notice a restore: otherwise the reply promises nothing about it. */
 const listedPromise = " If a backup is ever restored, we delete your account again.";
 
+/** A vault of theirs that stays for its members for a while: the reply must not say it is gone already. */
+const closing = (r: Receipt) => {
+  const at = r.sharedVaultsScheduled ?? [];
+  return at.length === 0 ? "" : ` A vault you shared stays readable for its members until ${utcText(at[0])}, and is deleted then.`;
+};
+
 /** The reply the admin sends from the privacy contact: neutral, English, and signed with the configured contact. */
 export function replyText(r: Receipt): string {
   return `Subject: Your deletion request
 
 Hello,
 
-as you requested, we deleted your Kumbu² account "${r.username}" and all notes in it on ${utcText(r.deletedAt)}. This includes every vault, its history, trash and checkpoints, your API keys and your app connections.
+as you requested, we deleted your Kumbu² account "${r.username}" and all notes in it on ${utcText(r.deletedAt)}. This includes every vault of yours, its history, trash and checkpoints, your API keys and your app connections.${closing(r)}
+
+Text you wrote in a vault someone else shared with you stays in that vault, without your name.
 
 Copies that AI tools or other apps read from your notes are outside Kumbu². Please delete them there, for example in your chat history.
 

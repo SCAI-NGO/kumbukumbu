@@ -17,7 +17,7 @@ public sealed class Mkcp(Checkpoints checkpoints) : ICommand
           <name> until 'rmcp' removes it. Unlike the history (10 versions per note), a checkpoint is
           never pushed out and never expires. Names are unique per vault; {Checkpoint.NameRule} characters.
           A vault keeps at most {checkpoints.Limit} checkpoints.
-          Set checkpoints only when the user asks for one.
+          Set checkpoints only when the user asks for one. In a shared vault it takes maintain.
           Then: ls, cat, rg … --checkpoint <name> read from it; diff <path> --checkpoint <name> shows
           what changed since; restore --checkpoint <name> <path> goes back to it.
 

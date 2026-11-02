@@ -75,7 +75,7 @@ public class StructuralTests
         var result = await RunAsync(command, Writer);
 
         AssertStructural(result, command);
-        Assert.Equal($"{command}: Only those who may maintain *Work* can change its board's columns.", result.Output);
+        Assert.Equal($"{command}: Only those who may maintain *Work* can change its board's file, Board/Board.md.", result.Output);
         Assert.Equal(before, await SnapshotAsync());
     }
 
