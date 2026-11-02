@@ -405,12 +405,13 @@ export default function TreeDrawer(props: {
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
   const className = `relative flex h-full flex-col border-r border-line bg-surface ${resizing ? "select-none" : ""}`;
+  // `data-autofocus` is for the drawer, a dialog that takes the focus in; the docked sidebar is a landmark beside the note.
   const panel = (
     <>
       <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
         <div className="min-w-0 flex-1">
           <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${ownerLabel(active)}` : "Vault"}</p>
-          <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
+          <h2 tabIndex={-1} data-autofocus={docked ? undefined : true} className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
         {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
       </div>

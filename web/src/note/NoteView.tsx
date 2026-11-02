@@ -178,6 +178,20 @@ export default function NoteView({ path }: { path: string }) {
     keepScroll.current = null;
   }, [note.data?.content]);
 
+  // A note opened in Read mode puts the screen reader at its title, unless something holds the focus already (the
+  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself.
+  const titled = useRef<string | null>(null);
+  useEffect(() => {
+    if (mode !== "read" || !note.data || titled.current === path) return;
+    titled.current = path;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    const title = scroller.current?.querySelector<HTMLElement>("h1");
+    if (!title) return;
+    title.tabIndex = -1;
+    title.style.outline = "none";
+    title.focus({ preventScroll: true });
+  }, [mode, path, note.data]);
+
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();
   // Others with the vault see who is editing it (collab design §9.2).

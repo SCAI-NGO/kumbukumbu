@@ -88,6 +88,37 @@ describe("the note view", () => {
     expect(useEditor.getState().overlay).toBe("search");
   });
 
+  it("opening a note in Read mode leaves the focus where a screen reader expects it, on the note's heading", async () => {
+    noteApi();
+    renderApp(planUrl);
+    const title = await screen.findByRole("heading", { level: 1, name: "Plan" });
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(title).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("takes the focus to the file name's heading when the note has no H1 of its own", async () => {
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "Text.")) });
+    renderApp(planUrl);
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "plan" })).toHaveFocus());
+  });
+
+  it("leaves the focus where it is when something holds it", async () => {
+    noteApi();
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 1, name: "Plan" });
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    expect(screen.getByRole("heading", { name: "Work" })).toHaveFocus();
+  });
+
+  it("going to Write mode puts the caret in the text", async () => {
+    noteApi();
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 1, name: "Plan" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    const editor = await screen.findByRole("textbox", { name: "Markdown source" });
+    await waitFor(() => expect(editor).toHaveFocus());
+  });
+
   it("shows one title: the note's own H1 replaces the file name's", async () => {
     noteApi();
     renderApp(planUrl);
