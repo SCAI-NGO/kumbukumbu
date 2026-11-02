@@ -181,15 +181,13 @@ export default function NoteView({ path }: { path: string }) {
   // A note opened in Read mode puts the screen reader at its title, unless something holds the focus already (the
   // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself.
   const titled = useRef<string | null>(null);
+  const fileTitle = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     if (mode !== "read" || !note.data || titled.current === path) return;
     titled.current = path;
     if (document.activeElement && document.activeElement !== document.body) return;
-    const title = scroller.current?.querySelector<HTMLElement>("h1");
-    if (!title) return;
-    title.tabIndex = -1;
-    title.style.outline = "none";
-    title.focus({ preventScroll: true });
+    // The note's own H1 carries `data-line`; an embedded note's H1 doesn't.
+    (fileTitle.current ?? article.current?.querySelector<HTMLElement>("h1[data-line]"))?.focus({ preventScroll: true });
   }, [mode, path, note.data]);
 
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
@@ -350,7 +348,7 @@ export default function NoteView({ path }: { path: string }) {
       )}
       <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
-        {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
+        {!(note.data && startsWithH1(parts.body)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
         {notice && (
           <p
             role={notice.kind === "conflict" ? "status" : "alert"}

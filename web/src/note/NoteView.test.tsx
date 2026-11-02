@@ -102,12 +102,22 @@ describe("the note view", () => {
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "plan" })).toHaveFocus());
   });
 
-  it("leaves the focus where it is when something holds it", async () => {
-    noteApi();
+  it("leaves the focus where it is when something outside the note holds it as the note arrives", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    noteApi({
+      [`GET /api/notes${PLAN}`]: async () => {
+        await slow;
+        return json(200, noteView(PLAN, source));
+      },
+    });
     renderApp(planUrl);
-    await screen.findByRole("heading", { level: 1, name: "Plan" });
-    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
-    expect(screen.getByRole("heading", { name: "Work" })).toHaveFocus();
+    const opener = await screen.findByRole("button", { name: "Open file tree" });
+    act(() => opener.focus());
+    release();
+    const title = await screen.findByRole("heading", { level: 1, name: "Plan" });
+    expect(opener).toHaveFocus();
+    expect(title).not.toHaveFocus();
   });
 
   it("going to Write mode puts the caret in the text", async () => {

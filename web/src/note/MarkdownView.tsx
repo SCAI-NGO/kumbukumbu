@@ -332,7 +332,7 @@ const components: Components = {
       </CalloutTitle>
     </summary>
   ),
-  h1: ({ node, ...props }) => <h1 data-line={useLine(node)} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0" {...props} />,
+  h1: ({ node, ...props }) => <h1 data-line={useLine(node)} tabIndex={-1} className="mt-6 mb-3 text-[28px] leading-tight font-bold text-text first:mt-0 focus:outline-none" {...props} />,
   h2: ({ node, ...props }) => (
     <h2 data-line={useLine(node)} className="mt-7 mb-2.5 font-mono text-[12px] leading-[1.4] font-semibold tracking-[0.08em] text-accent-text uppercase first:mt-0" {...props} />
   ),

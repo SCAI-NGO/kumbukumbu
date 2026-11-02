@@ -111,6 +111,7 @@ function FolderButton({ folder, count, open, selected, onToggle }: { folder: Tre
     <button
       ref={button}
       type="button"
+      data-tree-row
       aria-expanded={open}
       aria-current={selected ? "true" : undefined}
       onClick={onToggle}
@@ -162,6 +163,7 @@ function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKin
   return (
     <button
       type="button"
+      data-tree-row
       aria-current={current ? "page" : undefined}
       onClick={onOpen}
       data-file-kind={fileKind}

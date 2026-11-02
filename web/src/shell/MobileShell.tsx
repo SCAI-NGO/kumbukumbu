@@ -166,7 +166,7 @@ export default function MobileShell() {
   useEffect(() => {
     if (!revealed) return;
     const sidebar = document.getElementById(sidebarId);
-    (sidebar?.querySelector<HTMLElement>('[aria-current="page"]') ?? sidebar?.querySelector<HTMLElement>("li button"))?.focus();
+    (sidebar?.querySelector<HTMLElement>('[aria-current="page"]') ?? sidebar?.querySelector<HTMLElement>("[data-tree-row]"))?.focus();
   }, [revealed]);
 
   // Ctrl+\ (Cmd+\ on a Mac), as in other editors with a sidebar; the note's editor has no shortcut of its own for it.
