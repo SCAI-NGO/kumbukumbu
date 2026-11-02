@@ -401,7 +401,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             {
                 try
                 {
-                    picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, null, ct);
+                    picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, null, 0, ct);
                 }
                 catch (PixelsUnavailableException e)
                 {
@@ -475,7 +475,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         Picture picture;
         try
         {
-            picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, crop, ct);
+            picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, crop, 0, ct);
         }
         catch (PixelsUnavailableException e)
         {
@@ -508,7 +508,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
             Picture picture;
             try
             {
-                picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, call.Crop, ct);
+                picture = await pixels.PageAsync(call.Path, call.State, n, call.Step, call.Crop, 0, ct);
             }
             catch (PixelsUnavailableException e)
             {

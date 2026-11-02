@@ -60,10 +60,10 @@ public sealed record ImgRefused(ImgRefusal Reason) : AttachmentUse;
 public interface IAttachmentPixels
 {
     /// <summary>The image at a step, optionally cropped (original pixel coordinates, EXIF-oriented).</summary>
-    Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct);
+    Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, CancellationToken ct);
 
     /// <summary>A rendered page (1-based), optionally a region in displayed points.</summary>
-    Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct);
+    Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct);
 
     /// <summary>The stored analysis (without page text); <paramref name="runIfPending"/> runs a missing or outdated one now, within its time limit. Null if there is none and it can't be had.</summary>
     Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct);

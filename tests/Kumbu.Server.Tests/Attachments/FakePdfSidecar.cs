@@ -38,6 +38,12 @@ public sealed class FakePdfSidecar : IPdfSidecar
 
     public List<(StepLimits Target, Crop? Crop)> ImageRequests { get; } = [];
 
+    /// <summary>The turn each page request asked for, beside <see cref="PageRequests"/>.</summary>
+    public List<int> PageRotations { get; } = [];
+
+    /// <summary>The turn each image request asked for, beside <see cref="ImageRequests"/>.</summary>
+    public List<int> ImageRotations { get; } = [];
+
     public async Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct)
     {
         Interlocked.Increment(ref _analyses);
@@ -46,23 +52,25 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return Analysis(pdf);
     }
 
-    public async Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct)
+    public async Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct)
     {
         Interlocked.Increment(ref _renders);
-        lock (PageRequests) PageRequests.Add((page, target, crop));
+        lock (PageRequests) { PageRequests.Add((page, target, crop)); PageRotations.Add(rotate); }
         await AnswerAsync(ct);
         var (w, h) = crop is null ? PageSize : (crop.Width, crop.Height);
+        if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w * 600 / 72, h * 600 / 72, target);
         return new Picture(SolidPng(width, height), "image/png", width, height, PageSize.Width, PageSize.Height);
     }
 
-    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct)
+    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct)
     {
         Interlocked.Increment(ref _renders);
-        lock (ImageRequests) ImageRequests.Add((target, crop));
+        lock (ImageRequests) { ImageRequests.Add((target, crop)); ImageRotations.Add(rotate); }
         await AnswerAsync(ct);
         var original = ImageHeader.Read(image.Span, out _) ?? (640, 480);
         var (w, h) = crop is null ? (original.Width, original.Height) : ((int)crop.Width, (int)crop.Height);
+        if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w, h, target);
         return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height);
     }

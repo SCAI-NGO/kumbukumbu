@@ -17,11 +17,11 @@ public interface IPdfSidecar
     /// <summary>The analysis of at most <paramref name="maxPages"/> pages, with each page's text.</summary>
     Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct);
 
-    /// <summary>Page <paramref name="page"/> (1-based) rendered to fit <paramref name="target"/>, optionally a region in displayed points.</summary>
-    Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct);
+    /// <summary>Page <paramref name="page"/> (1-based) rendered to fit <paramref name="target"/>, optionally a region in displayed points, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270).</summary>
+    Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
 
-    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels.</summary>
-    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct);
+    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270).</summary>
+    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
 }
 
 /// <summary>An analysis as the sidecar answers it: the measurements, and the text of each analysed page (index 0 = page 1).</summary>
@@ -102,17 +102,18 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         return ParseAnalysis(body, maxPages);
     }
 
-    public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct) =>
-        SendAsync("render/page", $"page={page.ToString(CultureInfo.InvariantCulture)}&{Query(target, crop)}", pdf, "application/pdf", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
+    public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
+        SendAsync("render/page", $"page={page.ToString(CultureInfo.InvariantCulture)}&{Query(target, crop, rotate)}", pdf, "application/pdf", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
 
-    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct) =>
-        SendAsync("render/image", Query(target, crop), image, "application/octet-stream", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
+    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
+        SendAsync("render/image", Query(target, crop, rotate), image, "application/octet-stream", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
 
-    private static string Query(StepLimits target, Crop? crop) =>
+    private static string Query(StepLimits target, Crop? crop, int rotate) =>
         string.Create(CultureInfo.InvariantCulture, $"longEdge={target.LongEdge}&pixels={target.Pixels}&bytes={target.Bytes}")
-        + (crop is null ? "" : "&crop=" + crop);
+        + (crop is null ? "" : "&crop=" + crop)
+        + (rotate == 0 ? "" : string.Create(CultureInfo.InvariantCulture, $"&rotate={rotate}"));
 
     /// <summary>
     /// One request with its own time limit. A time-out of this client, a refused connection or a failed name lookup,
@@ -209,7 +210,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         return buffer.ToArray();
     }
 
-    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, string originalWidth, string originalHeight, CancellationToken ct)
+    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, int rotate, string originalWidth, string originalHeight, CancellationToken ct)
     {
         var mediaType = response.Content.Headers.ContentType?.MediaType;
         if (mediaType is not ("image/png" or "image/jpeg")) throw Invalid("The answer is not a PNG or JPEG image");
@@ -217,6 +218,10 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         var png = data.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
         var jpeg = data.AsSpan().StartsWith(new byte[] { 0xFF, 0xD8, 0xFF });
         if (mediaType == "image/png" ? !png : !jpeg) throw Invalid("The image's bytes are not what its type says");
+
+        // An older sidecar ignores a parameter it doesn't know and answers the picture unturned: absent counts as 0.
+        var turned = response.Headers.TryGetValues("X-Kumbu-Rotate", out var echo) ? echo.FirstOrDefault() : null;
+        if ((turned ?? "0") != rotate.ToString(CultureInfo.InvariantCulture)) throw Invalid("The image isn't turned as asked");
 
         var width = Whole(response, "X-Kumbu-Width");
         var height = Whole(response, "X-Kumbu-Height");

@@ -81,7 +81,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         Picture picture;
         try
         {
-            picture = await pixels.ImageAsync(path, state, step, crop, ct);
+            picture = await pixels.ImageAsync(path, state, step, crop, 0, ct);
         }
         catch (PixelsUnavailableException e)
         {
