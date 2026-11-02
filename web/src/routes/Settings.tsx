@@ -554,7 +554,7 @@ function DeleteAccountSection() {
   // Her own vaults with an active member: the ones the server asks about. A vault shared with nobody isn't one.
   const shared = (vaults.data ?? []).filter((v) => v.owner == null && Number(v.members ?? 0) > 0);
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: me.username, ...(shared.length > 0 && { sharedVaults: choice }) } })),
+    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: me?.username ?? typed, ...(shared.length > 0 && { sharedVaults: choice }) } })),
     onSuccess: () => {
       setPassword("");
       queryClient.clear();
