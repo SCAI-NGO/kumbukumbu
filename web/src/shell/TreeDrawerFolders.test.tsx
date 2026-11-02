@@ -512,6 +512,8 @@ describe("renaming the vault from its menu", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Rename / })).not.toBeInTheDocument());
     expect(requests(fetch, "PUT").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Work/name"]);
     expect(useEditor.getState().activeVault).toBe("Garten");
+    // Nor did it turn into a dialog for the new name while it closed.
+    expect(requests(fetch, "GET").map((r) => new URL(r.url).pathname)).not.toContain("/api/vaults/Garten/access");
   });
 });
 
