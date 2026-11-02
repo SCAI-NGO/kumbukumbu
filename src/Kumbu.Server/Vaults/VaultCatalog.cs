@@ -366,22 +366,36 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     {
         await EnsureReadyAsync(ct);
         var f = Builders<SlotDocument>.Filter;
-        var slot = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, UserLookup(userKey, userId))
-            & f.Eq(s => s.NameId, VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)))).FirstOrDefaultAsync(ct);
-        if (slot is null || await Vaults.Find(v => v.Id == slot.Vault).FirstOrDefaultAsync(ct) is not { } doc) return null;
-        try
+        // The slot and the meta are read apart, and a re-key's finish can commit between the two: the old key then
+        // doesn't open the new meta. A second read sees both from after the finish.
+        for (var attempt = 0; ; attempt++)
         {
-            var vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
-            var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
-            // The name hash is case-insensitive; the name asked for must match exactly, as the owner sees it.
-            return string.Equals(meta.Shown, name, StringComparison.Ordinal) ? doc.Id : null;
-        }
-        catch (Exception e) when (e is CryptographicException or JsonException)
-        {
-            log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
-            return null;
+            var slot = await Slots.Find(f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, UserLookup(userKey, userId))
+                & f.Eq(s => s.NameId, VaultCrypto.Mac(VaultCrypto.Derive(userKey, VaultNameLabel, []), NormaliseVaultName(name)))).FirstOrDefaultAsync(ct);
+            if (slot is null) return null;
+            if (FindBetweenReads is { } between) await between();
+            if (await Vaults.Find(v => v.Id == slot.Vault).FirstOrDefaultAsync(ct) is not { } doc) return null;
+            try
+            {
+                var vaultKey = VaultCrypto.Open(UserKek(userKey, slot.Vault), slot.Wrapped, SlotContext(slot.Vault, slot.Kind));
+                var meta = JsonSerializer.Deserialize<VaultMeta>(VaultCrypto.Open(VaultCrypto.Derive(vaultKey, "kumbu/v1/content", []), doc.Meta, $"vault:{doc.Id}"))!;
+                // The name hash is case-insensitive; the name asked for must match exactly, as the owner sees it.
+                return string.Equals(meta.Shown, name, StringComparison.Ordinal) ? doc.Id : null;
+            }
+            catch (Exception e) when (attempt == 0 && e is CryptographicException or JsonException)
+            {
+                // Read again, below.
+            }
+            catch (Exception e) when (e is CryptographicException or JsonException)
+            {
+                log.LogWarning("A user slot of vault {VaultId} matched the user key but did not open", slot.Vault);
+                return null;
+            }
         }
     }
+
+    /// <summary>For tests, as <see cref="RekeyFaultAt"/>: a point between reading a slot and its vault's meta when a vault is found by name.</summary>
+    internal Func<Task>? FindBetweenReads { get; set; }
 
     /// <summary>
     /// The vault keys of <paramref name="vaultIds"/>, opened from the user's own slots or, for a vault shared with the

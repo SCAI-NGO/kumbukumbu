@@ -184,6 +184,30 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
     /// and it revokes the vault's keys all the same: the codes are dropped with the request, not only with an answer.
     /// </summary>
     [Fact]
+    public async Task A_vault_is_still_found_when_a_rekey_finishes_while_it_is_looked_up()
+    {
+        var user = await NewAsync(Api);
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        catalog.FindBetweenReads = async () =>
+        {
+            catalog.FindBetweenReads = null;
+            using var between = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
+            Assert.Equal(HttpStatusCode.OK, between.StatusCode);
+        };
+
+        try
+        {
+            using var rekey = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
+
+            Assert.Equal(HttpStatusCode.OK, rekey.StatusCode);
+        }
+        finally
+        {
+            catalog.FindBetweenReads = null;
+        }
+    }
+
+    [Fact]
     public async Task A_rekey_given_up_by_its_client_still_drops_the_open_pairing_codes()
     {
         var bound = TimeSpan.FromSeconds(30);
