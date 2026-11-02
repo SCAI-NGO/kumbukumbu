@@ -620,4 +620,90 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(Changed("Beet"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
         Assert.Equal(Changed("Beet"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
     }
+
+    /// <summary>Alice's "Gartenarbeit" with <c>plan.md</c>, shared with Bob (who owns "Work") as "Beet"; her key on it.
+    /// The id and the key are taken before any rename, as <see cref="RestClient.Vault"/> keeps the old name.</summary>
+    private async Task<(RestClient Alice, RestClient Bob, string VaultId, string Key)> RenamableAsync()
+    {
+        var alice = await NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "Beete\n");
+        var bob = await NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "Beet");
+        var vaultId = await alice.VaultIdAsync();
+        var (key, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "Gartenarbeit – Obsidian Laptop", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct, kind: ApiKeyKind.Device);
+        return (alice, bob, vaultId, key);
+    }
+
+    private static async Task RenameToGartenAsync(RestClient alice)
+    {
+        using var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" });
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+    }
+
+    private static async Task WriteAsync(RestClient alice)
+    {
+        using var written = await alice.SendAsync(HttpMethod.Put, $"/api/notes/Garten/{Guid.NewGuid():N}.md", new { content = "Beete\n" });
+        Assert.Equal(HttpStatusCode.Created, written.StatusCode);
+    }
+
+    /// <summary>Until the hub holds <paramref name="count"/> connections of <paramref name="vaultId"/>: a socket is
+    /// connected before the server lists it.</summary>
+    private async Task HeldAsync(string vaultId, int count)
+    {
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (Hub.Held.Count(h => h.VaultId == vaultId) < count)
+        {
+            Assert.True(waiting.Elapsed < TimeSpan.FromSeconds(10), "The hub doesn't hold the connections.");
+            await Task.Delay(20, Ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_renamed_vault_names_the_hints_at_once()
+    {
+        var (alice, bob, vaultId, key) = await RenamableAsync();
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        using var device = await SyncSockets.OpenAsync(Api, alice, key);
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        await HeldAsync(vaultId, 3);
+
+        await RenameToGartenAsync(alice);
+
+        // Unprompted: her open tabs ask for the vault list again, and take a new ticket.
+        Assert.Equal(Changed("Garten"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Garten"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
+        Assert.Equal(["Garten", "Garten"], Hub.Held.Where(h => h.VaultId == vaultId && h.Subject.User == alice.User.Id).Select(h => h.Name).ToArray());
+        Assert.Equal("Beet", Assert.Single(Hub.Held, h => h.VaultId == vaultId && h.Subject.User == bob.User.Id).Name);
+        // Bob's alias didn't change: nothing to tell him.
+        Assert.Null(await ReceiveAsync(bobs, TimeSpan.FromSeconds(1.5)));
+
+        await WriteAsync(alice);
+        Assert.Equal(Changed("Garten"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Garten"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Beet"), await ReceiveAsync(bobs, TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task A_ticket_from_before_a_rename_names_the_new_name()
+    {
+        var (alice, bob, vaultId, key) = await RenamableAsync();
+        var tabTicket = await SyncSockets.TicketAsync(alice);
+        var deviceTicket = await SyncSockets.TicketAsync(alice, key);
+        var bobsTicket = await SyncSockets.TicketAsync(bob);
+
+        await RenameToGartenAsync(alice);
+        using var tab = await SyncSockets.ConnectAsync(Api, tabTicket);
+        using var device = await SyncSockets.ConnectAsync(Api, deviceTicket);
+        using var bobs = await SyncSockets.ConnectAsync(Api, bobsTicket);
+        await HeldAsync(vaultId, 3);
+
+        await WriteAsync(alice);
+        foreach (var (socket, name) in new[] { (tab, "Garten"), (device, "Garten"), (bobs, "Beet") })
+        {
+            var messages = await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(1.5));
+            Assert.Contains(Changed(name), messages);
+            Assert.DoesNotContain(messages, m => m.Contains("Gartenarbeit", StringComparison.Ordinal));
+        }
+    }
 }

@@ -264,8 +264,9 @@ public sealed class AccountLimits : IDisposable
     public const int MetadataFetchesPerHost = 10;
 
     /// <summary>
-    /// A member's renames of vaults shared with her, a minute per user (spec §1.3): each one is a transaction on her
-    /// member slot. A person renames a vault now and then; a loop of them gets 30 a minute.
+    /// A member's renames of vaults shared with her and an owner's renames of her own vaults, together a minute per user
+    /// (spec §1.3; rename spec §1.4): each one is a transaction on her member or user slot. A person renames a vault now
+    /// and then; a loop of them gets 30 a minute.
     /// </summary>
     public const int AliasRenamesPerUser = 30;
 
@@ -341,7 +342,8 @@ public sealed class AccountLimits : IDisposable
     public TimeSpan? MetadataFetch(HttpContext context, string host) =>
         Take(_metadataFetchByAddress, Address(context)) ?? Take(_metadataFetchByHost, host.ToLowerInvariant());
 
-    /// <summary>A member's rename of a vault shared with her, counted per user across her sessions.</summary>
+    /// <summary>A member's rename of a vault shared with her, or an owner's of her own vault, counted together per user
+    /// across her sessions.</summary>
     public TimeSpan? AliasRename(string userId) => Take(_aliasRenameByUser, userId);
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";

@@ -223,6 +223,67 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
     }
 
+    private static async Task RenameAsync(RestClient user, string vault, string name)
+    {
+        using var renamed = await user.SendAsync(HttpMethod.Put, $"/api/vaults/{vault}/name", new { name });
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+    }
+
+    /// <summary>A code made before would hand a device the old name. <see cref="RestClient.Vault"/> stays
+    /// <c>Gartenarbeit</c>, so later paths are spelt out.</summary>
+    [Fact]
+    public async Task A_rename_drops_open_pairing_codes()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+
+        await RenameAsync(user, "Gartenarbeit", "Garten");
+
+        Assert.False(IsOpen(code));
+        using (var old = await RedeemAsync(code, "Laptop"))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+        }
+
+        using var made = await user.SendAsync(HttpMethod.Post, "/api/vaults/Garten/pairing", new { });
+        Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using var redeemed = await RedeemAsync((await JsonAsync(made))["code"]!.GetValue<string>(), "Laptop");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        var body = await JsonAsync(redeemed);
+        Assert.Equal(("Garten", "Garten – Obsidian Laptop"), (body["vault"]!.GetValue<string>(), body["keyName"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task An_old_device_gets_404_by_the_old_name()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        await user.CreateAsync("plan.md", "Beete\n");
+        using var paired = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        var key = (await JsonAsync(paired))["key"]!.GetValue<string>();
+
+        await RenameAsync(user, "Gartenarbeit", "Garten");
+
+        // What the plugin reads as "this key can't open the vault any more".
+        using (var gone = await user.GetAsync("/api/vaults/Gartenarbeit/versions", key))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        }
+
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        }
+
+        using (var other = await user.GetAsync("/api/vaults/Gartenarbeit/versions", key))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
+        }
+
+        using var versions = await user.GetAsync("/api/vaults/Garten/versions", key);
+        Assert.Equal(HttpStatusCode.OK, versions.StatusCode);
+        Assert.Equal(["/Garten/plan.md"], (await JsonAsync(versions))["notes"]!.AsArray().Select(n => n!["path"]!.GetValue<string>()).ToArray());
+    }
+
     [Fact]
     public async Task The_redeemed_key_works_on_the_versions_endpoint()
     {

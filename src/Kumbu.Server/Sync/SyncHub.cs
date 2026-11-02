@@ -122,6 +122,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         _connections[connection] = 0;
         try
         {
+            // A ticket issued before its owner renamed a vault holds the old name. Read after the connection is listed,
+            // a rename is caught either way: one before is seen here, one after (VaultRenamed) finds the connection.
+            // RenameOwned leaves a member's alias alone.
+            foreach (var vaultId in connection.Vaults.Keys)
+            {
+                if (catalog.Current(vaultId)?.Shown is { } shown) connection.RenameOwned(vaultId, shown);
+            }
+
             var older = _connections.Keys.Where(c => c.Grant.Subject == grant.Subject).OrderByDescending(c => c.Number).Skip(MaxPerKey).ToList();
             foreach (var replaced in older)
             {
@@ -240,6 +248,18 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     public void AliasRenamed(string memberId, string membershipId, string alias)
     {
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == memberId)) connection.Rename(membershipId, alias);
+    }
+
+    /// <summary>An owner renamed her vault (rename spec §1.4): her connections that hold it as its owner name it so from
+    /// now on, and are told, so that her open tabs ask for the vault list again and take a new ticket. Members keep
+    /// their alias and are told nothing.</summary>
+    public void VaultRenamed(string ownerId, string vaultId, string name)
+    {
+        foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == ownerId && c.Has(vaultId)))
+        {
+            connection.RenameOwned(vaultId, name);
+            connection.Hint(vaultId);
+        }
     }
 
     /// <summary>For tests: how many connections are held.</summary>
@@ -606,6 +626,13 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         public void Rename(string membershipId, string alias)
         {
             lock (_gate) _vaults = _vaults.ToDictionary(v => v.Key, v => v.Value.Membership == membershipId ? v.Value with { Name = alias } : v.Value, StringComparer.Ordinal);
+        }
+
+        /// <summary>The vault renamed by its owner, where this connection holds it as the owner's: never a member's
+        /// alias, which is the member's own name for it.</summary>
+        public void RenameOwned(string vaultId, string name)
+        {
+            lock (_gate) _vaults = _vaults.ToDictionary(v => v.Key, v => v.Key == vaultId && v.Value.Membership is null ? v.Value with { Name = name } : v.Value, StringComparer.Ordinal);
         }
 
         public bool IsEmpty => _vaults.Count == 0;

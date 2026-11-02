@@ -147,6 +147,45 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_rename_during_a_recomputation_keeps_the_new_name()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var vaultId = await alice.VaultIdAsync();
+        using var tab = await OpenAsync(Api, alice);
+        // Her own presence line says the upgrade's recomputation is done, so the one held below is the check's.
+        await EditingAsync(tab, "Gartenarbeit", "plan.md", on: true);
+        Assert.NotNull(await PresenceAsync(tab, Wait));
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = 1;
+        Hub.AfterRecomputeRead = s => s.User == alice.User.Id && Interlocked.Exchange(ref first, 0) == 1 ? HoldAsync() : Task.CompletedTask;
+        try
+        {
+            var checking = Hub.CheckAsync(TestContext.Current.CancellationToken);
+            await read.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+            using (var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+            }
+
+            release.SetResult();
+            await checking;
+        }
+        finally
+        {
+            Hub.AfterRecomputeRead = null;
+        }
+
+        Assert.Equal("Garten", Assert.Single(Hub.Held, h => h.Subject.User == alice.User.Id && h.VaultId == vaultId).Name);
+
+        async Task HoldAsync()
+        {
+            read.SetResult();
+            await release.Task;
+        }
+    }
+
+    [Fact]
     public async Task A_frame_checked_just_before_a_lowering_leaves_no_entry_after_it()
     {
         var (alice, bob, _, membership) = await SharedAsync();

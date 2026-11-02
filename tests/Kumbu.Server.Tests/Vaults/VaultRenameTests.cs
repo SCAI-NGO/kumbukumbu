@@ -3,7 +3,9 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Api;
 using Kumbu.Server.Search;
+using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Search;
 using Kumbu.Server.Tests.Sharing;
@@ -13,6 +15,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Driver;
 
 namespace Kumbu.Server.Tests.Vaults;
@@ -736,5 +739,217 @@ public sealed class VaultRenameTests(KumbuAppFactory app)
         var meta = await RawMetaAsync(id, vaultKey);
         Assert.Equal(["DisplayName", "Name"], meta.Select(p => p.Key).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(("Gartenarbeit", "Garten"), (meta["Name"]!.GetValue<string>(), meta["DisplayName"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task A_key_may_not_rename_the_vault()
+    {
+        var (alice, _, _, key) = await AliceAsync();
+
+        using var refused = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }, bearer: key);
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+    }
+
+    [Fact]
+    public async Task No_password_is_asked()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<TimeProvider>();
+            s.AddSingleton<TimeProvider>(time);
+        }));
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
+        // 31 minutes without a request: a remembered session's password window closes, the session stays.
+        time.Advance(TimeSpan.FromMinutes(31));
+        using (var session = await alice.GetAsync("/api/session"))
+        {
+            Assert.False((await RestClient.JsonAsync(session))["passwordWindowOpen"]!.GetValue<bool>());
+        }
+
+        using var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten");
+
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        Assert.Equal(["Garten"], await NamesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_members_alias_is_untouched()
+    {
+        var (alice, id, _, _) = await AliceAsync();
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "Beet", MemberRole.Write);
+        var key = await KeyForAsync(bob, id, "Work");
+        // What his agent was told so far goes out now: whatever comes after is the rename's.
+        await bob.ShBlocksAsync("ls /", key);
+        var activity = await KindsAsync(bob, "/api/vaults/Beet/activity");
+        var feed = await KindsAsync(bob, "/api/vault-events");
+
+        await RenamedToGartenAsync(alice);
+
+        Assert.Equal(["Beet", "Work"], await NamesAsync(bob));
+        using (var read = await bob.GetAsync("/api/notes/Beet/plan.md"))
+        {
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            Assert.Equal("/Beet/plan.md", (await RestClient.JsonAsync(read))["path"]!.GetValue<string>());
+        }
+
+        Assert.Equal(activity, await KindsAsync(bob, "/api/vaults/Beet/activity"));
+        Assert.Equal(feed, await KindsAsync(bob, "/api/vault-events"));
+        Assert.DoesNotContain(VaultEvents.VaultRenamed, await KindsAsync(bob, "/api/vaults/Beet/activity"));
+        var blocks = await bob.ShBlocksAsync("ls /", key);
+        Assert.Contains("Beet/", blocks[0]);
+        Assert.DoesNotContain(blocks, b => b.Contains("Notice:", StringComparison.Ordinal) || b.Contains("Garten", StringComparison.Ordinal));
+        // Hers names it so.
+        Assert.Contains(VaultEvents.VaultRenamed, await KindsAsync(alice, "/api/vaults/Garten/activity"));
+    }
+
+    /// <summary>The kinds of the events at <paramref name="path"/> (a vault's activity, or a member's feed), as the user sees them.</summary>
+    private static async Task<string[]> KindsAsync(RestClient user, string path)
+    {
+        using var response = await user.GetAsync(path);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await RestClient.JsonAsync(response);
+        var events = body is JsonArray feed ? feed : body["events"]!.AsArray();
+        return [.. events.Select(e => e!["kind"]!.GetValue<string>())];
+    }
+
+    [Fact]
+    public async Task A_case_only_rename_works()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "beet");
+        await alice.CreateAsync("plan.md", "Beete\n");
+        var id = await alice.VaultIdAsync();
+        var nameId = await NameIdAsync(id);
+
+        using (var renamed = await RenameAsync(alice, "beet", "Beet"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        Assert.Equal(["Beet"], await NamesAsync(alice));
+        Assert.Equal(nameId, await NameIdAsync(id));
+        Assert.Equal("Beete\n", await ContentAsync(alice, "/api/notes/Beet/plan.md"));
+        // The lookup is exact: the stored name no longer reaches it.
+        using var old = await alice.GetAsync("/api/notes/beet/plan.md");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
+    public async Task Renaming_to_the_same_name_changes_nothing()
+    {
+        var (alice, id, _, _) = await AliceAsync();
+        await RenamedToGartenAsync(alice);
+        var meta = await StoredMetaAsync(id);
+        var events = await KindsAsync(alice, "/api/vaults/Garten/activity");
+
+        using var same = await RenameAsync(alice, "Garten", "Garten");
+
+        Assert.Equal(HttpStatusCode.NoContent, same.StatusCode);
+        Assert.Equal(meta, await StoredMetaAsync(id));
+        Assert.Equal(events, await KindsAsync(alice, "/api/vaults/Garten/activity"));
+        Assert.Equal(["Garten"], await NamesAsync(alice));
+    }
+
+    [Fact]
+    public async Task A_name_taken_by_an_alias_is_refused()
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await bob.ShareWithAsync(alice, "Beet", MemberRole.Write);
+        var nameId = await NameIdAsync(id);
+
+        using var taken = await RenameAsync(alice, "Gartenarbeit", "beet");
+
+        Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
+        Assert.Equal("You already have a vault named 'beet'.", await RestClient.ErrorAsync(taken));
+        Assert.Equal(["Beet", "Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(nameId, await NameIdAsync(id));
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Theory]
+    [InlineData("a/b")]
+    [InlineData("   ")]
+    [InlineData("")]
+    [InlineData("65 characters")]
+    public async Task Invalid_names_are_refused(string name)
+    {
+        var (alice, id, vaultKey, _) = await AliceAsync();
+        if (name == "65 characters") name = string.Concat(Enumerable.Repeat("Garten", 11))[..65];
+
+        using var refused = await RenameAsync(alice, "Gartenarbeit", name);
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Equal(["Gartenarbeit"], await NamesAsync(alice));
+        Assert.Equal(("Gartenarbeit", null, null), Fields(await RawMetaAsync(id, vaultKey)));
+    }
+
+    [Fact]
+    public async Task Renames_are_rate_limited_with_aliases()
+    {
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+        {
+            s.RemoveAll<AccountLimits>();
+            s.AddSingleton(new AccountLimits(AccountLimits.RedeemFailuresPerNetwork, AccountLimits.RedeemFailuresPerServer, aliasRenamesPerUser: 2));
+        }));
+        var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(api, vault: "Work");
+        var membership = await bob.ShareWithAsync(alice, "Beet", MemberRole.Write);
+
+        // One budget: an alias rename and a vault rename use it up together.
+        using (var alias = await alice.SendAsync(HttpMethod.Put, $"/api/memberships/{membership}/alias", new { alias = "Work" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, alias.StatusCode);
+        }
+
+        using (var renamed = await RenameAsync(alice, "Gartenarbeit", "Garten"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        using var limited = await RenameAsync(alice, "Garten", "Beet");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.NotNull(limited.Headers.RetryAfter);
+        Assert.Equal(["Garten", "Work"], await NamesAsync(alice));
+    }
+
+    [Fact]
+    public async Task The_new_name_reaches_no_log()
+    {
+        const string secret = "Zz.Geheim-7";
+        var log = new CapturedLog();
+        await using var api = app.PublicApi.WithWebHostBuilder(b => b.ConfigureLogging(l => l.AddProvider(log)));
+        var (alice, _, _, key) = await AliceAsync(api);
+        using (var created = await alice.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Work" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        }
+
+        // Her open tab and her agent's socket hear of each rename.
+        using var tab = await SyncSockets.OpenAsync(api, alice);
+        using var device = await SyncSockets.OpenAsync(api, alice, key);
+
+        using (var renamed = await RenameAsync(alice, "Gartenarbeit", secret))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        using (var taken = await RenameAsync(alice, "Work", secret))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
+        }
+
+        using (var again = await RenameAsync(alice, secret, "Garten"))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, again.StatusCode);
+        }
+
+        Assert.Equal(["Garten", "Work"], await NamesAsync(alice));
+        Assert.NotEmpty(log.Lines);
+        Assert.DoesNotContain(log.Lines, line => line.Contains(secret, StringComparison.OrdinalIgnoreCase));
     }
 }
