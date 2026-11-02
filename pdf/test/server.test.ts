@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "../src/pool.js";
 import { MAX_BODY, createSidecar } from "../src/server.js";
-import { chartPage, encryptedPdf, threePages } from "./fixtures.js";
+import { chartPage, encryptedPdf, gifOf, threePages } from "./fixtures.js";
 
 // The built worker (vitest's global setup builds it).
 const entry = new URL("../dist/worker.js", import.meta.url);
@@ -121,6 +121,40 @@ describe("server", () => {
         expect(r.status, `${route} ${rotate}`).toBe(400);
         expect(await r.json()).toEqual({ code: "bad_request", error: "rotate must be 90, 180 or 270." });
       }
+  });
+
+  const threeFrames = () => gifOf(10, 10, [0xff0000, 0x00ff00, 0x0000ff].map((colour) => ({ width: 10, height: 10, palette: [colour, 0], pixels: 0 })));
+
+  it("takes frame and answers X-Kumbu-Frame and X-Kumbu-Frames", async () => {
+    const r = await post(`/render/image?${medium}&frame=2`, threeFrames());
+    expect(r.status).toBe(200);
+    expect([r.headers.get("x-kumbu-frame"), r.headers.get("x-kumbu-frames")]).toEqual(["2", "3"]);
+    const still = await post(`/render/image?${medium}`, threeFrames());
+    expect(still.status).toBe(200);
+    expect(still.headers.has("x-kumbu-frame")).toBe(false);
+    expect(still.headers.get("x-kumbu-frames")).toBe("3");
+  });
+
+  it("answers no_such_frame with 422", async () => {
+    const r = await post(`/render/image?${medium}&frame=4`, threeFrames());
+    expect(r.status).toBe(422);
+    expect(await r.json()).toMatchObject({ code: "no_such_frame" });
+  });
+
+  it("refuses frame 0, 1000001 and 1-3", async () => {
+    for (const frame of ["0", "1000001", "1-3"]) {
+      const r = await post(`/render/image?${medium}&frame=${frame}`, threeFrames());
+      expect(r.status, frame).toBe(400);
+      expect(await r.json()).toEqual({ code: "bad_request", error: "frame must be a whole number from 1 to 1000000." });
+    }
+  });
+
+  it("answers no X-Kumbu-Frames for a PNG", async () => {
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const r = await post(`/render/image?${medium}`, createCanvas(40, 30).toBuffer("image/png"));
+    expect(r.status).toBe(200);
+    expect(r.headers.has("x-kumbu-frames")).toBe(false);
+    expect(r.headers.has("x-kumbu-frame")).toBe(false);
   });
 
   it("maps errors to their status", async () => {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createCanvas } from "@napi-rs/canvas";
+import { GifWriter } from "omggif";
 import {
   PDFArray,
   PDFDocument,
@@ -202,3 +203,43 @@ export const photoPage = () =>
     const photo = await doc.embedPng(noiseCanvas(600, 850).toBuffer("image/png"));
     page.drawImage(photo, { x: 0, y: 0, width: A4.width, height: A4.height });
   });
+
+// One frame of gifOf(): its rectangle, its own palette (0xRRGGBB, a power of two of at least 2
+// entries) and its indices, row by row, or one index for the whole rectangle.
+export type GifFrame = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  palette: number[];
+  pixels: number[] | number;
+  disposal?: number;
+  transparent?: number;
+};
+
+// A GIF written by omggif's GifWriter, which keeps palettes, offsets, disposal and transparency as
+// given (GifEncoder quantises colours and has disposals of its own).
+export function gifOf(width: number, height: number, frames: GifFrame[]): Uint8Array {
+  const buf = new Uint8Array(1024 + frames.reduce((n, f) => n + 1024 + f.width * f.height * 2, 0));
+  const writer = new GifWriter(buf, width, height, { loop: 0 });
+  for (const f of frames) {
+    const pixels = typeof f.pixels === "number" ? new Array<number>(f.width * f.height).fill(f.pixels) : f.pixels;
+    writer.addFrame(f.x ?? 0, f.y ?? 0, f.width, f.height, pixels, { palette: f.palette, disposal: f.disposal, transparent: f.transparent });
+  }
+  return buf.slice(0, writer.end());
+}
+
+// A GIF of one frame written byte by byte, with a global palette of black and white, whose frame
+// rectangle may lie anywhere: its image data is a clear code and an end code, so the stream ends
+// early (omggif then warns, and leaves the rest of the frame at index 0, black).
+export function gifWithFrameRect(canvasW: number, canvasH: number, frameW: number, frameH: number, x = 0, y = 0): Uint8Array {
+  const u16 = (v: number) => [v & 0xff, v >> 8];
+  return new Uint8Array([
+    ...new TextEncoder().encode("GIF89a"),
+    ...u16(canvasW), ...u16(canvasH), 0x80, 0, 0, // global palette of 2 colours
+    0, 0, 0, 0xff, 0xff, 0xff,
+    0x2c, ...u16(x), ...u16(y), ...u16(frameW), ...u16(frameH), 0,
+    2, 1, 0x2c, 0, // minimum code size 2; one sub-block: clear (4), end (5) in 3-bit codes
+    0x3b,
+  ]);
+}

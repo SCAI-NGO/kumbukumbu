@@ -3,16 +3,30 @@
 // Scales an image to a size target, never enlarging it. Skia applies the EXIF orientation when it
 // decodes a JPEG, so sizes and crops are in the image's displayed pixels, as the server reports
 // them; a turn (clockwise, in degrees) comes on top of that, and a crop counts in the turned image.
-// The header is checked before anything is decoded.
+// A frame of a GIF is composed first, as it looks when played. The header is checked before
+// anything is decoded.
 
-import { type Canvas, createCanvas, loadImage } from "@napi-rs/canvas";
+import { type Canvas, type Image, ImageData, createCanvas, loadImage } from "@napi-rs/canvas";
+import { GifReader } from "omggif";
 import { type Rendered, encode } from "./encode.js";
 import { MAX_IMAGE_PIXELS, PdfError } from "./pdfjs.js";
 import { type Crop, type Target, fit, inside, pixels } from "./steps.js";
 
 export const MAX_SIDE = 16_384;
+// Composing holds the canvas several times over (buffer, copy, index stream, canvas), so a frame
+// has a lower cap than the plain path.
+export const MAX_FRAME_PIXELS = 16_000_000;
 
-export type RenderedImage = Rendered & { originalWidth: number; originalHeight: number; transparent: boolean; rotate: number };
+export type RenderedImage = Rendered & {
+  originalWidth: number;
+  originalHeight: number;
+  transparent: boolean;
+  rotate: number;
+  frame?: number;
+  frames?: number;
+};
+
+const notImage = () => new PdfError("The file is not an image Kumbu² can read.", "not_image");
 
 // From the image's pixels to the turned frame: whole-number matrices, so a turn at scale 1 moves
 // pixels and blends none.
@@ -22,20 +36,37 @@ function turn(rotate: number, ow: number, oh: number): [number, number, number, 
   return [0, -1, 1, 0, 0, ow];
 }
 
-export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotate = 0): Promise<RenderedImage> {
+export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotate = 0, frame?: number): Promise<RenderedImage> {
   const header = imageHeader(img);
-  if (!header || header.width <= 0 || header.height <= 0) throw new PdfError("The file is not an image Kumbu² can read.", "not_image");
+  if (!header || header.width <= 0 || header.height <= 0) throw notImage();
   if (header.width > MAX_SIDE || header.height > MAX_SIDE)
     throw new PdfError(`The image is too large: at most ${MAX_SIDE.toLocaleString("en-GB")} px on each side.`, "too_large");
   if (header.width * header.height > MAX_IMAGE_PIXELS)
     throw new PdfError(`The image is too large: at most ${MAX_IMAGE_PIXELS / 1_000_000} megapixels.`, "too_large");
 
-  let image;
-  try {
-    // A buffer, never a string: loadImage would take a string for a path or URL.
-    image = await loadImage(Buffer.from(img.buffer, img.byteOffset, img.byteLength));
-  } catch {
-    throw new PdfError("The file is not an image Kumbu² can read.", "not_image");
+  let image: Image | Canvas;
+  let count: number | undefined;
+  if (frame === undefined) {
+    try {
+      // A buffer, never a string: loadImage would take a string for a path or URL.
+      image = await loadImage(Buffer.from(img.buffer, img.byteOffset, img.byteLength));
+    } catch {
+      throw notImage();
+    }
+    count = frames(img);
+  } else {
+    if (!isGif(img)) throw notImage();
+    if (header.width * header.height > MAX_FRAME_PIXELS)
+      throw new PdfError(`The GIF is too large for a frame: at most ${MAX_FRAME_PIXELS / 1_000_000} megapixels.`, "too_large");
+    let reader: GifReader;
+    try {
+      reader = new GifReader(img);
+    } catch {
+      throw notImage();
+    }
+    count = reader.numFrames();
+    if (frame > count) throw new PdfError(`The GIF has no frame ${frame}.`, "no_such_frame");
+    image = composeFrame(reader, frame);
   }
   const { width: ow, height: oh } = image;
   const [tw, th] = rotate === 90 || rotate === 270 ? [oh, ow] : [ow, oh];
@@ -55,7 +86,64 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
     ctx.drawImage(image, 0, 0);
   }
   const transparent = hasTransparency(canvas);
-  return { ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)), originalWidth: ow, originalHeight: oh, transparent, rotate };
+  return {
+    ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)),
+    originalWidth: ow,
+    originalHeight: oh,
+    transparent,
+    rotate,
+    ...(frame !== undefined ? { frame } : {}),
+    ...(count !== undefined ? { frames: count } : {}),
+  };
+}
+
+const isGif = (b: Uint8Array) => b.length >= 6 && [0x47, 0x49, 0x46, 0x38].every((c, i) => b[i] === c) && (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61;
+
+// How many frames a GIF has, or undefined for another format and a GIF omggif can't read (which
+// Skia may still draw).
+export function frames(bytes: Uint8Array): number | undefined {
+  if (!isGif(bytes)) return undefined;
+  try {
+    const n = new GifReader(bytes).numFrames();
+    return n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Frames 1 to n (counting from 1) on a transparent canvas, each but the last disposed of as it
+// asks. omggif checks no frame against the canvas and allocates a frame's own rectangle, up to
+// 65,535 × 65,535 from a few bytes, so that is checked before each frame is decoded; and it reads a
+// frame without a palette from the file's header, so such a frame is refused.
+function composeFrame(reader: GifReader, n: number): Canvas {
+  const { width, height } = reader;
+  const buffer = new Uint8ClampedArray(width * height * 4);
+  let saved: Uint8ClampedArray | undefined;
+  // omggif warns with console.log once per decoded frame on a short stream, which a 16 MiB GIF of
+  // tiny frames could turn into over a million lines; the sidecar logs nothing about a file.
+  const log = console.log;
+  console.log = () => {};
+  try {
+    for (let i = 0; i < n; i++) {
+      const f = reader.frameInfo(i);
+      if (f.x + f.width > width || f.y + f.height > height) throw new PdfError("A frame of the GIF lies outside its canvas.", "not_image");
+      if (f.palette_offset === null) throw notImage();
+      const last = i === n - 1;
+      if (!last && f.disposal === 3) (saved ??= new Uint8ClampedArray(buffer.length)).set(buffer);
+      reader.decodeAndBlitFrameRGBA(i, buffer);
+      if (last) break;
+      if (f.disposal === 2) for (let y = f.y; y < f.y + f.height; y++) buffer.fill(0, (y * width + f.x) * 4, (y * width + f.x + f.width) * 4);
+      else if (f.disposal === 3) buffer.set(saved!);
+    }
+  } catch (e) {
+    throw e instanceof PdfError ? e : notImage();
+  } finally {
+    console.log = log;
+  }
+  const canvas = createCanvas(width, height);
+  // ImageData wraps the buffer without a copy.
+  canvas.getContext("2d").putImageData(new ImageData(buffer, width, height), 0, 0);
+  return canvas;
 }
 
 function hasTransparency(canvas: Canvas): boolean {

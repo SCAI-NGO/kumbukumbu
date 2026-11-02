@@ -23,7 +23,7 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
       const r =
         job.kind === "page"
           ? await renderPage(job.bytes, job.page, job.target, job.crop, job.rotate)
-          : await renderImage(job.bytes, job.target, job.crop, job.rotate);
+          : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame);
       // A copy in a buffer of its own: Skia's buffers cannot be transferred, and a Buffer may share one.
       const data = new Uint8Array(r.data);
       return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };

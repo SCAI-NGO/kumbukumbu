@@ -26,6 +26,7 @@ const STATUS: Record<string, number> = {
   not_image: 400,
   too_large: 413,
   no_such_page: 422,
+  no_such_frame: 422,
   bad_crop: 422,
   encrypted: 422,
   busy: 503,
@@ -93,9 +94,18 @@ const ROUTES: Record<string, Route> = {
   },
   "/render/image": (q, ms) => {
     const [t, c, rotate] = [target(q), crop(q), turn(q)];
+    const frame = q.has("frame") ? integer(q, "frame", 1, 1_000_000) : undefined;
     return async (body, slot) => {
-      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c, rotate }, ms.renderMs);
-      return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight, "X-Kumbu-Transparent": r.transparent ? 1 : 0 });
+      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c, rotate, frame }, ms.renderMs);
+      return (res) =>
+        image(res, r, {
+          "X-Kumbu-Original-Width": r.originalWidth,
+          "X-Kumbu-Original-Height": r.originalHeight,
+          "X-Kumbu-Transparent": r.transparent ? 1 : 0,
+          // Like X-Kumbu-Rotate, the frame it composed lets the server tell an older sidecar.
+          ...(r.frame !== undefined ? { "X-Kumbu-Frame": r.frame } : {}),
+          ...(r.frames !== undefined ? { "X-Kumbu-Frames": r.frames } : {}),
+        });
     };
   },
 };

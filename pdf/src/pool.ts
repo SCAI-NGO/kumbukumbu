@@ -12,7 +12,7 @@ import { PdfError } from "./pdfjs.js";
 export type Job =
   | { kind: "analyse"; bytes: Uint8Array; maxPages: number }
   | { kind: "page"; bytes: Uint8Array; page: number; target: Target; crop?: Crop; rotate: number }
-  | { kind: "image"; bytes: Uint8Array; target: Target; crop?: Crop; rotate: number };
+  | { kind: "image"; bytes: Uint8Array; target: Target; crop?: Crop; rotate: number; frame?: number };
 
 // What a worker posts: its page count as soon as it knows it, then one answer.
 export type WorkerMessage =

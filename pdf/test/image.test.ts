@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { GifEncoder, createCanvas, loadImage } from "@napi-rs/canvas";
-import { describe, expect, it } from "vitest";
-import { imageHeader, renderImage } from "../src/image.js";
-import { MEDIUM, SMALL } from "./fixtures.js";
+import { describe, expect, it, vi } from "vitest";
+import { frames, imageHeader, renderImage } from "../src/image.js";
+import { type GifFrame, MEDIUM, SMALL, gifOf, gifWithFrameRect } from "./fixtures.js";
 
 function solid(width: number, height: number, colour = "#3366cc") {
   const canvas = createCanvas(width, height);
@@ -228,6 +228,193 @@ describe("renderImage", () => {
   it("refuses what is not an image", async () => {
     await expect(renderImage(new TextEncoder().encode("hello, not an image"), MEDIUM)).rejects.toMatchObject({ code: "not_image" });
     await expect(renderImage(new Uint8Array(), MEDIUM)).rejects.toMatchObject({ code: "not_image" });
+  });
+});
+
+const [RED, BLUE, GREEN, BLACK] = [0xff0000, 0x0000ff, 0x00ff00, 0x000000];
+const [red, blue, green, white] = [[255, 0, 0, 255], [0, 0, 255, 255], [0, 255, 0, 255], [255, 255, 255, 255]];
+
+// A frame of one colour; the second palette entry is only there to make the palette's size two.
+const fill = (colour: number, rect: { x?: number; y?: number; width: number; height: number }, more: Partial<GifFrame> = {}): GifFrame => ({
+  ...rect,
+  palette: [colour, BLACK],
+  pixels: 0,
+  ...more,
+});
+
+const frame = (gif: Uint8Array, n: number, t = SMALL) => renderImage(gif, t, undefined, 0, n);
+
+// The bytes of gifWithFrameRect() without its global palette: the frame then has no palette at all.
+function gifWithoutPalette() {
+  const b = gifWithFrameRect(4, 4, 4, 4);
+  return new Uint8Array([...b.subarray(0, 10), 0, ...b.subarray(11, 13), ...b.subarray(19)]);
+}
+
+const notOutside = { code: "not_image", message: "A frame of the GIF lies outside its canvas." };
+
+describe("renderImage with a frame", () => {
+  it("composes frame 2 over frame 1 with a partial rectangle", async () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { x: 2, y: 2, width: 4, height: 4 })]);
+    const r = await frame(gif, 2);
+    expect([r.width, r.height]).toEqual([10, 10]);
+    expect(await pixel(r.data, 3, 3)).toEqual(blue);
+    expect(await pixel(r.data, 0, 0)).toEqual(red);
+    expect(await pixel(r.data, 8, 8)).toEqual(red);
+    expect(r.transparent).toBe(false);
+  });
+
+  it("clears a frame's rectangle for disposal 2", async () => {
+    const gif = gifOf(10, 10, [
+      fill(RED, { width: 10, height: 10 }),
+      fill(BLUE, { x: 2, y: 2, width: 4, height: 4 }, { disposal: 2 }),
+      fill(GREEN, { width: 2, height: 2 }),
+    ]);
+    const r = await frame(gif, 3);
+    expect(await pixel(r.data, 3, 3)).toEqual(white);
+    expect(await pixel(r.data, 8, 8)).toEqual(red);
+    expect(await pixel(r.data, 1, 1)).toEqual(green);
+    expect(r.transparent).toBe(true);
+  });
+
+  it("restores what lay under a frame for disposal 3", async () => {
+    const gif = gifOf(10, 10, [
+      fill(RED, { width: 10, height: 10 }),
+      fill(BLUE, { x: 2, y: 2, width: 4, height: 4 }, { disposal: 3 }),
+      fill(GREEN, { width: 2, height: 2 }),
+    ]);
+    const r = await frame(gif, 3);
+    expect(await pixel(r.data, 3, 3)).toEqual(red);
+    expect(await pixel(r.data, 1, 1)).toEqual(green);
+    expect(await pixel(r.data, 8, 8)).toEqual(red);
+  });
+
+  it("lets what lies under show through a transparent index", async () => {
+    // Frame 2 covers the canvas: blue on the left half, its transparent index on the right.
+    const pixels = Array.from({ length: 100 }, (_, i) => (i % 10 < 5 ? 0 : 1));
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), { width: 10, height: 10, palette: [BLUE, BLACK], pixels, transparent: 1 }]);
+    const r = await frame(gif, 2);
+    expect(await pixel(r.data, 2, 5)).toEqual(blue);
+    expect(await pixel(r.data, 8, 5)).toEqual(red);
+  });
+
+  it("shows the last frame before its own disposal", async () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { x: 2, y: 2, width: 4, height: 4 }, { disposal: 2 })]);
+    const r = await frame(gif, 2);
+    expect(await pixel(r.data, 3, 3)).toEqual(blue);
+  });
+
+  it("shows frame 1 through the composing path as the plain still shows it", async () => {
+    // Four colours in stripes over the whole canvas, then a second frame that the still doesn't show.
+    const pixels = Array.from({ length: 12 * 8 }, (_, i) => Math.floor((i % 12) / 3));
+    const gif = gifOf(12, 8, [{ width: 12, height: 8, palette: [RED, GREEN, BLUE, BLACK], pixels }, fill(BLUE, { width: 12, height: 8 })]);
+    const [still, first] = [await renderImage(gif, SMALL), await frame(gif, 1)];
+    expect([first.width, first.height]).toEqual([still.width, still.height]);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 12; x++) expect(await pixel(first.data, x, y), `${x},${y}`).toEqual(await pixel(still.data, x, y));
+  });
+
+  it("delivers transparency left by composing on white, and says so", async () => {
+    // Frame 1 is cleared after it is shown, frame 2 covers a corner: the rest of the canvas is empty.
+    const gif = gifOf(10, 10, [fill(RED, { x: 2, y: 2, width: 4, height: 4 }, { disposal: 2 }), fill(BLUE, { x: 6, y: 6, width: 2, height: 2 })]);
+    const r = await frame(gif, 2);
+    expect(r.transparent).toBe(true);
+    expect(await pixel(r.data, 7, 7)).toEqual(blue);
+    expect(await pixel(r.data, 3, 3)).toEqual(white);
+    expect(await pixel(r.data, 0, 0)).toEqual(white);
+  });
+
+  it("turns and crops a frame", async () => {
+    // 20 × 10 red; frame 2 puts a blue square of 5 px in the top-left corner, which a quarter turn
+    // clockwise brings to the top right of 10 × 20.
+    const gif = gifOf(20, 10, [fill(RED, { width: 20, height: 10 }), fill(BLUE, { width: 5, height: 5 })]);
+    const whole = await renderImage(gif, SMALL, undefined, 90, 2);
+    expect([whole.width, whole.height]).toEqual([10, 20]);
+    expect(await pixel(whole.data, 7, 2)).toEqual(blue);
+    expect(await pixel(whole.data, 2, 2)).toEqual(red);
+    const corner = await renderImage(gif, SMALL, { x: 5, y: 0, w: 5, h: 5 }, 90, 2);
+    expect([corner.width, corner.height]).toEqual([5, 5]);
+    for (const [x, y] of [[0, 0], [4, 4]] as const) expect(await pixel(corner.data, x, y)).toEqual(blue);
+    expect(corner.frame).toBe(2);
+  });
+
+  it("refuses a frame past the end with no_such_frame", async () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
+    await expect(frame(gif, 3)).rejects.toMatchObject({ code: "no_such_frame" });
+  });
+
+  it("refuses a frame rectangle past the canvas before decoding it", async () => {
+    // Decoded, the frame would take 3.6 GB; a failed allocation would also be not_image, so the
+    // sentence tells the check from it.
+    await expect(frame(gifWithFrameRect(10, 10, 60_000, 60_000), 1)).rejects.toMatchObject(notOutside);
+  });
+
+  it("refuses a frame past the canvas's width", async () => {
+    await expect(frame(gifWithFrameRect(10, 10, 6, 1, 5, 0), 1)).rejects.toMatchObject(notOutside);
+  });
+
+  it("refuses a frame past the canvas's height", async () => {
+    await expect(frame(gifWithFrameRect(10, 10, 1, 6, 0, 5), 1)).rejects.toMatchObject(notOutside);
+  });
+
+  it("refuses to compose a GIF over 16 megapixels", async () => {
+    // 5000 × 4000 is 20 MP: within the header limits of the plain path, which goes on to decode it
+    // (Skia makes an empty canvas of the garbage after the header).
+    const header = new Uint8Array([...new TextEncoder().encode("GIF89a"), 0x88, 0x13, 0xa0, 0x0f, 0, 0, 0, ...new Array(32).fill(0xee)]);
+    await expect(frame(header, 1)).rejects.toMatchObject({ code: "too_large", message: "The GIF is too large for a frame: at most 16 megapixels." });
+    await expect(renderImage(header, SMALL)).resolves.toMatchObject({ originalWidth: 5000, originalHeight: 4000 });
+  });
+
+  it("logs nothing while decoding a frame with a short stream", async () => {
+    const log = vi.spyOn(console, "log");
+    try {
+      const r = await frame(gifWithFrameRect(4, 4, 4, 4), 1);
+      expect([r.width, r.height, r.frame]).toEqual([4, 4, 1]);
+      expect(log).not.toHaveBeenCalled();
+      expect(console.log).toBe(log);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("refuses a frame with no palette", async () => {
+    await expect(frame(gifWithoutPalette(), 1)).rejects.toMatchObject({ code: "not_image" });
+  });
+
+  it("refuses a frame of a file that is no GIF", async () => {
+    await expect(frame(solid(10, 10).toBuffer("image/png"), 1)).rejects.toMatchObject({ code: "not_image" });
+  });
+
+  it("refuses a frame of a truncated GIF", async () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
+    await expect(frame(gif.subarray(0, gif.length - 6), 1)).rejects.toMatchObject({ code: "not_image" });
+  });
+
+  it("frames counts 3 for a GIF of three, 1 for a still GIF, and nothing for a PNG", () => {
+    const one = fill(RED, { width: 10, height: 10 });
+    expect(frames(gifOf(10, 10, [one, one, one]))).toBe(3);
+    expect(frames(gifOf(10, 10, [one]))).toBe(1);
+    expect(frames(solid(10, 10).toBuffer("image/png"))).toBeUndefined();
+  });
+
+  it("frames gives nothing, and doesn't throw, for a truncated GIF", () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
+    expect(frames(gif.subarray(0, gif.length - 6))).toBeUndefined();
+  });
+
+  it("renderImage reports the frames of a plain GIF", async () => {
+    const one = fill(RED, { width: 10, height: 10 });
+    const r = await renderImage(gifOf(10, 10, [one, one, one]), SMALL);
+    expect(r.frames).toBe(3);
+    expect(r.frame).toBeUndefined();
+    expect((await renderImage(solid(10, 10).toBuffer("image/png"), SMALL)).frames).toBeUndefined();
+  });
+
+  it("a plain GIF still comes through Skia", async () => {
+    // A plain text extension before the frame: Skia skips it, omggif knows no such block and throws.
+    const b = gifWithFrameRect(4, 4, 4, 4);
+    const gif = new Uint8Array([...b.subarray(0, 19), 0x21, 0x01, 12, ...new Array(12).fill(0), 0, ...b.subarray(19)]);
+    const r = await renderImage(gif, SMALL);
+    expect([r.width, r.height]).toEqual([4, 4]);
+    expect(r.frames).toBeUndefined();
   });
 });
 
