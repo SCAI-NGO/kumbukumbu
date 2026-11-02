@@ -288,16 +288,20 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _accountInvitationPeekByNetwork = Limiter(AccountInvitationPeeksPerNetwork);
     private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
     private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
-    private readonly PartitionedRateLimiter<string> _aliasRenameByUser = Limiter(AliasRenamesPerUser);
+    private readonly PartitionedRateLimiter<string> _aliasRenameByUser;
 
     public AccountLimits()
         : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes and on invitation peeks, so that one can be reached in a few requests.</summary>
-    internal AccountLimits(int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork)
+    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks and on renames, so that one can be
+    /// reached in a few requests, or not at all.</summary>
+    internal AccountLimits(
+        int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
+        int aliasRenamesPerUser = AliasRenamesPerUser)
     {
+        _aliasRenameByUser = Limiter(aliasRenamesPerUser);
         _redeemFailuresByNetwork = Limiter(redeemFailuresPerNetwork);
         _redeemFailures = Limiter(redeemFailuresPerServer);
         _invitePeekByAccount = Limiter(invitePeeksPerAccount);

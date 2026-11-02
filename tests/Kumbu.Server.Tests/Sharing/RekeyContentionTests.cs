@@ -2,11 +2,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using Kumbu.Server.Api;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Kumbu.Server.Tests.Sharing;
 
@@ -15,7 +17,7 @@ namespace Kumbu.Server.Tests.Sharing;
 /// before they write, so the finish commits at its first try, and nobody else's vault waits for it meanwhile.
 /// </summary>
 [Collection("app")]
-public sealed class RekeyContentionTests(KumbuAppFactory app)
+public sealed class RekeyContentionTests(KumbuAppFactory app) : IAsyncDisposable
 {
     /// <summary>The longest any one wait of this test may take; a wait that needs it has failed.</summary>
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
@@ -24,7 +26,23 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private WebApplicationFactory<Program> Api => app.PublicApi;
+    private WebApplicationFactory<Program>? _api;
+
+    /// <summary>
+    /// The public instance with renames practically unlimited: the rate limit would answer the loop 429 before the
+    /// catalog sees it, and it is tested apart (<c>AliasApiTests.Renames_are_rate_limited_per_user</c>). Here every
+    /// rename reaches the check before the write, for the whole run.
+    /// </summary>
+    private WebApplicationFactory<Program> Api => _api ??= app.PublicApi.WithWebHostBuilder(b => b.ConfigureServices(s =>
+    {
+        s.RemoveAll<AccountLimits>();
+        s.AddSingleton(new AccountLimits(AccountLimits.RedeemFailuresPerNetwork, AccountLimits.RedeemFailuresPerServer, aliasRenamesPerUser: 1_000_000));
+    }));
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_api is not null) await _api.DisposeAsync();
+    }
 
     private VaultCatalog Catalog => Api.Services.GetRequiredService<VaultCatalog>();
 
@@ -63,9 +81,8 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
             if (p == "before-finish" && reached.TrySetResult()) await release.Task;
         };
 
-        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var stop = new CancellationTokenSource();
-        var answers = new ConcurrentQueue<(bool Released, HttpStatusCode Status)>();
+        var answers = new ConcurrentQueue<HttpStatusCode>();
         Task<HttpResponseMessage>? rekey = null;
         var loops = new List<Task>();
 
@@ -74,8 +91,7 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
             for (var i = 0; !stop.IsCancellationRequested; i++)
             {
                 using var renamed = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{bobs}/alias", new { alias = $"garten-{loop}-{i}" });
-                // Read after the answer: an answer seen before the flag was set came while the run was held.
-                answers.Enqueue((released.Task.IsCompleted, renamed.StatusCode));
+                answers.Enqueue(renamed.StatusCode);
             }
         }
 
@@ -91,7 +107,6 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
                 loops.Add(Task.Run(() => LoopAsync(n), Ct));
             }
 
-            // Past the rate limit, so that both refusals are seen while the run is held.
             var waiting = Stopwatch.StartNew();
             while (answers.Count < 50 && !loops.Any(l => l.IsFaulted))
             {
@@ -100,14 +115,10 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
             }
 
             Assert.False(loops.Any(l => l.IsFaulted), "A rename loop failed.");
+            // Taken before the release: every answer in it came while the run was held.
             var held = answers.ToArray();
-            var others = held.Select(a => a.Status).Where(s => s is not (HttpStatusCode.ServiceUnavailable or HttpStatusCode.TooManyRequests)).Distinct().ToArray();
-            Assert.True(others.Length == 0, $"While the run was held, renames answered {string.Join(", ", others)}.");
-            Assert.Contains(held, a => a.Status == HttpStatusCode.ServiceUnavailable);
-            Assert.Contains(held, a => a.Status == HttpStatusCode.TooManyRequests);
 
             // Released with the loops still going, and kept going until the re-key has answered; Carol reads meanwhile.
-            released.SetResult();
             release.SetResult();
             var during = TimeSpan.Zero;
             do
@@ -121,12 +132,15 @@ public sealed class RekeyContentionTests(KumbuAppFactory app)
             await Task.WhenAll(loops).WaitAsync(Bound, Ct);
 
             TestContext.Current.TestOutputHelper?.WriteLine(
-                $"Carol's read: {baseline.TotalMilliseconds:0} ms without the loops, {during.TotalMilliseconds:0} ms during the release; {answers.Count} renames, {held.Length} while held.");
+                $"Carol's read: {baseline.TotalMilliseconds:0} ms without the loops, {during.TotalMilliseconds:0} ms during the release; {answers.Count} renames, {held.Length} while held; the finish's transaction ran {Volatile.Read(ref insideFinish)} time(s).");
+            // What a loop that reached the finish would break comes first, then what the hold saw.
             Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
             Assert.Equal(1, Volatile.Read(ref insideFinish));
             // A rename after the commit may go through; none of them is the server's fault.
-            Assert.DoesNotContain(answers, a => a.Status == HttpStatusCode.InternalServerError);
+            Assert.DoesNotContain(HttpStatusCode.InternalServerError, answers);
             Assert.True(during <= baseline * 2 + TimeSpan.FromSeconds(1), $"Carol's read took {during.TotalMilliseconds:0} ms during the release, {baseline.TotalMilliseconds:0} ms without the loops.");
+            var others = held.Where(s => s != HttpStatusCode.ServiceUnavailable).Distinct().ToArray();
+            Assert.True(others.Length == 0, $"While the run was held, renames answered {string.Join(", ", others)}.");
         }
         finally
         {

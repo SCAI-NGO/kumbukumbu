@@ -106,7 +106,8 @@ public static class Share
 
 /// <summary>
 /// A run of a vault held at <c>"before-finish"</c> (through <see cref="VaultCatalog.RekeyFaultAt"/>): the run holds the
-/// vault in memory and the vault is in its two-key period. Disposing releases it and waits for the finish.
+/// vault in memory and the vault is in its two-key period. Disposing releases it and waits, bounded, for the finish;
+/// how the run ends is left to the test's own checks, so a failure of the body is the one reported.
 /// </summary>
 public sealed class RekeyHold : IAsyncDisposable
 {
@@ -135,7 +136,8 @@ public sealed class RekeyHold : IAsyncDisposable
         }
         catch
         {
-            catalog.RekeyFaultAt = null;
+            // Not left running: released, and waited for, before the failure is reported.
+            await hold.DisposeAsync();
             throw;
         }
 
@@ -148,6 +150,10 @@ public sealed class RekeyHold : IAsyncDisposable
         try
         {
             await _run.WaitAsync(Bound, TestContext.Current.CancellationToken);
+        }
+        catch (Exception)
+        {
+            // The run's own end isn't what is tested here; what the test asserts afterwards is.
         }
         finally
         {

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text;
 using Kumbu.Core.Crypto;
@@ -169,15 +170,14 @@ public sealed partial class VaultCatalog
         // Her slot is what a run's finish writes: refused before the write while one holds the vault or it is in its
         // two-key period, so a rename loop can't make the finish conflict (spec §1.3). Bound to her first, so someone
         // else's membership answers as an unknown one.
-        var own = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-            .Find(m => m.Id == membershipId && m.Member == memberId && m.Status == MembershipStatus.Active).FirstOrDefaultAsync(ct) ?? throw notYours;
+        Expression<Func<MembershipDocument, bool>> hers = m => m.Id == membershipId && m.Member == memberId && m.Status == MembershipStatus.Active;
+        var own = await db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(hers).FirstOrDefaultAsync(ct) ?? throw notYours;
         await RequireNoneRekeyingAsync([own.Vault], ct);
         using var session = await StartSessionAsync(ct);
         await session.WithTransactionAsync(
             async (s, token) =>
             {
-                var membership = await db.GetCollection<MembershipDocument>(Memberships.CollectionName)
-                    .Find(s, m => m.Id == membershipId && m.Member == memberId && m.Status == MembershipStatus.Active).FirstOrDefaultAsync(token) ?? throw notYours;
+                var membership = await db.GetCollection<MembershipDocument>(Memberships.CollectionName).Find(s, hers).FirstOrDefaultAsync(token) ?? throw notYours;
                 var slot = await Slots.Find(s, f.Eq(x => x.Kind, SlotDocument.Member) & f.Eq(x => x.Membership, membershipId)
                     & f.Eq(x => x.Vault, membership.Vault) & f.Eq(x => x.Lookup, UserLookup(memberKey, memberId))).FirstOrDefaultAsync(token) ?? throw notYours;
                 byte[] aliasKey;
