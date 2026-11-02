@@ -181,10 +181,15 @@ describe("renderImage", () => {
   });
 
   it("keeps an opaque image opaque when it is turned and scaled", async () => {
-    const png = solid(1000, 700).toBuffer("image/png");
-    for (const rotate of [90, 180, 270]) {
-      const r = await renderImage(png, SMALL, undefined, rotate);
-      expect(r.transparent, `${rotate}`).toBe(false);
+    // Skia doesn't blend an image's edges: a drawing off by a fraction of a pixel leaves a row or
+    // column empty once the fraction reaches half an output pixel. At scale 1 (640 × 480 at small),
+    // half a pixel of the image is half a pixel of the output.
+    for (const [w, h] of [[1000, 700], [640, 480]]) {
+      const png = solid(w!, h!).toBuffer("image/png");
+      for (const rotate of [90, 180, 270]) {
+        const r = await renderImage(png, SMALL, undefined, rotate);
+        expect(r.transparent, `${w} × ${h}, ${rotate}`).toBe(false);
+      }
     }
   });
 
