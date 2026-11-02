@@ -132,6 +132,12 @@ describe("text boxes", () => {
       expect(pages.map((p) => p.n)).toEqual(a.pages.map((p) => p.n));
       pages.forEach((p, i) => expect(p.text).toBe(a.pages[i]!.text));
     }
+    // pdf.js leaves no white space at the end of these pages; items that end in it must lose it too,
+    // as analyse's text (pageText's) does.
+    const viewport = await viewportOf(await emptyPage());
+    const ending = [item("Total", 50, 780, { hasEOL: true }), item("  ", 50, 760, { hasEOL: true })];
+    expect(pageText(ending).text).toBe("Total");
+    expect(boxesOf({ n: 1, width: A4.width, height: A4.height }, ending, viewport).text).toBe(pageText(ending).text);
   });
 
   it("keeps offsets inside the trimmed text, ascending", async () => {
