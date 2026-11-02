@@ -784,8 +784,8 @@ describe("vaults shared with the user", () => {
     expect(await menuItems("Actions for Board", 1)).toEqual(["Rename or move", "Delete note"]);
     const items = await menuItems("Actions for Beete");
     expect(items).toContain("Board");
-    // Pairing a shared vault and its embedding provider stay the owner's.
-    expect(items).not.toContain("Connect Obsidian…");
+    // A member may pair her own device; sharing and the embedding provider stay the owner's.
+    expect(items).toContain("Connect Obsidian…");
     expect(items).not.toContain("Share…");
     expect(items).not.toContain("Search by meaning…");
   });
