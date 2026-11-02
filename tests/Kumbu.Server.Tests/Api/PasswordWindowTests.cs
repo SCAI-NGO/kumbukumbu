@@ -170,7 +170,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/oauth/requests/{id}/decision"] = GrantingInline,
-        ["PATCH /api/admin/users/{id}"] = GrantingInline,
+        ["PATCH /api/admin/users/{id}"] = "guarded inline: every change to another account needs the window",
         ["POST /api/admin/invitations"] = GrantingInline,
         ["PUT /api/vaults/{vault}/memberships/{id}/role"] = GrantingInline,
     };

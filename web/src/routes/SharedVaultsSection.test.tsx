@@ -39,7 +39,8 @@ describe("Shared vaults", () => {
     ]);
     expect(items[0]).toHaveTextContent("No longer shared with you");
     expect(items[1]).not.toHaveTextContent("No longer shared with you");
-    expect(items[0]).toHaveTextContent("1 Nov 2026");
+    // The day as the runner's time zone has it: 11:00 UTC is already 2 November in some.
+    expect(items[0]).toHaveTextContent(new Date("2026-11-01T11:00:00Z").toLocaleDateString("en-GB", { dateStyle: "medium" }));
   });
 
   it("shows nothing for someone with no events", async () => {
