@@ -6,7 +6,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AuthScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useSession } from "../state/session";
-import { RightText } from "./rights";
+import { ActsAs } from "./rights";
 
 type View = components["schemas"]["ConsentView"];
 
@@ -17,7 +17,6 @@ const bigSecondary = secondaryButtonClass.replace("min-h-11", "min-h-12");
 /** What the server found wrong with the request, in words for the user. The few that cannot be answered by Allow. */
 const problems: Record<string, string> = {
   not_a_connection: "This address isn't a connection. In Kumbu², open Access → Connect an app, and use the connector URL it shows.",
-  other_user: "This connection belongs to another Kumbu² account. Sign out and sign in as its owner.",
   revoked: "This connection was revoked. Make a new connection in Kumbu² and add its URL in the app.",
   expired: "This connection expired. Make a new connection in Kumbu² and add its URL in the app.",
 };
@@ -29,7 +28,9 @@ export function ConsentError({ code }: { code: string }) {
       ? "The app could not be identified, so Kumbu² can't connect it."
       : code === "invalid_redirect_uri"
         ? "The app asked to return to an address it didn't register. Nothing was connected."
-        : "The app's request could not be used. Nothing was connected.";
+        : code === "temporarily_unavailable"
+          ? "Too many apps are being identified right now; try again in a minute. Nothing was connected."
+          : "The app's request could not be used. Nothing was connected.";
   return (
     <AuthScreen title="Nothing was connected">
       <p role="alert" className="rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-text">
@@ -86,9 +87,17 @@ export default function Consent() {
   if (id === "") return <ConsentError code="invalid_request" />;
   if (request.isPending) return null;
   if (request.isError) {
+    // The server's 404 for a request that names another account's connection: signing in as its owner helps.
+    const otherAccount = request.error instanceof HttpError && request.error.status === 404 && request.error.type === "other-account";
     return (
       <AuthScreen title="Connection request">
         <FormError>{errorText(request.error)}</FormError>
+        {signOut.isError && <FormError>Signing out didn't work. Try again.</FormError>}
+        {otherAccount && (
+          <button type="button" disabled={signOut.isPending} onClick={() => signOut.mutate()} className={primaryButtonClass}>
+            Sign out
+          </button>
+        )}
       </AuthScreen>
     );
   }
@@ -108,14 +117,8 @@ export default function Consent() {
     return (
       <AuthScreen title="Can't connect">
         <p className="text-text-body">{problems[problem] ?? "This request can't be completed."}</p>
-        {signOut.isError && <FormError>Signing out didn't work. Try again.</FormError>}
         {failure}
         <div className="flex flex-col gap-3">
-          {problem === "other_user" && (
-            <button type="button" disabled={signOut.isPending} onClick={() => signOut.mutate()} className={primaryButtonClass}>
-              Sign out
-            </button>
-          )}
           {back(problem === "revoked" || problem === "expired" ? "Back" : `Back to ${host}`)}
         </div>
       </AuthScreen>
@@ -131,7 +134,7 @@ export default function Consent() {
       <ul className="flex flex-col divide-y divide-line rounded-[12px] border border-line bg-surface">
         {Object.entries(connection.vaults).map(([vault, right]) => (
           <li key={vault} className="px-4 py-3 break-words text-text">
-            {vault}: <RightText right={right} />
+            {vault}: <ActsAs right={right} level={connection.actsAs[vault]} vault={vault} />
           </li>
         ))}
       </ul>

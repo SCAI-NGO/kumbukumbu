@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { countsText, useActivity, writerText, type ActivityFile, type ActivityRow } from "../api/activity";
+import { countsText, mergeActivity, useActivity, writerText, type ActivityFile, type ActivityRow } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { fileInfoQuery } from "../api/notes";
 import { fileKindOf, folderOf, inVault, shownPath, viewUrl, type FileKind, type LightboxState } from "../api/paths";
@@ -38,7 +38,7 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
   const activity = useActivity(vault);
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const [chosen, setChosen] = useState<ActivityFile | null>(null);
-  const rows = activity.data?.pages.flatMap((p) => p.rows) ?? [];
+  const items = mergeActivity(activity.data?.pages ?? []);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -85,10 +85,22 @@ export default function ActivitySheet({ vault, onClose, onOpenTrash }: { vault: 
     <Sheet title="Activity" onClose={onClose}>
       {activity.isPending && <p className="text-sm text-muted">Loading the changes …</p>}
       {activity.isError && <FormError>{errorText(activity.error)}</FormError>}
-      {activity.data && rows.length === 0 && <p className="text-sm text-muted">No changes yet.</p>}
-      {rows.length > 0 && (
+      {activity.data && items.length === 0 && <p className="text-sm text-muted">No changes yet.</p>}
+      {items.length > 0 && (
         <ul aria-label="Changes" className="flex flex-col gap-1.5">
-          {rows.map((row, i) => {
+          {items.map((item, i) => {
+            if (item.type === "event") {
+              return (
+                <li key={`${i}-event-${item.at}`} data-event-kind={item.event.kind} className="rounded-[12px] border border-line bg-surface-2 px-3.5 py-2">
+                  <span className="flex w-full items-baseline gap-2">
+                    <span className="min-w-0 flex-1 text-text">{item.event.text}</span>
+                    <span className="flex-none text-[12px] text-dim">{ago(item.event.at)}</span>
+                  </span>
+                  <span className="text-sm text-muted">{timeText(item.event.at)}</span>
+                </li>
+              );
+            }
+            const { row } = item;
             const k = key(row, i);
             const expanded = open.has(k);
             const Chevron = expanded ? ChevronDown : ChevronRight;

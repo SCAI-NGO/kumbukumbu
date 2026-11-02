@@ -77,9 +77,9 @@ describe("attachments in the tree", () => {
   it("the vault's menu opens its gallery, beside the board", async () => {
     const router = await openDrawer();
     await userEvent.click(within(drawer()).getByRole("button", { name: "Actions for Work" }));
-    const items = within(drawer()).getAllByRole("menuitem").map((i) => i.textContent);
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
     expect(items.indexOf("Gallery")).toBe(items.indexOf("Create board") + 1);
-    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Gallery" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Gallery" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/gallery/Work"));
   });
 

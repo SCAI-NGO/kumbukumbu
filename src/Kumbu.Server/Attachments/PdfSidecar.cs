@@ -133,6 +133,8 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
                 Content = content,
             };
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            // The client follows no redirects (Program.cs); one that comes back is not an answer to trust.
+            if ((int)response.StatusCode is >= 300 and < 400) throw Invalid("The PDF sidecar answered with a redirect");
             if (!response.IsSuccessStatusCode) throw await ErrorAsync(response, timeout.Token);
             return await read(response, timeout.Token);
         }

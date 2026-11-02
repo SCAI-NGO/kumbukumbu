@@ -74,9 +74,10 @@ public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 
 /// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
-/// session, the latest visit (its first request after 30 minutes without one); not the last request.</summary>
+/// session, the latest visit (its first request after 30 minutes without one); not the last request. <c>sharedVaults</c>:
+/// how many of their vaults have an active member (a count, never a name).</summary>
 public sealed record AdminUserView(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
 
 /// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
 /// acting admin's own.</summary>
@@ -150,7 +151,7 @@ public static class AccountApi
         var open = app.MapGroup("/api").AddEndpointFilter(ApiErrors.Filter).AllowAnonymous();
         open.MapPost("/session", SignInAsync).Errors(400, 401, 403, 429);
         // POST with the code in the body, never in the path: request lines end up in logs.
-        open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404);
+        open.MapPost("/invitations/peek", PeekInvitationAsync).Errors(400, 403, 404, 429);
         open.MapPost("/join", JoinAsync).Errors(400, 403, 409, 429);
         open.MapPost("/recover", RecoverAsync).Errors(400, 401, 403, 409, 429);
 
@@ -181,8 +182,8 @@ public static class AccountApi
     }
 
     private static async Task<Ok<SessionView>> SignInAsync(
-        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, ILoggerFactory logs,
-        CancellationToken ct)
+        SignInRequest body, HttpContext http, UserCatalog users, Sessions sessions, Rekeying rekeying, AccountLimits limits, Pairings pairings,
+        ILoggerFactory logs, CancellationToken ct)
     {
         if (limits.SignIn(http, body.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // Unknown user, wrong password and inactive user all answer the same; Argon2 runs for each of them.
@@ -195,7 +196,12 @@ public static class AccountApi
         var (user, userKey, readAt) = signedIn;
 
         // Signing in again in the same browser replaces its session rather than leaving the old one behind.
-        if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old)) await sessions.EndAsync(old, ct);
+        // Its codes go with it, whoever's session it was.
+        if (http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var old) && await sessions.EndAsync(old, ct) is { } replaced)
+        {
+            pairings.DropAll(replaced);
+        }
+
         SetSessionCookie(http, await sessions.StartAsync(user, userKey, readAt, ct, body.Remember), body.Remember);
         KumbuMetrics.SignedIn(KumbuMetrics.Outcome.Success);
         if (body.Remember) Log(logs).LogInformation("User {UserId} signed in and is kept signed in on this device", user.Id);
@@ -205,8 +211,10 @@ public static class AccountApi
         return TypedResults.Ok(new SessionView(UserView.From(user), user.PreviousSignInAt, PasswordWindowOpen: true));
     }
 
-    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(PeekInvitationRequest body, Invitations invitations, CancellationToken ct)
+    private static async Task<Ok<InvitationPeekView>> PeekInvitationAsync(
+        PeekInvitationRequest body, HttpContext http, Invitations invitations, AccountLimits limits, CancellationToken ct)
     {
+        if (limits.AccountInvitationPeek(http) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         var info = await invitations.PeekAsync(body.Code, ct) ?? throw ApiErrors.NotFound("This is not a valid invitation.");
         return TypedResults.Ok(new InvitationPeekView(info.Role, info.ExpiresAt, info.Valid, info.Valid ? null : StateText(info.State)));
     }
@@ -387,7 +395,7 @@ public static class AccountApi
 
     private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored))
+            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults))
             .ToArray());
 
     private static async Task<NoContent> UpdateUserAsync(
@@ -395,10 +403,11 @@ public static class AccountApi
         AccountLimits limits, CancellationToken ct)
     {
         if (body is { Active: null, Role: null }) throw ApiErrors.BadRequest("Give 'active', 'role' or both.");
-        // Only granting needs the window: activating; making an admin brings the password itself, which opens it.
-        // Deactivating and demoting are cleaning up and need neither.
+        // Every change to another account needs the window: deactivating or demoting destroys that account's
+        // credentials, which a remembered session with its window closed must not do. Making an admin brings the
+        // password itself, which opens it.
         if (body.Role == Roles.Admin) await RequirePasswordAsync(http, caller, body.Password, "Making someone an admin needs your password.", users, sessions, limits, ct);
-        else if (body.Active is true) Security.RequirePasswordWindow(caller);
+        else Security.RequirePasswordWindow(caller);
         // A refused request changes nothing. The role goes first, and SetRoleAsync refuses before it writes (an
         // unusable role, the primary admin, no such user, an actor who isn't an admin). The one refusal left to
         // SetActiveAsync after that is deactivating oneself, so it is checked here, before the role is set.
@@ -569,14 +578,16 @@ public static class AccountApi
     }
 
     /// <summary>The counterpart of <see cref="PasswordGivenAsync"/>: a wrong one counts against the session, which
-    /// ends if it is remembered and this is the fifth in a row. Called by <see cref="ApiErrors.Filter"/> for every
-    /// <see cref="WrongPasswordException"/>, so a check only has to throw that.</summary>
+    /// ends if it is remembered and this is the fifth in a row or the tenth in all; the user's open pairing codes go
+    /// with it. Called by <see cref="ApiErrors.Filter"/> for every <see cref="WrongPasswordException"/>, so a check
+    /// only has to throw that.</summary>
     internal static async Task PasswordWrongAsync(HttpContext http, CancellationToken ct)
     {
         if (!http.Request.Cookies.TryGetValue(CallerMiddleware.SessionCookie, out var secret)) return;
         if (await http.RequestServices.GetRequiredService<Sessions>().PasswordWrongAsync(secret, ct) is { } userId)
         {
-            Log(http.RequestServices.GetRequiredService<ILoggerFactory>()).LogInformation("Ended a remembered session of user {UserId} after 5 wrong passwords", userId);
+            http.RequestServices.GetRequiredService<Pairings>().DropAll(userId);
+            Log(http.RequestServices.GetRequiredService<ILoggerFactory>()).LogInformation("Ended a remembered session of user {UserId} after too many wrong passwords", userId);
         }
     }
 }

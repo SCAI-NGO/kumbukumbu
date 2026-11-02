@@ -175,7 +175,7 @@ A database-level attacker (a hoster's disk; architecture §2) can replace a user
 
 - At acceptance, the public key is **derived from the private key the session's user key just unwrapped**, never read from the user document; it is written into the membership's sealed `pin` (§2.1) under the current vault key.
 - A re-key finish (§7.1) and a member's rotation (§5.1) wrap only to the key in a pin that **opens under the vault key** and matches the membership's `member` and id. A `member` slot without a valid pin is deleted and logged as damaged; the finish never creates member slots.
-- **Stated residual:** an ex-member who still holds the vault key *and* can write the live database could forge a pin. That needs both a former member and write access to the database; it is stated beside the re-encrypt-after-revoke offer (§6.4).
+- **Stated residual:** an ex-member who still holds the vault key *and* can write the live database could forge a pin. That needs both a former member and write access to the database; it is stated beside the re-encrypt-after-revoke offer (§6.4). (amended in §14)
 
 ## 6. Revocation, leaving, role changes
 
@@ -358,7 +358,7 @@ The review saw only this document and `docs/security-architecture.md`. Every fin
 
 | # | Finding | Resolution |
 |---|---|---|
-| C1 | A re-key finish wraps the new key to a public key the database names | Sealed pins under the vault key; wrap only to pinned keys; stated residual (§5.4, §7.1) |
+| C1 | A re-key finish wraps the new key to a public key the database names | Sealed pins under the vault key; wrap only to pinned keys; stated residual (§5.4, §7.1; amended in §14) |
 | H1 | A member's keypair is never rotated | New keypair on every user-key rotation, slots rewrapped in the rotation's transaction (§5.1) |
 | H2 | Membership ids not bound to vault or caller | Every membership write filters on vault or member and status; a test per route (§6.0) |
 | M1 | Presence reaches revoked members for up to 30 s | Synchronous hub notification on every access change (§6.1, §9.1) |
@@ -409,3 +409,5 @@ The review saw only this document and `docs/security-architecture.md`. Every fin
 
 
 **The `(vault, member)` index covers live memberships only** (review of tasks 3.1–3.4; replaces the index rule in §2.1). The unique index is partial on `member` being a string **and** `status` in `pending | active`. A tombstone keeps `member` (§2.1), and under the first rule a declined, revoked or departed person could never be invited to that vault again; two live memberships of one person stay impossible. The redeemer's name and username reach the owner only while a membership waits for her confirmation (`pending`, `confirm`, redeemed), as §4.2 says.
+
+**Re-encrypting does not end the forged-pin residual** (0.3.0 review; amends §5.4 and §13 C1). A pin is sealed under the vault key alone, and the finish wraps the new key to whatever a pin that opens under the **old** key names (§7.1). So an ex-member who kept the old vault key *and* can write the live database can get the new key too; §5.4 and C1 overstate what re-encrypting after a revocation achieves. Re-encrypting still cuts off a former member who cannot write the database. Pins that hold against this are planned for 0.3.1; see `2026-11-01-0.3.0-fixes-design.md` §1.2.

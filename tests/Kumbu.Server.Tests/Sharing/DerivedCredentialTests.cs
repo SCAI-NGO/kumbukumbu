@@ -111,7 +111,7 @@ public sealed class DerivedCredentialTests(KumbuAppFactory app)
         var (alice, bob, vaultId, membershipId) = await SharedAsync();
         var pairings = Api.Services.GetRequiredService<Pairings>();
 
-        var code = pairings.Create(bob.User, (byte[])bob.UserKey.Clone(), DateTime.UtcNow, vaultId, "garten", null);
+        var code = pairings.Create(bob.User, (byte[])bob.UserKey.Clone(), DateTime.UtcNow, Sessions.SubjectOf(bob.Session)!, vaultId, "garten", null);
         var redeemed = await pairings.RedeemAsync(code.Code, "Laptop", Ct);
 
         Assert.Equal("garten – Obsidian Laptop", redeemed!.KeyName);

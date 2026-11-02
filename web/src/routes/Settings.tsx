@@ -6,12 +6,15 @@ import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import ConfirmTyped from "../components/ConfirmTyped";
+import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../components/SharedVaultsChoice";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
 import { usePreferences } from "../attachments/downloadFiles";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
+import SharedVaultsSection from "./SharedVaultsSection";
+import DeleteVaultDialog from "../shell/DeleteVaultDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -32,6 +35,9 @@ export default function Settings() {
       <ReencryptSection />
       <SessionsSection />
       <VaultsSection />
+      <Section title="Shared vaults">
+        <SharedVaultsSection />
+      </Section>
       <YourDataSection />
       <DownloadsSection />
       <DeleteAccountSection />
@@ -535,36 +541,6 @@ function AccessList({ title, names }: { title: string; names: string[] }) {
   );
 }
 
-function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
-  const queryClient = useQueryClient();
-  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
-  const [password, setPassword] = useState("");
-  const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/vaults/{vault}/delete", { params: { path: { vault } }, body: { password, confirm: vault } })),
-    onSuccess: async () => {
-      useEditor.getState().forgetVault(vault);
-      // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
-      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
-      await Promise.all(["vaults", "keys", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
-      onClose();
-    },
-  });
-  return (
-    <ConfirmTyped
-      title={`Delete ${vault}?`}
-      text="The vault goes for good, with every note in it, their history, the trash and the checkpoints. Nobody can bring it back. An API key that had only this vault is revoked."
-      word={vault}
-      action="Delete vault"
-      pending={remove.isPending}
-      error={remove.isError ? errorText(remove.error) : null}
-      onConfirm={() => remove.mutate()}
-      onClose={onClose}
-      password={password}
-      onPasswordChange={setPassword}
-    />
-  );
-}
-
 /** Needs the password and the username typed out, so neither a stolen session nor a slip deletes the account. */
 function DeleteAccountSection() {
   const id = useId();
@@ -572,8 +548,12 @@ function DeleteAccountSection() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
   const [typed, setTyped] = useState("");
+  const [choice, setChoice] = useState<SharedVaultsChoice>(defaultSharedVaultsChoice);
+  const vaults = useVaults();
+  // Her own vaults with an active member: the ones the server asks about. A vault shared with nobody isn't one.
+  const shared = (vaults.data ?? []).filter((v) => v.owner == null && Number(v.members ?? 0) > 0);
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed } })),
+    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed, ...(shared.length > 0 && { sharedVaults: choice }) } })),
     onSuccess: () => {
       setPassword("");
       queryClient.clear();
@@ -599,6 +579,20 @@ function DeleteAccountSection() {
             Agents using your keys stop working at once. Nobody can bring it back, not even an admin.
           </p>
           <form onSubmit={submit} className="flex flex-col gap-4">
+            {shared.length > 0 && (
+              <SharedVaultsChoiceField
+                legend="Your shared vaults"
+                count={shared.length}
+                intro={
+                  <>
+                    You share {shared.length === 1 ? "this vault" : "these vaults"} with others: <b className="text-text">{shared.map((v) => v.name).join(", ")}</b>.
+                    What becomes of {shared.length === 1 ? "it" : "them"}?
+                  </>
+                }
+                value={choice}
+                onChange={setChoice}
+              />
+            )}
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`${id}-confirm`} className={labelClass}>
@@ -616,7 +610,7 @@ function DeleteAccountSection() {
               />
             </div>
             {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
-            <button type="submit" disabled={remove.isPending || !password || typed !== me.username} className={primaryButtonClass}>
+            <button type="submit" disabled={remove.isPending || vaults.isPending || !password || typed !== me.username} className={primaryButtonClass}>
               Delete my account
             </button>
           </form>

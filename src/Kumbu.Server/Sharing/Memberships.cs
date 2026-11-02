@@ -481,12 +481,16 @@ public sealed partial class Memberships(
     /// <summary>
     /// The member acknowledges <paramref name="provider"/> as the embedding provider of the vault of her active membership
     /// <paramref name="membershipId"/> (collab design §8.5): her searches go to it again once it is the vault's. Bound
-    /// to her as the member (HARD RULE 2); <see cref="MembershipNotFoundException"/> for anyone else's membership.
+    /// to her as the member (HARD RULE 2); <see cref="MembershipNotFoundException"/> for anyone else's membership, and
+    /// <see cref="Vaults.VaultBusyException"/> while the vault is re-keyed.
     /// </summary>
     public async Task ProviderSeenAsync(string memberId, string membershipId, string provider, CancellationToken ct)
     {
         await EnsureReadyAsync(ct);
         var bound = BoundFilter(membershipId, MembershipScope.OfMember(memberId), MembershipStatus.Active, MembershipStatus.Active);
+        // Her membership is what a run's finish writes: refused before the write during a run (spec §1.3), as a rename is.
+        var doc = await Docs.Find(bound).FirstOrDefaultAsync(ct) ?? throw new MembershipNotFoundException();
+        await catalog.RequireNoneRekeyingAsync([doc.Vault], ct);
         var updated = await Docs.UpdateOneAsync(bound, Builders<MembershipDocument>.Update.Set(m => m.ProviderSeen, provider), cancellationToken: ct);
         if (updated.MatchedCount == 0) throw new MembershipNotFoundException();
     }
@@ -495,7 +499,7 @@ public sealed partial class Memberships(
     /// The owner changes the role of an active membership of <paramref name="vaultId"/> (collab design §6.3): one update
     /// of <c>role</c>, <c>roleChangedAt</c> and <c>revision</c>, conditioned on the role it had, with an event for the
     /// member in the same transaction. Raising it calls <paramref name="raising"/> first, which throws unless the
-    /// password window is open (§13 M7); lowering never does, so the owner can always reduce access at once. Effective
+    /// password window is open (§13 M7), or for <c>maintain</c> unless the password was given; lowering never does, so the owner can always reduce access at once. Effective
     /// on the member's next request; no slot changes. <see cref="MembershipNotFoundException"/> unless it is an active
     /// membership of that vault. Returns the membership, with the role it has now.
     /// </summary>

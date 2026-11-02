@@ -64,6 +64,28 @@ public sealed class MemberDeletionTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_admins_user_list_counts_the_shared_vaults_of_each_user_and_names_none()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("plan.md", "# Beete\n");
+        await alice.ShareWithAsync(bob, "garten", MemberRole.Read);
+        var admin = await RestClient.NewAsync(Api, vault: "Admin", role: Roles.Admin);
+
+        using var response = await admin.GetAsync("/api/admin/users");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(Ct);
+        var rows = System.Text.Json.Nodes.JsonNode.Parse(body)!.AsArray();
+        // One vault, shared with Bob: Alice has it counted, and Bob's own unshared vault is no shared vault of his.
+        Assert.Equal(1, rows.Single(u => u!["username"]!.GetValue<string>() == alice.Username)!["sharedVaults"]!.GetValue<int>());
+        Assert.Equal(0, rows.Single(u => u!["username"]!.GetValue<string>() == bob.Username)!["sharedVaults"]!.GetValue<int>());
+        Assert.Equal(0, rows.Single(u => u!["username"]!.GetValue<string>() == carol.Username)!["sharedVaults"]!.GetValue<int>());
+        Assert.DoesNotContain("Gartenarbeit", body);
+    }
+
+    [Fact]
     public async Task A_members_account_deletion_never_deletes_the_owners_vault()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");

@@ -93,4 +93,71 @@ public static class Share
     public static Task SetRoleAsync(IMongoDatabase db, string membershipId, MemberRole role) =>
         db.GetCollection<MembershipDocument>(Memberships.CollectionName).UpdateOneAsync(
             m => m.Id == membershipId, Builders<MembershipDocument>.Update.Set(m => m.Role, MemberRoles.ToText(role)).Inc(m => m.Revision, 1), cancellationToken: Ct);
+
+    /// <summary>Sets or clears <c>rekeyStartedAt</c> straight in MongoDB: a vault in its two-key period, as a run of another
+    /// process leaves it, with nothing of it in this process's memory.</summary>
+    public static Task SetRekeyStartedAsync(IMongoDatabase db, string vaultId, DateTime? at) =>
+        db.GetCollection<VaultDocument>("vaults").UpdateOneAsync(v => v.Id == vaultId, Builders<VaultDocument>.Update.Set(v => v.RekeyStartedAt, at), cancellationToken: Ct);
+
+    /// <summary>The owner's run of her vault, held before its finish until the hold is disposed (<see cref="RekeyHold"/>).</summary>
+    public static async Task<RekeyHold> HoldRekeyAsync(this RestClient owner) =>
+        await RekeyHold.StartAsync(owner.Api.Services.GetRequiredService<VaultCatalog>(), await owner.VaultIdAsync(), owner);
+}
+
+/// <summary>
+/// A run of a vault held at <c>"before-finish"</c> (through <see cref="VaultCatalog.RekeyFaultAt"/>): the run holds the
+/// vault in memory and the vault is in its two-key period. Disposing releases it and waits, bounded, for the finish;
+/// how the run ends is left to the test's own checks, so a failure of the body is the one reported.
+/// </summary>
+public sealed class RekeyHold : IAsyncDisposable
+{
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
+
+    private readonly VaultCatalog _catalog;
+    private readonly TaskCompletionSource _reached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task _run = Task.CompletedTask;
+
+    private RekeyHold(VaultCatalog catalog) => _catalog = catalog;
+
+    internal static async Task<RekeyHold> StartAsync(VaultCatalog catalog, string vaultId, RestClient owner)
+    {
+        var hold = new RekeyHold(catalog);
+        catalog.RekeyFaultAt = async p =>
+        {
+            if (p == "before-finish" && hold._reached.TrySetResult()) await hold._release.Task;
+        };
+        hold._run = Task.Run(() => catalog.RekeyAsync(vaultId, owner.User.Id, owner.UserKey, TestContext.Current.CancellationToken));
+        try
+        {
+            // A run that fails before its finish throws here rather than leaving the wait to time out.
+            await (await Task.WhenAny(hold._reached.Task, hold._run).WaitAsync(Bound, TestContext.Current.CancellationToken));
+            if (!hold._reached.Task.IsCompleted) throw new InvalidOperationException("The run ended before its finish.");
+        }
+        catch
+        {
+            // Not left running: released, and waited for, before the failure is reported.
+            await hold.DisposeAsync();
+            throw;
+        }
+
+        return hold;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _release.TrySetResult();
+        try
+        {
+            await _run.WaitAsync(Bound, TestContext.Current.CancellationToken);
+        }
+        catch (Exception)
+        {
+            // The run's own end isn't what is tested here; what the test asserts afterwards is.
+        }
+        finally
+        {
+            _catalog.RekeyFaultAt = null;
+        }
+    }
 }

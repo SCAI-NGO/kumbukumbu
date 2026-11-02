@@ -3,6 +3,8 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
+using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Kumbu.Server.Tests.Api;
@@ -72,6 +74,39 @@ public sealed class BoardApiTests(KumbuAppFactory app)
 
         Assert.Equal("Work", board["title"]!.GetValue<string>());
         Assert.Equal(JsonValueKind.Null, board["instructions"]?.GetValueKind() ?? JsonValueKind.Null);
+    }
+
+    /// <summary>Alice's "Gartenarbeit" with a board from the template, shared with Bob as "garten" at <paramref name="role"/>.</summary>
+    private async Task<(RestClient Alice, RestClient Bob)> SharedBoardAsync(MemberRole role)
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        using (var created = await alice.SendAsync(HttpMethod.Post, Board(alice))) Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.ShareWithAsync(bob, "garten", role);
+        return (alice, bob);
+    }
+
+    [Fact]
+    public async Task A_new_board_shows_each_caller_her_own_name_for_the_vault()
+    {
+        var (alice, bob) = await SharedBoardAsync(MemberRole.Read);
+
+        Assert.Equal("Gartenarbeit", (await RestClient.JsonAsync(await alice.GetAsync(Board(alice))))["title"]!.GetValue<string>());
+        Assert.Equal("garten", (await RestClient.JsonAsync(await bob.GetAsync("/api/vaults/garten/board")))["title"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_write_member_adds_a_card_and_a_read_member_is_refused()
+    {
+        var (_, writer) = await SharedBoardAsync(MemberRole.Write);
+        using var added = await writer.SendAsync(HttpMethod.Post, "/api/vaults/garten/board/cards", new { title = "Untitled", column = "Ideas" });
+        Assert.Equal(HttpStatusCode.Created, added.StatusCode);
+        Assert.Equal(["Untitled"], Titles(await RestClient.JsonAsync(added), "Ideas"));
+
+        var (_, reader) = await SharedBoardAsync(MemberRole.Read);
+        using var refused = await reader.SendAsync(HttpMethod.Post, "/api/vaults/garten/board/cards", new { title = "Untitled", column = "Ideas" });
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("read-only", (await RestClient.JsonAsync(refused))["code"]!.GetValue<string>());
     }
 
     [Fact]

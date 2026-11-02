@@ -103,12 +103,12 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
     /// <summary>
     /// Revokes every open invitation <paramref name="userId"/> created, inside the caller's transaction (or without
     /// one): when they are deleted, deactivated or made a user. An invitation is an admin's act and must not outlast
-    /// their being one. Returns how many.
+    /// their being one. A redeem in flight counts as open, as for <see cref="RevokeAsync"/>. Returns how many.
     /// </summary>
     internal static async Task<long> RevokeOpenOfAsync(IMongoDatabase db, IClientSessionHandle? session, string userId, DateTime now, CancellationToken ct)
     {
         var docs = db.GetCollection<InvitationDocument>("invitations");
-        var filter = Builders<InvitationDocument>.Filter.Where(d => d.CreatedBy == userId && d.UsedAt == null && d.RevokedAt == null && d.ExpiresAt > now);
+        var filter = Builders<InvitationDocument>.Filter.Where(d => d.CreatedBy == userId && d.UsedBy == null && d.RevokedAt == null && d.ExpiresAt > now);
         var revoke = Builders<InvitationDocument>.Update.Set(d => d.RevokedAt, now);
         var result = session is null
             ? await docs.UpdateManyAsync(filter, revoke, cancellationToken: ct)
@@ -192,13 +192,15 @@ public sealed class Invitations(IMongoDatabase db, ServerSecret secret, UserCata
         return created;
     }
 
-    /// <summary>Revokes an invitation that isn't used yet; false if there is no such open one.</summary>
+    /// <summary>Revokes an invitation that has made no account yet; false if there is no such open one. A redeem in
+    /// flight, which has claimed it (<c>usedAt</c>) but not made the account (<c>usedBy</c>), counts as open: should it
+    /// then give the claim back, the invitation stays revoked.</summary>
     public async Task<bool> RevokeAsync(User actor, string invitationId, CancellationToken ct)
     {
         await AdminRules.RequireAdminAsync(Users, actor, ct);
         await EnsureReadyAsync(ct);
         var result = await Docs.UpdateOneAsync(
-            d => d.Id == invitationId && d.UsedAt == null && d.RevokedAt == null,
+            d => d.Id == invitationId && d.UsedBy == null && d.RevokedAt == null,
             Builders<InvitationDocument>.Update.Set(d => d.RevokedAt, Now),
             cancellationToken: ct);
         if (result.ModifiedCount == 0) return false;

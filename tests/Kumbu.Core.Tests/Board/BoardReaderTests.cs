@@ -32,10 +32,19 @@ public class BoardReaderTests
         Assert.Equal(["Done", "Rejected"], definition.Columns.Where(c => c.Archivable).Select(c => c.Name));
         Assert.Equal(["Rejected"], definition.Columns.Where(c => c.NeedsReason).Select(c => c.Name));
         Assert.Equal(new ArchiveRule(30, 14), definition.Archive);
-        Assert.Equal("Board", definition.Title);
         Assert.StartsWith("Don't let ideas go stale", definition.Instructions);
         Assert.EndsWith("Today is what comes next, not literally today.", definition.Instructions);
         Assert.Contains("Kanban board of this vault.", BoardTemplate.Text());
+    }
+
+    [Fact]
+    public void The_template_has_no_h1()
+    {
+        var (definition, _) = BoardDefinition.Parse(BoardTemplate.Text());
+
+        // Whatever a title would say, each caller knows the vault by her own name (collab design §2.3).
+        Assert.Null(definition!.Title);
+        Assert.DoesNotContain(BoardTemplate.Text().Split('\n'), line => line.StartsWith("# ", StringComparison.Ordinal));
     }
 
     [Fact]

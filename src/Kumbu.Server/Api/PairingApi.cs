@@ -42,13 +42,15 @@ public static partial class PairingApi
     }
 
     private static async Task<Created<PairingCodeView>> CreateAsync(
-        string vault, CreatePairingRequest body, RequestCaller caller, Pairings pairings, VaultCatalog catalog, CancellationToken ct)
+        string vault, CreatePairingRequest body, HttpContext http, RequestCaller caller, Pairings pairings, VaultCatalog catalog, CancellationToken ct)
     {
         var found = (await caller.OpenVaultsAsync(ct)).FirstOrDefault(v => v.Name == vault) ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         if (found.Vault.Pending) throw VaultBusyException.Being();
         // A shared vault's code is made like any other: the plugin's version is checked when it is redeemed, which
         // also covers a code made before the vault was shared.
-        var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, found.Id, found.Name, body.ExpiresInDays);
+        // Session-only, so the cookie is there and resolved to this caller.
+        var session = Sessions.SubjectOf(http.Request.Cookies[CallerMiddleware.SessionCookie]!)!;
+        var code = pairings.Create(caller.User!, (byte[])caller.UserKey!.Clone(), caller.CredentialReadAt!.Value, session, found.Id, found.Name, body.ExpiresInDays);
         return TypedResults.Created((string?)null, new PairingCodeView(code.Code, code.ExpiresAt, (int)Pairings.Lifetime.TotalSeconds));
     }
 

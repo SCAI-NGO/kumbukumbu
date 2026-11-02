@@ -142,11 +142,15 @@ function Panel({ vault, membership, onClose }: { vault: VaultView; membership: s
 
         <form onSubmit={submit} className="flex flex-col gap-1.5">
           <label htmlFor={`${id}-alias`} className={labelClass}>
-            Your name for it
+            Your name for this vault
           </label>
+          <p id={`${id}-alias-lead`} className="text-sm text-text-body">
+            Give this vault a name of your own. Only you see it; the owner and others keep theirs.
+          </p>
           <div className="flex gap-2">
             <input
               id={`${id}-alias`}
+              aria-describedby={`${id}-alias-lead`}
               value={alias}
               onChange={(e) => {
                 setAlias(e.target.value);
@@ -162,7 +166,6 @@ function Panel({ vault, membership, onClose }: { vault: VaultView; membership: s
               Rename
             </button>
           </div>
-          <p className="text-sm text-muted">Only you see this name. The owner and others keep theirs.</p>
           {rename.isError && <FormError>{errorText(rename.error)}</FormError>}
         </form>
 

@@ -174,6 +174,41 @@ describe("the sidebar on the desktop", () => {
     expect(within(sidebar()).getByRole("button", { name: "inbox" })).toHaveFocus();
   });
 
+  // The cause of the focus in the heading: the sidebar's reveal takes the open note's row, and else `[data-autofocus]`,
+  // which the heading carried for the drawer. A note opened with the tree still loading has no row yet; a new note takes
+  // the focus into its editor at once, so it never shows.
+  it("in the docked sidebar nothing takes the focus to the vault's heading", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    fakeApi({
+      "GET /api/session": () => json(200, { user, previousSignInAt: null }),
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal" }]),
+      "GET /api/embeddings": () => json(200, []),
+      "GET /api/vaults/Work/tree": async () => {
+        await slow;
+        return json(200, tree);
+      },
+      "GET /api/notes/*": () => json(200, { path: "/Work/inbox.md", content: "Text.", version: "v1", lastWriter: "ada", lastWriteAt: "2026-10-25T09:00:00Z" }),
+      "GET /api/links/*": () => json(200, []),
+      "GET /api/backlinks/*": () => json(200, []),
+      "GET /api/changes": () => json(200, []),
+    });
+    renderApp("/notes/Work/inbox.md");
+    await screen.findByRole("heading", { name: "inbox" });
+    await userEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(within(sidebar()).getByRole("heading", { name: "Work" })).not.toHaveFocus();
+    expect(within(sidebar()).getByRole("heading", { name: "Work" })).not.toHaveAttribute("data-autofocus");
+    release();
+    await within(sidebar()).findByRole("button", { name: "inbox" });
+  });
+
+  it("the drawer on a phone still focuses its heading", async () => {
+    desktop = false;
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Open file tree" }));
+    expect(within(screen.getByRole("dialog", { name: "File tree" })).getByRole("heading", { name: "Work" })).toHaveFocus();
+  });
+
   it("works without local storage", async () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");

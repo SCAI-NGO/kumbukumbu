@@ -274,6 +274,36 @@ public sealed class RememberedSessionTests(KumbuAppFactory app)
         Assert.All(lines, l => Assert.DoesNotContain(Password, l, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A right password resets the count in a row, not the one in all: a thief who knows nothing gets no more guesses
+    /// by mixing in a right one, and one who learnt the password needn't guess. Through <see cref="Sessions"/> itself,
+    /// as the API counts there: the twelve checks would meet the password-check limit of 5 a minute per username.
+    /// </summary>
+    [Fact]
+    public async Task The_session_ends_after_ten_wrong_passwords_in_all_even_with_right_ones_between()
+    {
+        var api = app.PublicApi;
+        var session = await RememberedAsync(api, await NewUserAsync(api));
+        var sessions = api.Services.GetRequiredService<Sessions>();
+        var userId = (await SessionViewAsync(api, session))!["user"]!["id"]!.GetValue<string>();
+
+        for (var round = 0; round < 2; round++)
+        {
+            for (var i = 0; i < Sessions.WrongPasswordLimit - 1; i++) Assert.Null(await sessions.PasswordWrongAsync(session, Ct));
+            await sessions.OpenWindowAsync(session, Ct);
+        }
+
+        Assert.Null(await sessions.PasswordWrongAsync(session, Ct));
+        Assert.NotNull(await SessionViewAsync(api, session));
+        var slot = await api.Services.GetRequiredService<IMongoDatabase>().GetCollection<MongoDB.Bson.BsonDocument>("user_slots")
+            .Find(new MongoDB.Bson.BsonDocument { ["user"] = userId, ["kind"] = UserSlotDocument.Session }).SingleAsync(Ct);
+        Assert.Equal(1, slot["wrongPasswords"].AsInt32);
+        Assert.Equal(9, slot["wrongPasswordsTotal"].AsInt32);
+
+        Assert.Equal(userId, await sessions.PasswordWrongAsync(session, Ct));
+        Assert.Null(await SessionViewAsync(api, session));
+    }
+
     [Theory]
     [InlineData("sign-out")]
     [InlineData("end-others")]

@@ -4,8 +4,9 @@ namespace Kumbu.Core.Board;
 public static class BoardTemplate
 {
     /// <summary>
-    /// The <c>Board.md</c> a new board starts from. Its title names no vault: the name a caller knows a shared vault by
-    /// may be her alias, which is hers alone (collab design §2.3), and the owner and every member read this note.
+    /// The <c>Board.md</c> a new board starts from. It has no H1: the name a caller knows a shared vault by may be her
+    /// alias, which is hers alone (collab design §2.3), and the owner and every member read this note. Without one the
+    /// board shows each caller her own name for the vault (<see cref="BoardDefinition.TitleFor"/>).
     /// </summary>
     public static string Text() => """
         ---
@@ -19,8 +20,6 @@ public static class BoardTemplate
           - Rejected: [archivable, reason]
         archive: { after: 30, minDays: 14 }
         ---
-        # Board
-
         Kanban board of this vault.
 
         ## Instructions

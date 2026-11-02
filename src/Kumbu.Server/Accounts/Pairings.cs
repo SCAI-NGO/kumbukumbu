@@ -18,19 +18,22 @@ public sealed record RedeemedKey(string Key, string Vault, string KeyName);
 /// the password (<see cref="ApiKeys.CreateAsync"/>), so a code's record holds a copy of the session's user key. It
 /// lives in this process's memory only: 40 bits guard it well enough for ten minutes online, rate-limited, but not
 /// against an offline guess, so it is never written to MongoDB or a log, and the copy is zeroed when the record goes
-/// (redeemed, expired, replaced, dropped with the user's other codes by <see cref="DropAll"/>, or the process ends).
+/// (redeemed, expired, replaced, dropped with the user's other codes by <see cref="DropAll"/>, found with its session
+/// gone at a redeem, or the process ends).
 /// </summary>
 public sealed class Pairings : IDisposable
 {
     private readonly ApiKeys keys;
+    private readonly Sessions sessions;
     private readonly TimeProvider time;
     private readonly ILogger<Pairings> log;
     private readonly ITimer _sweeper;
     private readonly Lock _creating = new();
 
-    public Pairings(ApiKeys keys, TimeProvider time, ILogger<Pairings> log)
+    public Pairings(ApiKeys keys, Sessions sessions, TimeProvider time, ILogger<Pairings> log)
     {
         this.keys = keys;
+        this.sessions = sessions;
         this.time = time;
         this.log = log;
         // An expired record goes within a minute, with its copy of the user key, whether or not anyone pairs again.
@@ -64,11 +67,12 @@ public sealed class Pairings : IDisposable
     internal bool IsOpen(string code) => _records.TryGetValue(Normalise(code), out var r) && Now < r.ExpiresAt;
 
     /// <summary>
-    /// A new code for the user's vault, replacing the open one of the same user and vault. <paramref name="userKey"/> is
-    /// taken over (a copy the caller doesn't use again) and zeroed when the record goes. The expiry is checked now,
-    /// as <see cref="ApiKeys.CreateAsync"/> would check it, so a wrong one fails in the web app, not on the device.
+    /// A new code for the user's vault, made by the session <paramref name="session"/> (<see cref="Sessions.SubjectOf"/>),
+    /// replacing the open one of the same user and vault. <paramref name="userKey"/> is taken over (a copy the caller
+    /// doesn't use again) and zeroed when the record goes. The expiry is checked now, as <see cref="ApiKeys.CreateAsync"/>
+    /// would check it, so a wrong one fails in the web app, not on the device.
     /// </summary>
-    public PairingCode Create(User user, byte[] userKey, DateTime credentialReadAt, string vaultId, string vaultName, int? expiresInDays)
+    public PairingCode Create(User user, byte[] userKey, DateTime credentialReadAt, string session, string vaultId, string vaultName, int? expiresInDays)
     {
         if (expiresInDays is { } days && !ApiKeys.ExpiryDays.Contains(days))
         {
@@ -77,7 +81,7 @@ public sealed class Pairings : IDisposable
         }
 
         Sweep();
-        var record = new Record(user, userKey, credentialReadAt, vaultId, vaultName, expiresInDays, Now + Lifetime);
+        var record = new Record(user, userKey, credentialReadAt, session, vaultId, vaultName, expiresInDays, Now + Lifetime);
         string raw;
         // Replacing and adding in one step: of two codes made at once for a vault, one stays open.
         lock (_creating)
@@ -95,9 +99,10 @@ public sealed class Pairings : IDisposable
     }
 
     /// <summary>
-    /// Drops every open code of the user, each with its copy of the user key: on sign-out, a password change, a
-    /// recovery, a re-encryption, ending the other sessions, a deactivation or a deletion. Such a code could no longer
-    /// be redeemed anyway (or wasn't meant to be), but its copy of the user key would stay in memory until it expired.
+    /// Drops every open code of the user, each with its copy of the user key: on sign-out, a sign-in over a session,
+    /// a session ended by wrong passwords, a password change, a recovery, a re-encryption of the account or of a vault,
+    /// ending the other sessions, a deactivation or a deletion. Such a code could no longer be redeemed anyway (or
+    /// wasn't meant to be), but its copy of the user key would stay in memory until it expired.
     /// </summary>
     public void DropAll(string userId)
     {
@@ -108,9 +113,10 @@ public sealed class Pairings : IDisposable
     }
 
     /// <summary>
-    /// The key for a code, made once: null for a code that is unknown, used, expired, or made before the user's
-    /// credentials or user key changed. A bad device name throws <see cref="ArgumentException"/> before the code is
-    /// taken, so a corrected retry still works. A name taken up to " 20" throws <see cref="ApiKeyNameTakenException"/>.
+    /// The key for a code, made once: null for a code that is unknown, used, expired, made before the user's
+    /// credentials or user key changed, or whose session is no longer alive (<see cref="Sessions.AliveAsync"/>). A bad
+    /// device name throws <see cref="ArgumentException"/> before the code is taken, so a corrected retry still works. A
+    /// name taken up to " 20" throws <see cref="ApiKeyNameTakenException"/>.
     /// <paramref name="check"/> is given the code's vault before the code is taken, and refuses by throwing: the code
     /// then stays open for a retry that passes it.
     /// </summary>
@@ -125,6 +131,14 @@ public sealed class Pairings : IDisposable
         var baseName = Name(peeked.VaultName, clean);
         WriterNames.Check(peeked.User, baseName, "A device key");
         if (Now >= peeked.ExpiresAt) return null;
+        // Only while the session that made it lives: one that ended or timed out takes its code with it, before the
+        // check, which would keep the code for a retry.
+        if (await sessions.AliveAsync(peeked.Session, ct) != peeked.User.Id)
+        {
+            if (_records.TryRemove(new KeyValuePair<string, Record>(normal, peeked))) peeked.Drop();
+            return null;
+        }
+
         if (check is not null) await check(peeked.VaultId, ct);
         // Taken out before use: of two redeems at once, only one gets the record.
         if (!_records.TryRemove(normal, out var record)) return null;
@@ -263,13 +277,16 @@ public sealed class Pairings : IDisposable
         }
     }
 
-    private sealed class Record(User user, byte[] userKey, DateTime credentialReadAt, string vaultId, string vaultName, int? expiresInDays, DateTime expiresAt)
+    private sealed class Record(User user, byte[] userKey, DateTime credentialReadAt, string session, string vaultId, string vaultName, int? expiresInDays, DateTime expiresAt)
     {
         public User User { get; } = user;
 
         public byte[] UserKey { get; } = userKey;
 
         public DateTime CredentialReadAt { get; } = credentialReadAt;
+
+        /// <summary>The session that made the code (<see cref="Sessions.SubjectOf"/>): it must still be alive at redeem.</summary>
+        public string Session { get; } = session;
 
         public string VaultId { get; } = vaultId;
 

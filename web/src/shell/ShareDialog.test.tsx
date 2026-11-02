@@ -44,6 +44,15 @@ async function fill(label = "Bob", password = "correct horse") {
 }
 
 describe("ShareDialog", () => {
+  it("keeps password managers away from the label field", () => {
+    fakeApi({});
+    renderShare();
+    const field = screen.getByLabelText("Who it is for");
+    expect(field).toHaveAttribute("data-bwignore");
+    expect(field).toHaveAttribute("data-1p-ignore");
+    expect(field).toHaveAttribute("data-lpignore");
+  });
+
   it("shows the link once and forgets it on close", async () => {
     let body: unknown;
     fakeApi({

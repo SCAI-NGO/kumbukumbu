@@ -16,6 +16,7 @@ const row = (u: typeof root, extra = {}) => ({
   lastActiveAt: "2026-10-20T09:00:00Z",
   vaults: 2,
   bytesStored: 1536,
+  sharedVaults: 0,
   ...extra,
 });
 
@@ -85,6 +86,34 @@ describe("Admin users", () => {
     await userEvent.click(confirm);
     await vi.waitFor(() => expect(patches).toEqual([{ active: false }]));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["deactivates", "Deactivate Bob", { active: false }],
+    ["makes a user of an admin", "Make Ada a user", { role: "user" }],
+  ])("asks for the password when the window is closed and then %s", async (_, button, expected) => {
+    const patches: unknown[] = [];
+    let tries = 0;
+    // The first try finds the password window closed; the repeat after the password goes through.
+    const patch = async (r: Request) => {
+      patches.push(await r.json());
+      return tries++ === 0 ? json(401, { error: "Give your password again.", type: "password-required" }) : noContent();
+    };
+    api(root, { "PATCH /api/admin/users/u1": patch, "PATCH /api/admin/users/u2": patch, "POST /api/session/confirm": () => noContent() });
+    renderApp("/admin/users");
+    await userEvent.click(await screen.findByRole("button", { name: button }));
+    if (button.startsWith("Deactivate")) {
+      await userEvent.type(within(screen.getByRole("alertdialog", { name: "Deactivate Bob?" })).getByLabelText(/Type bob to confirm/), "bob");
+      await userEvent.click(within(screen.getByRole("alertdialog", { name: "Deactivate Bob?" })).getByRole("button", { name: "Deactivate" }));
+    }
+
+    const prompt = await screen.findByRole("alertdialog", { name: "Confirm your password" });
+    await userEvent.type(within(prompt).getByLabelText("Your password"), "correct horse battery staple");
+    await userEvent.click(within(prompt).getByRole("button", { name: "Confirm" }));
+
+    await vi.waitFor(() => expect(patches).toEqual([expected, expected]));
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("reactivates a deactivated user, again with the username typed", async () => {
@@ -167,6 +196,57 @@ describe("Admin users", () => {
     expect(within(receipt).getByRole("button", { name: "Copy reply" })).toBeInTheDocument();
     await userEvent.click(within(receipt).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("counts the user's shared vaults in the dialog, sends the choice and names no vault", async () => {
+    const bodies: unknown[] = [];
+    api(admin, {
+      "GET /api/admin/users": () => json(200, [row(root), row(admin), row(plain, { sharedVaults: 2 })]),
+      "POST /api/admin/users/u2/delete": async (r) => {
+        bodies.push(await r.json());
+        return json(200, {
+          userId: "u2", username: "bob", deletedBy: "ada", deletedAt: "2026-10-27T10:15:00Z", vaults: 0, notes: 0, attachments: 0, apiKeys: 0,
+          connections: 0, invitations: 0, externalProviders: [], privacyContact: null, listed: true, sharedVaultsScheduled: ["2026-11-03T10:15:00Z"],
+        });
+      },
+    });
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    await userEvent.click(bob.getByRole("button", { name: "Delete for a privacy request…" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Bob for a privacy request?" });
+    const group = within(dialog).getByRole("group", { name: "Their shared vaults" });
+    expect(group).toHaveTextContent("2 vaults shared with others");
+    const give = within(group).getByRole("radio", { name: /Give members 7 days/ });
+    expect(give).toBeChecked();
+    // More than one: each of them.
+    expect(give.closest("label")).toHaveTextContent("Give members 7 days: each stays read-only for its members for 7 days");
+    const now = within(group).getByRole("radio", { name: /Delete them for everyone now/ });
+    expect(now.closest("label")).toHaveTextContent("Delete them for everyone now: each is deleted at once, and each member is told");
+    await userEvent.click(now);
+    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(bodies).toEqual([{ password: "admin password, long", confirm: "bob", sharedVaults: "delete-now" }]));
+    expect(await screen.findByRole("dialog", { name: "Deleted for a privacy request" })).toHaveTextContent("scheduled for deletion on 2026-11-03 10:15 UTC");
+  });
+
+  it("offers no choice for a user with no shared vaults", async () => {
+    const bodies: unknown[] = [];
+    api(admin, {
+      "POST /api/admin/users/u2/delete": async (r) => {
+        bodies.push(await r.json());
+        return json(400, { error: "no" });
+      },
+    });
+    renderApp("/admin/users");
+    const bob = within(await screen.findByRole("listitem", { name: "Bob" }));
+    await userEvent.click(bob.getByRole("button", { name: "Delete for a privacy request…" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Bob for a privacy request?" });
+    expect(within(dialog).queryByRole("radio")).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(bodies).toEqual([{ password: "admin password, long", confirm: "bob" }]));
   });
 
   it("shows the server's sentence when the deletion is refused, and no receipt", async () => {

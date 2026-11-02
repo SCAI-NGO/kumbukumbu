@@ -151,4 +151,108 @@ describe("the share page", () => {
     expect(await screen.findByText("The owner confirms your access first. Gartenarbeit shows among your vaults once they have.")).toBeInTheDocument();
     expect(sessionStorage.getItem(shareSecretKey)).toBeNull();
   });
+
+  const other = "b3RoZXItdGVzdC1zZWNyZXQtb2YtMzItYnl0ZXMtYQ";
+  const refusing = { "POST /api/vault-invitations/peek": async (r: Request) => {
+    const body = (await r.clone().json()) as { secret: string };
+    return body.secret === secret ? json(404, { error: "This invitation link is not valid (any more)." }) : json(200, { ...peek, vault: "Work", alias: "Work" });
+  } };
+
+  it("a new fragment replaces the secret, also over a refused one", async () => {
+    const { fetch } = shareApi(refusing);
+    const router = renderApp(`/share#${secret}`);
+    expect(await screen.findByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+
+    await router.navigate(`/share#${other}`);
+    expect(await screen.findByRole("heading", { name: "Join Work" })).toBeInTheDocument();
+    expect(router.state.location.hash).toBe("");
+    expect(sessionStorage.getItem(shareSecretKey)).toBe(other);
+    expect(await bodies(fetch, "/api/vault-invitations/peek")).toEqual([{ secret }, { secret: other }]);
+  });
+
+  it("a new link starts the form afresh", async () => {
+    shareApi({
+      "POST /api/vault-invitations/peek": async (r) => {
+        const body = (await r.clone().json()) as { secret: string };
+        return json(200, body.secret === secret ? peek : { ...peek, vault: "Work", alias: "Work" });
+      },
+    });
+    const router = renderApp(`/share#${secret}`);
+    const alias = await screen.findByLabelText("Your name for this vault");
+    await userEvent.clear(alias);
+    await userEvent.type(alias, "Mine");
+
+    await router.navigate(`/share#${other}`);
+    expect(await screen.findByRole("heading", { name: "Join Work" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your name for this vault")).toHaveValue("Work");
+  });
+
+  it("a refused secret is forgotten, so plain /share doesn't show it again", async () => {
+    shareApi(refusing);
+    renderApp(`/share#${secret}`);
+    expect(await screen.findByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+    expect(sessionStorage.getItem(shareSecretKey)).toBeNull();
+    cleanup();
+
+    renderApp("/share");
+    expect(await screen.findByText("This link has no invitation in it. Open the full link you were sent.")).toBeInTheDocument();
+  });
+
+  it("the same refused link opened again isn't kept either", async () => {
+    shareApi(refusing);
+    const router = renderApp(`/share#${secret}`);
+    expect(await screen.findByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.getItem(shareSecretKey)).toBeNull());
+
+    await router.navigate(`/share#${secret}`);
+    await waitFor(() => expect(router.state.location.hash).toBe(""));
+    expect(screen.getByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+    expect(sessionStorage.getItem(shareSecretKey)).toBeNull();
+  });
+
+  it("a link back to Kumbu² on every screen that can end here", async () => {
+    const back = async () => expect(await screen.findByRole("link", { name: "Back to Kumbu²" })).toHaveAttribute("href", "/");
+    shareApi();
+    renderApp("/share");
+    await screen.findByText("This link has no invitation in it. Open the full link you were sent.");
+    await back();
+    cleanup();
+
+    shareApi(refusing);
+    renderApp(`/share#${secret}`);
+    await screen.findByText("This invitation link is not valid (any more).");
+    await back();
+    cleanup();
+
+    shareApi({ "GET /api/session": () => json(500, { error: "Something went wrong." }) });
+    renderApp(`/share#${secret}`);
+    await screen.findByText("The server can't be reached right now. Try again in a moment.");
+    await back();
+    cleanup();
+
+    shareApi({ "POST /api/vault-invitations/accept": () => json(200, { id: "m1", vault: "Gartenarbeit", role: "write", status: "active" }) });
+    renderApp(`/share#${secret}`);
+    await userEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    await screen.findByRole("heading", { name: "Gartenarbeit is shared with you" });
+    await back();
+  });
+
+  it("a secret kept through sign-in still works", async () => {
+    const { fetch, state } = shareApi(
+      {
+        "POST /api/session": () => ((state.signedIn = true), json(200, { user, previousSignInAt: null })),
+        "POST /api/vault-invitations/accept": () => json(200, { id: "m1", vault: "Gartenarbeit", role: "write", status: "active" }),
+      },
+      false,
+    );
+    renderApp(`/share#${secret}`);
+    await userEvent.click(await screen.findByRole("link", { name: "Sign in" }));
+    await userEvent.type(await screen.findByLabelText("Username"), "ada");
+    await userEvent.type(screen.getByLabelText("Password"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Accept" }));
+    expect(await screen.findByRole("heading", { name: "Gartenarbeit is shared with you" })).toBeInTheDocument();
+    expect(await bodies(fetch, "/api/vault-invitations/accept")).toEqual([{ secret, alias: "Gartenarbeit" }]);
+    expect(sessionStorage.getItem(shareSecretKey)).toBeNull();
+  });
 });

@@ -181,4 +181,8 @@ public sealed class UserSlotDocument
     /// (<see cref="Sessions.PasswordWrongAsync"/>).</summary>
     [BsonElement("wrongPasswords"), BsonIgnoreIfDefault]
     public int WrongPasswords { get; set; }
+
+    /// <summary>A remembered session: every wrong password given through it, which a right one doesn't reset.</summary>
+    [BsonElement("wrongPasswordsTotal"), BsonIgnoreIfDefault]
+    public int WrongPasswordsTotal { get; set; }
 }

@@ -170,7 +170,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/files/{vault}/zip"] = "guarded inline: the ticket when the window is closed",
         ["POST /api/oauth/requests/{id}/decision"] = GrantingInline,
-        ["PATCH /api/admin/users/{id}"] = GrantingInline,
+        ["PATCH /api/admin/users/{id}"] = "guarded inline: every change to another account needs the window",
         ["POST /api/admin/invitations"] = GrantingInline,
         ["PUT /api/vaults/{vault}/memberships/{id}/role"] = GrantingInline,
     };
@@ -322,30 +322,84 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     }
 
     [Theory]
-    [InlineData("maintain", false)]
-    [InlineData("maintain", true)]
+    [InlineData("write", false)]
+    [InlineData("write", true)]
     [InlineData("read", false)]
     public async Task A_members_role_is_raised_only_inside_the_window_and_lowered_any_time(string role, bool open)
     {
         await using var api = Timed();
         var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
         var bob = await RestClient.NewAsync(api, vault: "Work");
-        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", Kumbu.Server.Sharing.MemberRole.Write);
+        // Raised from read to write, lowered from write to read; maintain takes the password each time (MembershipApiTests).
+        var from = role == "read" ? Kumbu.Server.Sharing.MemberRole.Write : Kumbu.Server.Sharing.MemberRole.Read;
+        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", from);
         CloseWindow();
         if (open) await ConfirmAsync(alice);
 
         using var response = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role });
 
         var stored = (await Kumbu.Server.Tests.Sharing.Share.MembershipAsync(app.Database, membership)).Role;
-        if (role == "maintain" && !open)
+        if (role == "write" && !open)
         {
             await AssertPasswordRequiredAsync(response);
-            Assert.Equal("write", stored);
+            Assert.Equal("read", stored);
         }
         else
         {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal(role, stored);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Deactivating_another_account_needs_the_window(bool open)
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
+        var (otherId, _) = await OtherUserAsync(api);
+        CloseWindow();
+        if (open) await ConfirmAsync(user);
+
+        using var response = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId}", new { active = false });
+
+        var listed = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == otherId)!;
+        if (open)
+        {
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.False(listed["active"]!.GetValue<bool>());
+        }
+        else
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.True(listed["active"]!.GetValue<bool>());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Demoting_another_admin_needs_the_window(bool open)
+    {
+        await using var api = Timed();
+        var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
+        var (otherId, _) = await api.Services.GetRequiredService<UserCatalog>().CreateAsync("u" + Guid.NewGuid().ToString("N")[..12], RestClient.Password, Roles.Admin, Ct);
+        CloseWindow();
+        if (open) await ConfirmAsync(user);
+
+        using var response = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId.Id}", new { role = Roles.User });
+
+        var role = (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == otherId.Id)!["role"]!.GetValue<string>();
+        if (open)
+        {
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Equal(Roles.User, role);
+        }
+        else
+        {
+            await AssertPasswordRequiredAsync(response);
+            Assert.Equal(Roles.Admin, role);
         }
     }
 
@@ -355,22 +409,12 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         await using var api = Timed();
         var user = await RestClient.NewAsync(api, remember: true, role: Roles.Admin);
         var connection = await ConnectionAsync(user);
-        var (otherId, _) = await OtherUserAsync(api);
         var (promotedId, _) = await OtherUserAsync(api);
-        var (demotedId, _) = await OtherUserAsync(api);
-        using (var made = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.Admin, password = RestClient.Password }))
-        {
-            Assert.Equal(HttpStatusCode.NoContent, made.StatusCode);
-        }
-
         CloseWindow();
 
         var flow = await OAuthFlow.StartAsync(api, user, connection, await OAuthFlow.RegisterAsync(api, Callback), Callback);
         using (var denied = await flow.DecideAsync(allow: false)) Assert.Equal(HttpStatusCode.OK, denied.StatusCode);
         using (var gone = await flow.GetConsentAsync()) Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
-        using (var off = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{otherId}", new { active = false })) Assert.Equal(HttpStatusCode.NoContent, off.StatusCode);
-        using (var demoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{demotedId}", new { role = Roles.User })) Assert.Equal(HttpStatusCode.NoContent, demoted.StatusCode);
-        Assert.Equal(Roles.User, (await ListAsync(user, "/api/admin/users")).Single(u => u!["id"]!.GetValue<string>() == demotedId)!["role"]!.GetValue<string>());
         Assert.False(await WindowOpenAsync(user));
 
         using (var promoted = await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{promotedId}", new { role = Roles.Admin, password = RestClient.Password }))
@@ -672,12 +716,16 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     [InlineData("make-admin")]
     [InlineData("password")]
     [InlineData("delete-account")]
+    [InlineData("raise-to-maintain")]
     public async Task A_wrong_password_on_any_check_counts_towards_the_five(string action)
     {
         await using var api = Timed();
         var admin = action is "delete-user" or "repeat-deletions" or "invite-admin" or "make-admin";
         var user = await RestClient.NewAsync(api, remember: true, role: admin ? Roles.Admin : Roles.User);
         var other = action is "delete-user" or "make-admin" ? await OtherUserAsync(api) : default;
+        var membership = action is "raise-to-maintain"
+            ? await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(user, await RestClient.NewAsync(api, vault: "Work"), "Garten", Kumbu.Server.Sharing.MemberRole.Read)
+            : null;
         await ConfirmWrongAsync(user, 4);
         const string password = Wrong;
 
@@ -695,6 +743,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "make-admin" => await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{other.Id}", new { role = Roles.Admin, password }),
             "password" => await user.SendAsync(HttpMethod.Post, "/api/password", new { oldPassword = password, newPassword = "another long passphrase here" }),
             "delete-account" => await user.SendAsync(HttpMethod.Post, "/api/account/delete", new { password, confirm = user.Username }),
+            "raise-to-maintain" => await user.SendAsync(HttpMethod.Put, $"/api/vaults/Arbeit/memberships/{membership}/role", new { role = "maintain", password }),
             _ => throw new ArgumentOutOfRangeException(nameof(action)),
         })
         {

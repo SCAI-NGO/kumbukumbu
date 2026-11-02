@@ -297,6 +297,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -7051,6 +7060,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Service Unavailable */
                 503: {
                     headers: {
@@ -7259,6 +7277,24 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
             };
         };
         post?: never;
@@ -7328,6 +7364,15 @@ export interface paths {
                 };
                 /** @description Not Found */
                 404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -7643,6 +7688,8 @@ export interface components {
             vaults: number | string;
             /** Format: int64 */
             bytesStored: number | string;
+            /** Format: int32 */
+            sharedVaults: number | string;
         };
         ApiError: {
             error: string;
@@ -7695,6 +7742,7 @@ export interface components {
         };
         ChangeRoleRequest: {
             role: string;
+            password?: null | string;
         };
         ChangeView: {
             path: string;
@@ -7762,6 +7810,9 @@ export interface components {
             vaults: {
                 [key: string]: string;
             };
+            actsAs: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -7777,6 +7828,9 @@ export interface components {
         ConsentConnectionView: {
             name: string;
             vaults: {
+                [key: string]: string;
+            };
+            actsAs: {
                 [key: string]: string;
             };
             /** Format: date-time */

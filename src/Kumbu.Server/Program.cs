@@ -70,9 +70,9 @@ builder.Services.AddSingleton<Plans>();
 builder.Services.AddHttpClient();
 // The sidecar refuses connections beyond its capacity plus a margin; each call sets its own time limit. Every address
 // connected to is refused on the server's listeners before a byte is sent (SidecarPeers.ConnectAsync); no proxy, whose
-// address the callback would see instead.
+// address the callback would see instead. No redirects: the callback only connects to the configured host and port.
 builder.Services.AddHttpClient<IPdfSidecar, PdfSidecar>(c => c.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(sp => new SocketsHttpHandler { MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2), UseProxy = false, ConnectCallback = sp.GetRequiredService<SidecarPeers>().ConnectAsync });
+    .ConfigurePrimaryHttpMessageHandler(sp => new SocketsHttpHandler { AllowAutoRedirect = false, MaxConnectionsPerServer = 8, PooledConnectionLifetime = TimeSpan.FromMinutes(2), UseProxy = false, ConnectCallback = sp.GetRequiredService<SidecarPeers>().ConnectAsync });
 builder.Services.AddSingleton<PdfAnalyses>();
 builder.Services.AddSingleton<PdfAnalysisRunner>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PdfAnalysisRunner>());

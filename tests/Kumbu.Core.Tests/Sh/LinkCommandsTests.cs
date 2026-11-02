@@ -359,7 +359,7 @@ public class LinkCommandsTests
         await Run("mv /Demo/a/plan-b.md /Demo/c/plan-c.md");
 
         Assert.Equal(
-            ShellResult.Error("cat: /Demo/a/plan.md: No such file or directory; it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC (dev)"),
+            ShellResult.Error("cat: /Demo/a/plan.md: No such file or directory; it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC"),
             await Run("cat /Demo/a/plan.md"));
         Assert.StartsWith(
             "mv: /Demo/a/plan.md: No such file or directory; it was moved to /Demo/c/plan-c.md",
@@ -367,7 +367,7 @@ public class LinkCommandsTests
 
         await Run("rm /Demo/c/plan-c.md");
         Assert.EndsWith(
-            "it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC (dev), and is not there any more ('trash' may list it)",
+            "it was moved to /Demo/c/plan-c.md on 2026-10-02 12:00 UTC, and is not there any more ('trash' may list it)",
             (await Run("cat /Demo/a/plan.md")).Output);
     }
 

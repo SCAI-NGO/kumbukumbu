@@ -380,4 +380,38 @@ public sealed class MarkerTests(KumbuAppFactory app)
         using var owners = await w.Alice.GetAsync("/api/vaults/Gartenarbeit/activity");
         Assert.Contains($"You removed {w.Carol.Username}.", await owners.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_read_only_member_never_sees_the_owners_credential_name_in_a_move_hint()
+    {
+        var w = await WorldAsync();
+        const string OwnersKeyName = "MARKER-owner-key";
+        var (ownersKey, _) = await KeyAsync(w.Alice, OwnersKeyName, w.VaultId, KeyRight.Write);
+        var (moved, text) = await w.Alice.ShAsync("mv /Gartenarbeit/plan.md /Gartenarbeit/plan2.md", ownersKey);
+        Assert.False(moved, text);
+
+        var answers = new List<(string What, string Text)>();
+        using (var gone = await w.Bob.SendAsync(HttpMethod.Get, "/api/notes/garten/plan.md", bearer: w.BobReadKey))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+            answers.Add(("404", await gone.Content.ReadAsStringAsync(Ct)));
+        }
+
+        answers.Add(("cat", (await w.Bob.ShAsync("cat /garten/plan.md", w.BobReadKey)).Text));
+        // The commands that write answer a read-only key with a refusal first; his maintaining key gets to the hint.
+        foreach (var command in new[] { "mv /garten/plan.md /garten/x.md", "rm /garten/plan.md", "mkcp /garten/plan.md nachher" })
+        {
+            answers.Add((command, (await w.Bob.ShAsync(command, w.BobKey)).Text));
+        }
+
+        foreach (var (what, answer) in answers)
+        {
+            Assert.DoesNotContain(Marker, answer, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(OwnersKeyName, answer, StringComparison.OrdinalIgnoreCase);
+            Assert.False(answer.Contains(w.Alice.Username, StringComparison.OrdinalIgnoreCase), $"{what} names Alice");
+        }
+
+        // The hint is still there, and says where the note went.
+        Assert.All(answers, a => Assert.Contains("it was moved to /garten/plan2.md", a.Text, StringComparison.Ordinal));
+    }
 }

@@ -76,6 +76,58 @@ describe("AccessList", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("choosing maintain asks for the password and a cancel leaves the role", async () => {
+    members = [member()];
+    const fetch = accessApi();
+    renderList();
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Let Bob maintain Gartenarbeit?" });
+    expect(dialog).toHaveTextContent("Can change the vault's structure: the board's columns, checkpoints.");
+    expect(within(dialog).getByRole("button", { name: "Raise to maintain" })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(await bob()).getByLabelText("Role")).toHaveValue("read");
+    expect(requests(fetch, "PUT")).toHaveLength(0);
+    // Asked again, the field starts empty.
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+    expect(within(await screen.findByRole("alertdialog")).getByLabelText("Your password")).toHaveValue("");
+  });
+
+  it("raises to maintain with the password in the request, a wrong one changing nothing", async () => {
+    members = [member()];
+    let puts = 0;
+    const fetch = accessApi({
+      "PUT /api/vaults/Gartenarbeit/memberships/m1/role": () => {
+        if (puts++ === 0) return json(400, { error: "The password is wrong." });
+        members = [member({ role: "maintain" })];
+        return json(200, { id: "m1", label: "Bob", role: "maintain", status: "active", confirm: false, expiresAt: null, redeemedAt: null, redeemer: null });
+      },
+    });
+    renderList();
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+    const dialog = await screen.findByRole("alertdialog", { name: "Let Bob maintain Gartenarbeit?" });
+
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "not it");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Raise to maintain" }));
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "Bob" })).getByLabelText("Role")).toHaveValue("read");
+
+    await userEvent.clear(within(dialog).getByLabelText("Your password"));
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Raise to maintain" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("listitem", { name: "Bob" })).getByLabelText("Role")).toHaveValue("maintain"));
+    const sent = requests(fetch, "PUT");
+    expect(sent).toHaveLength(2);
+    expect(await sent[1].json()).toEqual({ role: "maintain", password: "correct horse" });
+    // The password dialog of the window is never involved.
+    expect(screen.queryByRole("alertdialog", { name: "Confirm your password" })).not.toBeInTheDocument();
+  });
+
   it("confirms showing the username", async () => {
     members = [member({ status: "pending", confirm: true, acceptedAt: null })];
     const fetch = accessApi({
@@ -232,5 +284,47 @@ describe("AccessList", () => {
     await waitFor(() => expect(requests(fetch, "POST")).toHaveLength(1));
     expect(requests(fetch, "DELETE").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Gartenarbeit/memberships/m1"]);
     expect(new URL(requests(fetch, "POST")[0].url).pathname).toBe("/api/vaults/Gartenarbeit/memberships/m2/decline");
+  });
+
+  it("closing the invitation dialog shows the list, updated", async () => {
+    members = [];
+    accessApi({
+      "POST /api/vaults/Gartenarbeit/invitations": () => {
+        // Bob opens the link while the owner still has the dialog with it open.
+        setTimeout(() => (members = [member({ status: "pending", confirm: true, acceptedAt: null })]), 0);
+        return json(201, { id: "m1", link: "https://kumbu.example/share#c2VjcmV0LWZvci10aGUtdGVzdA", role: "read", confirm: true, expiresAt: "2026-11-08T10:00:00Z" });
+      },
+      "GET /api/vaults/Gartenarbeit/memberships/m1": () =>
+        json(200, { id: "m1", label: "Bob", role: "read", status: "pending", confirm: true, expiresAt: null, redeemedAt: "2026-10-30T09:00:00Z", redeemer: { name: '"Bob"', username: "bob" } }),
+    });
+    renderList();
+    expect(await screen.findByText("Gartenarbeit isn't shared with anyone.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Invite someone…" }));
+    await userEvent.type(screen.getByLabelText("Who it is for"), "Bob");
+    await userEvent.type(screen.getByLabelText("Your password"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Create link" }));
+    const share = await screen.findByRole("dialog", { name: "Share Gartenarbeit" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await userEvent.click(within(share).getByRole("button", { name: "Done" }));
+    expect(await bob()).toHaveTextContent(/accepted|Grant access/);
+    expect(screen.queryByText("Gartenarbeit isn't shared with anyone.")).not.toBeInTheDocument();
+  });
+
+  it("a redeemer who arrives shows without a reload", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"], shouldAdvanceTime: true });
+    try {
+      members = [member({ status: "pending", acceptedAt: null, redeemedAt: null, expiresAt: "2026-11-07T09:00:00Z" })];
+      accessApi({
+        "GET /api/vaults/Gartenarbeit/memberships/m1": () =>
+          json(200, { id: "m1", label: "Bob", role: "read", status: "pending", confirm: true, expiresAt: null, redeemedAt: "2026-10-30T09:00:00Z", redeemer: { name: '"Bob"', username: "bob" } }),
+      });
+      renderList();
+      expect(await within(await bob()).findByText(/Invited as Read/)).toBeInTheDocument();
+      members = [member({ status: "pending", confirm: true, acceptedAt: null })];
+      await act(() => vi.advanceTimersByTimeAsync(10_500));
+      expect(await within(await bob()).findByRole("button", { name: "Grant access" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

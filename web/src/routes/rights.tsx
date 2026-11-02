@@ -25,10 +25,15 @@ export function isCapped(right: string, vault: VaultView) {
  */
 export function CappedRight({ right, vault }: { right: string; vault: VaultView | undefined }) {
   if (!vault || !isCapped(right, vault)) return <RightText right={right} />;
-  const level = levelOf(vault);
+  return <ActsAs right={right} level={levelOf(vault)} vault={vault.name} />;
+}
+
+/** A capped right with the level it acts as, as the server says it (a connection's `actsAs`); without one, as it is. */
+export function ActsAs({ right, level, vault }: { right: string; level: string | undefined; vault: string }) {
+  if (!level) return <RightText right={right} />;
   return (
     <>
-      {right}, acts as {level} while you can only {level} <em>{vault.name}</em>
+      {right}, acts as {level} while you can only {level} <em>{vault}</em>
     </>
   );
 }

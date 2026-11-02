@@ -201,6 +201,8 @@ public static class Security
 /// password change or of a new recovery key 5 per minute per username (together). Every attempt counts,
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
+/// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL. Peeking at an
+/// account invitation, 20 per minute per network. Renaming a vault shared with one, 30 per minute per user.
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
@@ -246,6 +248,27 @@ public sealed class AccountLimits : IDisposable
 
     public const int InvitePeeksPerNetwork = 60;
 
+    /// <summary>
+    /// Peeks at an account invitation (the join page's), a minute per network: anonymous, so there is no account to
+    /// count. A code is 256 random bits, so this bounds the work a stranger makes the server do, not guessing.
+    /// </summary>
+    public const int AccountInvitationPeeksPerNetwork = 20;
+
+    /// <summary>
+    /// Fetches of a client's metadata document that an anonymous <c>/oauth/authorize</c> starts, a minute per address
+    /// and per host of the <c>client_id</c> URL: each is a request to an address a stranger picks. A document in the
+    /// cache needs no fetch and isn't counted, so a known app keeps working while a host is held back.
+    /// </summary>
+    public const int MetadataFetchesPerAddress = 10;
+
+    public const int MetadataFetchesPerHost = 10;
+
+    /// <summary>
+    /// A member's renames of vaults shared with her, a minute per user (spec §1.3): each one is a transaction on her
+    /// member slot. A person renames a vault now and then; a loop of them gets 30 a minute.
+    /// </summary>
+    public const int AliasRenamesPerUser = 30;
+
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>No username is longer; a longer one only needs a partition, not a distinct one.</summary>
@@ -262,15 +285,23 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _historyScanByUser = Limiter(HistoryScansPerUser);
     private readonly PartitionedRateLimiter<string> _invitePeekByAccount;
     private readonly PartitionedRateLimiter<string> _invitePeekByNetwork;
+    private readonly PartitionedRateLimiter<string> _accountInvitationPeekByNetwork = Limiter(AccountInvitationPeeksPerNetwork);
+    private readonly PartitionedRateLimiter<string> _metadataFetchByAddress = Limiter(MetadataFetchesPerAddress);
+    private readonly PartitionedRateLimiter<string> _metadataFetchByHost = Limiter(MetadataFetchesPerHost);
+    private readonly PartitionedRateLimiter<string> _aliasRenameByUser;
 
     public AccountLimits()
         : this(RedeemFailuresPerNetwork, RedeemFailuresPerServer)
     {
     }
 
-    /// <summary>For tests: other limits on wrong pairing codes and on invitation peeks, so that one can be reached in a few requests.</summary>
-    internal AccountLimits(int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork)
+    /// <summary>For tests: other limits on wrong pairing codes, on invitation peeks and on renames, so that one can be
+    /// reached in a few requests, or not at all.</summary>
+    internal AccountLimits(
+        int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
+        int aliasRenamesPerUser = AliasRenamesPerUser)
     {
+        _aliasRenameByUser = Limiter(aliasRenamesPerUser);
         _redeemFailuresByNetwork = Limiter(redeemFailuresPerNetwork);
         _redeemFailures = Limiter(redeemFailuresPerServer);
         _invitePeekByAccount = Limiter(invitePeeksPerAccount);
@@ -301,6 +332,17 @@ public sealed class AccountLimits : IDisposable
     /// limit uses up nothing of its network's.</summary>
     public TimeSpan? InvitePeek(HttpContext context, string userId) =>
         Take(_invitePeekByAccount, userId) ?? Take(_invitePeekByNetwork, Network(context));
+
+    /// <summary>A peek at an account invitation, counted per network.</summary>
+    public TimeSpan? AccountInvitationPeek(HttpContext context) => Take(_accountInvitationPeekByNetwork, Network(context));
+
+    /// <summary>A fetch of a client's metadata document from <paramref name="host"/>: the address is asked first, so
+    /// one over its own limit uses up nothing of the host's.</summary>
+    public TimeSpan? MetadataFetch(HttpContext context, string host) =>
+        Take(_metadataFetchByAddress, Address(context)) ?? Take(_metadataFetchByHost, host.ToLowerInvariant());
+
+    /// <summary>A member's rename of a vault shared with her, counted per user across her sessions.</summary>
+    public TimeSpan? AliasRename(string userId) => Take(_aliasRenameByUser, userId);
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";
 
@@ -377,6 +419,10 @@ public sealed class AccountLimits : IDisposable
         _historyScanByUser.Dispose();
         _invitePeekByAccount.Dispose();
         _invitePeekByNetwork.Dispose();
+        _accountInvitationPeekByNetwork.Dispose();
+        _metadataFetchByAddress.Dispose();
+        _metadataFetchByHost.Dispose();
+        _aliasRenameByUser.Dispose();
     }
 }
 

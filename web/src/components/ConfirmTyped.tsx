@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adapted from chatsundere (apps/admin-client/src/routes/users/actions.tsx)
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "./form";
 import { PasswordField } from "./PasswordField";
 import { useDialog } from "../hooks/useDialog";
@@ -18,6 +18,7 @@ export default function ConfirmTyped({
   onClose,
   password,
   onPasswordChange,
+  children,
 }: {
   title: string;
   text: string;
@@ -30,6 +31,8 @@ export default function ConfirmTyped({
   /** Given, the dialog also asks for the current password: the caller keeps it in its own state. */
   password?: string;
   onPasswordChange?(value: string): void;
+  /** More for the person to read or choose, between the text and the fields. */
+  children?: ReactNode;
 }) {
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
@@ -53,6 +56,7 @@ export default function ConfirmTyped({
           {title}
         </h2>
         <p className="text-text-body">{text}</p>
+        {children}
         {password !== undefined && (
           <PasswordField label="Your password" value={password} onChange={(v) => onPasswordChange?.(v)} autoComplete="current-password" />
         )}

@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, call, type RefusalCode } from "./client";
+import { addToFirstColumn } from "./board";
 import { folderOf, inVault, isAttachment, untitledName, vaultOf, type FileAt } from "./paths";
 import { textOrder } from "./textOrder";
 import type { components } from "./schema";
@@ -161,7 +162,10 @@ export function useCreateUntitled() {
         queryKey: ["tree", vault],
         queryFn: () => call(api.GET("/api/vaults/{vault}/tree", { params: { path: { vault } } })),
       });
-      const name = untitledName(findFolder(tree.root, folder)?.notes.map((n) => n.name) ?? []);
+      const at = findFolder(tree.root, folder);
+      const name = untitledName(at?.notes.map((n) => n.name) ?? []);
+      // In the board's folder a note is a card: one made as a plain note would only be a problem on the board.
+      if (folder === `/${vault}/Board` && at?.notes.some((n) => n.name === "Board.md")) return addToFirstColumn(queryClient, vault, name.slice(0, -".md".length));
       const path = [...rest, name].join("/");
       const note = await call(api.PUT("/api/notes/{vault}/{path}", { params: { path: { vault, path } }, body: { content: "" } }));
       return note.path;

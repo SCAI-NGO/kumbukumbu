@@ -14,12 +14,13 @@ public sealed record ClientView(string Name, string Host, bool Verified);
 
 /// <summary>
 /// A connection as its owner sees it: <c>url</c> is its connector URL, to paste into the app; vault names with
-/// <c>read</c> or <c>write</c>. <c>state</c> is <c>waiting</c>, <c>connected</c>, <c>needs_reconnect</c>,
+/// <c>read</c> or <c>write</c>, as stored; <c>actsAs</c>: the vaults shared with her where her role caps that right, with
+/// the right the connection acts with there until she is raised. <c>state</c> is <c>waiting</c>, <c>connected</c>, <c>needs_reconnect</c>,
 /// <c>revoked</c> or <c>expired</c>; <c>reason</c> (e.g. <c>rights_changed</c>) goes with the last three;
 /// <c>client</c> is null until an app was authorised.
 /// </summary>
 public sealed record ConnectionView(
-    string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
+    string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
     string State, string? Reason, ClientView? Client);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
@@ -35,14 +36,15 @@ public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, stri
 /// the browser returns. <c>connection</c>: the connection its URL names, with the rights this grant gets (already
 /// capped to read if the app asked for read only); null when there is a <c>problem</c> that hides it.
 /// <c>renewal</c>: the connection was authorised before. <c>problem</c>: null, <c>not_a_connection</c> (the app was
-/// given an address that is no connection's URL), <c>other_user</c> (the connection is another account's),
-/// <c>revoked</c> or <c>expired</c>; with a problem only Deny is possible.
+/// given an address that is no connection's URL), <c>revoked</c> or <c>expired</c>; with a problem only Deny is
+/// possible. A request for another account's connection is a 404 to this one, for the view and the decision alike.
 /// </summary>
 public sealed record ConsentView(string RequestId, ClientView Client, string RedirectHost, ConsentConnectionView? Connection, bool Renewal, string? Problem);
 
-/// <summary>A connection on the consent page: its name, vault name → <c>read</c> or <c>write</c>, its expiry, and the app
-/// it is authorised for now, if any.</summary>
-public sealed record ConsentConnectionView(string Name, IReadOnlyDictionary<string, string> Vaults, DateTime? ExpiresAt, ClientView? CurrentClient);
+/// <summary>A connection on the consent page: its name, vault name → <c>read</c> or <c>write</c>, <c>actsAs</c> as in
+/// <see cref="ConnectionView"/>, its expiry, and the app it is authorised for now, if any.</summary>
+public sealed record ConsentConnectionView(
+    string Name, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime? ExpiresAt, ClientView? CurrentClient);
 
 /// <summary><c>allow</c>: the user's Allow (true) or Deny (false).</summary>
 public sealed record ConsentDecisionRequest(bool Allow);
@@ -73,11 +75,13 @@ public static class ConnectionApi
 
     private const string RequestExpired = "This request has expired; start the connection again in the app.";
     private const string ClientGone = "The app could not be identified any more; start the connection again in the app.";
+    private const string OtherAccount = "This request is for another Kumbu² account; sign in as the connection's owner.";
 
     private static async Task<Ok<ConsentView>> ConsentAsync(
         string id, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, Connections connections, TimeProvider time, CancellationToken ct)
     {
         var request = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
+        await RequireOwnerAsync(request, caller, connections, ct);
         var client = await clients.ResolveAsync(request.ClientId, ct) ?? throw ApiErrors.NotFound(ClientGone);
         var (problem, connection, renewal) = await ConsentConnectionAsync(request, caller, connections, time, ct);
         return TypedResults.Ok(new ConsentView(request.Id, new ClientView(client.Name, client.Host, client.Verified), new Uri(request.RedirectUri).Host, connection, renewal, problem));
@@ -87,6 +91,7 @@ public static class ConnectionApi
     /// The decision, which takes the request (single use): Deny always redirects with <c>access_denied</c>
     /// (<c>invalid_target</c> for an address that is no connection's, Ruling 7); Allow with a problem is a 409 and
     /// leaves the request, so the page can still offer the way back; Allow issues the code for the signed-in user.
+    /// Another account's request is a 404 either way, before anything is taken.
     /// </summary>
     private static async Task<Ok<ConsentDecisionView>> DecideAsync(
         string id, ConsentDecisionRequest body, HttpContext http, RequestCaller caller, AuthorizationRequests requests, OAuthClients clients, OAuthTokens tokens,
@@ -96,6 +101,7 @@ public static class ConnectionApi
         if (body.Allow) Security.RequirePasswordWindow(caller);
         var log = logs.CreateLogger(OAuthEndpoints.LogCategory);
         var pending = await requests.GetAsync(id, ct) ?? throw ApiErrors.NotFound(RequestExpired);
+        await RequireOwnerAsync(pending, caller, connections, ct);
         var clientHost = OAuthEndpoints.ClientHost(pending.ClientId, pending.RedirectUri);
         if (body.Allow)
         {
@@ -132,10 +138,10 @@ public static class ConnectionApi
             OAuthEndpoints.LogStep(log, "consent", "conflict", request.ConnectionId, clientHost, request.Id);
             throw new ApiException(StatusCodes.Status409Conflict, e.Message);
         }
-        catch (VaultBusyException)
+        catch (Exception e) when (e is VaultBusyException or ClientMetadataUnavailableException)
         {
-            // A re-keying started or finished between the check above and the transaction, which issued nothing:
-            // the request goes back, so "try again" means this request.
+            // A re-keying started or finished between the check above and the transaction, or the app's document
+            // couldn't be fetched in time; nothing was issued: the request goes back, so "try again" means this request.
             await requests.PutBackAsync(request, CancellationToken.None);
             OAuthEndpoints.LogStep(log, "consent", "busy", request.ConnectionId, clientHost, request.Id);
             throw;
@@ -147,10 +153,18 @@ public static class ConnectionApi
         return TypedResults.Ok(new ConsentDecisionView(OAuthEndpoints.Redirect(request.RedirectUri, issuer, request.State, ("code", code))));
     }
 
+    /// <summary>A request naming another account's connection is not found for this one: not shown, allowed or denied.</summary>
+    private static async Task RequireOwnerAsync(PendingAuthorisation request, RequestCaller caller, Connections connections, CancellationToken ct)
+    {
+        if (request.ConnectionId is null) return;
+        if (await connections.FindAsync(request.ConnectionId, ct) is { } doc && doc.User != caller.User!.Id)
+            throw new ApiException(StatusCodes.Status404NotFound, OtherAccount, type: ApiErrors.OtherAccount);
+    }
+
     /// <summary>
-    /// The connection a request names, as the signed-in user may see it: its problem if any (then nothing of it is
-    /// shown when it isn't theirs), else its name, its vaults by name with the rights of this grant, its expiry and
-    /// client, and whether it was authorised before.
+    /// The connection a request names, which <see cref="RequireOwnerAsync"/> found to be the signed-in user's: its
+    /// problem if any, else its name, its vaults by name with the rights of this grant, its expiry and client, and
+    /// whether it was authorised before.
     /// </summary>
     private static async Task<(string? Problem, ConsentConnectionView? Connection, bool Renewal)> ConsentConnectionAsync(
         PendingAuthorisation request, RequestCaller caller, Connections connections, TimeProvider time, CancellationToken ct)
@@ -158,14 +172,14 @@ public static class ConnectionApi
         if (request.Problem is not null || request.ConnectionId is null) return (request.Problem ?? AuthorizationRequests.NotAConnection, null, false);
         var doc = await connections.FindAsync(request.ConnectionId, ct);
         if (doc is null) return (AuthorizationRequests.NotAConnection, null, false);
-        if (doc.User != caller.User!.Id) return ("other_user", null, false);
         // A meta that doesn't open with the user key was changed in the database: nothing to show or to authorise.
-        if (connections.OpenMeta(caller.User, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
+        if (connections.OpenMeta(caller.User!, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
 
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
+        var (vaults, actsAs) = Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), await caller.OpenVaultsAsync(ct));
         var view = new ConsentConnectionView(
             meta.Name,
-            OAuthTokens.Rights(doc, meta, request.ReadOnly).Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
+            vaults,
+            actsAs,
             doc.ExpiresAt,
             meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null);
         var renewal = doc.AuthorisedAt is not null || meta.Client is not null;
@@ -177,53 +191,76 @@ public static class ConnectionApi
     private static string ProblemText(string problem) => problem switch
     {
         AuthorizationRequests.NotAConnection => "This address isn't a connection; it can't be allowed.",
-        "other_user" => "This connection belongs to another account.",
         "expired" => "This connection has expired.",
         _ => "This connection was revoked.",
     };
 
     private static async Task<Ok<ConnectionView[]>> ListAsync(HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
+        var open = await caller.OpenVaultsAsync(ct);
         var list = await connections.ListAsync(caller.User!, caller.UserKey!, ct);
         var origin = OAuthUrls.Origin(http, options.Value.PublicUrl);
-        return TypedResults.Ok(list.Select(c => View(c, names, origin)).ToArray());
+        return TypedResults.Ok(list.Select(c => View(c, open, origin)).ToArray());
     }
 
     private static async Task<Created<ConnectionView>> CreateAsync(
         CreateConnectionRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var open = await caller.OpenVaultsAsync(ct);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
         var info = await connections.CreateAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, body.Name, vaults, ct, body.ExpiresInDays);
-        return TypedResults.Created($"/api/connections/{info.Id}", View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
+        return TypedResults.Created($"/api/connections/{info.Id}", View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<Ok<ConnectionView>> SetVaultsAsync(
         string id, SetConnectionVaultsRequest body, HttpContext http, RequestCaller caller, Connections connections, IOptions<KumbuOptions> options, CancellationToken ct)
     {
-        var names = await AccountApi.VaultNamesAsync(caller, ct);
-        var vaults = AccountApi.RightsByVaultId(body.Vaults, names);
+        var open = await caller.OpenVaultsAsync(ct);
+        var vaults = AccountApi.RightsByVaultId(body.Vaults, open.ToDictionary(v => v.Id, v => v.Name, StringComparer.Ordinal));
         var info = await connections.SetVaultsAsync(caller.User!, caller.UserKey!, caller.CredentialReadAt!.Value, id, vaults, ct) ?? throw ApiErrors.NotFound(NoSuchConnection);
-        return TypedResults.Ok(View(info, names, OAuthUrls.Origin(http, options.Value.PublicUrl)));
+        return TypedResults.Ok(View(info, open, OAuthUrls.Origin(http, options.Value.PublicUrl)));
     }
 
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");
 
-    /// <summary>A vault the connection was given but that no longer opens for the user isn't listed: it has no name to show.</summary>
-    private static ConnectionView View(ConnectionInfo info, Dictionary<string, string> names, string origin) => new(
-        info.Id,
-        info.Name,
-        OAuthUrls.Resource(origin, info.Id),
-        info.Vaults.Where(v => names.ContainsKey(v.Key)).ToDictionary(v => names[v.Key], v => KeyRights.ToText(v.Value)),
-        info.CreatedAt,
-        info.LastUsedAt,
-        info.ExpiresAt,
-        info.RevokedAt,
-        StateText(info.State),
-        info.Reason,
-        info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null);
+    /// <summary>The rights by the caller's name for each vault, as stored, so that changing them starts from what she
+    /// gave; and, where a shared vault's role caps one (collab design §3.3), what the connection acts as there. A vault
+    /// that no longer opens for the user isn't listed: it has no name to show.</summary>
+    private static (Dictionary<string, string> Vaults, Dictionary<string, string> ActsAs) Shown(
+        IEnumerable<KeyValuePair<string, KeyRight>> rights, IReadOnlyList<VaultAccess> open)
+    {
+        var byId = open.ToDictionary(v => v.Id, StringComparer.Ordinal);
+        var vaults = new Dictionary<string, string>(StringComparer.Ordinal);
+        var actsAs = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (id, right) in rights)
+        {
+            if (!byId.TryGetValue(id, out var vault)) continue;
+            vaults[vault.Name] = KeyRights.ToText(right);
+            if (vault.Membership is { } membership && VaultCatalog.Capped(right, membership) is var capped && capped != right)
+                actsAs[vault.Name] = KeyRights.ToText(capped);
+        }
+
+        return (vaults, actsAs);
+    }
+
+    private static ConnectionView View(ConnectionInfo info, IReadOnlyList<VaultAccess> open, string origin)
+    {
+        var (vaults, actsAs) = Shown(info.Vaults, open);
+        return new(
+            info.Id,
+            info.Name,
+            OAuthUrls.Resource(origin, info.Id),
+            vaults,
+            actsAs,
+            info.CreatedAt,
+            info.LastUsedAt,
+            info.ExpiresAt,
+            info.RevokedAt,
+            StateText(info.State),
+            info.Reason,
+            info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null);
+    }
 
     private static string StateText(ConnectionState state) => state switch
     {

@@ -22,6 +22,7 @@ import { useSession } from "../state/session";
 import AccessList from "./AccessList";
 import MemberPanel from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
+import DeleteVaultDialog from "./DeleteVaultDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
@@ -110,6 +111,7 @@ function FolderButton({ folder, count, open, selected, onToggle }: { folder: Tre
     <button
       ref={button}
       type="button"
+      data-tree-row
       aria-expanded={open}
       aria-current={selected ? "true" : undefined}
       onClick={onToggle}
@@ -161,6 +163,7 @@ function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKin
   return (
     <button
       type="button"
+      data-tree-row
       aria-current={current ? "page" : undefined}
       onClick={onOpen}
       data-file-kind={fileKind}
@@ -334,6 +337,7 @@ export default function TreeDrawer(props: {
   const [exporting, setExporting] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [member, setMember] = useState(false);
+  const [deletingVault, setDeletingVault] = useState<string | null>(null);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
@@ -397,16 +401,19 @@ export default function TreeDrawer(props: {
         ]
       : []),
     ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
+    // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
+    ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
   const className = `relative flex h-full flex-col border-r border-line bg-surface ${resizing ? "select-none" : ""}`;
+  // `data-autofocus` is for the drawer, a dialog that takes the focus in; the docked sidebar is a landmark beside the note.
   const panel = (
     <>
       <div className="flex flex-none items-start gap-2 px-[18px] pt-[18px] pb-2.5">
         <div className="min-w-0 flex-1">
           <p className="truncate font-mono text-[11px] tracking-[0.08em] text-dim uppercase">{active?.owner != null ? `Shared by ${ownerLabel(active)}` : "Vault"}</p>
-          <h2 tabIndex={-1} data-autofocus className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
+          <h2 tabIndex={-1} data-autofocus={docked ? undefined : true} className="mt-0.5 truncate text-[22px] font-bold text-text focus:outline-none">{activeVault ?? "No vault yet"}</h2>
         </div>
         {tree.data && <FolderMenu folder={tree.data.root} {...folderActions} extra={vaultItems} />}
       </div>
@@ -459,7 +466,7 @@ export default function TreeDrawer(props: {
       </div>
 
       <div className="flex flex-none flex-col gap-2.5 border-t border-line px-3 pt-3 pb-[max(20px,env(safe-area-inset-bottom))]">
-        <VaultSwitcher onNewVault={onNewVault} />
+        <VaultSwitcher onNewVault={onNewVault} onRename={() => setMember(true)} />
         <AccountRow />
       </div>
       {/* Last in the tab order: the tree and its controls come first. */}
@@ -471,12 +478,19 @@ export default function TreeDrawer(props: {
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
+      {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />
       )}
       {choosingEmbeddings && activeVault && embeddings && providers.data && (
-        <EmbeddingsDialog vault={activeVault} current={embeddings} providers={providers.data} onClose={() => setChoosingEmbeddings(false)} />
+        <EmbeddingsDialog
+          vault={activeVault}
+          current={embeddings}
+          providers={providers.data}
+          members={Number(active?.members ?? 0)}
+          onClose={() => setChoosingEmbeddings(false)}
+        />
       )}
     </>
   );

@@ -14,8 +14,12 @@ namespace Kumbu.Server.OAuth;
 public sealed record OAuthClient(string ClientId, string Name, string Host, IReadOnlyList<string> RedirectUris, bool Verified);
 
 /// <summary><paramref name="Error"/> is one of <c>unreachable</c>, <c>not_public</c>, <c>too_large</c>, <c>not_json</c>,
-/// <c>client_id_mismatch</c>, <c>no_redirect_uris</c>, <c>bad_redirect_uri</c>, <c>not_public_client</c>, <c>redirected</c>.</summary>
+/// <c>client_id_mismatch</c>, <c>no_redirect_uris</c>, <c>bad_redirect_uri</c>, <c>not_public_client</c>, <c>redirected</c>,
+/// or <see cref="ClientMetadataFetcher.Unavailable"/>, which says nothing about the client and is not cached.</summary>
 public sealed record ClientMetadataResult(OAuthClient? Client, string? Error);
+
+/// <summary>A client's metadata document waited too long for its turn to be fetched (<see cref="ClientMetadataFetcher.Unavailable"/>).</summary>
+public sealed class ClientMetadataUnavailableException() : Exception("Too many apps are being identified right now; try again in a minute.");
 
 public static class ClientMetadataServices
 {
@@ -50,7 +54,11 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     public const int MaxBytes = 16 * 1024;
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>The error of a fetch that waited <see cref="Timeout"/> for one of the fetches at once and didn't get it.</summary>
+    public const string Unavailable = "unavailable";
+
     private const int MaxEntries = 1000;
+    private const int MaxConcurrentFetches = 8;
     private const int MaxUrlLength = 2048;
     private const int MaxNameLength = 100;
     private static readonly TimeSpan MinAge = TimeSpan.FromMinutes(5);
@@ -59,6 +67,9 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
     private static readonly TimeSpan FailureAge = TimeSpan.FromMinutes(1);
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
+
+    /// <summary>At most this many fetches at once, whoever starts them; the rest wait their turn, for <see cref="Timeout"/> at most.</summary>
+    private readonly SemaphoreSlim _fetches = new(MaxConcurrentFetches);
 
     private sealed record CacheEntry(ClientMetadataResult Result, DateTimeOffset Stored, DateTimeOffset Expires);
 
@@ -71,15 +82,49 @@ public sealed class ClientMetadataFetcher(IHttpClientFactory http, IOptions<Kumb
         && uri.UserInfo.Length == 0
         && !clientId.Contains('#', StringComparison.Ordinal);
 
+    /// <summary>Whether <see cref="FetchAsync"/> would answer from the cache, without a request.</summary>
+    public bool IsCached(string clientId) => _cache.TryGetValue(clientId, out var cached) && time.GetUtcNow() < cached.Expires;
+
     public async Task<ClientMetadataResult> FetchAsync(string clientId, CancellationToken ct)
     {
-        var now = time.GetUtcNow();
-        if (_cache.TryGetValue(clientId, out var cached) && now < cached.Expires) return cached.Result;
+        if (_cache.TryGetValue(clientId, out var cached) && time.GetUtcNow() < cached.Expires) return cached.Result;
 
-        var allowLoopback = options.Value.OAuth.AllowLoopbackClients;
-        var (result, maxAge) = await FetchUncachedAsync(clientId, allowLoopback, ct);
-        Store(clientId, result, now, result.Error is null ? maxAge : FailureAge);
-        return result;
+        if (!await TurnAsync(ct))
+        {
+            log.LogInformation("Client metadata not fetched: too many fetches at once");
+            return new ClientMetadataResult(null, Unavailable);
+        }
+
+        try
+        {
+            // Another request may have fetched it while this one waited.
+            var now = time.GetUtcNow();
+            if (_cache.TryGetValue(clientId, out cached) && now < cached.Expires) return cached.Result;
+            var allowLoopback = options.Value.OAuth.AllowLoopbackClients;
+            var (result, maxAge) = await FetchUncachedAsync(clientId, allowLoopback, ct);
+            Store(clientId, result, now, result.Error is null ? maxAge : FailureAge);
+            return result;
+        }
+        finally
+        {
+            _fetches.Release();
+        }
+    }
+
+    /// <summary>Waits for one of the fetches at once, on <see cref="TimeProvider"/>'s clock; false after <see cref="Timeout"/>.</summary>
+    private async Task<bool> TurnAsync(CancellationToken ct)
+    {
+        using var waited = new CancellationTokenSource(Timeout, time);
+        using var either = CancellationTokenSource.CreateLinkedTokenSource(ct, waited.Token);
+        try
+        {
+            await _fetches.WaitAsync(either.Token);
+            return true;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private void Store(string clientId, ClientMetadataResult result, DateTimeOffset now, TimeSpan age)

@@ -2,13 +2,13 @@
 // Adapted from chatsundere (apps/user-client/src/routes/app/projects/file.tsx)
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { deviceOf } from "../api/activity";
 import { errorText } from "../api/error-text";
 import { collectFromDrop } from "../upload/collectFiles";
 import type { NoteVersion } from "../api/history";
 import { levelOf, mayChange, useBacklinks, useMayChange, useCreateNote, useDeleteNote, useLinks, useNote, useSaveNote, useVaults } from "../api/notes";
-import { crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
+import { boardUrl, crumbOf, folderOf, noteUrl, titleOf, vaultOf } from "../api/paths";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { secondaryButtonClass } from "../components/form";
 import { useDialog } from "../hooks/useDialog";
@@ -178,6 +178,18 @@ export default function NoteView({ path }: { path: string }) {
     keepScroll.current = null;
   }, [note.data?.content]);
 
+  // A note opened in Read mode puts the screen reader at its title, unless something holds the focus already (the
+  // drawer's opener, a tree row): Write mode has its editor, which takes the focus itself.
+  const titled = useRef<string | null>(null);
+  const fileTitle = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (mode !== "read" || !note.data || titled.current === path) return;
+    titled.current = path;
+    if (document.activeElement && document.activeElement !== document.body) return;
+    // The note's own H1 carries `data-line`; an embedded note's H1 doesn't.
+    (fileTitle.current ?? article.current?.querySelector<HTMLElement>("h1[data-line]"))?.focus({ preventScroll: true });
+  }, [mode, path, note.data]);
+
   // With "Refresh Read mode automatically" on, Read mode takes a version written elsewhere by itself. Write mode never does.
   const autoRefresh = mode === "read" && storedAutoRefresh();
   // Others with the vault see who is editing it (collab design §9.2).
@@ -297,8 +309,18 @@ export default function NoteView({ path }: { path: string }) {
   const failedText = newer && refreshFailed === versionKey(newer) && <span className="block text-text">Couldn't load the new version. Try again.</span>;
   const bannerHasIt = sameWrite(newer);
 
+  // The board's own note is mostly its frontmatter (and, below `maintain`, refused for writing): the board is what is wanted.
+  const boardOfNote = path === `/${vaultOf(path)}/Board/Board.md` ? vaultOf(path) : null;
+
   return (
     <>
+      {boardOfNote && (
+        <nav aria-label="Board" className="flex min-h-11 flex-none items-center border-b border-line bg-surface px-4 text-sm">
+          <Link to={boardUrl(boardOfNote)} className="font-medium text-accent-text underline underline-offset-[3px] focus-visible:outline-2 focus-visible:outline-accent">
+            Open the board
+          </Link>
+        </nav>
+      )}
       <AgentBanner change={change} actions={bannerHasIt && offerRefresh ? refreshButton : null}>
         {bannerHasIt && failedText}
       </AgentBanner>
@@ -326,7 +348,7 @@ export default function NoteView({ path }: { path: string }) {
       )}
       <div ref={scroller} {...dropTarget} className={`min-h-0 flex-1 overflow-y-auto px-[22px] pt-[22px] pb-7 ${dropping ? "outline-2 -outline-offset-4 outline-dashed outline-accent" : ""}`}>
         {/* A note with its own H1 would show two titles; the page keeps exactly one. */}
-        {!(note.data && startsWithH1(parts.body)) && <h1 className="text-[28px] leading-tight font-bold text-text">{titleOf(path)}</h1>}
+        {!(note.data && startsWithH1(parts.body)) && <h1 ref={fileTitle} tabIndex={-1} className="text-[28px] leading-tight font-bold text-text focus:outline-none">{titleOf(path)}</h1>}
         {notice && (
           <p
             role={notice.kind === "conflict" ? "status" : "alert"}

@@ -12,9 +12,20 @@ export type Departure = components["schemas"]["DepartureView"];
 export type Role = "read" | "write" | "maintain";
 export const roles: readonly Role[] = ["read", "write", "maintain"];
 
-/** Who has access to the owner's vault: her keys and apps, and the people it is shared with or who are invited. */
-export const useVaultAccess = (vault: string) =>
-  useQuery({ queryKey: ["vault-access", vault], queryFn: () => call(api.GET("/api/vaults/{vault}/access", { params: { path: { vault } } })) });
+/** How often the open access list asks again: the sync socket's hints are about notes and don't say a link was opened. */
+const accessPoll = 10_000;
+
+/**
+ * Who has access to the owner's vault: her keys and apps, and the people it is shared with or who are invited.
+ * `poll`: while the list is open, so a redeemer who arrives shows without a reload.
+ */
+export const useVaultAccess = (vault: string, poll = false) =>
+  useQuery({
+    queryKey: ["vault-access", vault],
+    queryFn: () => call(api.GET("/api/vaults/{vault}/access", { params: { path: { vault } } })),
+    refetchInterval: poll ? accessPoll : false,
+    refetchIntervalInBackground: false,
+  });
 
 /** One membership as its owner sees it: with `redeemer` only while it waits for her confirmation. */
 export const useMembership = (vault: string, id: string, enabled: boolean) =>
@@ -29,8 +40,9 @@ export type MembershipChange =
   | { kind: "role"; id: string; role: Role };
 
 /**
- * The owner's changes to a membership, each through `api`: confirming and raising a role need the password window, and
- * a closed one asks for the password and goes on. Lowering, declining, withdrawing and revoking never do.
+ * The owner's changes to a membership, each through `api`: confirming and raising a role to write need the password
+ * window, and a closed one asks for the password and goes on. Raising to maintain takes the password each time, through
+ * `useRaiseToMaintain`. Lowering, declining, withdrawing and revoking never need it.
  */
 export function useMembershipChange(vault: string) {
   const queryClient = useQueryClient();
@@ -52,6 +64,21 @@ export function useMembershipChange(vault: string) {
     },
     onSettled: async (_, __, change) => {
       queryClient.removeQueries({ queryKey: ["membership", vault, change.id] });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
+    },
+  });
+}
+
+/**
+ * Raising a member to maintain: the owner's password goes with the request, window open or not, and opens the window.
+ * `password` is read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+ */
+export function useRaiseToMaintain(vault: string, id: string, password: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => call(api.PUT("/api/vaults/{vault}/memberships/{id}/role", { params: { path: { vault, id } }, body: { role: "maintain", password } })),
+    onSettled: async () => {
+      queryClient.removeQueries({ queryKey: ["membership", vault, id] });
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
     },
   });
@@ -127,3 +154,10 @@ export function useDismissNotice() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["member-notices"] }),
   });
 }
+
+/** The caller's own events as a member across the vaults shared with her, newest first; `vault` is null for one she has lost. */
+export const useVaultEvents = () =>
+  useQuery({
+    queryKey: ["vault-events"],
+    queryFn: async () => (await call(api.GET("/api/vault-events"))).sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+  });

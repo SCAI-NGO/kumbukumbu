@@ -2,6 +2,7 @@
 using System.Net;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Tests.Api;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace Kumbu.Server.Tests.Sharing;
@@ -71,5 +72,80 @@ public sealed class AliasApiTests(KumbuAppFactory app)
         using var left = await bob.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/leave");
         using var afterLeaving = await bob.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias = "Mine" });
         Assert.Equal(HttpStatusCode.NotFound, afterLeaving.StatusCode);
+    }
+
+    private static Task<HttpResponseMessage> RenameAsync(RestClient user, string membershipId, string alias) =>
+        user.SendAsync(HttpMethod.Put, $"/api/memberships/{membershipId}/alias", new { alias });
+
+    /// <summary>
+    /// A rename writes the member slot the finish of a run writes (spec §1.3): while a run holds the vault, or it is
+    /// in its two-key period, it answers 503 "being re-encrypted" before it writes. Someone else's membership still
+    /// answers 404, which tells nothing of the vault.
+    /// </summary>
+    [Fact]
+    public async Task Renaming_during_a_run_answers_being_reencrypted()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        await alice.CreateAsync("plan.md", "Beete planen\n");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Privat");
+        var membershipId = await alice.ShareWithAsync(bob, "garten");
+        var vaultId = await alice.VaultIdAsync();
+
+        await Share.SetRekeyStartedAsync(app.Database, vaultId, DateTime.UtcNow);
+        try
+        {
+            using var during = await RenameAsync(bob, membershipId, "Beete");
+            using var byCarol = await RenameAsync(carol, membershipId, "Beete");
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, during.StatusCode);
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(during));
+            Assert.Equal(HttpStatusCode.NotFound, byCarol.StatusCode);
+        }
+        finally
+        {
+            await Share.SetRekeyStartedAsync(app.Database, vaultId, null);
+        }
+
+        await using (await alice.HoldRekeyAsync())
+        {
+            using var during = await RenameAsync(bob, membershipId, "Beete");
+            using var byCarol = await RenameAsync(carol, membershipId, "Beete");
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, during.StatusCode);
+            Assert.Equal(VaultBusyException.BeingReencrypted, await RestClient.ErrorAsync(during));
+            Assert.Equal(HttpStatusCode.NotFound, byCarol.StatusCode);
+        }
+
+        Assert.Equal(["garten", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        using var after = await RenameAsync(bob, membershipId, "Beete");
+        Assert.Equal(HttpStatusCode.NoContent, after.StatusCode);
+        using var read = await bob.GetAsync("/api/notes/Beete/plan.md");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+    }
+
+    [Fact]
+    public async Task Renames_are_rate_limited_per_user()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Privat");
+        var bobs = await alice.ShareWithAsync(bob, "garten");
+        var carols = await alice.ShareWithAsync(carol, "Beete", MemberRole.Read, label: "Carol");
+
+        for (var i = 0; i < 30; i++)
+        {
+            using var renamed = await RenameAsync(bob, bobs, $"garten{i}");
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        using var over = await RenameAsync(bob, bobs, "Beete");
+        using var byCarol = await RenameAsync(carol, carols, "Garten");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, over.StatusCode);
+        Assert.NotNull(over.Headers.RetryAfter);
+        Assert.Equal(["garten29", "Work"], (await NamesAsync(bob)).Order(StringComparer.OrdinalIgnoreCase).ToArray());
+        // Counted per user: Carol's rename isn't held back by Bob's.
+        Assert.Equal(HttpStatusCode.NoContent, byCarol.StatusCode);
     }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
@@ -52,15 +52,23 @@ async function sessionOrNull(): Promise<SessionView | null> {
 export default function Share() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [secret] = useState(() => {
+  const [secret, setSecret] = useState(() => {
     const fromLink = fragmentSecret(location.hash);
     if (fromLink) sessionStorage.setItem(shareSecretKey, fromLink);
     return fromLink || sessionStorage.getItem(shareSecretKey) || "";
   });
 
+  // A link opened in a tab that already shows one replaces its secret, whatever became of the first. The same link
+  // again is not stored again: the page already shows what became of it, and a refused secret stays forgotten.
   useEffect(() => {
-    if (location.hash) navigate({ pathname: "/share" }, { replace: true });
-  }, [location.hash, navigate]);
+    if (!location.hash) return;
+    const fromLink = fragmentSecret(location.hash);
+    if (fromLink && fromLink !== secret) {
+      sessionStorage.setItem(shareSecretKey, fromLink);
+      setSecret(fromLink);
+    }
+    navigate({ pathname: "/share" }, { replace: true });
+  }, [location.hash, navigate, secret]);
 
   const signedIn = useSession((s) => s.signedIn);
   const session = useQuery({ queryKey: ["share-session"], queryFn: sessionOrNull, gcTime: 0 });
@@ -68,12 +76,12 @@ export default function Share() {
     if (session.data) signedIn(session.data);
   }, [session.data, signedIn]);
 
-  if (!secret) return <AuthScreen title="A shared vault" lead="This link has no invitation in it. Open the full link you were sent." />;
-  if (session.isPending) return <AuthScreen title="A shared vault" lead="Checking the invitation…" />;
-  if (session.isError) return <AuthScreen title="A shared vault" lead={errorText(session.error)} />;
+  if (!secret) return <ShareScreen title="A shared vault" lead="This link has no invitation in it. Open the full link you were sent." />;
+  if (session.isPending) return <ShareScreen title="A shared vault" lead="Checking the invitation…" />;
+  if (session.isError) return <ShareScreen title="A shared vault" lead={errorText(session.error)} />;
   if (!session.data) {
     return (
-      <AuthScreen title="A shared vault" lead="Someone invited you to a vault of theirs on this Kumbu².">
+      <ShareScreen title="A shared vault" lead="Someone invited you to a vault of theirs on this Kumbu².">
         <p className="text-text-body">
           To accept, you need an account on this Kumbu² first. If you have none, tell the person who sent you the link that you haven't been invited yet:
           only an admin makes accounts here. The link stays valid until it expires, so you can open it again once you have one.
@@ -81,10 +89,22 @@ export default function Share() {
         <Link to={`/signin?next=${encodeURIComponent("/share")}`} className={`${primaryButtonClass} flex items-center justify-center`}>
           Sign in
         </Link>
-      </AuthScreen>
+      </ShareScreen>
     );
   }
-  return <Invitation secret={secret} />;
+  return <Invitation key={secret} secret={secret} />;
+}
+
+/** The frame of this page, with a way out on each screen: the link may be expired, refused or used up. */
+function ShareScreen({ title, lead, children }: { title: string; lead?: ReactNode; children?: ReactNode }) {
+  return (
+    <AuthScreen title={title} lead={lead}>
+      {children}
+      <Link to="/" className="flex min-h-11 items-center self-start text-accent-text">
+        Back to Kumbu²
+      </Link>
+    </AuthScreen>
+  );
 }
 
 function Invitation({ secret }: { secret: string }) {
@@ -98,13 +118,19 @@ function Invitation({ secret }: { secret: string }) {
   const [accepted, setAccepted] = useState<Accepted | null>(null);
 
   const peek = useQuery({
-    queryKey: ["vault-invitation"],
+    queryKey: ["vault-invitation", secret],
     queryFn: () => call(api.POST("/api/vault-invitations/peek", { body: { secret } })),
     // Nothing of it stays in the cache once the page is gone.
     gcTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
   });
+  // The server answers every refusal alike (unknown, expired, withdrawn, used): such a secret is of no use to keep.
+  useEffect(() => {
+    if (peek.error instanceof HttpError && peek.error.status === 404 && sessionStorage.getItem(shareSecretKey) === secret) {
+      sessionStorage.removeItem(shareSecretKey);
+    }
+  }, [peek.error, secret]);
   useEffect(() => {
     if (!peek.data || alias !== null) return;
     setAlias(peek.data.alias);
@@ -142,22 +168,22 @@ function Invitation({ secret }: { secret: string }) {
       navigate("/", { replace: true });
     };
     return accepted.status === "active" ? (
-      <AuthScreen title={`${accepted.vault} is shared with you`} lead={`You can open it now, as ${roleText[accepted.role] ?? accepted.role}.`}>
+      <ShareScreen title={`${accepted.vault} is shared with you`} lead={`You can open it now, as ${roleText[accepted.role] ?? accepted.role}.`}>
         <button type="button" onClick={open} className={primaryButtonClass}>
           Open {accepted.vault}
         </button>
-      </AuthScreen>
+      </ShareScreen>
     ) : (
-      <AuthScreen title="Accepted" lead={`The owner confirms your access first. ${accepted.vault} shows among your vaults once they have.`}>
+      <ShareScreen title="Accepted" lead={`The owner confirms your access first. ${accepted.vault} shows among your vaults once they have.`}>
         <button type="button" onClick={() => navigate("/", { replace: true })} className={secondaryButtonClass}>
           To your vaults
         </button>
-      </AuthScreen>
+      </ShareScreen>
     );
   }
 
-  if (peek.isPending) return <AuthScreen title="A shared vault" lead="Checking the invitation…" />;
-  if (peek.isError) return <AuthScreen title="A shared vault" lead={errorText(peek.error)} />;
+  if (peek.isPending) return <ShareScreen title="A shared vault" lead="Checking the invitation…" />;
+  if (peek.isError) return <ShareScreen title="A shared vault" lead={errorText(peek.error)} />;
 
   const p: Peek = peek.data;
   const provider = providers.data?.find((x) => x.name === p.embeddingProvider);
@@ -167,7 +193,7 @@ function Invitation({ secret }: { secret: string }) {
   };
   const row = "flex flex-col gap-0.5";
   return (
-    <AuthScreen title={`Join ${p.vault}`} lead="Someone shares a vault with you. Check whose it is before you accept.">
+    <ShareScreen title={`Join ${p.vault}`} lead="Someone shares a vault with you. Check whose it is before you accept.">
       <dl className="flex flex-col gap-3 rounded-[12px] border border-line bg-surface p-4">
         <div className={row}>
           <dt className={labelClass}>Vault</dt>
@@ -231,6 +257,6 @@ function Invitation({ secret }: { secret: string }) {
           Accept
         </button>
       </form>
-    </AuthScreen>
+    </ShareScreen>
   );
 }

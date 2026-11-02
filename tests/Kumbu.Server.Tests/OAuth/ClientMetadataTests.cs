@@ -14,14 +14,84 @@ public sealed class ClientMetadataTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static ClientMetadataFetcher Fetcher(bool allowLoopback = true, TimeProvider? time = null, CapturedLog? log = null)
+    private static ClientMetadataFetcher Fetcher(bool allowLoopback = true, TimeProvider? time = null, CapturedLog? log = null, HttpMessageHandler? handler = null)
     {
         var services = new ServiceCollection();
         services.AddLogging(b => { if (log is not null) b.AddProvider(log); });
         services.AddSingleton<IOptions<KumbuOptions>>(Options.Create(new KumbuOptions { OAuth = { AllowLoopbackClients = allowLoopback } }));
         services.AddSingleton(time ?? TimeProvider.System);
         services.AddClientMetadataFetcher();
+        if (handler is not null) services.AddHttpClient(ClientMetadataServices.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => handler);
         return services.BuildServiceProvider().GetRequiredService<ClientMetadataFetcher>();
+    }
+
+    [Fact]
+    public async Task At_most_8_metadata_fetches_run_at_once()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(handler: handler);
+
+        var fetches = Enumerable.Range(0, 12).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        await handler.StartedAsync(8);
+        // Long enough for a ninth to arrive if nothing held it back.
+        await Task.Delay(300, Ct);
+
+        Assert.Equal(8, handler.Started);
+        release.SetResult();
+        await Task.WhenAll(fetches);
+        Assert.Equal(12, handler.Started);
+        Assert.Equal(8, handler.MostAtOnce);
+    }
+
+    [Fact]
+    public async Task A_fetch_that_waits_too_long_for_its_turn_is_unavailable_and_not_cached()
+    {
+        var time = new FakeTimeProvider();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(time: time, handler: handler);
+        const string ninth = "https://ninth.example/client.json";
+
+        var held = Enumerable.Range(0, 8).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        await handler.StartedAsync(8);
+        var waiting = fetcher.FetchAsync(ninth, Ct);
+        await Task.Delay(100, Ct);
+        Assert.False(waiting.IsCompleted);
+
+        time.Advance(ClientMetadataFetcher.Timeout);
+        var result = await waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        Assert.Equal("unavailable", result.Error);
+        Assert.Null(result.Client);
+        Assert.Equal(8, handler.Started);
+        Assert.False(fetcher.IsCached(ninth));
+
+        // Once a turn is free, the same document is fetched after all.
+        release.SetResult();
+        await Task.WhenAll(held);
+        Assert.Equal("unreachable", (await fetcher.FetchAsync(ninth, Ct)).Error);
+        Assert.Equal(9, handler.Started);
+    }
+
+    [Fact]
+    public async Task An_unavailable_fetch_is_an_exception_of_its_own_when_resolving()
+    {
+        var time = new FakeTimeProvider();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new HoldingHandler(release.Task);
+        var fetcher = Fetcher(time: time, handler: handler);
+        var clients = new OAuthClients(null!, fetcher, time);
+
+        var held = Enumerable.Range(0, 8).Select(i => fetcher.FetchAsync($"https://c{i}.example/client.json", Ct)).ToList();
+        await handler.StartedAsync(8);
+        var waiting = clients.ResolveAsync("https://ninth.example/client.json", Ct);
+        await Task.Delay(100, Ct);
+        time.Advance(ClientMetadataFetcher.Timeout);
+
+        await Assert.ThrowsAsync<ClientMetadataUnavailableException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5), Ct));
+        release.SetResult();
+        await Task.WhenAll(held);
     }
 
     private static string Document(string clientId, string? redirectUris = null, string? extra = null) =>

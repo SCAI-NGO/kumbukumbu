@@ -27,9 +27,15 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
     private volatile bool _ready;
 
     /// <summary>Null when the client is unknown or its document unusable; <see cref="ClientMetadataFetcher.FetchAsync"/> says why when that matters.</summary>
+    /// <exception cref="ClientMetadataUnavailableException">The document couldn't be fetched now; that says nothing about the client.</exception>
     public async Task<OAuthClient?> ResolveAsync(string clientId, CancellationToken ct)
     {
-        if (ClientMetadataFetcher.IsMetadataUrl(clientId)) return (await fetcher.FetchAsync(clientId, ct)).Client;
+        if (ClientMetadataFetcher.IsMetadataUrl(clientId))
+        {
+            var fetched = await fetcher.FetchAsync(clientId, ct);
+            return fetched.Error == ClientMetadataFetcher.Unavailable ? throw new ClientMetadataUnavailableException() : fetched.Client;
+        }
+
         if (!IsRegisteredId(clientId)) return null;
 
         await EnsureReadyAsync(ct);
@@ -38,6 +44,9 @@ public sealed class OAuthClients(IMongoDatabase db, ClientMetadataFetcher fetche
         if (doc is null || doc.ExpiresAt is { } expiresAt && expiresAt <= Now) return null;
         return new OAuthClient(doc.Id, doc.Name, HostOf(doc.RedirectUris[0]), doc.RedirectUris, Verified: false);
     }
+
+    /// <summary>Whether resolving <paramref name="clientId"/> would fetch a metadata document, rather than read the cache or the store.</summary>
+    public bool WouldFetch(string clientId) => ClientMetadataFetcher.IsMetadataUrl(clientId) && !fetcher.IsCached(clientId);
 
     /// <summary>
     /// Registers a public client from RFC 7591 client metadata. Only what Kumbu² uses is read; the rest is ignored.

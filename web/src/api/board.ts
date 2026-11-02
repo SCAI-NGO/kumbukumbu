@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api, call } from "./client";
 import type { components } from "./schema";
 
@@ -84,4 +84,21 @@ export function useBoardAction(vault: string) {
       void queryClient.invalidateQueries({ queryKey: ["changes"] });
     },
   });
+}
+
+/**
+ * A note made in the board's folder from the tree or the dock: the board's own add, as "+ Card", into the first column
+ * a card can start in (not a reason column, which takes a card only with a reason). Answers the card's path. A name
+ * that is taken is refused by the server, so a note there, card or not, is never written over.
+ */
+export async function addToFirstColumn(queryClient: QueryClient, vault: string, title: string) {
+  const board = await queryClient.fetchQuery({
+    queryKey: boardKey(vault),
+    queryFn: () => call(api.GET("/api/vaults/{vault}/board", { params: { path: { vault }, query: {} } })),
+  });
+  const column = (board.columns.find((c) => !c.needsReason) ?? board.columns[0]).name;
+  const after = await send(vault, { kind: "add", title, column });
+  queryClient.setQueryData(boardKey(vault), after);
+  void queryClient.invalidateQueries({ queryKey: ["changes"] });
+  return after.columns.flatMap((c) => c.cards).find((c) => c.title === title)?.path ?? `/${vault}/Board/${title}.md`;
 }

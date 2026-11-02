@@ -88,6 +88,47 @@ describe("the note view", () => {
     expect(useEditor.getState().overlay).toBe("search");
   });
 
+  it("opening a note in Read mode leaves the focus where a screen reader expects it, on the note's heading", async () => {
+    noteApi();
+    renderApp(planUrl);
+    const title = await screen.findByRole("heading", { level: 1, name: "Plan" });
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(title).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("takes the focus to the file name's heading when the note has no H1 of its own", async () => {
+    noteApi({ [`GET /api/notes${PLAN}`]: () => json(200, noteView(PLAN, "Text.")) });
+    renderApp(planUrl);
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "plan" })).toHaveFocus());
+  });
+
+  it("leaves the focus where it is when something outside the note holds it as the note arrives", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    noteApi({
+      [`GET /api/notes${PLAN}`]: async () => {
+        await slow;
+        return json(200, noteView(PLAN, source));
+      },
+    });
+    renderApp(planUrl);
+    const opener = await screen.findByRole("button", { name: "Open file tree" });
+    act(() => opener.focus());
+    release();
+    const title = await screen.findByRole("heading", { level: 1, name: "Plan" });
+    expect(opener).toHaveFocus();
+    expect(title).not.toHaveFocus();
+  });
+
+  it("going to Write mode puts the caret in the text", async () => {
+    noteApi();
+    renderApp(planUrl);
+    await screen.findByRole("heading", { level: 1, name: "Plan" });
+    await userEvent.click(screen.getByRole("button", { name: "Write" }));
+    const editor = await screen.findByRole("textbox", { name: "Markdown source" });
+    await waitFor(() => expect(editor).toHaveFocus());
+  });
+
   it("shows one title: the note's own H1 replaces the file name's", async () => {
     noteApi();
     renderApp(planUrl);
@@ -523,5 +564,26 @@ describe("Outline and find in the note", () => {
     act(() => useEditor.getState().openNote("/Work/inbox.md"));
     expect(useEditor.getState().find).toEqual({ query: "", index: 0, count: 0 });
     expect(useEditor.getState().noteTool).toBeNull();
+  });
+});
+
+describe("the board's own note", () => {
+  const BOARD = "/Work/Board/Board.md";
+  const definition = ["---", "kumbu-board: 1", "columns: [Ideas, Doing]", "---", "## Instructions", "", "Keep it small."].join("\n");
+
+  it("Board.md opens with a link to the board above it", async () => {
+    noteApi({ [`GET /api/notes${BOARD}`]: () => json(200, noteView(BOARD, definition)) });
+    renderApp(`/notes${BOARD}`);
+    const link = await screen.findByRole("link", { name: "Open the board" });
+    expect(link).toHaveAttribute("href", "/board/Work");
+    expect(link.compareDocumentPosition(await screen.findByRole("article")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("no other note has the link, not even a Board.md elsewhere", async () => {
+    const elsewhere = "/Work/Board/Archive/Board.md";
+    noteApi({ [`GET /api/notes${elsewhere}`]: () => json(200, noteView(elsewhere, definition)) });
+    renderApp(`/notes${elsewhere}`);
+    await screen.findByRole("article");
+    expect(screen.queryByRole("link", { name: "Open the board" })).not.toBeInTheDocument();
   });
 });

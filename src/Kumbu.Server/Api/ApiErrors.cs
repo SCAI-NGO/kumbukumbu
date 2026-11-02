@@ -7,7 +7,8 @@ using Kumbu.Server.Vaults;
 namespace Kumbu.Server.Api;
 
 /// <summary>Every error the REST API returns: one sentence for a person to read. <c>type</c>, only on errors a client
-/// answers by itself: <c>password-required</c> (<see cref="ApiErrors.PasswordRequired"/>). <c>code</c>, only on a
+/// answers by itself: <c>password-required</c> (<see cref="ApiErrors.PasswordRequired"/>), <c>other-account</c>
+/// (<see cref="ApiErrors.OtherAccount"/>). <c>code</c>, only on a
 /// refused write: why it was refused (<see cref="Kumbu.Core.Notes.Refusals"/>: <c>read-only</c>, <c>structural</c>, …).</summary>
 public sealed record ApiError(
     string Error,
@@ -35,6 +36,10 @@ public static class ApiErrors
     /// given (<see cref="Security.RequirePasswordWindow"/>): a 401 that doesn't end the session; the web app asks for the
     /// password, confirms it and repeats the request.</summary>
     public const string PasswordRequired = "password-required";
+
+    /// <summary>A 404 for a consent request that names another account's connection: the web app offers to sign out
+    /// and sign in as its owner.</summary>
+    public const string OtherAccount = "other-account";
 
     public static ApiException NotFound(string message) => new(StatusCodes.Status404NotFound, message);
 
@@ -92,6 +97,11 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status404NotFound, e.Message);
         }
+        catch (OAuth.ClientMetadataUnavailableException e)
+        {
+            SetRetryAfter(context.HttpContext, BusyRetryAfter);
+            return Result(StatusCodes.Status503ServiceUnavailable, e.Message);
+        }
         // Only the busy vault of a re-keying: every other VaultUnavailableException keeps its mapping.
         catch (Kumbu.Server.Vaults.VaultBusyException e)
         {
@@ -114,7 +124,8 @@ public static class ApiErrors
         {
             return Result(StatusCodes.Status400BadRequest, Sentence(e));
         }
-        // Counted before the answer, whatever happens to the request now: a remembered session ends at the fifth in a row.
+        // Counted before the answer, whatever happens to the request now: a remembered session ends at the fifth in a row
+        // or the tenth in all.
         catch (WrongPasswordException e)
         {
             await AccountApi.PasswordWrongAsync(context.HttpContext, CancellationToken.None);

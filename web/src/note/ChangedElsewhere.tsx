@@ -31,11 +31,12 @@ export function useChangedElsewhere(
 }
 
 /**
- * Where a moved note is now, from the 404's sentence (`Moves.HintAsync` on the server: "; it was moved to
- * /Work/b.md on 2026-10-25 09:03 UTC (liz)"); null if it wasn't moved, or isn't there any more either.
+ * Where a moved note is now, from the 404's sentence (`Moves.HintAsync` on the server, inside `NoteApi.MissingAsync`'s:
+ * "There is no note at /Work/a.md; it was moved to /Work/b.md on 2026-10-25 09:03 UTC (if it was removed, it is in the
+ * trash)."); null if it wasn't moved, or isn't there any more either. Nothing after the time is relied on.
  */
 export function movedTo(message: string): string | null {
-  const m = /; it was moved to (\/.+?\.md) on \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC /.exec(message);
+  const m = /; it was moved to (\/.+?\.md) on \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\b/.exec(message);
   return m && !message.includes(", and is not there any more") ? m[1] : null;
 }
 

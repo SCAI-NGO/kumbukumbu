@@ -219,6 +219,25 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.NotNull((await JsonAsync(response))["error"]);
     }
 
+    /// <summary>Per network (IPv4 /24), as wrong pairing codes are: another address of it doesn't start afresh.</summary>
+    [Fact]
+    public async Task Peek_at_an_account_invitation_is_rate_limited()
+    {
+        var code = new string('A', 43);
+        for (var i = 1; i <= Kumbu.Server.Api.AccountLimits.AccountInvitationPeeksPerNetwork; i++)
+        {
+            using var peek = await SendAsync(HttpMethod.Post, "/api/invitations/peek", new { code }, ip: $"192.0.2.{i}");
+            Assert.Equal(HttpStatusCode.NotFound, peek.StatusCode);
+        }
+
+        using var limited = await SendAsync(HttpMethod.Post, "/api/invitations/peek", new { code }, ip: "192.0.2.200");
+        using var elsewhere = await PeekAsync(code);
+
+        Assert.Equal((HttpStatusCode)429, limited.StatusCode);
+        Assert.True(limited.Headers.RetryAfter is not null);
+        Assert.Equal(HttpStatusCode.NotFound, elsewhere.StatusCode);
+    }
+
     [Theory]
     [InlineData("deactivated")]
     [InlineData("deleted")]
@@ -764,7 +783,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var row = (await JsonAsync(list)).AsArray().Single(u => u!["username"]!.GetValue<string>() == username)!.AsObject();
         Assert.Equal(
-            ["active", "bytesStored", "createdAt", "display", "id", "lastActiveAt", "role", "username", "vaults"],
+            ["active", "bytesStored", "createdAt", "display", "id", "lastActiveAt", "role", "sharedVaults", "username", "vaults"],
             row.Select(p => p.Key).Order());
         Assert.NotNull(row["lastActiveAt"]?.GetValue<DateTime>());
         var id = row["id"]!.GetValue<string>();

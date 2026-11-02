@@ -16,7 +16,10 @@ import { useSession } from "../state/session";
 export function safeNext(next: string | null): string {
   if (!next || !/^\/(?![/\\])/.test(next)) return "/";
   const url = new URL(next, window.location.origin);
-  return url.origin === window.location.origin ? url.pathname + url.search + url.hash : "/";
+  if (url.origin !== window.location.origin) return "/";
+  // Dot segments and escapes can turn a harmless-looking input into "//host" once parsed, so the output is checked too.
+  const result = url.pathname + url.search + url.hash;
+  return /^\/[/\\]/.test(result) ? "/" : result;
 }
 
 export default function SignIn() {

@@ -93,7 +93,7 @@ export default function ShareDialog({ vault, onClose }: { vault: string; onClose
           </>
         ) : (
           <form onSubmit={submit} className="flex flex-col gap-4" aria-busy={create.isPending}>
-            <TextField label="Who it is for" value={label} onChange={setLabel} autoComplete="off" />
+            <TextField label="Who it is for" value={label} onChange={setLabel} autoComplete="off" ignoreManagers />
             <p className="-mt-2 text-sm text-muted">Your name for them, shown only to you. Whoever opens the link gets in under it.</p>
 
             <fieldset className="flex min-w-0 flex-col gap-1">

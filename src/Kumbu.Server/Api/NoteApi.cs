@@ -316,12 +316,29 @@ public static class NoteApi
     /// that list it disconnected: they can't be given the new key without their owner.</summary>
     private static async Task<Ok<RekeyVaultView>> RekeyVaultAsync(
         string vault, RekeyVaultRequest body, HttpContext http, RequestCaller caller, Rekeying rekeying, Sessions sessions, AccountLimits limits,
-        CancellationToken ct)
+        Pairings pairings, CancellationToken ct)
     {
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // A wrong password throws; null is a right one and no such vault.
-        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+        RekeySummary? summary;
+        var passwordRight = true;
+        try
+        {
+            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+        }
+        catch (WrongPasswordException)
+        {
+            passwordRight = false;
+            throw;
+        }
+        finally
+        {
+            // An open code would make a key after the run, which revoked the vault's keys; also when the client went
+            // away and the run goes on without the request, or the run failed part-way.
+            if (passwordRight) pairings.DropAll(caller.User!.Id);
+        }
+
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));

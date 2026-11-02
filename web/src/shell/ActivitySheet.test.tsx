@@ -309,4 +309,79 @@ describe("the vault's activity", () => {
     const dialog = await openActivity();
     expect((await rowsOf(dialog))[0]).toHaveTextContent("2 folders");
   });
+
+  describe("sharing events", () => {
+    const event = (kind: string, at: string, text: string) => ({ kind, at, text, role: null, vault: "Work" });
+
+    it("shows a sharing event among the rows, in time order", async () => {
+      api(() =>
+        json(200, {
+          rows: [
+            row("liz", "agent", [{ path: "/Work/plan.md", kind: "changed" }], "2026-10-26T09:10:00Z"),
+            row("ada", "self", [{ path: "/Work/a.md", kind: "changed" }], "2026-10-24T09:10:00Z", "2026-10-24T09:00:00Z"),
+          ],
+          more: false,
+          events: [event("exported", "2026-10-25T12:00:00Z", "Bob exported Work.")],
+        }),
+      );
+      const dialog = await openActivity();
+
+      const items = await rowsOf(dialog);
+      expect(items).toHaveLength(3);
+      expect(items[0]).toHaveTextContent("Agent liz");
+      expect(items[1]).toHaveTextContent("Bob exported Work.");
+      expect(items[1]).toHaveTextContent("25 Oct 2026");
+      expect(items[2]).toHaveTextContent("You");
+      expect(within(items[1]).queryByRole("button")).not.toBeInTheDocument();
+      expect(within(items[1]).queryByText(/compare/i)).not.toBeInTheDocument();
+    });
+
+    it("shows the server's sentence as it is", async () => {
+      const text = "Alice changed your role in Gartenarbeit to write.";
+      api(() => json(200, { rows: [], more: false, events: [event("role-changed", "2026-10-25T12:00:00Z", text)] }));
+      const dialog = await openActivity();
+
+      expect(await within(dialog).findByText(text)).toBeInTheDocument();
+      expect(within(dialog).queryByText("No changes yet.")).not.toBeInTheDocument();
+    });
+
+    it("pages through events with the rows", async () => {
+      api((r) =>
+        new URL(r.url).searchParams.get("before")
+          ? json(200, {
+              rows: [row("ada", "self", [{ path: "/Work/old.md", kind: "added", before: null }], "2026-10-20T09:00:00Z", "2026-10-20T09:00:00Z")],
+              more: false,
+              events: [event("invited", "2026-10-22T08:00:00Z", "Alice invited Carol."), event("joined", "2026-10-19T08:00:00Z", "Carol joined Work.")],
+            })
+          : json(200, {
+              rows: [row("liz", "agent", [{ path: "/Work/plan.md", kind: "changed" }], "2026-10-26T09:10:00Z")],
+              more: true,
+              events: [event("exported", "2026-10-27T08:00:00Z", "Bob exported Work.")],
+            }),
+      );
+      const dialog = await openActivity();
+      expect(await rowsOf(dialog)).toHaveLength(2);
+
+      await userEvent.click(within(dialog).getByRole("button", { name: "Load more" }));
+
+      await within(dialog).findByText("Carol joined Work.");
+      const items = await rowsOf(dialog);
+      expect(items.map((i) => /Bob exported|Agent liz|Alice invited|You|Carol joined/.exec(i.textContent ?? "")?.[0])).toEqual([
+        "Bob exported",
+        "Agent liz",
+        "Alice invited",
+        "You",
+        "Carol joined",
+      ]);
+    });
+
+    it("shows no event section where there are none", async () => {
+      api(() => json(200, { rows: [row("liz", "agent", [{ path: "/Work/plan.md", kind: "changed" }])], more: false }));
+      const dialog = await openActivity();
+
+      expect(await rowsOf(dialog)).toHaveLength(1);
+      expect(within(dialog).getAllByRole("list")).toHaveLength(1);
+      expect(within(dialog).queryByText(/sharing|shared/i)).not.toBeInTheDocument();
+    });
+  });
 });

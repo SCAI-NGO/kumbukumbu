@@ -60,7 +60,7 @@ public sealed class BoundMembershipWriteTests(KumbuAppFactory app)
         return route switch
         {
             "withdraw" => caller.SendAsync(HttpMethod.Delete, url),
-            "role" => caller.SendAsync(HttpMethod.Put, url + "/role", new { role = "maintain" }),
+            "role" => caller.SendAsync(HttpMethod.Put, url + "/role", new { role = "maintain", password = RestClient.Password }),
             "leave" => caller.SendAsync(HttpMethod.Post, $"/api/memberships/{membershipId}/leave"),
             _ => caller.SendAsync(HttpMethod.Post, url + "/" + route),
         };
