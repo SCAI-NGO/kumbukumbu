@@ -131,14 +131,14 @@ public sealed class Rekeying(
     }
 
     /// <summary>The names of what a re-keying of the vault would take access from: API keys with a slot on it, and
-    /// connections that list it and aren't revoked; and who the vault is shared with (collab design §8.6), with the
+    /// connections that list it and aren't revoked, with the device keys among the keys named apart; and who the vault is shared with (collab design §8.6), with the
     /// members' credentials on it, and who left it since its last re-encryption (§6.4). Null if the user has no such vault: a vault shared with her is not hers to list.</summary>
     internal async Task<VaultAccessList?> AccessAsync(User user, byte[] userKey, string vaultName, CancellationToken ct)
     {
         if (await catalog.FindForUserAsync(user.Id, userKey, vaultName, ct) is not { } vaultId) return null;
         var (keyIds, connectionIds) = await catalog.AccessAsync(vaultId, ct);
-        // Only what has access now: a key or app past its expiry or revoked has none to lose, even while its slots
-        // wait for the sweep.
+        // Only what has access now: a key or app past its expiry, whose slots wait for the sweep, or revoked has none
+        // to lose.
         var now = time.GetUtcNow().UtcDateTime;
         var live = (await keys.ListAsync(user, userKey, ct)).Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).ToList();
         var connectionNames = (await connections.ListAsync(user, userKey, ct))
