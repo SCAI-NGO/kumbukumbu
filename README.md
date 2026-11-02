@@ -4,7 +4,7 @@
 
 Kumbu² is a self-hostable second brain for humans that AI agents may use. Notes are plain Markdown, kept in MongoDB, and agents reach them through an MCP server. It is your memory; the AI gets a key.
 
-## Status: reading, searching, writing, encrypted at rest; accounts, a web app, app connections, Obsidian sync
+## Status: reading, searching, writing, encrypted at rest; accounts, a web app, app connections, Obsidian sync, shared vaults
 
 The server offers five MCP tools. `sh` is a shell over your notes:
 
@@ -274,6 +274,14 @@ Good to know:
 - **Access tokens last an hour** by default and are refreshed by the app; `KUMBU_OAUTH_ACCESS_TOKEN_MINUTES` (5 to 1440) changes that. Every refresh replaces the refresh token too.
 - The details, from the consent to the tokens' slots: `docs/security-architecture.md`, §6 "Connections (OAuth)", with a diagram of the flow and of a connection's states.
 
+### Sharing and renaming a vault
+
+A vault's owner shares it from **Share…** in the vault's menu, with a link that works once. A member has one of three roles: `read`, `write` or `maintain`, which adds the board's columns and checkpoints. A member keeps a name of their own for the vault, and leaves through **Shared with you…** or **Leave this vault…**. Members' agents work through their own API keys or connections, which act at most at the member's role. Among members a writer is "another user"; the owner sees who wrote. What sharing does and doesn't protect against: `docs/security-architecture.md`.
+
+A device on a shared vault needs the Obsidian plugin at 0.2.0 or newer.
+
+An owner renames a vault with **Rename vault…**. Members keep their own name for it. Agents find it under the new name, and paths with the old one stop working. Connected Obsidian devices stop syncing and pair again; the old device key keeps working until you revoke it under API keys.
+
 ### Recovery keys
 
 When the server creates a vault, it writes the vault's recovery key **once** to `/recovery` in the container (the `recovery-keys` volume), and nowhere else. Fetch it, keep it somewhere safe such as a password manager, and delete the file:
@@ -414,6 +422,21 @@ docker compose exec kumbu kumbu bootstrap-admin      # the link for the first ad
 ```
 
 The override sets `KUMBU_PUBLIC_URL` to `https://<KUMBU_HOST>` and `KUMBU_TRUSTED_PROXY` to true, publishes no port for the server (Traefik is its only way in from outside the host, which the trusted proxy setting relies on), and puts MongoDB on an internal network that Traefik isn't on. The server trusts any peer's `X-Forwarded-For` (Docker assigns the addresses, so Traefik's can't be pinned), so every container sharing a network with it reaches port 8080 and could pick the address rate limits count against: Traefik, MongoDB and, with monitoring, Prometheus (the PDF sidecar is refused at the server). None of them takes requests from outside, an accepted limit; put no other container on the server's networks (Grafana is kept off them). Traefik redirects http to https, takes the certificate through the TLS-ALPN challenge on port 443, sets no body size limit (Kumbu²'s own 15 MB applies), allows 10 minutes for reading a request (its default of 60 seconds would cut off a 15 MB upload slower than about 2 Mbit/s), passes the sync WebSocket, and keeps no access log. It drops the `X-Forwarded-For` a client sends and appends the address the connection came from, the entry the server reads. Without IPv6 on the Docker network, Docker hands IPv6 connections to Traefik from one internal address, so all IPv6 clients share one rate-limit budget; on a host with IPv6, set `enable_ipv6: true` on the `proxy` network (see the file). `!reset` in the file needs Docker Compose 2.24 or newer. If the dev token is set, unset it for a public instance (see Security). Already running Traefik? The file's header says what to copy into a `compose.override.yaml` instead.
+
+### Without Compose (Kubernetes and the like)
+
+`compose.yaml` is the reference for every setting. What it does for you, and you then do yourself:
+
+- **One instance of the server.** Unlocked vaults, write gates and rate limits live in the process. Don't run two against one database, also not during a rolling update: stop the old one first (in Kubernetes, `replicas: 1` and the `Recreate` strategy).
+- **Both images from the same release**, pinned: `ghcr.io/scai-ngo/kumbukumbu:<version>` and `ghcr.io/scai-ngo/kumbukumbu-pdf:<version>`. `:latest` moves only on a release tag.
+- **MongoDB as a replica set**: see the Quickstart. A standalone MongoDB is refused.
+- **Persistent storage**: `/models` for the embedding model (about 630 MB; it is downloaded on the first start, so that start needs outbound access), `/recovery` for recovery keys, if you set `Kumbu:Recovery:Path`, and `/deletions`, which must stay out of database restores. All three belong to the server's user, UID 1654. Leave out `Kumbu:Seed:Path` when there is nothing to seed.
+- **The PDF sidecar stays isolated.** It parses untrusted files, so give it what `compose.yaml` does: reachable from the server alone, no way out to any network, a read-only root with a small `/tmp`, no capabilities, UID 1000, and 1.5 GB of memory and 1.5 CPUs, with a restart when it dies. In Kubernetes that takes a NetworkPolicy. Set `Kumbu:Pdf:Url` to its address. The server refuses connections from the addresses that host resolves to and that it connects to; a Service's address isn't the Pod's, so the NetworkPolicy is what keeps the sidecar out of the server there.
+- **Ingress**: pass the WebSocket on `/api/ws`, allow 15 MB bodies, and allow several minutes for reading a request (see "Behind Traefik"). Set `Kumbu:PublicUrl`, and `Kumbu:Proxy:Trusted` only when the proxy is the only way in. The advice on access logs under "Accounts, API keys and the REST API" applies.
+- **Outbound**: app connections fetch client metadata over `https` (see the same section).
+- **Probes**: `GET /healthz` answers `ok`, on the server's port 8080 and on the sidecar's 8090. Metrics are on `Kumbu:Metrics:Url`; keep that port private.
+
+Then `kumbu bootstrap-admin` inside the server's container gives the link for the first admin, and fetching the recovery keys goes the same way.
 
 ### Monitoring
 
