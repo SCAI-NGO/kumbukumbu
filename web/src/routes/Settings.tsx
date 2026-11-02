@@ -14,6 +14,7 @@ import { usePreferences } from "../attachments/downloadFiles";
 import ExportDialog from "../data/ExportDialog";
 import ImportDialog from "../data/ImportDialog";
 import SharedVaultsSection from "./SharedVaultsSection";
+import DeleteVaultDialog from "../shell/DeleteVaultDialog";
 import { RecoveryKeyReveal } from "../components/RecoveryKeyReveal";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
@@ -537,36 +538,6 @@ function AccessList({ title, names }: { title: string; names: string[] }) {
         ))}
       </ul>
     </div>
-  );
-}
-
-function DeleteVaultDialog({ vault, onClose }: { vault: string; onClose(): void }) {
-  const queryClient = useQueryClient();
-  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
-  const [password, setPassword] = useState("");
-  const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/vaults/{vault}/delete", { params: { path: { vault } }, body: { password, confirm: vault } })),
-    onSuccess: async () => {
-      useEditor.getState().forgetVault(vault);
-      // Nothing of the vault stays in the caches: its tree, and every note, link and history read from it.
-      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
-      await Promise.all(["vaults", "keys", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
-      onClose();
-    },
-  });
-  return (
-    <ConfirmTyped
-      title={`Delete ${vault}?`}
-      text="The vault goes for good, with every note in it, their history, the trash and the checkpoints. Nobody can bring it back. An API key that had only this vault is revoked."
-      word={vault}
-      action="Delete vault"
-      pending={remove.isPending}
-      error={remove.isError ? errorText(remove.error) : null}
-      onConfirm={() => remove.mutate()}
-      onClose={onClose}
-      password={password}
-      onPasswordChange={setPassword}
-    />
   );
 }
 

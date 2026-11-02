@@ -82,13 +82,23 @@ describe("MemberPanel", () => {
     expect(useEditor.getState().activeVault).toBeNull();
   });
 
+  it("the member panel's field is labelled Your name for this vault and has a sentence of lead-in", async () => {
+    panelApi();
+    const dialog = await renderPanel();
+    const field = within(dialog).getByLabelText("Your name for this vault");
+    expect(field).toHaveAccessibleDescription(/^Give this vault a name of your own\./);
+    // The lead-in comes before the field, so it is read first.
+    const lead = within(dialog).getByText(/^Give this vault a name of your own\./);
+    expect(lead.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("renames the alias", async () => {
     const fetch = panelApi({ "PUT /api/memberships/m1/alias": () => noContent() });
     useEditor.setState({ activeVault: "garten", recentPaths: ["/garten/plan.md"] });
     const onClose = vi.fn();
     const dialog = await renderPanel(onClose);
 
-    const field = within(dialog).getByLabelText("Your name for it");
+    const field = within(dialog).getByLabelText("Your name for this vault");
     expect(field).toHaveValue("garten");
     expect(within(dialog).getByRole("button", { name: "Rename" })).toBeDisabled();
     await userEvent.clear(field);
@@ -105,8 +115,8 @@ describe("MemberPanel", () => {
     panelApi({ "PUT /api/memberships/m1/alias": () => json(409, { error: "You already have a vault named 'Work'." }) });
     const onClose = vi.fn();
     const dialog = await renderPanel(onClose);
-    await userEvent.clear(within(dialog).getByLabelText("Your name for it"));
-    await userEvent.type(within(dialog).getByLabelText("Your name for it"), "Work");
+    await userEvent.clear(within(dialog).getByLabelText("Your name for this vault"));
+    await userEvent.type(within(dialog).getByLabelText("Your name for this vault"), "Work");
     await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("You already have a vault named 'Work'.");
     expect(onClose).not.toHaveBeenCalled();

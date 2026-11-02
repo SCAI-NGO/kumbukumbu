@@ -295,3 +295,48 @@ describe("folders of a vault shared with the user", () => {
     expect(await menuOf("Drafts")).toContain("Rename or move");
   });
 });
+
+describe("deleting the vault from its menu", () => {
+  it("the owner's vault menu offers Delete vault…, a member's doesn't", async () => {
+    const bodies: unknown[] = [];
+    let vaults = [{ name: "Work", notes: 2, embeddings: "internal" }, { name: "Gartenarbeit", notes: 0, embeddings: "internal" }];
+    api({
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/keys": () => json(200, []),
+      "GET /api/vaults/Gartenarbeit/tree": () => json(200, { damaged: 0, root: folder("/Gartenarbeit") }),
+      "POST /api/vaults/Work/delete": async (r) => {
+        bodies.push(await r.json());
+        vaults = vaults.filter((v) => v.name !== "Work");
+        return noContent();
+      },
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    const items = await menuOf("Work");
+    expect(items.at(-1)).toBe("Delete vault…");
+    await userEvent.click(within(drawer()).getByRole("menuitem", { name: "Delete vault…" }));
+
+    // The dialog Settings has: the name typed and the password.
+    const dialog = screen.getByRole("alertdialog", { name: "Delete Work?" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete vault" });
+    await userEvent.type(within(dialog).getByLabelText("Type Work to confirm"), "Work");
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
+    await userEvent.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(bodies).toEqual([{ password: "my password, long", confirm: "Work" }]);
+    // Away from its note, which is gone with it.
+    await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/notes\/Work\//));
+    expect(useEditor.getState().recentPaths.some((p) => p.startsWith("/Work/"))).toBe(false);
+  });
+
+  it.each(["write", "maintain"])("a member (%s) is offered no Delete vault…", async (level) => {
+    api({ "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal", canWrite: true, level, owner: '"Alice"', shared: true, membership: "m1" }]) });
+    await openDrawer();
+    const items = await menuOf("Work");
+    expect(items).toContain("Shared with you…");
+    expect(items).not.toContain("Delete vault…");
+  });
+});

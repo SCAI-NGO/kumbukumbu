@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Navigate, useMatch, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
@@ -56,7 +56,7 @@ function SearchLoadFailed({ onClose }: { onClose(): void }) {
   return <LoadFailedSheet onClose={onClose} />;
 }
 
-/** `/` without a last note: the vaults, or the way to the first one. */
+/** `/` without a last note, or asked for ("All vaults" in the switcher): the vaults, or the way to the first one. */
 function VaultOverview({ onNewVault }: { onNewVault(): void }) {
   const vaults = useVaults();
   const open = (vault: string) => {
@@ -129,6 +129,7 @@ export default function MobileShell() {
   const noteLevel = useLevel(path && vaultOf(path));
   const createUntitled = useCreateUntitled();
   const navigate = useNavigate();
+  const overview = (useLocation().state as { overview?: boolean } | null)?.overview === true;
   useSyncSocket();
   const [vaultDialog, setVaultDialog] = useState(false);
   /** The folder a new folder goes into, while its dialog is open. */
@@ -217,7 +218,7 @@ export default function MobileShell() {
   const queryClient = useQueryClient();
   useEffect(() => onRefusal(() => void queryClient.invalidateQueries({ queryKey: ["vaults"] })), [queryClient]);
 
-  if (!path && recentPaths.length) return <Navigate to={noteUrl(recentPaths[0])} replace />;
+  if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
   /** A new note in `folder` (`/Work/projects`), opened in Write mode. */
   const newNote = (folder: string) =>

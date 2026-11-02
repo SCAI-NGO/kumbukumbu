@@ -135,7 +135,8 @@ describe("the shell", () => {
 
     // Open, then a dialog over it: a swipe left leaves both.
     swipe([10, 400], [100, 400]);
-    await userEvent.click(within(drawer()).getByRole("button", { name: "New vault" }));
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: Work" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "New vault" }));
     swipe([300, 400], [200, 400]);
     expect(screen.getByRole("dialog", { name: "New vault" })).toBeInTheDocument();
     expect(drawer()).toBeInTheDocument();
@@ -355,15 +356,35 @@ describe("the shell", () => {
     renderApp("/notes/Work/inbox.md");
     await openDrawer();
     const tree = await within(drawer()).findByRole("list");
-    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
+    const switcher = within(drawer()).getByRole("button", { name: "Switch vault: Work" });
     const account = within(drawer()).getByRole("navigation", { name: "Account" });
     expect(tree.compareDocumentPosition(switcher) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(switcher.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    expect(within(switcher).getByRole("button", { name: "Work" })).toHaveAttribute("aria-pressed", "true");
-    await userEvent.click(within(switcher).getByRole("button", { name: "Home" }));
-    await waitFor(() => expect(rows()).toEqual(["garden"]));
-    expect(within(switcher).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
+    // The popout opens inside the drawer, which stays open behind it and after a vault is chosen.
+    await userEvent.click(switcher);
+    const popout = screen.getByRole("dialog", { name: "Vaults" });
+    expect(within(popout).getByRole("button", { name: "Work" })).toHaveAttribute("aria-current", "true");
+    await userEvent.click(within(popout).getByRole("button", { name: "Home" }));
+    await waitFor(() => expect(within(drawer()).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["garden"]));
+    expect(within(drawer()).getByRole("button", { name: "Switch vault: Home" })).toHaveFocus();
+  });
+
+  it("leads from the popout to the overview of all vaults, even with a last note", async () => {
+    signedInApi();
+    const router = renderApp("/notes/Work/inbox.md");
+    await openDrawer();
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: Work" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "All vaults" }));
+    expect(await screen.findByRole("heading", { name: "Your vaults" })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.queryByRole("dialog", { name: "File tree" })).not.toBeInTheDocument();
+    expect(useEditor.getState().recentPaths).toContain("/Work/inbox.md");
+
+    // A vault chosen there opens its tree, as from the overview at the start.
+    await userEvent.click(within(screen.getByRole("list", { name: "Your vaults" })).getByRole("button", { name: /^Home/ }));
+    expect(await screen.findByRole("dialog", { name: "File tree" })).toBeInTheDocument();
+    expect(useEditor.getState().activeVault).toBe("Home");
   });
 
   it("links to access and settings, and to admin only for admins", async () => {
@@ -474,7 +495,7 @@ describe("the shell", () => {
     expect(await screen.findByRole("dialog", { name: "File tree" })).toBeInTheDocument();
     expect(body).toEqual({ name: "Ideas" });
     expect(useEditor.getState().activeVault).toBe("Ideas");
-    expect(within(drawer()).getByRole("button", { name: "Ideas" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(drawer()).getByRole("button", { name: "Switch vault: Ideas" })).toBeInTheDocument();
   });
 
   it("shows the server's sentence when a vault can't be created", async () => {
@@ -549,12 +570,21 @@ describe("the shell", () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     await openDrawer();
-    const chip = within(drawer()).getByRole("button", { name: "New vault" });
-    await userEvent.click(chip);
+    const switcher = within(drawer()).getByRole("button", { name: "Switch vault: Work" });
+    await userEvent.click(switcher);
+    await userEvent.click(within(screen.getByRole("dialog", { name: "Vaults" })).getByRole("button", { name: "New vault" }));
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "New vault" })).not.toBeInTheDocument();
     expect(drawer()).toBeInTheDocument();
-    expect(chip).toHaveFocus();
+    // The popout closed when New vault was chosen: the focus goes back to the button that opened it.
+    expect(switcher).toHaveFocus();
+
+    // Escape in the popout closes the popout only.
+    await userEvent.click(switcher);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Vaults" })).not.toBeInTheDocument();
+    expect(drawer()).toBeInTheDocument();
+    expect(switcher).toHaveFocus();
   });
 });
 
@@ -603,9 +633,11 @@ describe("vaults shared with the user", () => {
 
     // The drawer's switcher: her own first, then each owner's.
     await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
-    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
-    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "New vault"]);
-    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice"' })).toHaveTextContent("garten");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: garten" }));
+    const switcher = screen.getByRole("dialog", { name: "Vaults" });
+    expect(within(switcher).getAllByRole("button").map((b) => b.textContent)).toEqual(["Home", "Work", "garten", "Beete", "Rezepte", "Your name for this vault…", "New vault", "All vaults"]);
+    expect(within(switcher).getByRole("list", { name: 'Shared by "Alice"' })).toHaveTextContent("garten");
+    await userEvent.keyboard("{Escape}");
     expect(within(drawer()).getByText('Shared by "Alice"', { selector: "p" })).toBeInTheDocument();
   });
 
@@ -624,9 +656,11 @@ describe("vaults shared with the user", () => {
     expect(names(screen.getByRole("list", { name: 'Shared by "Alice" (mallory)' }))).toEqual(["Beete"]);
 
     await userEvent.click(screen.getByRole("button", { name: /^garten/ }));
-    const switcher = within(drawer()).getByRole("group", { name: "Switch vault" });
-    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (alice)' })).toHaveTextContent("garten");
-    expect(within(switcher).getByRole("group", { name: 'Shared by "Alice" (mallory)' })).toHaveTextContent("Beete");
+    await userEvent.click(within(drawer()).getByRole("button", { name: "Switch vault: garten" }));
+    const switcher = screen.getByRole("dialog", { name: "Vaults" });
+    expect(within(switcher).getByRole("list", { name: 'Shared by "Alice" (alice)' })).toHaveTextContent("garten");
+    expect(within(switcher).getByRole("list", { name: 'Shared by "Alice" (mallory)' })).toHaveTextContent("Beete");
+    await userEvent.keyboard("{Escape}");
     expect(within(drawer()).getByText('Shared by "Alice" (alice)', { selector: "p" })).toBeInTheDocument();
   });
 
