@@ -293,6 +293,25 @@ describe("the history", () => {
 });
 
 describe("the output", () => {
+  it.each([
+    ["image/png", true],
+    ["image/jpeg", true],
+    ["image/gif", true],
+    ["image/webp", true],
+    ["image/svg+xml", false],
+    ["text/html", false],
+  ])("shows an image part of %s as an image: %s", async (mediaType, shownAsImage) => {
+    consoleApi(() => json(200, { parts: [{ type: "image", text: null, mediaType, data: "AAAA" }], isError: false, version: null }));
+    await open();
+    await run("img /Work/shot");
+    const image = log().querySelector("img");
+    if (shownAsImage) expect(image).toHaveAttribute("src", `data:${mediaType};base64,AAAA`);
+    else {
+      expect(image).toBeNull();
+      expect(lines()).toContain("! Error: (an image the console can't show)");
+    }
+  });
+
   it("prints a version on its own line and shows an image part as an image", async () => {
     consoleApi(() =>
       json(200, {

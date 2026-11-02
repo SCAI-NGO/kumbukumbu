@@ -11,6 +11,9 @@ const local = new Set(["cd", "pwd", "clear"]);
 
 let nextId = 1;
 
+/** The image types a part may show as; the shell sends PNG and JPEG. */
+const raster = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
 const text = (value: string): Output => ({ kind: "text", text: value });
 const error = (value: string): Output => ({ kind: "text", text: value, error: true });
 
@@ -18,8 +21,8 @@ const error = (value: string): Output => ({ kind: "text", text: value, error: tr
 function shown(view: ConsoleView, sent: string): Output[] {
   const output = view.parts.map((part): Output => {
     if (part.type !== "image") return { kind: "text", text: part.text ?? "", error: view.isError };
-    // Only an image type goes into the data: URL; anything else would be no image to show.
-    if (!/^image\/[\w.+-]+$/.test(part.mediaType ?? "")) return error("(an image the console can't show)");
+    // Only raster types go into the data: URL: an SVG is a document, and anything else no image to show.
+    if (!raster.has(part.mediaType ?? "")) return error("(an image the console can't show)");
     return { kind: "image", src: `data:${part.mediaType};base64,${part.data ?? ""}`, alt: `Image from ${sent}` };
   });
   if (view.version) output.push(text(`version of ${view.version.path}: ${view.version.token}`));
