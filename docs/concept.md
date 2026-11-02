@@ -143,13 +143,13 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
 - Admins see metadata (who, storage used), never content.
 - **API keys:** named, per-vault read/write rights, shown once at creation, afterwards only by prefix (`kumbu_ab12…`). A key without at least one right can't exist (no slot = can't decrypt anything).
 - Rate limiting on login and invalid keys, in memory (one instance).
-- **Later:** sharing vaults between users, which needs asymmetric crypto (v3); TOTP/2FA (v4).
+- **Later:** sharing vaults between users, which needs asymmetric crypto (v3); TOTP/2FA (v5).
 
 **Login through GitHub** (direction from Chris, Oct 24, 2026; **postponed, not built**): in many companies every internal tool for developers (Rancher, Argo CD, Mongo Express …) signs in through GitHub, and Kumbu² should fit in. To settle when it is taken up:
 - **GitHub as the identity provider, limited to an organisation and optionally a team** (`KUMBU_GITHUB_ORG`, `KUMBU_GITHUB_TEAM`), the pattern of oauth2-proxy and Argo CD. The first login of a member creates the user; leaving the organisation ends the access. Invites become an option for deployments without an organisation.
 - **Admins through a GitHub team** (`KUMBU_GITHUB_ADMIN_TEAM`) instead of, or next to, the bootstrap token.
-- **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, a passkey with PRF in v4); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
-- **Later (v4): any OIDC provider** (Entra ID, Keycloak), GitHub being the first. The MCP OAuth flow (§9, step 10) uses the same login at `/authorize`; Claude and other clients are OAuth clients and bring no identity of their own.
+- **GitHub says who someone is, not how to open their vaults.** A vault opens with a secret of the user's (a passphrase or the recovery key, a passkey with PRF in v5); the identity provider never holds key material, so a GitHub login alone, or an admin, can't read anyone's notes. Once a vault is open, API keys and OAuth tokens carry slots as in §9.
+- **Later (v5): any OIDC provider** (Entra ID, Keycloak), GitHub being the first. The MCP OAuth flow (§9, step 10) uses the same login at `/authorize`; Claude and other clients are OAuth clients and bring no identity of their own.
 
 ## 9. Client access
 
@@ -214,15 +214,17 @@ Renumbered on Oct 23, 2026 (decided by Chris): step 6 was added, and the Obsidia
 
 **A plugin package for the user's agent** (decided by Chris, Oct 24, 2026) handles what the tools can't judge: changes that need context, like renaming a project whose notes describe the name without containing it (`docs/notes-test-phase6b.md`). Its skills, a rename skill first, read before they replace and ask where the user's intent is unclear. It lives in its own repository and is distributed through a plugin marketplace; with the Obsidian sync plugin, Kumbu² then spans three repositories.
 
-**Roadmap** (decided by Chris, Oct 26, 2026; the versions are the release numbers; v3 and v4 swapped on Oct 28, 2026):
+**Roadmap** (decided by Chris, Oct 26, 2026; the versions are the release numbers; v3 and v4 swapped on Oct 28, 2026; v4 and v5 reshaped on Nov 2, 2026):
 - **v1 (0.1.0):** the base, done; an internal test version.
 - **v2 (0.2.0):** the first public release, released in October 2026. Obsidian sync with pairing codes and device keys, install as an app with self-update, export and import as ZIP, welcome vault, activity and search in earlier versions, GDPR deletion, looking into a checkpoint (open it read-only, copy it for your AI, export it as ZIP).
 - **v2.5 (0.2.5):** Kanban boards, markdown links in `links`, `backlinks` and `mv`, attachments, and tags (read as Obsidian reads them, listed with `tags`, a filter on `rg`, `semsearch` and the web app's search).
 - **v3 (0.3.0):** sharing vaults and collaboration ("think together"; concept in `concepts/collab-concept.md`). It extends the crypto model (asymmetric keys, slots for other users, revocation), gets its own section in `docs/security-architecture.md` and an independent review before it is built.
-- **v4 (0.4.0):** TOTP/2FA, OIDC single sign-on, and passkeys with PRF. Under discussion: Kumbu² as a skills repository.
+- **v3.5 (0.3.5):** a small release, not named on the site: what clients asked for from attachments (`docs/attachments-client-research.md` §6.2).
+- **v4 (0.4.0):** skills, the plugin package for the user's agent above. Under discussion: Kumbu² as a skills repository.
 
 Why the swap (Chris, Oct 28, 2026): sharing is the lower-hanging fruit with the larger effect at this stage, and the sign-in options get more feedback from real use first.
-- **v5 (1.0.0):** "Time Machine": automatic checkpoints, and browsing a vault as it was on a date without a checkpoint made beforehand (today: 10 versions per note, 30 days of trash, at most 10 named checkpoints).
+Why the reshaping (Chris, Nov 2, 2026): with sharing out there is no hurry; the Time Machine and the sign-in options take the time they need, and release together.
+- **v5 (1.0.0):** TOTP/2FA, OIDC single sign-on and passkeys with PRF, together with "Time Machine": automatic checkpoints, and browsing a vault as it was on a date without a checkpoint made beforehand (today: 10 versions per note, 30 days of trash, at most 10 named checkpoints).
 
 v1 is text only, on purpose. Attachments (images, PDFs) come in v2.5, to be designed with the same care as the text core, not added on the side. They are read by the AI as image parts plus extracted text, page by page; research in `docs/attachments-client-research.md`. Decided so far: the paragraphs below; still open: the size steps' numbers (from the test in §6 of the research). The way in, uploading an attachment, came with attachments, part 1.
 

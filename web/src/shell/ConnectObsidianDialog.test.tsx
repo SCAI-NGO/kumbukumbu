@@ -18,6 +18,7 @@ let gate: Promise<void> | null = null;
 let skew = 0;
 
 let shared = false;
+let level: string | null = null;
 
 function api() {
   codes = 0;
@@ -28,7 +29,7 @@ function api() {
   skew = 0;
   return fakeApi({
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
-    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: true, ...(shared ? { shared: true, members: 1 } : {}) }]),
+    "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: level !== "read", ...(level ? { level, owner: '"Alice"', membership: "m1" } : {}), ...(shared ? { shared: true, members: 1 } : {}) }]),
     "GET /api/embeddings": () => json(200, []),
     "GET /api/vaults/Work/tree": () => json(200, workTree),
     "GET /api/notes/*": (r) =>
@@ -56,6 +57,7 @@ afterEach(() => {
   useSession.getState().reset();
   useEditor.getState().reset();
   shared = false;
+  level = null;
 });
 
 async function openDialog() {
@@ -68,13 +70,23 @@ async function openDialog() {
 }
 
 describe("Connect Obsidian", () => {
-  it("asks no code for a vault she shares, and says why", async () => {
+  it("gives a code for a vault she shares, and names the plugin it needs", async () => {
     api();
     shared = true;
     const { dialog } = await openDialog();
-    expect(dialog).toHaveTextContent("Work is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.");
-    expect(within(dialog).getByRole("button", { name: "New code" })).toBeDisabled();
-    expect(codes).toBe(0);
+    expect(dialog).toHaveTextContent("Work is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0 or newer.");
+    await within(dialog).findByText("Pairing code");
+    expect(codes).toBe(1);
+  });
+
+  it("says a member's device acts at her role, not as maintain", async () => {
+    api();
+    shared = true;
+    level = "read";
+    const { dialog } = await openDialog();
+    expect(dialog).toHaveTextContent('The device acts at your role in Work, which is read: what that doesn\'t allow stays on the device, and the plugin lists it under "Not synced".');
+    expect(within(dialog).queryByText("The device may read, write and maintain this vault.", { exact: false })).not.toBeInTheDocument();
+    await within(dialog).findByText("Pairing code");
   });
 
   it("opens from the vault menu with the plugin, the server, the expiry and a code", async () => {

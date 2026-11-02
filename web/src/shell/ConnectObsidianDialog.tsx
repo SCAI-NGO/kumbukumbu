@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { useVaults } from "../api/notes";
+import { atLeast, levelOf, useVaults } from "../api/notes";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
@@ -31,7 +31,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
   // Others reach a shared vault, and a device there needs a plugin that knows them (collab design §10.2): the server
-  // refuses to pair it until that plugin is out, so no code is asked for. Until the list is in, none either.
+  // refuses an older one when it redeems, and the code stays usable. Until the list is in, no code is asked for.
   const vaults = useVaults();
   const entry = vaults.data?.find((v) => v.name === vault);
   const shared = entry?.shared === true || entry?.owner != null;
@@ -65,7 +65,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
     [vault],
   );
 
-  const asking = !!entry && !shared;
+  const asking = !!entry;
   useEffect(() => {
     if (asking) mutate(expiresInDays);
   }, [asking, mutate, expiresInDays]);
@@ -120,7 +120,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
             <div className="flex flex-col items-center gap-1 rounded-[12px] border border-line bg-surface-2 p-4">
               {shared && (
                 <p className="text-center text-sm text-text-body">
-                  {vault} is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0, which comes with a later step.
+                  {vault} is shared with others. Pairing a shared vault needs the Kumbu² plugin 0.2.0 or newer.
                 </p>
               )}
               {valid ? (
@@ -145,7 +145,13 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
         </ExpiryPicker>
 
         {/* A device is the person themself in Obsidian: the server pairs it as maintain. */}
-        <p className="text-sm text-warning">The device may read, write and maintain this vault. {maintainSentence}</p>
+        {entry && !atLeast(levelOf(entry), "maintain") ? (
+          <p className="text-sm text-text-body">
+            The device acts at your role in {vault}, which is {levelOf(entry)}: what that doesn't allow stays on the device, and the plugin lists it under "Not synced".
+          </p>
+        ) : (
+          <p className="text-sm text-warning">The device may read, write and maintain this vault. {maintainSentence}</p>
+        )}
 
         <p className="text-sm text-muted">
           Each device gets its own key, named "{vault} – Obsidian &lt;device&gt;". You can revoke it under API keys. Re-encrypting this vault disconnects

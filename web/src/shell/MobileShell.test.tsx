@@ -680,8 +680,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the gallery, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
+    // Reading, the trash, activity, checkpoints, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(within(drawer()).queryByRole("button", { name: "Actions for soup" })).not.toBeInTheDocument();
   });
@@ -784,8 +784,8 @@ describe("vaults shared with the user", () => {
     expect(await menuItems("Actions for Board", 1)).toEqual(["Rename or move", "Delete note"]);
     const items = await menuItems("Actions for Beete");
     expect(items).toContain("Board");
-    // Pairing a shared vault and its embedding provider stay the owner's.
-    expect(items).not.toContain("Connect Obsidian…");
+    // A member may pair her own device; sharing and the embedding provider stay the owner's.
+    expect(items).toContain("Connect Obsidian…");
     expect(items).not.toContain("Share…");
     expect(items).not.toContain("Search by meaning…");
   });

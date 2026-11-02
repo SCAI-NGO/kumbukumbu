@@ -16,7 +16,7 @@ Already known, so no need to note them (overnighter report, section 8):
 - "Bob Example (username bob)" can show the username twice.
 - A member who deletes their own account gets no receipt.
 - Refusal sentences can carry literal `*` around a vault's name.
-- Plugin 0.2.0 isn't out yet; step 37 expects the refusal.
+- Step 37 needs plugin 0.1.x and 0.2.0 or newer on hand.
 
 ## A. New accounts
 
@@ -86,7 +86,7 @@ Give the agent time to finish before the next step.
 34. As Bob: **Leave this vault**, confirmed. *Expected:* gone from Bob's list; Bob's key loses the vault, and is revoked if it has no vault left. The vault's activity says Bob left, among the other rows and in time order, and offers Alice re-encryption with an honest sentence. In Settings, "Shared vaults", Bob's own events say so too, though the vault is no longer his to open. Tell the agent to `ls /`. *Expected:* `Beet` is gone.
 35. As Alice: invite Bob again and accept. Then re-encrypt the vault. *Expected:* during the run Bob sees "being re-encrypted"; after it he can read again, and Settings, "Shared vaults", tells him to give his agents the vault again. An invitation still open at the start is withdrawn, and the sentence after the run tells Alice.
 36. As Carol: make a vault `Carols Notizen` with a note, and share it with Bob as write. As Alice, in Admin: deactivate Carol. *Expected as Bob:* a banner that the vault is read-only until her account is active again, and export still works. Reactivate Carol. *Expected:* writing works on the next request.
-37. As Alice, pair Obsidian with plugin 0.1.x to `Garten Alice`, which is shared (a member's menu offers this only with plugin 0.2.0). *Expected:* "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault." An Obsidian already paired to one of Alice's own vaults goes on syncing.
+37. As Bob, pair Obsidian with plugin 0.1.x to the shared vault. *Expected:* "Update the Kumbu² plugin to 0.2.0 or newer to sync a shared vault." An Obsidian already paired to one of Alice's own vaults goes on syncing.
 38. As Carol: delete her account. *Expected:* the dialog lists `Carols Notizen` and offers two choices, "Give members 7 days" (the default) or "Delete it for everyone now". Take the 7 days. *Expected as Bob:* a banner with the date, read only, and export works. As Alice in Admin, delete Bob's account with a privacy request; the admin's dialog offers the same two choices for vaults he owns and shares. *Expected:* the receipt counts what ended. Old entries in Alice's vault show "a former member" and nowhere Bob's name.
 39. Grafana, if the monitoring runs (`compose.monitoring.yaml`): the Sharing row of the dashboard counts invitations and membership changes.
 
