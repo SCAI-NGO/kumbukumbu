@@ -1124,6 +1124,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                         return true;
                     },
                     cancellationToken: ct);
+                // An answer lost after the commit, which a fault inside the transaction can't stand for.
+                if (MetaFaultAt is { } lost) await lost("after-rename-commit");
             }
             catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException) && e.GetType() != typeof(ArgumentException))
             {

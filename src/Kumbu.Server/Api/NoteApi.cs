@@ -271,7 +271,7 @@ public static class NoteApi
     /// <summary>The owner renames her vault (rename spec §1.4): no password, since it is undone by renaming again and
     /// removes no access. A member's alias answers 404, as on the other owner-only endpoints. Her open pairing codes go,
     /// also when the outcome isn't known; her sockets, of open tabs and of her API keys and devices, are renamed and
-    /// told; members keep their alias and are told nothing. Nothing of the name is logged.</summary>
+    /// told, also when the outcome isn't known (then, unless the vault was loaded again meanwhile, only told); members keep their alias and are told nothing. Nothing of the name is logged.</summary>
     private static async Task<NoContent> RenameVaultAsync(
         string vault, RenameVaultRequest body, EncryptedNoteStore store, VaultCatalog catalog, RequestCaller caller, AccountLimits limits,
         Pairings pairings, Sync.SyncHub hub, CancellationToken ct)
@@ -292,10 +292,12 @@ public static class NoteApi
         {
             throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
         }
-        // As the catalog has it: anything but a refusal may come after the commit.
+        // As the catalog has it: anything but a refusal may come after the commit. Her sockets are told too: the catalog
+        // forgot the vault, so they keep the name they hold, but her tabs read the vault list again and take a new ticket.
         catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException))
         {
             pairings.DropAll(caller.User.Id);
+            hub.VaultRenamed(caller.User.Id, access.Id);
             throw;
         }
 

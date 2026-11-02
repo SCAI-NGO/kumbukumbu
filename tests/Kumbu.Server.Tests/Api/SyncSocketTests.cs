@@ -684,6 +684,43 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(Changed("Beet"), await ReceiveAsync(bobs, TimeSpan.FromSeconds(2)));
     }
 
+    /// <summary>A rename that committed but answers as if it failed: her sockets are told all the same, so her tabs ask
+    /// for the vault list again and take a new ticket. The catalog forgot the vault, so the hint still names it as the
+    /// socket held it; the new ticket names it as it is.</summary>
+    [Fact]
+    public async Task A_rename_whose_outcome_is_unknown_tells_her_sockets()
+    {
+        var (alice, _, vaultId, key) = await RenamableAsync();
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        using var device = await SyncSockets.OpenAsync(Api, alice, key);
+        await HeldAsync(vaultId, 2);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        catalog.MetaFaultAt = point => point == "after-rename-commit" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" });
+            Assert.Equal(HttpStatusCode.InternalServerError, renamed.StatusCode);
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal(Changed("Gartenarbeit"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Changed("Gartenarbeit"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
+
+        // What the tab does on the hint: the list, read again, has the committed name, and so has the new ticket.
+        using (var vaults = await alice.GetAsync("/api/vaults"))
+        {
+            Assert.Contains("\"Garten\"", await vaults.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
+        }
+
+        using var reopened = await SyncSockets.OpenAsync(Api, alice);
+        await HeldAsync(vaultId, 3);
+        await WriteAsync(alice);
+        Assert.Contains(Changed("Garten"), await SyncSockets.DrainAsync(reopened, TimeSpan.FromSeconds(1.5)));
+    }
+
     [Fact]
     public async Task A_ticket_from_before_a_rename_names_the_new_name()
     {
