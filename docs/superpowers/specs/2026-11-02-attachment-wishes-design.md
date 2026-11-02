@@ -97,11 +97,11 @@ img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [-
   --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
                     on its side; needs --images, --images=all or --crop, and leaves the text as it is. With
                     it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
-                    'rg --regions' are for the page not turned: x,y,w,h on a page W×H is H-y-h,x,h,w when
-                    turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
+                    'rg --regions' are for the page not turned: x,y,w,h on a page W×H, with W and H rounded
+                    down, is H-y-h,x,h,w when turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
 ```
 
-The conversions are checked against the sidecar's rendering in a test (§8), so the help can't go wrong unnoticed.
+The conversions are checked against the sidecar's rendering in a test (§8), so the help can't go wrong unnoticed. W and H are rounded down because an A4 page prints as 842 pt but measures 841.89: rounded to nearest, a converted region with y = 0 would pass the page's edge by 0.11 pt and be refused.
 
 ### 1.6 Worked example
 
@@ -160,14 +160,14 @@ ASSUMPTION: decode with **`omggif`** 1.0.10 (MIT, one file of pure JavaScript, n
 New in `pdf/src/image.ts`:
 
 - `frames(bytes)`: the count from `new GifReader(bytes).numFrames()`, for every GIF, with or without `--frame`. If the reader throws on a file Skia can still draw, the count is unknown and nothing fails.
-- `composeFrame(reader, n)`: one RGBA buffer, and a second copy only for a frame with disposal 3, drawn into a canvas (`createImageData`, `putImageData`) that takes the place of `image` from `:31`. A file-level `not_image` if the reader throws.
+- `composeFrame(reader, n)`: one RGBA buffer, and a second copy only for a frame with disposal 3, wrapped without copying (`new ImageData`) and drawn with `putImageData` into a canvas that takes the place of `image` from `:31`. A file-level `not_image` if the reader throws.
 
-**Limits.** The canvas is already bounded by the header check (`image.ts:17-22`), at 200 MB a buffer, as a decoded image is today (`compose.yaml:132-136`). Two gaps have to be closed, since `omggif` checks neither:
+**Limits.** The header check (`image.ts:17-22`) allows 50 MP, which is too much here: a buffer, a copy for disposal 3, the index stream, an `ImageData` and a canvas would come to some 850 MB in one worker, and two workers plus the bodies in memory pass `mem_limit: 1536m` (`compose.yaml:132-136`) and kill the sidecar. So the composing path has a cap of its own, **16 MP** (`too_large`), decodes nothing with `loadImage`, keeps one copy buffer for all frames and wraps its buffer in `ImageData` without copying. That leaves, by estimate, about 255 MB a worker without a copy and 320 MB with one, and about 1.3 to 1.45 GiB for the whole sidecar at its worst: close to the limit, so the run measures it, and lowers the cap if it doesn't hold. A plain `img` of a GIF stays on today's path. Two more gaps have to be closed, since `omggif` checks neither:
 
-- `decodeAndBlitFrameRGBA` allocates `width × height` of the **frame's own** rectangle, up to 65,535 × 65,535 from a few bytes of file. A frame not inside the canvas is refused with `not_image` before it is decoded.
+- `decodeAndBlitFrameRGBA` allocates `width × height` of the **frame's own** rectangle, up to 65,535 × 65,535 from a few bytes of file. A frame not inside the canvas is refused with `not_image` and a sentence of its own, `A frame of the GIF lies outside its canvas.`, before it is decoded.
 - Composing costs time with N. The worker's 10 s (`server.ts:17`) kills what takes too long, so no extra limit; `AttachmentPixels.Refused` (`AttachmentPixels.cs:112`) says for a call with a frame `finding frame N of <path> took too long`, as a smaller step wouldn't help.
 
-`omggif` calls `console.log` with two fixed warnings on a truncated stream. They hold no content, so the sidecar's rule of logging no content holds; note it in the code.
+`omggif` calls `console.log` with fixed warnings on a truncated stream, once per decoded frame: about 1.4 million lines from a 16 MiB GIF of tiny frames, against the sidecar's rule that it logs method, route, status and duration only (`server.ts:3-4`). So `console.log` is silenced while frames are decoded in the worker, and restored after.
 
 **Interface:** `/render/image` takes `frame` (`integer`, 1 to 1,000,000) and answers `X-Kumbu-Frame`, checked like `X-Kumbu-Rotate` (§1.3), and `X-Kumbu-Frames` for a GIF whose count is known. `Picture` (`IAttachmentPixels.cs:10`) gains `int? Frames`. A frame past the end is `no_such_frame`, 422, in `server.ts:23-33` and `PdfSidecar.cs:77-89`, reaching `Img` as a new `PixelsProblem.BadFrame`. The server never parses a GIF: it sees only the sidecar's numbers, validated as whole numbers above 0.
 
@@ -187,6 +187,7 @@ New in `pdf/src/image.ts`:
 | Not a whole number from 1 | `img: --frame is one frame, counting from 1, not '1-3'` |
 | Not a GIF | `img: --frame is for GIFs; /Work/Screens/shot.png is a PNG` |
 | Past the end | `img: /Work/Clips/moving.gif has no frame 7; img without --frame says how many it has` |
+| Canvas over 16 MP | `img: /Work/Clips/big.gif is too large for --frame (at most 16 megapixels); img without --frame shows its first frame` |
 
 `pdf --frame` stays `pdf: unrecognized option '--frame'`. `ImgRefusal` (`IAttachmentPixels.cs:43`) gains `BadRotate` and `BadFrame`, and `KumbuMetrics.Label` (`src/Kumbu.Server/Metrics/KumbuMetrics.cs:439-448`) must name both, or its fallback counts them as `unavailable`.
 
