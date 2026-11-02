@@ -169,6 +169,28 @@ def rotated(rng: random.Random, out: Path) -> list[str]:
     ]
 
 
+def sideways(rng: random.Random, out: Path) -> list[str]:
+    """A sheet stored on its side with no EXIF orientation: only a turn of the picture itself makes it readable."""
+    page = Image.new("RGB", (1700, 2200), (250, 248, 242))
+    d = ImageDraw.Draw(page)
+    d.text((120, 120), "Delivery note", fill="black", font=font(90))
+    for i in range(9):
+        y = 330 + i * 70
+        d.line((120, y, 1580, y), fill=(200, 200, 200), width=3)
+        d.line((120, y + 28, 120 + rng.randint(700, 1400), y + 28), fill=(150, 150, 150), width=14)
+
+    code = rng.randint(1000, 9999)
+    d.text((120, 1900), f"Ref {code}", fill="black", font=font(28))
+
+    # Stored 2200×1700 on its side, counter-clockwise; no EXIF, so a client sees it as stored.
+    page.rotate(90, expand=True).save(out / "sideways.png")
+    return [
+        "## sideways.png (a sheet on its side, no EXIF: `--rotate 90` reads it)",
+        f"- The small print at the bottom of the sheet: **Ref {code}**",
+        "- Note how many calls it took to read the code and to crop it, and whether the crop hit",
+    ]
+
+
 def wide(rng: random.Random, out: Path) -> list[str]:
     """A panorama reduced a lot by every step; the marker's code is only legible in a crop."""
     image = Image.new("RGB", (9000, 500), (235, 240, 235))
@@ -195,8 +217,9 @@ def animated(rng: random.Random, out: Path) -> list[str]:
     frames = [Image.new("RGB", (600, 400), COLOURS[name]) for name in names]
     frames[0].save(out / "animated.gif", save_all=True, append_images=frames[1:], duration=500, loop=0)
     return [
-        "## animated.gif (three frames; behaviour to record, no right answer yet)",
-        f"- Frames in order: **{', '.join(names)}**. Note which one the model sees.",
+        "## animated.gif (three frames; `--frame 2` shows the second)",
+        f"- Frames in order: **{', '.join(names)}**",
+        f"- Colour of frame 2: **{names[1]}**. Without `--frame` only the first, **{names[0]}**, arrives.",
     ]
 
 
@@ -227,7 +250,7 @@ def main() -> None:
 
     rng = random.Random(args.seed)
     lines = ["# Answer key: keep out of every vault", ""]
-    for make in (shapes, small_text, chart, rotated, wide, animated, transparent):
+    for make in (shapes, small_text, chart, rotated, sideways, wide, animated, transparent):
         lines += make(rng, upload) + [""]
     (key / "answers.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"Upload {upload}\nKeep {key / 'answers.md'} to yourself")

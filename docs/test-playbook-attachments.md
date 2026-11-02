@@ -67,7 +67,7 @@ Tick these yourself; no model is needed.
 - [ ] `holiday-large.pdf` is refused with a sentence that says why.
 - [ ] `locked.pdf`: what happens on upload, in the lightbox and with `pdf info`? Nothing may hang or end in a bare error.
 - [ ] The analysis of `holiday-small.pdf` finishes, and `cat` reports its pages.
-- [ ] Gallery and lightbox show all files, `rotated.jpg` upright, `transparent.webp` with both shapes.
+- [ ] Gallery and lightbox show all files, `rotated.jpg` upright, `sideways.png` on its side as stored, `transparent.webp` with both shapes.
 - [ ] The dashboard's Attachments row fills during the test: page types, `pdf` calls by mode, and `kumbu_pdf_text_pages_rendered_total` for looks at text pages.
 
 ### Running it
@@ -89,8 +89,9 @@ Report each step as: what you called, what came back, your answer, and how sure 
 3. `small-text.png`: Exactly one row has the status FAILED. Which one, and what number is in it? Say which calls you needed.
 4. `wide.png`: What colour is the circle, and what code stands below it? Say which calls you needed.
 5. `rotated.jpg`: What size does `cat` report? Where does the arrow point, and which corner holds the blue square? Then crop the blue square alone, working out the coordinates from what you saw. Did the crop hit it, and how many tries did it take?
-6. `animated.gif`: What do you see?
+6. `animated.gif`: What colour is its second frame? Say what you did to find out.
 7. `transparent.webp`: What do you see, in which colours?
+26. `sideways.png`: Read the code in the small print, then crop it, and say how many tries it took.
 
 ### B. Real pictures (`/Attachment Test/probes`)
 
@@ -110,6 +111,7 @@ Report each step as: what you called, what came back, your answer, and how sure 
 18. Search for a word from the page with the OCR layer, and one with an umlaut from the text page, with `rg` and with `semsearch`.
 19. On the page turned by 90°: `pdf info`, then crop one figure with the regions it gives. Did the crop hit it?
 20. Show all pages as images with `--images=all`, as far as the tools allow. How many came with one call, and how did you go on? Did all of them reach you?
+27. Find <a word of your choice from the text page> with `rg --regions`, then crop it. Did the crop hit it?
 
 ### D. A document of photos (`/Attachment Test/pdfs/holiday-small.pdf`)
 
@@ -134,11 +136,13 @@ One row per client, each cell PASS, FAIL or the behaviour seen. Add the result t
 | Values off a chart (2, 13, 14) | | | | | |
 | Finds small details, with a crop (3, 4, 10) | | | | | |
 | Camera's rotation and crops (5, 19) | | | | | |
-| Formats: GIF, WebP (6, 7) | | | | | |
+| Turns a sideways sheet, tries to a crop (26) | | | | | |
+| Formats: GIF frames, WebP (6, 7) | | | | | |
 | Real pictures (8, 9) | | | | | |
 | Looks at pages by itself (11, 21) | | | | | |
 | Tables and scans (15, 17) | | | | | |
 | Several images in one result (20) | | | | | |
+| A crop from `rg --regions` hits the word (27) | | | | | |
 | Tells the user what it left out (21) | | | | | |
 
 Write down what follows for the product: thresholds (`mixed`, 85 %), the 15 MB limit, wording of the hints. The round of 2026-11-01 is in [attachments-client-research](attachments-client-research.md) §6.2.
