@@ -11,7 +11,7 @@ describe("tokenise", () => {
 });
 
 describe("quote", () => {
-  it.each(["plain", "a b", "it's", "it's \"x\" \\ y", 'say "x"', "back\\slash", "", "a|b", "Bewässerung", "-n", "/x/y.md#Goals", "$HOME", "a;b"])(
+  it.each(["plain", "a b", "it's", "it's \"x\" \\ y", "it's \\", 'say "x"', "back\\slash", "", "a|b", "Bewässerung", "-n", "/x/y.md#Goals", "$HOME", "a;b"])(
     "reads back %j",
     (word) => {
       expect(tokenise(quote(word))).toEqual([[word]]);
