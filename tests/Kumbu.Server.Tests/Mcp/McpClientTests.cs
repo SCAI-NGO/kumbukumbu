@@ -432,6 +432,7 @@ public sealed class McpClientTests(KumbuAppFactory app)
 
         Task<string> Sh(string command) => Refused("sh", new() { ["command"] = command });
 
+        Assert.Equal("write: this key has no vault named Nowhere", await Refused("write", new() { ["path"] = "/Nowhere/b.md", ["content"] = "x\n" }));
         Assert.Equal("write: this key can only read vault Reading", await Refused("write", new() { ["path"] = "/Reading/b.md", ["content"] = "x" }));
         Assert.Equal("edit: this key can only read vault Reading", await Refused("edit", new() { ["path"] = "/Reading/a.md", ["version"] = version, ["new_text"] = "x" }));
         Assert.Equal("replace: this key can only read vault Reading", await Refused("replace", new() { ["path"] = "/Reading", ["old_text"] = "Hecate", ["new_text"] = "Selene" }));
