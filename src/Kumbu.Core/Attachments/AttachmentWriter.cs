@@ -239,11 +239,12 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
                     : ShellResult.Error($"{tool}: {Shown(path)} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
             }
 
+            var changeset = await ChangesetAsync(path, ct);
             var restored = trashed.Attachment with
             {
-                Revision = trashed.Attachment.Revision + 1, LastWriter = caller.WriterIn(path.Segments[0]), LastWriteAt = Now, Changeset = null, Ref = caller.ReferenceIn(path.Segments[0]),
+                Revision = trashed.Attachment.Revision + 1, LastWriter = caller.WriterIn(path.Segments[0]), LastWriteAt = Now, Changeset = changeset, Ref = caller.ReferenceIn(path.Segments[0]),
             };
-            var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
+            var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) }, Changeset = changeset };
             return (await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
                 ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")
                 : Written($"restored {Shown(path)} from the trash", restored).Result;

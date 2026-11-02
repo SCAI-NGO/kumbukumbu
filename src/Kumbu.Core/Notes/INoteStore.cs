@@ -39,8 +39,9 @@ public interface INoteStore : INoteReader
 
     /// <summary>Moves a deleted note at the path back: the most recently deleted one, or the one with
     /// <paramref name="version"/>. Records <paramref name="writer"/> and <paramref name="reference"/> as its last
-    /// writer. Returns null if there is no such note in the trash, or if a note exists at the path.</summary>
-    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct);
+    /// writer, and <paramref name="changeset"/> as the writer's changeset. Returns null if there is no such note in the
+    /// trash, or if a note exists at the path.</summary>
+    Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, Changeset changeset, CancellationToken ct);
 
     /// <summary>The named checkpoints of every vault (root) or of one vault, oldest first.</summary>
     Task<IReadOnlyList<Checkpoint>> ListCheckpointsAsync(VaultPath vaultOrRoot, CancellationToken ct);

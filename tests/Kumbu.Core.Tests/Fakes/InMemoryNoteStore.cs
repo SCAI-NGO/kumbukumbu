@@ -247,7 +247,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
         return Task.FromResult(result);
     }
 
-    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
+    public Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, Changeset changeset, CancellationToken ct)
     {
         RequireRef(reference);
         var latest = _trash
@@ -256,7 +256,7 @@ public sealed class InMemoryNoteStore : INoteStore, IAttachmentStore
             .FirstOrDefault();
         if (latest is null || _notes.ContainsKey(path)) return Task.FromResult<StoredNote?>(null);
 
-        var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null, Ref = reference };
+        var restored = latest.Note with { Revision = latest.Note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = changeset, Ref = reference };
         _trash.Remove(latest);
         _notes[path] = restored;
         return Task.FromResult<StoredNote?>(restored);

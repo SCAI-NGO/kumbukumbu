@@ -317,7 +317,7 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
         if (existing is null)
         {
             if (await store.IsDamagedAsync(path, ct)) return ShellResult.Error(Damage.Message("restore", path));
-            var restored = await store.TryRestoreFromTrashAsync(path, version, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct);
+            var restored = await store.TryRestoreFromTrashAsync(path, version, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct), ct);
             if (restored is not null) return Written($"restored {path.Value} from the trash", restored);
 
             return version is null
