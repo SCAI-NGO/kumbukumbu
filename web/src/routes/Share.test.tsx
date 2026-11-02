@@ -198,6 +198,18 @@ describe("the share page", () => {
     expect(await screen.findByText("This link has no invitation in it. Open the full link you were sent.")).toBeInTheDocument();
   });
 
+  it("the same refused link opened again isn't kept either", async () => {
+    shareApi(refusing);
+    const router = renderApp(`/share#${secret}`);
+    expect(await screen.findByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.getItem(shareSecretKey)).toBeNull());
+
+    await router.navigate(`/share#${secret}`);
+    await waitFor(() => expect(router.state.location.hash).toBe(""));
+    expect(screen.getByText("This invitation link is not valid (any more).")).toBeInTheDocument();
+    expect(sessionStorage.getItem(shareSecretKey)).toBeNull();
+  });
+
   it("a link back to Kumbu² on every screen that can end here", async () => {
     const back = async () => expect(await screen.findByRole("link", { name: "Back to Kumbu²" })).toHaveAttribute("href", "/");
     shareApi();

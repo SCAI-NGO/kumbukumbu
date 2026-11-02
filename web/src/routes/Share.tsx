@@ -58,16 +58,17 @@ export default function Share() {
     return fromLink || sessionStorage.getItem(shareSecretKey) || "";
   });
 
-  // A link opened in a tab that already shows one replaces its secret, whatever became of the first.
+  // A link opened in a tab that already shows one replaces its secret, whatever became of the first. The same link
+  // again is not stored again: the page already shows what became of it, and a refused secret stays forgotten.
   useEffect(() => {
     if (!location.hash) return;
     const fromLink = fragmentSecret(location.hash);
-    if (fromLink) {
+    if (fromLink && fromLink !== secret) {
       sessionStorage.setItem(shareSecretKey, fromLink);
       setSecret(fromLink);
     }
     navigate({ pathname: "/share" }, { replace: true });
-  }, [location.hash, navigate]);
+  }, [location.hash, navigate, secret]);
 
   const signedIn = useSession((s) => s.signedIn);
   const session = useQuery({ queryKey: ["share-session"], queryFn: sessionOrNull, gcTime: 0 });
