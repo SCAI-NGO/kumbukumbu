@@ -1738,6 +1738,59 @@
       "description": "img calls that showed a chosen frame of a GIF (--frame), in the hour before each point: whether anyone looks past the first frame."
     },
     {
+      "type": "timeseries",
+      "id": 51,
+      "title": "rg regions per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (outcome) (increase(kumbu_rg_regions_total[1h]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        }
+      ],
+      "description": "PDFs with matches in rg --regions searches, by outcome, in the hour before each point: delivered (regions on all their pages with matches), limited (past 8 PDFs or 50 pages), unavailable (the sidecar failed or the time was spent). Whether anyone asks where matches lie."
+    },
+    {
       "type": "row",
       "id": 17,
       "title": "Vaults",

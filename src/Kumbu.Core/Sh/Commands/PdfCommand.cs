@@ -66,8 +66,9 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
           At most {MaxImages} images come from one call, and at most {MaxPages} pages, fewer when their text would pass
           the output limit (about {OutputLimit.MaxChars / OutputLimit.CharsPerToken} tokens); the last line then names the range to go on with.
           rg finds text in PDFs (/Work/paper.pdf:p7: text), and semsearch finds their pages by
-          meaning (1. /Work/paper.pdf p7). Neither finds the text of pages without a text layer (scans),
-          which have none: look at them with --images. A PDF of more than 2000 pages is analysed up to
+          meaning (1. /Work/paper.pdf p7); rg --regions also says where on the page a match lies.
+          Neither finds the text of pages without a text layer (scans), which have none: look at them
+          with --images. A PDF of more than 2000 pages is analysed up to
           page 2000, and says so.
           The text and the picture of a page can differ. OCR text may have wrong or missing words, so a word
           not found doesn't prove it isn't there; and text covered up on the page, or hidden, is still in the

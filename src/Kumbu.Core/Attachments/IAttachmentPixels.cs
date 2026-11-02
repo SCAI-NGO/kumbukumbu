@@ -46,6 +46,12 @@ public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, BadRot
 /// <summary>The command that turned a picture with <c>--rotate</c>.</summary>
 public enum TurnCommand { Img, Pdf }
 
+/// <summary>
+/// What <c>rg --regions</c> could give a PDF with matches: regions on all its pages with matches (<c>Delivered</c>), on
+/// fewer or none for its limits (<c>Limited</c>), or none as the sidecar failed or the time was spent (<c>Unavailable</c>).
+/// </summary>
+public enum RegionOutcome { Delivered, Limited, Unavailable }
+
 /// <summary>What was looked at, for the usage metrics. Only enums and flags in the records: nothing a person typed.</summary>
 public abstract record AttachmentUse;
 
@@ -65,6 +71,9 @@ public sealed record PictureTurned(TurnCommand Command) : AttachmentUse;
 
 /// <summary>A frame of a GIF delivered on request by <c>--frame</c>.</summary>
 public sealed record ImgFrameShown : AttachmentUse;
+
+/// <summary>A PDF with matches in an <c>rg --regions</c> search, and what came of its regions.</summary>
+public sealed record RegionsAsked(RegionOutcome Outcome) : AttachmentUse;
 
 /// <summary>A run of text on a page: <c>[At, End)</c> in the page's text, and the box it prints in (points, as displayed, origin top left).</summary>
 public sealed record TextBox(int At, int End, double X, double Y, double Width, double Height);

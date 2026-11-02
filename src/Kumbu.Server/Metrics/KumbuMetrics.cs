@@ -71,6 +71,7 @@ public static class KumbuMetrics
         foreach (var step in Enum.GetValues<SizeStep>()) ImgCalls.WithLabels(Label(step));
         foreach (var reason in Enum.GetValues<ImgRefusal>()) ImgRefusals.WithLabels(Label(reason));
         foreach (var command in Enum.GetValues<TurnCommand>()) PicturesTurned.WithLabels(Label(command));
+        foreach (var outcome in Enum.GetValues<RegionOutcome>()) RgRegions.WithLabels(Label(outcome));
         foreach (var kind in Enum.GetValues<RenderKind>())
         {
             RenderDuration.WithLabels(Label(kind));
@@ -346,6 +347,9 @@ public static class KumbuMetrics
     private static readonly Counter ImgFrames = Prometheus.Metrics.CreateCounter(
         "kumbu_img_frames_total", "img calls that delivered a chosen frame of a GIF (--frame).");
 
+    private static readonly Counter RgRegions = Prometheus.Metrics.CreateCounter(
+        "kumbu_rg_regions_total", "PDFs with matches in rg --regions searches, by what came of their regions.", new CounterConfiguration { LabelNames = ["outcome"] });
+
     private static readonly Counter ImgRefusals = Prometheus.Metrics.CreateCounter(
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
@@ -429,6 +433,9 @@ public static class KumbuMetrics
             case PictureTurned t:
                 PicturesTurned.WithLabels(Label(t.Command)).Inc();
                 break;
+            case RegionsAsked r:
+                RgRegions.WithLabels(Label(r.Outcome)).Inc();
+                break;
         }
     }
 
@@ -463,6 +470,13 @@ public static class KumbuMetrics
     };
 
     private static string Label(TurnCommand command) => command == TurnCommand.Img ? "img" : "pdf";
+
+    private static string Label(RegionOutcome outcome) => outcome switch
+    {
+        RegionOutcome.Delivered => "delivered",
+        RegionOutcome.Limited => "limited",
+        _ => "unavailable",
+    };
 
     private static string Label(RenderKind kind) => kind == RenderKind.Page ? "page" : "image";
 
@@ -613,6 +627,7 @@ public static class KumbuMetrics
         Metric("kumbu_img_frames_total");
         Metric("kumbu_img_refusals_total", ("reason", Values<ImgRefusal>(Label)));
         Metric("kumbu_pictures_turned_total", ("command", Values<TurnCommand>(Label)));
+        Metric("kumbu_rg_regions_total", ("outcome", Values<RegionOutcome>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));
         Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
         Metric("kumbu_image_delivered_bytes", ("kind", kinds));

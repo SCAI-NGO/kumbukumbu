@@ -238,6 +238,42 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Regions_are_counted_by_outcome()
+    {
+        static string Series(string outcome) => $"kumbu_rg_regions_total{{outcome=\"{outcome}\"}}";
+        var sidecar = new FakePdfSidecar
+        {
+            // The long paper has a match on more pages than regions are asked for.
+            Analysis = pdf => FakePdfSidecar.Canned(System.Text.Encoding.ASCII.GetString(pdf.Span).Contains("long") ? 51 : 3),
+        };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a short paper"));
+        await user.CreateFileAsync("Samples/long.pdf", Pdf("a long paper"));
+        var vault = await VaultAsync(host, user);
+        foreach (var name in new[] { "paper.pdf", "long.pdf" })
+        {
+            var blobId = Convert.FromBase64String((await StateAsync(host, user, $"Samples/{name}")).BlobId);
+            await EventuallyAsync(async () => await host.Services.GetRequiredService<PdfAnalyses>().HeaderAsync(vault, blobId, Ct) is not null, "the analysis is stored");
+        }
+
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"rg --regions 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+        await ShAsync(host, key, $"rg --regions Page /{user.Vault}/Samples/long.pdf");
+        await ShAsync(host, key, $"rg 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+        sidecar.Down = true;
+        await ShAsync(host, key, $"rg --regions 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+
+        var after = await Scrape.TextAsync(app);
+        foreach (var outcome in new[] { "delivered", "limited", "unavailable" })
+        {
+            Assert.Equal(1, Scrape.Value(after, Series(outcome)) - Scrape.Value(before, Series(outcome)));
+        }
+    }
+
+    [Fact]
     public async Task A_refused_rotate_has_its_own_reason()
     {
         const string series = "kumbu_img_refusals_total{reason=\"bad_rotate\"}";

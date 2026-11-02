@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 using Kumbu.Core.Attachments;
@@ -19,6 +20,19 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     // The engine is linear in the input, so the timeout is a backstop, not the protection.
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>PDFs a search asks regions for: each means sending a whole file to the sidecar.</summary>
+    public const int MaxRegionPdfs = 8;
+
+    /// <summary>Pages with matches of one PDF that get regions, as many as one text-boxes request takes.</summary>
+    public const int MaxRegionPages = 50;
+
+    public const int MaxRegionsPerLine = 3;
+
+    private const string NoRegions = "No regions: PDF rendering is unavailable right now. The matches are all here.";
+
+    /// <summary>The time a search spends on regions before it asks for no further PDF's; a call under way runs to its own limit.</summary>
+    internal TimeSpan RegionBudget { get; init; } = TimeSpan.FromSeconds(20);
+
     private static readonly Option[] Spec =
     [
         new('i', "ignore-case"), new('F', "fixed-strings"), new('w', "word-regexp"), new('v', "invert-match"),
@@ -26,6 +40,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         new('m', "max-count", TakesValue: true), new('e', "regexp", TakesValue: true),
         new('A', "after-context", TakesValue: true), new('B', "before-context", TakesValue: true),
         new('C', "context", TakesValue: true), new(null, "files"), new(null, "version", TakesValue: true), new(null, "tag", TakesValue: true),
+        new(null, "regions"),
     ];
 
     public string Name => "rg";
@@ -48,6 +63,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           not analysed yet have no text to find, and the text of a scan may have wrong or missing words: if
           nothing matches, a hint line names the PDFs with such pages. Look at pages with 'pdf'. PDFs are
           searched in the current state only, not with --checkpoint; --files and --tag leave them out.
+          With --regions a match in a PDF also says where on the page it lies.
           Images are not searched ('ls' lists attachments, 'backlinks' finds the notes that embed one; 'help attachments').
         rg --files [path...]
           List the paths of all notes below each path; with no path, of every note.
@@ -65,6 +81,12 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
           --version V                search an earlier version (from 'history') of the one note given
           --tag T                    only notes that carry #T (nested too, ignoring case; 'help tags');
                                      repeat for notes with all of them
+          --regions                  for matches in PDFs, also where they lie on the page, ready for pdf's --crop:
+                                     /Work/paper.pdf:p7:crop=72,298,214,17: text. In points of the page as displayed,
+                                     around the piece of text that holds the match. It shows where the text box lies,
+                                     not that anyone can see it: look with 'pdf /Work/paper.pdf 7 --crop 72,298,214,17'.
+                                     Regions come from the PDF itself each time, for up to 8 PDFs a search; not with
+                                     -l, -c, -v, --files, --tag or --version, nor right of a pipe.
           -A N, -B N, -C N           N lines of context after, before, or around each match
 
         The syntax is that of ripgrep: no look-around and no backreferences, so a search
@@ -88,6 +110,12 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         if (tags.Count > 0 && (input is not null || options.Has("version")))
         {
             return ShellResult.Error("rg: --tag chooses the notes rg reads; it works neither right of a pipe nor with --version");
+        }
+
+        if (options.Has("regions")
+            && (input is not null || tags.Count > 0 || new[] { "files-with-matches", "count", "invert-match", "files", "version" }.Any(options.Has)))
+        {
+            return ShellResult.Error("rg: --regions says where matches lie in PDFs; it doesn't go with -l, -c, -v, --files, --tag or --version, nor right of a pipe");
         }
 
         if (options.Has("files")) return await ListFilesAsync(options.Operands, tags, input, ct);
@@ -196,9 +224,11 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         var matched = new List<VaultPath>();
         var lines = NoteLines(search, options, searched, matched);
         var pictured = new List<(VaultPath Path, int Pages)>();
-        if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, pictured, ct);
+        var notices = new List<string>();
+        if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, pictured, notices, ct);
         var result = ShellResult.Ok(Lines.Join(lines));
-        if (marks is not null && !options.Has("invert-match")) result = result with { Notice = await marks.NoticeAsync(matched, ct) };
+        if (marks is not null && !options.Has("invert-match") && await marks.NoticeAsync(matched, ct) is { } written) notices.Insert(0, written);
+        if (notices.Count > 0) result = result with { Notice = string.Join('\n', notices) };
         return result.Output.Length > 0 || options.Has("invert-match") ? result : result with { NoMatchHint = NoMatchHint(NameHint(search, options, searched.Select(n => n.Path)), PictureHint(pictured)) };
     }
 
@@ -281,19 +311,23 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// <summary>
     /// Appends the matches in the stored text of PDFs, one at a time and a hundred pages at a time, and stops reading
     /// once the output is past what the shell would show anyway. A PDF without a stored analysis, or whose analysis
-    /// failed, has no text to find: it is skipped, never analysed here.
+    /// failed, has no text to find: it is skipped, never analysed here. With --regions a PDF's matching pages are held
+    /// until its text is read, then printed with the regions of one text-boxes request; why some have none goes to
+    /// <paramref name="notices"/>.
     /// </summary>
-    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, List<(VaultPath Path, int Pages)> pictured, CancellationToken ct)
+    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, List<(VaultPath Path, int Pages)> pictured, List<string> notices, CancellationToken ct)
     {
         var lineNumbers = options.Has("line-number") && !options.Has("no-line-number");
         var size = output.Sum(l => l.Length + 1);
         var counted = output.Count;
+        var regions = options.Has("regions") ? new RegionSearch(notices) : null;
         foreach (var (path, state) in documents.OrderBy(d => d.Key.Value, TextOrder.Default))
         {
             if (size > OutputLimit.MaxChars) return;
 
             var name = path.Value;
             var total = 0;
+            var held = new List<HeldPage>();
             try
             {
                 var analysis = await pixels!.AnalysisAsync(path, state, runIfPending: false, ct);
@@ -322,7 +356,14 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                             break;
                         }
 
-                        if (!options.Has("count"))
+                        if (regions is not null)
+                        {
+                            // Counted as they would print without regions, so that reading stops where it would have.
+                            if (search.HasContext && output.Count + held.Count > 0) size += 3;
+                            size += search.Render(lines, matches, (n, sep, text) => PdfLine(name, page, lineNumbers, n, sep, text, null)).Sum(l => l.Length + 1);
+                            held.Add(new HeldPage(page, texts[i], lines, matches));
+                        }
+                        else if (!options.Has("count"))
                         {
                             if (search.HasContext && output.Count > 0) output.Add("--");
                             output.AddRange(search.Render(lines, matches, (n, sep, text) =>
@@ -342,6 +383,23 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 // a search that took too long is rg's error, not this PDF's.
             }
 
+            if (held.Count > 0)
+            {
+                var boxes = await RegionsAsync(path, state, held, regions!, ct);
+                foreach (var (page, _, lines, matches) in held)
+                {
+                    if (search.HasContext && output.Count > 0) output.Add("--");
+                    var answer = boxes.GetValueOrDefault(page);
+                    var offsets = new int[lines.Count];
+                    for (var i = 1; i < lines.Count; i++) offsets[i] = offsets[i - 1] + lines[i - 1].Length + 1;
+                    output.AddRange(search.Render(lines, matches, (n, sep, text) =>
+                        PdfLine(name, page, lineNumbers, n, sep, text, sep == ':' && answer is not null ? Region(search, answer, offsets[n - 1], text) : null)));
+                }
+
+                // Their size was added as they were held.
+                counted = output.Count;
+            }
+
             if (options.Has("count") && total > 0) output.Add($"{name}:{total}");
             size += Grown();
         }
@@ -353,6 +411,115 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             counted = output.Count;
             return added;
         }
+    }
+
+    /// <summary>A PDF's line as rg prints it; a region goes before the text, so that no text can pass for one.</summary>
+    private static string PdfLine(string name, int page, bool lineNumbers, int n, char sep, string text, string? region)
+    {
+        var at = lineNumbers ? $"{name}:p{page}{sep}{n}" : $"{name}:p{page}";
+        return region is null ? $"{at}{sep} {text}" : $"{at}:crop={region}: {text}";
+    }
+
+    /// <summary>A page of a PDF with matches, held until the PDF's text is read.</summary>
+    private sealed record HeldPage(int Page, string Text, IReadOnlyList<string> Lines, List<int> Matches);
+
+    /// <summary>What a search with --regions has spent on regions so far, and the notices it gives.</summary>
+    private sealed class RegionSearch(List<string> notices)
+    {
+        public int Pdfs { get; set; }
+
+        public bool Failed { get; set; }
+
+        public Stopwatch? Clock { get; set; }
+
+        public void Note(string notice)
+        {
+            if (!notices.Contains(notice)) notices.Add(notice);
+        }
+    }
+
+    /// <summary>
+    /// The text boxes of the held pages of one PDF, by page, from one request; a page whose text differs from the stored
+    /// text has none. Every failure gives none and asks for no further PDF's: the matches print without regions.
+    /// </summary>
+    private async Task<Dictionary<int, PageTextBoxes>> RegionsAsync(VaultPath path, AttachmentState state, List<HeldPage> held, RegionSearch regions, CancellationToken ct)
+    {
+        var found = new Dictionary<int, PageTextBoxes>();
+        var outcome = RegionOutcome.Delivered;
+        if (++regions.Pdfs > MaxRegionPdfs)
+        {
+            regions.Note($"Regions only for the first {MaxRegionPdfs} PDFs with matches; name a PDF to get its own.");
+            outcome = RegionOutcome.Limited;
+        }
+        else if (regions.Failed || regions.Clock?.Elapsed >= RegionBudget)
+        {
+            regions.Note(NoRegions);
+            outcome = RegionOutcome.Unavailable;
+        }
+        else
+        {
+            var asked = held.Take(MaxRegionPages).ToList();
+            regions.Clock ??= Stopwatch.StartNew();
+            try
+            {
+                var answer = new Dictionary<int, PageTextBoxes>();
+                foreach (var page in await pixels!.TextBoxesAsync(path, state, [.. asked.Select(h => h.Page)], ct)) answer.TryAdd(page.Number, page);
+                foreach (var page in asked)
+                {
+                    if (!answer.TryGetValue(page.Page, out var boxes)) continue;
+                    if (string.Equals(boxes.Text, page.Text, StringComparison.Ordinal)) found[page.Page] = boxes;
+                    else regions.Note($"No regions on some pages of {path.Value}: its stored text comes from an older analysis. pdf info {path.Value} renews it.");
+                }
+
+                if (held.Count > MaxRegionPages)
+                {
+                    regions.Note($"Regions for {path.Value} only on its first {MaxRegionPages} pages with matches; use -m, or look at one page: pdf {path.Value} {held[MaxRegionPages].Page}.");
+                    outcome = RegionOutcome.Limited;
+                }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // Away, busy, too slow, or an answer that doesn't hold up: the search still has all its matches.
+                regions.Failed = true;
+                regions.Note(NoRegions);
+                found.Clear();
+                outcome = RegionOutcome.Unavailable;
+            }
+        }
+
+        pixels!.Count(new RegionsAsked(outcome));
+        return found;
+    }
+
+    /// <summary>
+    /// The regions of the matches in one line that starts at <paramref name="offset"/> of the page's text: for each match
+    /// the box around the items it touches, grown by max(2, 0.3 × its short side), as a text box leaves out descenders,
+    /// and whole by <see cref="Crop.Enclosing"/>. Equal ones once, at most three and how many more; null for none.
+    /// </summary>
+    private static string? Region(Search search, PageTextBoxes page, int offset, string line)
+    {
+        var crops = new List<Crop>();
+        foreach (var (start, length) in search.Spans(line))
+        {
+            var (from, to) = (offset + start, offset + start + length);
+            var (left, top, right, bottom) = (double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
+            foreach (var item in page.Items)
+            {
+                if (item.At >= to) break;
+                if (item.End <= from) continue;
+                (left, top) = (Math.Min(left, item.X), Math.Min(top, item.Y));
+                (right, bottom) = (Math.Max(right, item.X + item.Width), Math.Max(bottom, item.Y + item.Height));
+            }
+
+            if (right < left) continue;
+            var (width, height) = (right - left, bottom - top);
+            var grow = Math.Max(2, 0.3 * Math.Min(width, height));
+            if (Crop.Enclosing(left - grow, top - grow, width + 2 * grow, height + 2 * grow, page.Width, page.Height) is { } crop && !crops.Contains(crop)) crops.Add(crop);
+        }
+
+        if (crops.Count == 0) return null;
+        var shown = string.Join(';', crops.Take(MaxRegionsPerLine));
+        return crops.Count > MaxRegionsPerLine ? $"{shown};+{crops.Count - MaxRegionsPerLine} more" : shown;
     }
 
     private static ShellResult SearchInput(Search search, Options options, IReadOnlyList<string> operands, string input)
@@ -469,6 +636,18 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         public bool IsMatch(string text) => regex.IsMatch(text);
 
         public bool HasContext => before > 0 || after > 0;
+
+        /// <summary>Where the regex matches in a line, leaving out empty matches.</summary>
+        public List<(int Start, int Length)> Spans(string line)
+        {
+            var spans = new List<(int Start, int Length)>();
+            foreach (var match in regex.EnumerateMatches(line))
+            {
+                if (match.Length > 0) spans.Add((match.Index, match.Length));
+            }
+
+            return spans;
+        }
 
         /// <summary>Indexes of the selected lines, at most <c>max</c> of them.</summary>
         public List<int> Matches(IReadOnlyList<string> lines) => Matches(lines, max);
