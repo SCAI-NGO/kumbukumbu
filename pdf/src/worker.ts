@@ -6,6 +6,7 @@
 
 import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
+import { textBoxes } from "./boxes.js";
 import { renderImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
@@ -28,6 +29,8 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
       const data = new Uint8Array(r.data);
       return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };
     }
+    case "boxes":
+      return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
   }
 }
 

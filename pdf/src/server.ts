@@ -6,6 +6,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import type { Analysis } from "./analyse.js";
+import type { PageBoxes } from "./boxes.js";
 import type { RenderedImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import { Pool, type Reservation } from "./pool.js";
@@ -14,6 +15,7 @@ import type { Crop, Target } from "./steps.js";
 
 export const MAX_BODY = 16 * 1024 * 1024;
 export const MAX_PAGES = 2000;
+export const MAX_BOX_PAGES = 50;
 export const RENDER_MS = 10_000;
 // An analysis gets 30 s plus 0.5 s per page, at most 20 min: pdf.js decodes a scan's image even to
 // measure the page (about 0.3 s each), and an ordinary scanned book must not time out for good.
@@ -108,6 +110,13 @@ const ROUTES: Record<string, Route> = {
         });
     };
   },
+  "/text-boxes": (q, ms) => {
+    const pages = pageList(q, "pages", MAX_BOX_PAGES);
+    return async (body, slot) => {
+      const b = await slot.run<{ pages: PageBoxes[] }>({ kind: "boxes", bytes: body, pages }, ms.renderMs);
+      return (res) => json(res, 200, b);
+    };
+  },
 };
 
 // The place in the pool is taken before the body is read, so a full pool answers busy at once and
@@ -159,6 +168,15 @@ function integer(q: URLSearchParams, name: string, min: number, max: number): nu
   const v = text !== null && /^\d{1,16}$/.test(text) ? Number(text) : NaN;
   if (!(v >= min && v <= max)) throw bad(`${name} must be a whole number from ${min} to ${max}.`);
   return v;
+}
+
+// Whole numbers as integer takes them, at most max, each above the one before.
+function pageList(q: URLSearchParams, name: string, max: number): number[] {
+  const parts = (q.get(name) ?? "").split(",");
+  const pages = parts.map((p) => (/^\d{1,16}$/.test(p) ? Number(p) : NaN));
+  const ok = parts.length <= max && pages.every((v, i) => v >= 1 && v <= Number.MAX_SAFE_INTEGER && (i === 0 || v > pages[i - 1]!));
+  if (!ok) throw bad(`${name} must be 1 to ${max} whole numbers, ascending and separated by commas.`);
+  return pages;
 }
 
 function target(q: URLSearchParams): Target {

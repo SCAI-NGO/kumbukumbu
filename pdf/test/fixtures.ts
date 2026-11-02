@@ -149,6 +149,50 @@ export const cropBoxPage = () =>
     page.drawRectangle({ ...CROPPED_BOX, color: rgb(0.2, 0.6, 0.2) });
   });
 
+// The text of turnedTextPage(), drawn upwards from TURNED_AT in Helvetica at TEXT_SIZE points.
+export const TEXT_SIZE = 12;
+export const TURNED_TEXT = "A turned axis title";
+export const TURNED_AT = { x: 300, y: 300 };
+
+export const turnedTextPage = () =>
+  single(async (doc, page) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText(TURNED_TEXT, { ...TURNED_AT, size: TEXT_SIZE, font, rotate: degrees(90) });
+  });
+
+// Horizontal text on a page of /Rotate 90, at ROTATED_TEXT_AT in its portrait MediaBox.
+export const ROTATED_TEXT = "Text on a sideways sheet";
+export const ROTATED_TEXT_AT = { x: 100, y: 600 };
+
+export const rotatedTextPage = () =>
+  single(async (doc, page) => {
+    page.setRotation(degrees(90));
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText(ROTATED_TEXT, { ...ROTATED_TEXT_AT, size: TEXT_SIZE, font });
+  });
+
+// Three lines on cropBoxPage()'s CropBox: one inside it, one across its left edge, one wholly above it.
+export const CROPPED_LINES = [
+  { text: "Inside the crop", x: 100, y: 400 },
+  { text: "Across the left edge", x: 20, y: 300 },
+  { text: "Wholly outside", x: 100, y: 700 },
+] as const;
+
+export const cropBoxTextPage = () =>
+  single(async (doc, page) => {
+    page.setCropBox(CROP_BOX.x, CROP_BOX.y, CROP_BOX.width, CROP_BOX.height);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (const line of CROPPED_LINES) page.drawText(line.text, { x: line.x, y: line.y, size: TEXT_SIZE, font });
+  });
+
+// A last line that ends in spaces, which the page's text loses to trimEnd.
+export const trailingSpacesPage = () =>
+  single(async (doc, page) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText("Item one   12", { x: 50, y: 800, size: TEXT_SIZE, font });
+    page.drawText("Total   ", { x: 50, y: 780, size: TEXT_SIZE, font });
+  });
+
 // A whole-page image that declares 10,000 × 10,000 pixels in a few bytes of Flate: it would cost
 // 100 MP of memory to decode.
 export const hugeImagePage = () =>

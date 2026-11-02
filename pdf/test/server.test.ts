@@ -178,6 +178,32 @@ describe("server", () => {
     expect((await post("/analyse?maxPages=none", pdf)).status).toBe(400);
   });
 
+  it("answers /text-boxes as JSON for the pages asked", async () => {
+    const r = await post("/text-boxes?pages=1,3", await threePages());
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/json");
+    const { pages } = (await r.json()) as { pages: { n: number; width: number; height: number; text: string; items: { at: number; end: number }[] }[] };
+    expect(pages.map((p) => [p.n, p.width, p.height, p.text])).toEqual([
+      [1, 595, 842, "Page 1"],
+      [3, 595, 842, "Page 3"],
+    ]);
+    expect(pages[1]!.items).toEqual([{ at: 0, end: 6, x: 50, y: 30, w: expect.any(Number), h: 12 }]);
+  });
+
+  it("refuses more than 50 pages, none, duplicates, a falling order, and anything but whole numbers", async () => {
+    const pdf = await threePages();
+    const upTo = (n: number) => Array.from({ length: n }, (_, i) => i + 1).join(",");
+    for (const q of [`pages=${upTo(51)}`, "", "pages=", "pages=1,1", "pages=3,1", "pages=0", "pages=1.5", "pages=1,x", "pages=-1", "pages=1,,2", "pages=1,", "pages= 1", "pages=1e2"]) {
+      const r = await post(`/text-boxes?${q}`, pdf);
+      expect(r.status, q).toBe(400);
+      expect(await r.json()).toMatchObject({ code: "bad_request" });
+    }
+    // Fifty pass the parameters; the PDF then lacks most of them.
+    const fifty = await post(`/text-boxes?pages=${upTo(50)}`, pdf);
+    expect(fifty.status).toBe(422);
+    expect(await fifty.json()).toMatchObject({ code: "no_such_page" });
+  });
+
   it("refuses a body over 16 MiB with 413", async () => {
     const big = new Uint8Array(16 * 1024 * 1024 + 1);
     const status = await new Promise<number>((resolve, reject) => {
