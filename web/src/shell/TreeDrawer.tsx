@@ -342,6 +342,7 @@ export default function TreeDrawer(props: {
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
+  const membership = active?.membership;
   const embeddings = active?.embeddings;
   const level = levelOf(active);
   const createBoard = useBoardAction(activeVault ?? "");
@@ -405,7 +406,7 @@ export default function TreeDrawer(props: {
     // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
     ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
     // A member's way out, last for the same reason. Held as chosen: leaving forgets the active vault before the dialog closes.
-    ...(active?.membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership: active.membership! }) }] : []),
+    ...(membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership }) }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;

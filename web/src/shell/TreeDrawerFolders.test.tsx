@@ -497,6 +497,7 @@ describe("leaving the vault from its menu", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     // Away from its note, which she can no longer read.
     expect(router.state.location.pathname).toBe("/");
+    expect(useEditor.getState().recentPaths.some((p) => p.startsWith("/Work/"))).toBe(false);
   });
 
   it("the owner's vault menu has no Leave this vault…", async () => {
