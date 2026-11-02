@@ -284,6 +284,108 @@ public sealed class PdfSidecarTests
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
+    /// <summary>The sidecar's answer to <c>/text-boxes?pages=7,12</c>, as <c>pdf/src/server.ts</c> shapes it.</summary>
+    private static JsonObject TwoPagesOfBoxes() => JsonNode.Parse("""
+        {
+          "pages": [
+            { "n": 7, "width": 595.3, "height": 841.9, "text": "Hello world.\nBye",
+              "items": [ { "at": 0, "end": 12, "x": 74.2, "y": 300.1, "w": 210.3, "h": 11 }, { "at": 13, "end": 16, "x": 74.2, "y": 312.1, "w": 20, "h": 11 } ] },
+            { "n": 12, "width": 842, "height": 595, "text": "", "items": [] }
+          ]
+        }
+        """)!.AsObject();
+
+    private static readonly IReadOnlyList<int> SevenAndTwelve = [7, 12];
+
+    [Fact]
+    public async Task Text_boxes_are_asked_by_page_list()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, TwoPagesOfBoxes().ToJsonString()));
+
+        await Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct);
+
+        var (request, body) = Assert.Single(stub.Seen);
+        Assert.Equal(("POST", "/text-boxes", "?pages=7,12", "application/pdf"), (request.Method.Method, request.RequestUri!.AbsolutePath, request.RequestUri.Query, request.Content!.Headers.ContentType!.MediaType));
+        Assert.Equal(Pdf, body);
+    }
+
+    [Fact]
+    public async Task Text_boxes_parse()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, TwoPagesOfBoxes().ToJsonString()));
+
+        var pages = await Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct);
+
+        Assert.Equal(2, pages.Count);
+        Assert.Equal((7, 595.3, 841.9, "Hello world.\nBye"), (pages[0].Number, pages[0].Width, pages[0].Height, pages[0].Text));
+        Assert.Equal([new TextBox(0, 12, 74.2, 300.1, 210.3, 11), new TextBox(13, 16, 74.2, 312.1, 20, 11)], pages[0].Items);
+        Assert.Equal((12, ""), (pages[1].Number, pages[1].Text));
+        Assert.Empty(pages[1].Items);
+    }
+
+    public static TheoryData<string, string> BrokenBoxes() => new()
+    {
+        { "pages other than asked", """{"op":"set","path":"pages.1.n","value":13}""" },
+        { "pages in another order", """{"op":"set","path":"pages","value":[{"n":12,"width":842,"height":595,"text":"","items":[]},{"n":7,"width":595,"height":842,"text":"","items":[]}]}""" },
+        { "a page too few", """{"op":"remove","path":"pages.1"}""" },
+        { "an at above its end", """{"op":"set","path":"pages.0.items.0.at","value":13}""" },
+        { "an end past the text", """{"op":"set","path":"pages.0.items.1.end","value":17}""" },
+        { "an at below the previous end", """{"op":"set","path":"pages.0.items.1.at","value":11}""" },
+        { "a negative x", """{"op":"set","path":"pages.0.items.0.x","value":-0.1}""" },
+        { "an infinite w", """{"op":"set","path":"pages.0.items.0.w","value":1e999}""" },
+        { "no text", """{"op":"remove","path":"pages.0.text"}""" },
+        { "no items", """{"op":"remove","path":"pages.1.items"}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(BrokenBoxes))]
+    public async Task Malformed_text_boxes_are_refused(string what, string change)
+    {
+        var json = TwoPagesOfBoxes();
+        var op = JsonNode.Parse(change)!;
+        var steps = op["path"]!.GetValue<string>().Split('.');
+        JsonNode node = json;
+        foreach (var step in steps[..^1]) node = int.TryParse(step, out var i) ? node[i]! : node[step]!;
+        var last = steps[^1];
+        if (op["op"]!.GetValue<string>() == "remove")
+        {
+            if (node is JsonArray array) array.RemoveAt(int.Parse(last, System.Globalization.CultureInfo.InvariantCulture));
+            else node.AsObject().Remove(last);
+        }
+        else if (node is JsonArray list) list[int.Parse(last, System.Globalization.CultureInfo.InvariantCulture)] = op["value"]!.DeepClone();
+        else node[last] = op["value"]!.DeepClone();
+        var text = json.ToJsonString().Replace("1E+999", "1e999", StringComparison.Ordinal);
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
+
+        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct));
+
+        Assert.True(e.Code == SidecarException.Failed, what);
+    }
+
+    [Fact]
+    public async Task Text_boxes_that_are_not_json_are_refused()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, "<html>oops</html>"));
+
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct))).Code);
+    }
+
+    [Fact]
+    public async Task Text_boxes_over_16_MiB_are_refused()
+    {
+        var huge = new Stub((_, _) => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Endless()) });
+
+        Assert.Equal(SidecarException.Failed, (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(huge).TextBoxesAsync(Pdf, SevenAndTwelve, Ct))).Code);
+    }
+
+    [Fact]
+    public async Task No_such_page_from_text_boxes_is_that_code()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.UnprocessableEntity, """{"error":"There is no page 12.","code":"no_such_page"}"""));
+
+        Assert.Equal("no_such_page", (await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct))).Code);
+    }
+
     [Theory]
     [InlineData(422, """{"error":"The PDF is password-protected.","code":"encrypted"}""", "encrypted")]
     [InlineData(400, """{"error":"The body is not a PDF.","code":"not_pdf"}""", "not_pdf")]

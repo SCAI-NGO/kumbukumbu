@@ -30,6 +30,13 @@ public sealed class FakePdfSidecar : IPdfSidecar
     /// <summary>The size of each page in points, as displayed (A4 by default).</summary>
     public (double Width, double Height) PageSize { get; set; } = (595, 842);
 
+    /// <summary>The boxes returned for the pages asked; by default one box over "Page n text" on each.</summary>
+    public Func<IReadOnlyList<int>, IReadOnlyList<PageTextBoxes>> TextBoxes { get; set; } = pages =>
+        [.. pages.Select(n => new PageTextBoxes(n, 595, 842, $"Page {n} text", [new TextBox(0, $"Page {n} text".Length, 72, 100, 90, 11)]))];
+
+    /// <summary>The PDF each text-boxes request carried.</summary>
+    public List<byte[]> TextBoxPdfs { get; } = [];
+
     public int Analyses => Volatile.Read(ref _analyses);
 
     public int Renders => Volatile.Read(ref _renders);
@@ -84,6 +91,13 @@ public sealed class FakePdfSidecar : IPdfSidecar
         if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w, h, target);
         return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height, Frames: frames);
+    }
+
+    public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
+    {
+        lock (TextBoxPdfs) TextBoxPdfs.Add(pdf.ToArray());
+        await AnswerAsync(ct);
+        return TextBoxes(pages);
     }
 
     private async Task AnswerAsync(CancellationToken ct)

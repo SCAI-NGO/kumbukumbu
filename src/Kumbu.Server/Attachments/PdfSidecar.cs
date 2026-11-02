@@ -22,6 +22,9 @@ public interface IPdfSidecar
 
     /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
     Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct);
+
+    /// <summary>The text of <paramref name="pages"/> (ascending, distinct, at most 50) with the boxes of its items.</summary>
+    Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct);
 }
 
 /// <summary>An analysis as the sidecar answers it: the measurements, and the text of each analysed page (index 0 = page 1).</summary>
@@ -68,6 +71,9 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     /// <summary>The largest image read: a page that doesn't fit its byte target even at the lowest quality is sent as it is.</summary>
     internal const int MaxImageBytes = 16 * 1024 * 1024;
 
+    /// <summary>The largest text-boxes answer read: 50 pages of 20,000 items stay below it.</summary>
+    internal const int MaxTextBoxBytes = 16 * 1024 * 1024;
+
     private const int MaxErrorBytes = 64 * 1024;
     private const int MaxMetadataChars = 1000;
 
@@ -110,6 +116,13 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) =>
         SendAsync("render/image", Query(target, crop, rotate, frame), image, "application/octet-stream", RenderTimeout, ct,
             (response, token) => PictureAsync(response, target, rotate, frame, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
+
+    public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
+    {
+        var body = await SendAsync("text-boxes", "pages=" + string.Join(',', pages.Select(p => p.ToString(CultureInfo.InvariantCulture))), pdf, "application/pdf", RenderTimeout, ct,
+            async (response, token) => await ReadAsync(response.Content, MaxTextBoxBytes, token) ?? throw Invalid("The text boxes are larger than 16 MiB"));
+        return ParseTextBoxes(body, pages);
+    }
 
     private static string Query(StepLimits target, Crop? crop, int rotate, int? frame = null) =>
         string.Create(CultureInfo.InvariantCulture, $"longEdge={target.LongEdge}&pixels={target.Pixels}&bytes={target.Bytes}")
@@ -354,4 +367,54 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         static bool Share(double v) => double.IsFinite(v) && v is >= 0 and <= 1;
         static string? Metadata(string? v) => v is null ? null : v.Length > MaxMetadataChars ? v[..MaxMetadataChars] : v;
     }
+
+    private sealed record TextBoxesJson(List<TextBoxPageJson>? Pages);
+
+    private sealed record TextBoxPageJson(int N, double Width, double Height, string? Text, List<TextBoxJson>? Items);
+
+    private sealed record TextBoxJson(int At, int End, double X, double Y, double W, double H);
+
+    /// <summary>The sidecar's JSON for <c>/text-boxes</c>, checked to be the pages asked, with offsets inside the text and ascending.</summary>
+    internal static IReadOnlyList<PageTextBoxes> ParseTextBoxes(byte[] body, IReadOnlyList<int> pages)
+    {
+        TextBoxesJson a;
+        try
+        {
+            a = JsonSerializer.Deserialize<TextBoxesJson>(body, Json) ?? throw Invalid("The text boxes are empty");
+        }
+        catch (JsonException)
+        {
+            throw Invalid("The text boxes are not valid JSON");
+        }
+
+        if (a.Pages is null || a.Pages.Count != pages.Count) throw Invalid("The text boxes don't add up");
+        var result = new List<PageTextBoxes>(pages.Count);
+        for (var i = 0; i < pages.Count; i++)
+        {
+            var p = a.Pages[i];
+            if (p.N != pages[i] || p.Text is null || p.Items is null || !Point(p.Width) || !Point(p.Height))
+            {
+                throw Invalid($"Page {pages[i]} of the text boxes doesn't add up");
+            }
+
+            var items = new List<TextBox>(p.Items.Count);
+            var previousEnd = 0;
+            foreach (var t in p.Items)
+            {
+                if (t.At < previousEnd || t.End < t.At || t.End > p.Text.Length || !Point(t.X) || !Point(t.Y) || !Point(t.W) || !Point(t.H))
+                {
+                    throw Invalid($"A box on page {pages[i]} of the text boxes doesn't add up");
+                }
+
+                items.Add(new TextBox(t.At, t.End, t.X, t.Y, t.W, t.H));
+                previousEnd = t.End;
+            }
+
+            result.Add(new PageTextBoxes(p.N, p.Width, p.Height, p.Text, items));
+        }
+
+        return result;
+    }
+
+    private static bool Point(double v) => double.IsFinite(v) && v >= 0;
 }

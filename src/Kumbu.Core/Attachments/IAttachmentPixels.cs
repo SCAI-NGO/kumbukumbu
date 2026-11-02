@@ -66,6 +66,12 @@ public sealed record PictureTurned(TurnCommand Command) : AttachmentUse;
 /// <summary>A frame of a GIF delivered on request by <c>--frame</c>.</summary>
 public sealed record ImgFrameShown : AttachmentUse;
 
+/// <summary>A run of text on a page: <c>[At, End)</c> in the page's text, and the box it prints in (points, as displayed, origin top left).</summary>
+public sealed record TextBox(int At, int End, double X, double Y, double Width, double Height);
+
+/// <summary>A page's text with the boxes of its items, ascending by offset.</summary>
+public sealed record PageTextBoxes(int Number, double Width, double Height, string Text, IReadOnlyList<TextBox> Items);
+
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
 {
@@ -80,6 +86,9 @@ public interface IAttachmentPixels
 
     /// <summary>The text of pages <paramref name="first"/> to <paramref name="last"/> of a stored analysis (index 0 = page first); null without one.</summary>
     Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct);
+
+    /// <summary>The text of the given pages (ascending, distinct) with the boxes of its items, read from the file itself; nothing is stored. Throws <see cref="PixelsUnavailableException"/> if the sidecar can't.</summary>
+    Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct);
 
     void Count(AttachmentUse use);
 }

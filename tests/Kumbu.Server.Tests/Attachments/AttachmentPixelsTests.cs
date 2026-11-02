@@ -89,6 +89,57 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Text_boxes_read_the_blob_with_the_requests_credential()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var bytes = Pdf("boxes of a paper");
+        await user.CreateFileAsync("paper.pdf", bytes);
+        var state = await StateAsync(host, user, "paper.pdf");
+        sidecar.TextBoxes = pages => [.. pages.Select(n => new PageTextBoxes(n, 595, 842, "Hi", [new TextBox(0, 2, 10, 20, 30, 11)]))];
+
+        var boxes = await Pixels(host, user).TextBoxesAsync(At(user, "paper.pdf"), state, [2, 3], Ct);
+
+        Assert.Equal(bytes, Assert.Single(sidecar.TextBoxPdfs));
+        Assert.Equal([2, 3], boxes.Select(b => b.Number));
+        Assert.Equal(new TextBox(0, 2, 10, 20, 30, 11), boxes[0].Items[0]);
+    }
+
+    [Fact]
+    public async Task Text_boxes_from_a_stopped_sidecar_are_unavailable()
+    {
+        await using var host = Host(app, new FakePdfSidecar { Down = true });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("nobody boxes this"));
+        var state = await StateAsync(host, user, "paper.pdf");
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => Pixels(host, user).TextBoxesAsync(At(user, "paper.pdf"), state, [1], Ct));
+
+        Assert.Equal(("PDF rendering is unavailable right now; try again later", PixelsProblem.Unavailable), (e.Message, e.Problem));
+    }
+
+    [Fact]
+    public async Task Text_boxes_store_nothing()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("a paper whose analysis stays as it is"));
+        var state = await StateAsync(host, user, "paper.pdf");
+        var pixels = Pixels(host, user);
+        await EventuallyAsync(async () => await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct) is not null, "the analysis is stored");
+        var before = System.Text.Json.JsonSerializer.Serialize(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct));
+        var textBefore = await pixels.PageTextAsync(At(user, "paper.pdf"), state, 1, 3, Ct);
+
+        await pixels.TextBoxesAsync(At(user, "paper.pdf"), state, [1, 2], Ct);
+
+        Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct)));
+        Assert.Equal(textBefore, await pixels.PageTextAsync(At(user, "paper.pdf"), state, 1, 3, Ct));
+        Assert.Equal(1, sidecar.Analyses);
+    }
+
+    [Fact]
     public async Task The_sidecars_refusals_become_sentences()
     {
         var sidecar = new RefusingSidecar();
@@ -193,6 +244,8 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) => throw new SidecarException(Code, Message);
 
         public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct) => throw new SidecarException(Code, Message);
     }
 
     [Fact]

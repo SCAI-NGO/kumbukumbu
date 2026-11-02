@@ -34,6 +34,8 @@ public class SemsearchPdfTests
             return Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(n => $"Methods\n\n  page {n} measures how {new string('x', 200)}")]);
         }
 
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
+
         public void Count(AttachmentUse use)
         {
         }

@@ -77,6 +77,19 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     public async Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct) =>
         await VaultAsync(path, state, ct) is var (vault, blobId) ? await analyses.TextAsync(vault, blobId, first, last, ct) : null;
 
+    public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct)
+    {
+        var bytes = await BytesAsync(path, state, ct);
+        try
+        {
+            return await sidecar.TextBoxesAsync(bytes, pages, ct);
+        }
+        catch (SidecarException e)
+        {
+            throw Refused(e, "PDF rendering", path, null, null, null);
+        }
+    }
+
     public void Count(AttachmentUse use) => KumbuMetrics.AttachmentUsed(use);
 
     private async Task<(UnlockedVault Vault, byte[] BlobId)?> VaultAsync(VaultPath path, AttachmentState state, CancellationToken ct) =>
