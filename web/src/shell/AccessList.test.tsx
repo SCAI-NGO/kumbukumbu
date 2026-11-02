@@ -285,4 +285,46 @@ describe("AccessList", () => {
     expect(requests(fetch, "DELETE").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Gartenarbeit/memberships/m1"]);
     expect(new URL(requests(fetch, "POST")[0].url).pathname).toBe("/api/vaults/Gartenarbeit/memberships/m2/decline");
   });
+
+  it("closing the invitation dialog shows the list, updated", async () => {
+    members = [];
+    accessApi({
+      "POST /api/vaults/Gartenarbeit/invitations": () => {
+        // Bob opens the link while the owner still has the dialog with it open.
+        setTimeout(() => (members = [member({ status: "pending", confirm: true, acceptedAt: null })]), 0);
+        return json(201, { id: "m1", link: "https://kumbu.example/share#c2VjcmV0LWZvci10aGUtdGVzdA", role: "read", confirm: true, expiresAt: "2026-11-08T10:00:00Z" });
+      },
+      "GET /api/vaults/Gartenarbeit/memberships/m1": () =>
+        json(200, { id: "m1", label: "Bob", role: "read", status: "pending", confirm: true, expiresAt: null, redeemedAt: "2026-10-30T09:00:00Z", redeemer: { name: '"Bob"', username: "bob" } }),
+    });
+    renderList();
+    expect(await screen.findByText("Gartenarbeit isn't shared with anyone.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Invite someone…" }));
+    await userEvent.type(screen.getByLabelText("Who it is for"), "Bob");
+    await userEvent.type(screen.getByLabelText("Your password"), "correct horse");
+    await userEvent.click(screen.getByRole("button", { name: "Create link" }));
+    const share = await screen.findByRole("dialog", { name: "Share Gartenarbeit" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await userEvent.click(within(share).getByRole("button", { name: "Done" }));
+    expect(await bob()).toHaveTextContent(/accepted|Grant access/);
+    expect(screen.queryByText("Gartenarbeit isn't shared with anyone.")).not.toBeInTheDocument();
+  });
+
+  it("a redeemer who arrives shows without a reload", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"], shouldAdvanceTime: true });
+    try {
+      members = [member({ status: "pending", acceptedAt: null, redeemedAt: null, expiresAt: "2026-11-07T09:00:00Z" })];
+      accessApi({
+        "GET /api/vaults/Gartenarbeit/memberships/m1": () =>
+          json(200, { id: "m1", label: "Bob", role: "read", status: "pending", confirm: true, expiresAt: null, redeemedAt: "2026-10-30T09:00:00Z", redeemer: { name: '"Bob"', username: "bob" } }),
+      });
+      renderList();
+      expect(await within(await bob()).findByText(/Invited as Read/)).toBeInTheDocument();
+      members = [member({ status: "pending", confirm: true, acceptedAt: null })];
+      await act(() => vi.advanceTimersByTimeAsync(10_500));
+      expect(await within(await bob()).findByRole("button", { name: "Grant access" })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

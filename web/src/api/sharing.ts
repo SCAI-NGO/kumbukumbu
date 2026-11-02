@@ -12,9 +12,20 @@ export type Departure = components["schemas"]["DepartureView"];
 export type Role = "read" | "write" | "maintain";
 export const roles: readonly Role[] = ["read", "write", "maintain"];
 
-/** Who has access to the owner's vault: her keys and apps, and the people it is shared with or who are invited. */
-export const useVaultAccess = (vault: string) =>
-  useQuery({ queryKey: ["vault-access", vault], queryFn: () => call(api.GET("/api/vaults/{vault}/access", { params: { path: { vault } } })) });
+/** How often the open access list asks again: the sync socket's hints are about notes and don't say a link was opened. */
+const accessPoll = 10_000;
+
+/**
+ * Who has access to the owner's vault: her keys and apps, and the people it is shared with or who are invited.
+ * `poll`: while the list is open, so a redeemer who arrives shows without a reload.
+ */
+export const useVaultAccess = (vault: string, poll = false) =>
+  useQuery({
+    queryKey: ["vault-access", vault],
+    queryFn: () => call(api.GET("/api/vaults/{vault}/access", { params: { path: { vault } } })),
+    refetchInterval: poll ? accessPoll : false,
+    refetchIntervalInBackground: false,
+  });
 
 /** One membership as its owner sees it: with `redeemer` only while it waits for her confirmation. */
 export const useMembership = (vault: string, id: string, enabled: boolean) =>

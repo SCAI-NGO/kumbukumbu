@@ -317,7 +317,8 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
 export default function AccessList({ vault, onClose }: { vault: string; onClose(): void }) {
   const id = useId();
   const dialog = useDialog<HTMLDivElement>(onClose);
-  const access = useVaultAccess(vault);
+  const access = useVaultAccess(vault, true);
+  const queryClient = useQueryClient();
   const [inviting, setInviting] = useState(false);
   // Held here, not by the member's row: the row goes as soon as the revoke is done, and a re-encryption may still run.
   const [revoking, setRevoking] = useState<MemberAccess | null>(null);
@@ -363,7 +364,16 @@ export default function AccessList({ vault, onClose }: { vault: string; onClose(
           Done
         </button>
       </div>
-      {inviting && <ShareDialog vault={vault} onClose={() => setInviting(false)} />}
+      {inviting && (
+        <ShareDialog
+          vault={vault}
+          onClose={() => {
+            setInviting(false);
+            // Someone may have opened the link meanwhile; the list behind the dialog was asked last when the link was made.
+            void queryClient.invalidateQueries({ queryKey: ["vault-access", vault] });
+          }}
+        />
+      )}
       {revoking && (
         <RevokeDialog
           vault={vault}
