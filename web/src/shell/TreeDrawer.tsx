@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -24,6 +24,7 @@ import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
+import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
@@ -338,6 +339,7 @@ export default function TreeDrawer(props: {
   const [sharing, setSharing] = useState(false);
   const [member, setMember] = useState(false);
   const [deletingVault, setDeletingVault] = useState<string | null>(null);
+  const [renamingVault, setRenamingVault] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<{ vault: string; membership: string } | null>(null);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
@@ -395,6 +397,8 @@ export default function TreeDrawer(props: {
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
                 { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
+                // Held as chosen: the rename changes the active vault before the dialog closes.
+                { label: "Rename vault…", icon: Pencil, onSelect: () => setRenamingVault(activeVault) },
               ]
             : []),
           // Her side of a vault shared with her: owner, role, provider, her name for it, and leaving.
@@ -482,6 +486,7 @@ export default function TreeDrawer(props: {
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
+      {renamingVault && <RenameVaultDialog vault={renamingVault} onClose={() => setRenamingVault(null)} />}
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}

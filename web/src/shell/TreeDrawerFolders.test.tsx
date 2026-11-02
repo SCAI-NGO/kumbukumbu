@@ -463,6 +463,58 @@ describe("deleting the vault from its menu", () => {
   });
 });
 
+describe("renaming the vault from its menu", () => {
+  it("the owner's vault menu offers Rename vault…, before Delete vault…", async () => {
+    api();
+    await openDrawer();
+    const items = await menuOf("Work");
+    expect(items).toContain("Rename vault…");
+    expect(items.indexOf("Rename vault…")).toBeLessThan(items.indexOf("Delete vault…"));
+    expect(items.at(-1)).toBe("Delete vault…");
+  });
+
+  it.each(["read", "write", "maintain"])("a member (%s) is offered no Rename vault…", async (level) => {
+    api({ "GET /api/vaults": () => json(200, [{ name: "Work", notes: 2, embeddings: "internal", canWrite: level !== "read", level, owner: '"Alice"', shared: true, membership: "m1" }]) });
+    await openDrawer();
+    const items = await menuOf("Work");
+    expect(items).toContain("Shared with you…");
+    expect(items).not.toContain("Rename vault…");
+  });
+
+  it("Rename vault… renames the vault and goes on showing the note under the new name", async () => {
+    let vaults = [{ name: "Work", notes: 2, embeddings: "internal" }];
+    const fetch = api({
+      "GET /api/vaults": () => json(200, vaults),
+      "GET /api/keys": () => json(200, []),
+      "GET /api/connections": () => json(200, []),
+      "GET /api/vaults/Work/access": () => json(200, { apiKeys: [], deviceKeys: [], connections: [], members: [], left: [] }),
+      "GET /api/vaults/Garten/tree": () => json(200, { damaged: 0, root: folder("/Garten", [], [note("/Garten/inbox.md")]) }),
+      "PUT /api/vaults/Work/name": () => {
+        vaults = [{ name: "Garten", notes: 2, embeddings: "internal" }];
+        return noContent();
+      },
+    });
+    const router = renderApp("/notes/Work/inbox.md");
+    await userEvent.click(await screen.findByRole("button", { name: "Open file tree" }));
+    await within(drawer()).findByText("Drafts");
+    await menuOf("Work");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename vault…" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Rename Work" });
+    const field = within(dialog).getByLabelText("New name");
+    await userEvent.clear(field);
+    await userEvent.type(field, "Garten");
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "Rename vault" })).toBeEnabled());
+    await userEvent.click(within(dialog).getByRole("button", { name: "Rename vault" }));
+
+    // The dialog was held as chosen: the active vault changing under it doesn't drop its success handler.
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/inbox.md"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Rename / })).not.toBeInTheDocument());
+    expect(requests(fetch, "PUT").map((r) => new URL(r.url).pathname)).toEqual(["/api/vaults/Work/name"]);
+    expect(useEditor.getState().activeVault).toBe("Garten");
+  });
+});
+
 describe("leaving the vault from its menu", () => {
   const shared = (level: string) => ({ name: "Work", notes: 2, embeddings: "internal", canWrite: level !== "read", level, owner: '"Alice"', shared: true, membership: "m1" });
 

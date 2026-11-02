@@ -141,6 +141,23 @@ export function useRenameAlias() {
   });
 }
 
+/** The owner's new name for her vault; her open note, recent notes and drawer move with it. */
+export function useRenameVault() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ vault, name }: { vault: string; name: string }) =>
+      void (await call(api.PUT("/api/vaults/{vault}/name", { params: { path: { vault } }, body: { name } }))),
+    onSuccess: async (_, { vault, name }) => {
+      const to = name.normalize("NFC").trim();
+      const editor = useEditor.getState();
+      editor.moved(`/${vault}/`, `/${to}/`);
+      if (useEditor.getState().activeVault === vault) editor.setActiveVault(to);
+      queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
+      await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    },
+  });
+}
+
 /** The member's OK for the provider the owner chose: her searches take the vault in again. */
 export function useProviderSeen() {
   const queryClient = useQueryClient();
