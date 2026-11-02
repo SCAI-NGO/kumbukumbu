@@ -120,9 +120,11 @@ public sealed class RestClient
         return [.. result.Content.OfType<TextContentBlock>().Select(b => b.Text)];
     }
 
-    /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead.</summary>
-    public Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body = null, string? bearer = null, IReadOnlyDictionary<string, string>? headers = null) =>
-        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer, headers);
+    /// <summary>A request as the session (with the web app's Origin), or as <paramref name="bearer"/> instead; <paramref name="cancel"/>
+    /// gives it up, as a client that goes away does.</summary>
+    public Task<HttpResponseMessage> SendAsync(
+        HttpMethod method, string path, object? body = null, string? bearer = null, IReadOnlyDictionary<string, string>? headers = null, CancellationToken? cancel = null) =>
+        SendAsync(_api, method, path, body, bearer is null ? Session : null, bearer, headers, cancel: cancel);
 
     public Task<HttpResponseMessage> GetAsync(string path, string? bearer = null) => SendAsync(HttpMethod.Get, path, bearer: bearer);
 
@@ -173,7 +175,7 @@ public sealed class RestClient
 
     private static async Task<HttpResponseMessage> SendAsync(
         WebApplicationFactory<Program> api, HttpMethod method, string path, object? body, string? session, string? bearer,
-        IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null)
+        IReadOnlyDictionary<string, string>? headers = null, HttpContent? content = null, CancellationToken? cancel = null)
     {
         using var request = new HttpRequestMessage(method, path);
         foreach (var (name, value) in headers ?? new Dictionary<string, string>()) request.Headers.TryAddWithoutValidation(name, value);
@@ -185,6 +187,6 @@ public sealed class RestClient
         // An address of its own per request, so the sign-in limits of other tests don't reach it.
         request.Headers.Add("X-Forwarded-For", $"198.20.{Random.Shared.Next(256)}.{Random.Shared.Next(1, 255)}");
         using var client = api.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false, BaseAddress = new Uri("https://localhost") });
-        return await client.SendAsync(request, Ct);
+        return await client.SendAsync(request, cancel ?? Ct);
     }
 }

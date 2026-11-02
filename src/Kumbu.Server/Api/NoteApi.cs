@@ -321,9 +321,24 @@ public static class NoteApi
         // The same budget as the other password checks behind a session.
         if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
         // A wrong password throws; null is a right one and no such vault.
-        var summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
-        // An open code would make a key after the run, which revoked the vault's keys.
-        if (summary is not null) pairings.DropAll(caller.User!.Id);
+        RekeySummary? summary;
+        var passwordRight = true;
+        try
+        {
+            summary = await rekeying.RekeyVaultAsync(caller.User!, caller.UserKey!, vault, body.Password, ct);
+        }
+        catch (WrongPasswordException)
+        {
+            passwordRight = false;
+            throw;
+        }
+        finally
+        {
+            // An open code would make a key after the run, which revoked the vault's keys; also when the client went
+            // away and the run goes on without the request, or the run failed part-way.
+            if (passwordRight) pairings.DropAll(caller.User!.Id);
+        }
+
         await AccountApi.PasswordGivenAsync(http, sessions, ct);
         if (summary is null) throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
         return TypedResults.Ok(new RekeyVaultView(summary.RevokedApiKeys.Count, summary.DisconnectedConnections.Count));

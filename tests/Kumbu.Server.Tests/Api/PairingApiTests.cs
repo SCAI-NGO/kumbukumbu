@@ -179,6 +179,50 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Empty((await JsonAsync(keys)).AsArray());
     }
 
+    /// <summary>
+    /// A client that goes away while the run is under way (a closed tab, a phone gone to sleep) leaves the run going,
+    /// and it revokes the vault's keys all the same: the codes are dropped with the request, not only with an answer.
+    /// </summary>
+    [Fact]
+    public async Task A_rekey_given_up_by_its_client_still_drops_the_open_pairing_codes()
+    {
+        var bound = TimeSpan.FromSeconds(30);
+        var user = await NewAsync(Api);
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        catalog.RekeyFaultAt = async p =>
+        {
+            if (p == "before-finish" && reached.TrySetResult()) await release.Task;
+        };
+
+        try
+        {
+            using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+            var rekey = user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password }, cancel: cancel.Token);
+            await Task.WhenAny(reached.Task, rekey).WaitAsync(bound, Ct);
+            Assert.True(reached.Task.IsCompleted, "The run answered before its finish.");
+
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => rekey);
+            var waiting = System.Diagnostics.Stopwatch.StartNew();
+            while (IsOpen(code) && waiting.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20, Ct);
+            Assert.False(IsOpen(code));
+            using var redeemed = await RedeemAsync(code, "Laptop");
+            Assert.Equal(HttpStatusCode.NotFound, redeemed.StatusCode);
+        }
+        finally
+        {
+            release.TrySetResult();
+            catalog.RekeyFaultAt = null;
+        }
+
+        // The given-up run goes on to its end; a second run waits behind it.
+        using var again = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+    }
+
     [Fact]
     public async Task The_redeemed_key_works_on_the_versions_endpoint()
     {
