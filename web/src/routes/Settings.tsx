@@ -6,6 +6,7 @@ import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
 import ConfirmTyped from "../components/ConfirmTyped";
+import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../components/SharedVaultsChoice";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { useDialog } from "../hooks/useDialog";
@@ -576,8 +577,12 @@ function DeleteAccountSection() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
   const [typed, setTyped] = useState("");
+  const [choice, setChoice] = useState<SharedVaultsChoice>(defaultSharedVaultsChoice);
+  const vaults = useVaults();
+  // Her own vaults with an active member: the ones the server asks about. A vault shared with nobody isn't one.
+  const shared = (vaults.data ?? []).filter((v) => v.owner == null && Number(v.members ?? 0) > 0);
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed } })),
+    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed, ...(shared.length > 0 && { sharedVaults: choice }) } })),
     onSuccess: () => {
       setPassword("");
       queryClient.clear();
@@ -603,6 +608,19 @@ function DeleteAccountSection() {
             Agents using your keys stop working at once. Nobody can bring it back, not even an admin.
           </p>
           <form onSubmit={submit} className="flex flex-col gap-4">
+            {shared.length > 0 && (
+              <SharedVaultsChoiceField
+                legend="Your shared vaults"
+                intro={
+                  <>
+                    You share {shared.length === 1 ? "this vault" : "these vaults"} with others: <b className="text-text">{shared.map((v) => v.name).join(", ")}</b>.
+                    What becomes of {shared.length === 1 ? "it" : "them"}?
+                  </>
+                }
+                value={choice}
+                onChange={setChoice}
+              />
+            )}
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`${id}-confirm`} className={labelClass}>
@@ -620,7 +638,7 @@ function DeleteAccountSection() {
               />
             </div>
             {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
-            <button type="submit" disabled={remove.isPending || !password || typed !== me.username} className={primaryButtonClass}>
+            <button type="submit" disabled={remove.isPending || vaults.isPending || !password || typed !== me.username} className={primaryButtonClass}>
               Delete my account
             </button>
           </form>

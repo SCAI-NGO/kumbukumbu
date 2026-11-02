@@ -458,6 +458,68 @@ describe("Settings", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Your account is deleted");
   });
 
+  it("lists her shared vaults and sends the choice", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "GET /api/vaults": () =>
+        json(200, [
+          { name: "Gartenarbeit", notes: 3, shared: true, members: 2 },
+          { name: "Work", notes: 1, shared: true, members: 0 },
+          { name: "Diary", notes: 1 },
+          { name: "Bobs", notes: 4, owner: "Bob", ownerUsername: "bob", shared: true, level: "write" },
+        ]),
+      "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    const group = await within(form).findByRole("group", { name: "Your shared vaults" });
+    // Only her own vaults with an active member; not one shared with nobody, nor one that is somebody else's.
+    expect(group).toHaveTextContent("Gartenarbeit");
+    expect(group).not.toHaveTextContent("Work");
+    expect(group).not.toHaveTextContent("Bobs");
+    const give = within(group).getByRole("radio", { name: /Give members 7 days/ });
+    const now = within(group).getByRole("radio", { name: /Delete it for everyone now/ });
+    expect(give).toBeChecked();
+    expect(group).toHaveTextContent("stays read-only for its members for 7 days");
+    expect(group).toHaveTextContent("is deleted at once, and each member is told");
+
+    await userEvent.click(now);
+    await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    await userEvent.click(within(form).getByRole("button", { name: "Delete my account" }));
+    await waitFor(() => expect(bodies).toEqual([{ password: "my password, long", confirm: "ada", sharedVaults: "delete-now" }]));
+  });
+
+  it("sends the default of 7 days unless she chooses otherwise", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "GET /api/vaults": () => json(200, [{ name: "Gartenarbeit", notes: 3, shared: true, members: 1 }]),
+      "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    await within(form).findByRole("group", { name: "Your shared vaults" });
+    await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    await userEvent.click(within(form).getByRole("button", { name: "Delete my account" }));
+    await waitFor(() => expect(bodies).toEqual([{ password: "my password, long", confirm: "ada", sharedVaults: "give-members-7-days" }]));
+  });
+
+  it("offers no choice without shared vaults", async () => {
+    const bodies: unknown[] = [];
+    api({
+      "GET /api/vaults": () => json(200, [{ name: "Work", notes: 3, shared: true, members: 0 }, { name: "Diary", notes: 1 }]),
+      "POST /api/account/delete": async (r) => (bodies.push(await r.json()), noContent()),
+    });
+    renderApp("/settings");
+    const form = await screen.findByRole("region", { name: "Delete account" });
+    await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");
+    await userEvent.type(within(form).getByLabelText("Type ada to confirm"), "ada");
+    expect(within(form).queryByRole("radio")).not.toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Delete my account" }));
+    await waitFor(() => expect(bodies).toEqual([{ password: "my password, long", confirm: "ada" }]));
+  });
+
   it("shows the server's sentence when the account deletion is refused", async () => {
     api({ "POST /api/account/delete": () => json(400, { error: "The password is wrong." }) });
     renderApp("/settings");

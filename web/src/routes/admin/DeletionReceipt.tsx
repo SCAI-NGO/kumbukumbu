@@ -33,6 +33,7 @@ export function receiptText(r: Receipt): string {
     `Attachments (PDFs, images): ${r.attachments}`,
     `API keys (incl. revoked): ${r.apiKeys}`,
     `App connections (incl. revoked): ${r.connections}`,
+    ...(r.sharedVaultsScheduled ?? []).map((at) => `Shared vault scheduled for deletion on ${utcText(at)}`),
     ...(Number(r.invitations) > 0 ? [`Invitation they joined with: kept as used, its note and link to them erased (${r.invitations})`] : []),
     ...providers,
     "Backups are not reached by this deletion.",

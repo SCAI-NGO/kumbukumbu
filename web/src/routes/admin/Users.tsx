@@ -7,6 +7,7 @@ import { errorText } from "../../api/error-text";
 import type { components } from "../../api/schema";
 import ConfirmTyped from "../../components/ConfirmTyped";
 import { FormError, secondaryButtonClass } from "../../components/form";
+import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../../components/SharedVaultsChoice";
 import { useSession } from "../../state/session";
 import AdminOnly, { useIsAdmin } from "./AdminOnly";
 import DeletionReceipt, { type Receipt } from "./DeletionReceipt";
@@ -175,8 +176,17 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose()
   const queryClient = useQueryClient();
   // The admin's own password, read through the closure: the mutation cache keeps no variables of it.
   const [password, setPassword] = useState("");
+  const [choice, setChoice] = useState<SharedVaultsChoice>(defaultSharedVaultsChoice);
+  // A count only: the admin never sees a vault's name.
+  const shared = Number(user.sharedVaults);
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/admin/users/{id}/delete", { params: { path: { id: user.id } }, body: { password, confirm: user.username } })),
+    mutationFn: () =>
+      call(
+        api.POST("/api/admin/users/{id}/delete", {
+          params: { path: { id: user.id } },
+          body: { password, confirm: user.username, ...(shared > 0 && { sharedVaults: choice }) },
+        }),
+      ),
     onSuccess: async (receipt) => {
       onDeleted(receipt);
       await queryClient.invalidateQueries({ queryKey: ["admin"] });
@@ -194,7 +204,16 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose()
       onClose={onClose}
       password={password}
       onPasswordChange={setPassword}
-    />
+    >
+      {shared > 0 && (
+        <SharedVaultsChoiceField
+          legend="Their shared vaults"
+          intro={`${user.display} has ${shared === 1 ? "1 vault" : `${shared} vaults`} shared with others. One choice for ${shared === 1 ? "it" : "all of them"}.`}
+          value={choice}
+          onChange={setChoice}
+        />
+      )}
+    </ConfirmTyped>
   );
 }
 

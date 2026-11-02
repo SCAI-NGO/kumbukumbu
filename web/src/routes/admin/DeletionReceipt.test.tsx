@@ -47,6 +47,17 @@ describe("receiptText", () => {
     expect(t).not.toContain("Not recorded in the deletion list");
   });
 
+  it("the receipt names the scheduled dates", () => {
+    const t = receiptText({ ...receipt, sharedVaultsScheduled: ["2026-11-03T10:15:00Z", "2026-11-04T08:00:00Z"] });
+    expect(t).toContain("Shared vault scheduled for deletion on 2026-11-03 10:15 UTC");
+    expect(t).toContain("Shared vault scheduled for deletion on 2026-11-04 08:00 UTC");
+  });
+
+  it("has no such line without a closing period", () => {
+    expect(receiptText(receipt)).not.toContain("scheduled for deletion");
+    expect(receiptText({ ...receipt, sharedVaultsScheduled: [] })).not.toContain("scheduled for deletion");
+  });
+
   it("says 'none configured' without external providers", () => {
     expect(receiptText({ ...receipt, externalProviders: [] })).toContain("External embedding providers: none configured");
   });
