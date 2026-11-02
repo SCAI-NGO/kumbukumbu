@@ -276,6 +276,38 @@ public sealed class InvitationTests(MongoFixture fixture)
         Assert.Null(await Users().TrySignInAsync("lea2", Password, Ct));
     }
 
+    /// <summary>The same for every open invitation of an admin at once, as her deactivation, demotion or deletion revokes them.</summary>
+    [Fact]
+    public async Task Revoking_an_admins_invitations_in_flight_sticks()
+    {
+        var admin = await AdminAsync();
+        await Users().CreateAsync("lea", Password, Roles.User, Ct);
+        var (code, _) = await Invitations().CreateAsync(admin, Roles.User, null, null, Ct);
+        var holding = new HoldingTime(_time);
+        var held = new Invitations(
+            _db, new ServerSecret(_db), new UserCatalog(_db, new Argon2Kdf(new Argon2Parameters(1024, 1, 1)), Keys(), new Connections(_db, new VaultCatalog(_db, Options.Create(new KumbuOptions()), _time, NullLogger<VaultCatalog>.Instance), _time, NullLogger<Connections>.Instance), holding, NullLogger<UserCatalog>.Instance), _time, NullLogger<Invitations>.Instance);
+
+        // Claimed, and the account not yet made: a taken username will give the claim back.
+        var redeem = Task.Run(() => held.RedeemAsync(code, "Lea", Password, Ct), Ct);
+        await holding.Reached.Task.WaitAsync(TimeSpan.FromSeconds(30), Ct);
+        long revoked;
+        try
+        {
+            revoked = await Kumbu.Server.Accounts.Invitations.RevokeOpenOfAsync(_db, null, admin.Id, _time.GetUtcNow().UtcDateTime, Ct);
+        }
+        finally
+        {
+            holding.Release();
+        }
+
+        await Assert.ThrowsAsync<UsernameTakenException>(() => redeem);
+        Assert.Equal(1, revoked);
+        Assert.Equal(InvitationState.Revoked, (await Invitations().PeekAsync(code, Ct))!.State);
+        var refused = await Assert.ThrowsAsync<InvitationUnusableException>(() => Invitations().RedeemAsync(code, "lea2", Password, Ct));
+        Assert.Equal(InvitationState.Revoked, refused.State);
+        Assert.Null(await Users().TrySignInAsync("lea2", Password, Ct));
+    }
+
     /// <summary>Throws on the "Created user" log line, i.e. right after the user is inserted: a fault there
     /// (a dropped connection, a cancelled request) must not hand the invitation out a second time.</summary>
     private sealed class FailAfterInsert : Microsoft.Extensions.Logging.ILogger<UserCatalog>
