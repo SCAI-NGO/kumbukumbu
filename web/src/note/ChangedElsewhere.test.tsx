@@ -8,6 +8,7 @@ import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import { fakeApi, json, renderApp, user } from "../test/app";
 import { setAutoRefresh, storedAutoRefresh } from "./autoRefresh";
+import { movedTo } from "./ChangedElsewhere";
 
 beforeEach(() => localStorage.clear());
 
@@ -411,13 +412,21 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     renderApp("/notes/Work/plan.md");
     await screen.findByText("Second.");
 
-    server.gone = "There is no note at /Work/plan.md; it was moved to /Work/old ideas/plan.md on 2026-10-25 09:03 UTC (liz (mv)) (if it was removed, it is in the trash).";
+    server.gone = "There is no note at /Work/plan.md; it was moved to /Work/old ideas/plan.md on 2026-10-25 09:03 UTC (if it was removed, it is in the trash).";
     backToThePage();
 
     const shown = await bar();
     expect(shown).toHaveTextContent("This note was moved elsewhere, to Work/old ideas/plan.md.");
     await userEvent.click(within(shown).getByRole("link", { name: "Work/old ideas/plan.md" }));
     await waitFor(() => expect(useEditor.getState().currentPath).toBe("/Work/old ideas/plan.md"));
+  });
+
+  it("reads where a note went from the server's hint alone, whatever follows it", () => {
+    const hint = "; it was moved to /Work/b.md on 2026-10-25 09:03 UTC";
+    expect(movedTo(`There is no note at /Work/a.md${hint}`)).toBe("/Work/b.md");
+    expect(movedTo(`There is no note at /Work/a.md${hint}.`)).toBe("/Work/b.md");
+    expect(movedTo(`There is no note at /Work/a.md${hint} (if it was removed, it is in the trash).`)).toBe("/Work/b.md");
+    expect(movedTo("There is no note at /Work/a.md; it was moved to /Work/b.md on 2026-10-25 09:03 UTCX")).toBeNull();
   });
 
   it("doesn't link to where a note went when it isn't there any more", async () => {
@@ -427,7 +436,7 @@ describe("a change made elsewhere to the open note, in Read mode", () => {
     await screen.findByText("Second.");
 
     server.gone =
-      "There is no note at /Work/plan.md; it was moved to /Work/b.md on 2026-10-25 09:03 UTC (liz (mv)), and is not there any more ('trash' may list it) (if it was removed, it is in the trash).";
+      "There is no note at /Work/plan.md; it was moved to /Work/b.md on 2026-10-25 09:03 UTC, and is not there any more ('trash' may list it) (if it was removed, it is in the trash).";
     backToThePage();
 
     expect(await bar()).toHaveTextContent("This note was moved or removed elsewhere.");
