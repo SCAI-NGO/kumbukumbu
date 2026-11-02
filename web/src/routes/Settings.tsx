@@ -582,6 +582,7 @@ function DeleteAccountSection() {
             {shared.length > 0 && (
               <SharedVaultsChoiceField
                 legend="Your shared vaults"
+                count={shared.length}
                 intro={
                   <>
                     You share {shared.length === 1 ? "this vault" : "these vaults"} with others: <b className="text-text">{shared.map((v) => v.name).join(", ")}</b>.

@@ -480,8 +480,9 @@ describe("Settings", () => {
     const give = within(group).getByRole("radio", { name: /Give members 7 days/ });
     const now = within(group).getByRole("radio", { name: /Delete it for everyone now/ });
     expect(give).toBeChecked();
-    expect(group).toHaveTextContent("stays read-only for its members for 7 days");
-    expect(group).toHaveTextContent("is deleted at once, and each member is told");
+    // One vault: the choices speak of it, not of each.
+    expect(give.closest("label")).toHaveTextContent("Give members 7 days: it stays read-only for its members for 7 days");
+    expect(now.closest("label")).toHaveTextContent("Delete it for everyone now: it is deleted at once, and each member is told");
 
     await userEvent.click(now);
     await userEvent.type(within(form).getByLabelText("Current password"), "my password, long");

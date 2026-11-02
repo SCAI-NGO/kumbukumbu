@@ -208,6 +208,7 @@ function DeleteDialog({ user, onClose, onDeleted }: { user: AdminUser; onClose()
       {shared > 0 && (
         <SharedVaultsChoiceField
           legend="Their shared vaults"
+          count={shared}
           intro={`${user.display} has ${shared === 1 ? "1 vault" : `${shared} vaults`} shared with others. One choice for ${shared === 1 ? "it" : "all of them"}.`}
           value={choice}
           onChange={setChoice}

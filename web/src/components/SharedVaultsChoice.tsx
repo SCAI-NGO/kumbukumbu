@@ -6,18 +6,24 @@ export type SharedVaultsChoice = "give-members-7-days" | "delete-now";
 
 export const defaultSharedVaultsChoice: SharedVaultsChoice = "give-members-7-days";
 
-/** The two choices for an account's shared vaults, "Give members 7 days" first and chosen: for her own dialog and the admin's. */
+/**
+ * The two choices for an account's shared vaults, "Give members 7 days" first and chosen: for her own dialog and the
+ * admin's. `count` is how many vaults the choice is for, so that the sentences speak of one vault or of each.
+ */
 export default function SharedVaultsChoiceField({
   legend,
   intro,
+  count,
   value,
   onChange,
 }: {
   legend: string;
   intro: ReactNode;
+  count: number;
   value: SharedVaultsChoice;
   onChange(value: SharedVaultsChoice): void;
 }) {
+  const one = count === 1;
   const name = useId();
   const option = (choice: SharedVaultsChoice, title: string, text: string) => (
     <label className="flex items-start gap-2 text-text-body">
@@ -34,9 +40,13 @@ export default function SharedVaultsChoiceField({
       {option(
         "give-members-7-days",
         "Give members 7 days",
-        "each stays read-only for its members for 7 days, so that they can export what they need, and is then deleted.",
+        `${one ? "it" : "each"} stays read-only for its members for 7 days, so that they can export what they need, and is then deleted.`,
       )}
-      {option("delete-now", "Delete it for everyone now", "each is deleted at once, and each member is told that the owner deleted it.")}
+      {option(
+        "delete-now",
+        `Delete ${one ? "it" : "them"} for everyone now`,
+        `${one ? "it" : "each"} is deleted at once, and each member is told that the owner deleted it.`,
+      )}
     </fieldset>
   );
 }

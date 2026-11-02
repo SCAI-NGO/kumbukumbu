@@ -216,8 +216,13 @@ describe("Admin users", () => {
     const dialog = screen.getByRole("alertdialog", { name: "Delete Bob for a privacy request?" });
     const group = within(dialog).getByRole("group", { name: "Their shared vaults" });
     expect(group).toHaveTextContent("2 vaults shared with others");
-    expect(within(group).getByRole("radio", { name: /Give members 7 days/ })).toBeChecked();
-    await userEvent.click(within(group).getByRole("radio", { name: /Delete it for everyone now/ }));
+    const give = within(group).getByRole("radio", { name: /Give members 7 days/ });
+    expect(give).toBeChecked();
+    // More than one: each of them.
+    expect(give.closest("label")).toHaveTextContent("Give members 7 days: each stays read-only for its members for 7 days");
+    const now = within(group).getByRole("radio", { name: /Delete them for everyone now/ });
+    expect(now.closest("label")).toHaveTextContent("Delete them for everyone now: each is deleted at once, and each member is told");
+    await userEvent.click(now);
     await userEvent.type(within(dialog).getByLabelText(/Type bob to confirm/), "bob");
     await userEvent.type(within(dialog).getByLabelText("Your password"), "admin password, long");
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
