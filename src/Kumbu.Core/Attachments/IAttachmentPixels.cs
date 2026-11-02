@@ -63,6 +63,9 @@ public sealed record ImgRefused(ImgRefusal Reason) : AttachmentUse;
 /// <summary>A picture delivered turned by <c>--rotate</c>.</summary>
 public sealed record PictureTurned(TurnCommand Command) : AttachmentUse;
 
+/// <summary>A frame of a GIF delivered on request by <c>--frame</c>.</summary>
+public sealed record ImgFrameShown : AttachmentUse;
+
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
 {

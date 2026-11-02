@@ -694,6 +694,17 @@ public class PdfCommandTests
         Assert.Equal(180, Assert.Single(_pixels.Rotations));
     }
 
+    [Fact]
+    public async Task Pdf_has_no_frame()
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run("pdf /Work/a.pdf 4 --images --frame 2");
+
+        Assert.Equal("pdf: unrecognized option '--frame'", result.Output);
+        Assert.True(result.IsError);
+    }
+
     [Theory]
     [InlineData("pdf /Work/a.pdf 4 --images --rotate 45", "45")]
     [InlineData("pdf /Work/a.pdf 4 --crop 1,1,10,10 --rotate=0", "0")]

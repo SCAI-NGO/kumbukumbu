@@ -343,6 +343,9 @@ public static class KumbuMetrics
     private static readonly Counter PicturesTurned = Prometheus.Metrics.CreateCounter(
         "kumbu_pictures_turned_total", "Pictures delivered turned by --rotate, by command.", new CounterConfiguration { LabelNames = ["command"] });
 
+    private static readonly Counter ImgFrames = Prometheus.Metrics.CreateCounter(
+        "kumbu_img_frames_total", "img calls that delivered a chosen frame of a GIF (--frame).");
+
     private static readonly Counter ImgRefusals = Prometheus.Metrics.CreateCounter(
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
@@ -419,6 +422,9 @@ public static class KumbuMetrics
                 break;
             case ImgRefused f:
                 ImgRefusals.WithLabels(Label(f.Reason)).Inc();
+                break;
+            case ImgFrameShown:
+                ImgFrames.Inc();
                 break;
             case PictureTurned t:
                 PicturesTurned.WithLabels(Label(t.Command)).Inc();
@@ -604,6 +610,7 @@ public static class KumbuMetrics
         Metric("kumbu_pdf_text_pages_rendered_total", ("via", textVia));
         Metric("kumbu_img_calls_total", ("step", Values<SizeStep>(Label)));
         Metric("kumbu_img_crops_total");
+        Metric("kumbu_img_frames_total");
         Metric("kumbu_img_refusals_total", ("reason", Values<ImgRefusal>(Label)));
         Metric("kumbu_pictures_turned_total", ("command", Values<TurnCommand>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));

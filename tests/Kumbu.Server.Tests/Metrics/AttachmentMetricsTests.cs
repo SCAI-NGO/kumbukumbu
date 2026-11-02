@@ -199,6 +199,26 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Frames_shown_are_counted()
+    {
+        const string series = "kumbu_img_frames_total";
+        const string refusals = "kumbu_img_refusals_total{reason=\"bad_frame\"}";
+        await using var host = Host(app, new FakePdfSidecar { FramesOf = _ => 3 });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/moving.gif", [.. "GIF89a"u8, 0x58, 0x02, 0x90, 0x01, 0, 0, 0]);
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif --frame 2");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif --frame 7");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(1, Scrape.Value(after, refusals) - Scrape.Value(before, refusals));
+    }
+
+    [Fact]
     public async Task Turned_pages_count_for_pdf()
     {
         const string series = "kumbu_pictures_turned_total{command=\"pdf\"}";

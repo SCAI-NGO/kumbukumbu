@@ -20,6 +20,8 @@ public class ImgTests
 
         public List<int> Rotations { get; } = [];
 
+        public List<int?> Frames { get; } = [];
+
         public List<AttachmentUse> Used { get; } = [];
 
         /// <summary>The picture returned; null scales the original down to the step's long edge.</summary>
@@ -31,6 +33,7 @@ public class ImgTests
         {
             Requests.Add((path, step, crop));
             Rotations.Add(rotate);
+            Frames.Add(frame);
             if (Fail is not null) throw Fail;
             return Task.FromResult(Answer?.Invoke(step, crop, state) ?? new Picture(Delivered, "image/png", 724, 1568, state.Width!.Value, state.Height!.Value));
         }
@@ -445,10 +448,155 @@ public class ImgTests
     {
         var help = (await Run("help img")).Output;
 
-        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h]\n", help);
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--frame N] [--crop x,y,w,h]\n", help);
         Assert.Contains("  --rotate D        turn the picture clockwise by 90, 180 or 270 degrees, on top of the camera's rotation,", help);
         Assert.Contains("for a sheet lying on its side. With it, --crop counts in the turned picture, from its", help);
-        Assert.Equal("img <path> [--size S] [--rotate D] [--crop x,y,w,h]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
+    }
+
+    private static byte[] Gif() => [.. "GIF89a"u8.ToArray(), .. new byte[100]];
+
+    private static Picture Still(int? frames) => new(Delivered, "image/png", 600, 400, 600, 400, Frames: frames);
+
+    private const string Animated3 = "An animated GIF of 3 frames, shown as a still: frame 1. --frame N shows another.";
+
+    [Fact]
+    public async Task A_plain_gif_of_three_frames_says_so()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var lines = Text(await Run("img /Work/Clips/animated.gif")).Split('\n');
+
+        Assert.Equal([Animated3, Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_plain_gif_of_one_frame_has_no_note()
+    {
+        await Upload("/Work/Clips/still.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(1);
+
+        var lines = Text(await Run("img /Work/Clips/still.gif")).Split('\n');
+
+        Assert.Equal([Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_plain_gif_of_unknown_count_says_todays_sentence()
+    {
+        await Upload("/Work/Clips/old.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(null);
+
+        var lines = Text(await Run("img /Work/Clips/old.gif")).Split('\n');
+
+        Assert.Equal(["A GIF is shown as a still: if it is animated, only its first frame.", Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_frame_goes_to_the_pixels()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var result = await Run("img /Work/Clips/animated.gif --frame 2");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(2, Assert.Single(_pixels.Frames));
+        Assert.Contains(_pixels.Used, u => u is ImgCalled);
+        Assert.Contains(_pixels.Used, u => u is ImgFrameShown);
+        _pixels.Used.Clear();
+        await Run("img /Work/Clips/animated.gif");
+        Assert.DoesNotContain(_pixels.Used, u => u is ImgFrameShown);
+        Assert.Null(_pixels.Frames[^1]);
+    }
+
+    [Fact]
+    public async Task The_head_names_the_frame_of_the_count()
+    {
+        var version = await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var text = Text(await Run("img /Work/Clips/animated.gif --frame 2"));
+
+        Assert.Equal($"/Work/Clips/animated.gif (version {version}), frame 2 of 3: image (GIF), original 600×400 px; medium: 600×400 px PNG, 4 B\n{Dropped}", text);
+    }
+
+    [Fact]
+    public async Task The_head_names_the_frame_with_the_count_unknown()
+    {
+        var version = await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(null);
+
+        var text = Text(await Run("img /Work/Clips/animated.gif --frame 2"));
+
+        Assert.StartsWith($"/Work/Clips/animated.gif (version {version}), frame 2: image (GIF), ", text);
+        Assert.DoesNotContain("A GIF is shown", text);
+    }
+
+    [Theory]
+    [InlineData("1-3")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("2.5")]
+    [InlineData("1000001")]
+    public async Task A_bad_frame_is_refused_with_its_sentence(string frame)
+    {
+        var result = await Run($"img /Work/Clips/nothing.gif --frame={frame}");
+
+        Assert.Equal(ShellResult.Error($"img: --frame is one frame, counting from 1, not '{frame}'") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+        Assert.Empty(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task A_frame_of_anything_but_a_gif_is_refused()
+    {
+        await Upload("/Work/Screens/shot.png", Png(1000), (1440, 3120));
+
+        var result = await Run("img /Work/Screens/shot.png --frame 2");
+
+        Assert.Equal(ShellResult.Error("img: --frame is for GIFs; /Work/Screens/shot.png is a PNG") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+        Assert.Empty(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task A_frame_past_the_end_says_so()
+    {
+        await Upload("/Work/Clips/moving.gif", Gif(), (600, 400));
+        _pixels.Fail = new PixelsUnavailableException("/Work/Clips/moving.gif has no frame 7; img without --frame says how many it has", PixelsProblem.BadFrame);
+
+        var result = await Run("img /Work/Clips/moving.gif --frame 7");
+
+        Assert.Equal(ShellResult.Error("img: /Work/Clips/moving.gif has no frame 7; img without --frame says how many it has") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+    }
+
+    [Fact]
+    public async Task Frame_goes_with_rotate_crop_and_size()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var result = await Run("img /Work/Clips/animated.gif --size large --rotate 90 --frame 3 --crop 0,0,300,200");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal((P("/Work/Clips/animated.gif"), SizeStep.Large, new Crop(0, 0, 300, 200)), Assert.Single(_pixels.Requests));
+        Assert.Equal(90, Assert.Single(_pixels.Rotations));
+        Assert.Equal(3, Assert.Single(_pixels.Frames));
+        Assert.Contains(", frame 3 of 3: ", Text(result));
+    }
+
+    [Fact]
+    public async Task The_help_names_frame()
+    {
+        var help = (await Run("help img")).Output;
+
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--frame N] [--crop x,y,w,h]\n", help);
+        Assert.Contains("  --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img", help);
+        Assert.Contains("A GIF is shown as a still, its first frame unless --frame says otherwise.", help);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
     }
 
     [Fact]

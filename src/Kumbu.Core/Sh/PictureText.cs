@@ -37,7 +37,7 @@ internal static class PictureText
     /// "/Screens/shot.png (version …): image (PNG), original 1440×3120 px; medium: 724×1568 px PNG, 312 KB", then what
     /// the picture doesn't show of the image, and always the line for a client that dropped the image.
     /// </summary>
-    public static string ForImage(string head, string original, SizeStep step, Crop? crop, Picture picture, bool gif, int rotate = 0)
+    public static string ForImage(string head, string original, SizeStep step, Crop? crop, Picture picture, bool gif, int rotate = 0, int? frame = null)
     {
         var notes = new List<string>();
         var share = picture.Width / (crop?.Width ?? (Rotation.SwapsSides(rotate) ? picture.OriginalHeight : picture.OriginalWidth));
@@ -46,7 +46,12 @@ internal static class PictureText
             notes.Add($"Reduced to {share * 100:0} %: small text and digits may be misread; look at {(crop is null ? "a part" : "a smaller part")} with --crop x,y,w,h before quoting them.");
         }
 
-        if (gif) notes.Add("A GIF is shown as a still: if it is animated, only its first frame.");
+        if (gif && frame is null)
+        {
+            if (picture.Frames is null) notes.Add("A GIF is shown as a still: if it is animated, only its first frame.");
+            else if (picture.Frames > 1) notes.Add($"An animated GIF of {picture.Frames} frames, shown as a still: frame 1. --frame N shows another.");
+        }
+
         if (picture.Transparent) notes.Add("Transparent areas are shown on white, so a white shape on them can't be seen.");
         if (rotate != 0) notes.Add($"With --rotate {rotate}, --crop counts from the top left of this turned image, in its pixels.");
         return Block(head, original + Turned(rotate, picture.OriginalWidth, picture.OriginalHeight, "px"), step, crop, rotate == 0 ? "" : " of the turned image", picture, notes);

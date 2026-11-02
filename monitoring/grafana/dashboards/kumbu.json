@@ -1685,6 +1685,59 @@
       "description": "Pictures img and pdf delivered turned by --rotate, by command, in the hour before each point: whether anyone turns sideways sheets."
     },
     {
+      "type": "timeseries",
+      "id": 50,
+      "title": "GIF frames chosen per hour",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum(increase(kumbu_img_frames_total[1h]))",
+          "legendFormat": "frames",
+          "range": true
+        }
+      ],
+      "description": "img calls that showed a chosen frame of a GIF (--frame), in the hour before each point: whether anyone looks past the first frame."
+    },
+    {
       "type": "row",
       "id": 17,
       "title": "Vaults",
