@@ -7060,6 +7060,15 @@ export interface paths {
                         "application/json": components["schemas"]["ApiError"];
                     };
                 };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
                 /** @description Service Unavailable */
                 503: {
                     headers: {
@@ -7733,6 +7742,7 @@ export interface components {
         };
         ChangeRoleRequest: {
             role: string;
+            password?: null | string;
         };
         ChangeView: {
             path: string;

@@ -43,8 +43,9 @@ public sealed record RedeemerView(string Name, string Username);
 public sealed record MembershipView(
     string Id, string Label, string Role, string Status, bool Confirm, DateTime? ExpiresAt, DateTime? RedeemedAt, RedeemerView? Redeemer);
 
-/// <summary>A member's new role: <c>read</c>, <c>write</c> or <c>maintain</c>.</summary>
-public sealed record ChangeRoleRequest(string Role);
+/// <summary>A member's new role: <c>read</c>, <c>write</c> or <c>maintain</c>; raising it to <c>maintain</c> needs the
+/// owner's <c>password</c>.</summary>
+public sealed record ChangeRoleRequest(string Role, string? Password = null);
 
 /// <summary><c>provider</c>: the embedding provider the member OKs, as the vault's <c>embeddings</c> named it.</summary>
 public sealed record ProviderSeenRequest(string Provider);
@@ -71,7 +72,7 @@ public static class SharingApi
         api.MapPost("/vaults/{vault}/memberships/{id}/decline", DeclineAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapDelete("/vaults/{vault}/memberships/{id}", WithdrawAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPost("/vaults/{vault}/memberships/{id}/revoke", RevokeAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
-        api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapPut("/vaults/{vault}/memberships/{id}/role", ChangeRoleAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/vault-events", EventsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403);
         api.MapPost("/memberships/{id}/leave", LeaveAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(401, 403, 404);
         api.MapPut("/memberships/{id}/alias", RenameAliasAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
@@ -173,15 +174,36 @@ public static class SharingApi
     }
 
     /// <summary>
-    /// The owner changes a member's role (collab design §6.3). Guarded inline: raising it needs the password window,
-    /// since it widens what the member's credentials reach; lowering never does. The hub is told as for a revocation.
+    /// The owner changes a member's role (collab design §6.3). Guarded inline: raising it to <c>write</c> needs the
+    /// password window, since it widens what the member's credentials reach; raising it to <c>maintain</c> needs the
+    /// owner's password in the body each time, window open or not, checked before the vault is looked up as an
+    /// invitation's is, and opening the window; lowering never needs either. The hub is told as for a revocation.
     /// </summary>
     private static async Task<Ok<MembershipView>> ChangeRoleAsync(
-        string vault, string id, ChangeRoleRequest body, RequestCaller caller, VaultCatalog catalog, Memberships memberships, SyncHub hub, CancellationToken ct)
+        string vault, string id, ChangeRoleRequest body, HttpContext http, RequestCaller caller, UserCatalog users, Sessions sessions, AccountLimits limits,
+        VaultCatalog catalog, Memberships memberships, SyncHub hub, CancellationToken ct)
     {
         var role = MemberRoles.Parse(body.Role) ?? throw ApiErrors.BadRequest($"A role is 'read', 'write' or 'maintain', not '{body.Role}'.");
+        var passwordGiven = false;
+        if (role == MemberRole.Maintain && !string.IsNullOrEmpty(body.Password))
+        {
+            // The same budget as the other password checks behind a session.
+            if (limits.PasswordCheck(caller.User!.Username) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+            if (!await users.CheckPasswordAsync(caller.User!.Id, caller.UserKey!, body.Password, ct)) throw new WrongPasswordException("The password is wrong.");
+            await AccountApi.PasswordGivenAsync(http, sessions, ct);
+            passwordGiven = true;
+        }
+
         var vaultId = await OwnVaultIdAsync(vault, caller, catalog, ct);
-        var changed = await memberships.ChangeRoleAsync(caller.User!.Id, caller.UserKey!, vaultId, id, role, () => Security.RequirePasswordWindow(caller), ct);
+        // Decided on the role the membership has in the transaction, so a change in between can't skip the password.
+        var changed = await memberships.ChangeRoleAsync(
+            caller.User!.Id, caller.UserKey!, vaultId, id, role,
+            () =>
+            {
+                if (role != MemberRole.Maintain) Security.RequirePasswordWindow(caller);
+                else if (!passwordGiven) throw ApiErrors.BadRequest("Raising a member to maintain needs your password.");
+            },
+            ct);
         try
         {
             // Past the commit: an aborted request must not skip it.

@@ -499,7 +499,7 @@ public sealed partial class Memberships(
     /// The owner changes the role of an active membership of <paramref name="vaultId"/> (collab design §6.3): one update
     /// of <c>role</c>, <c>roleChangedAt</c> and <c>revision</c>, conditioned on the role it had, with an event for the
     /// member in the same transaction. Raising it calls <paramref name="raising"/> first, which throws unless the
-    /// password window is open (§13 M7); lowering never does, so the owner can always reduce access at once. Effective
+    /// password window is open (§13 M7), or for <c>maintain</c> unless the password was given; lowering never does, so the owner can always reduce access at once. Effective
     /// on the member's next request; no slot changes. <see cref="MembershipNotFoundException"/> unless it is an active
     /// membership of that vault. Returns the membership, with the role it has now.
     /// </summary>

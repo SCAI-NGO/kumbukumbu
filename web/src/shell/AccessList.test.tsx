@@ -76,6 +76,58 @@ describe("AccessList", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("choosing maintain asks for the password and a cancel leaves the role", async () => {
+    members = [member()];
+    const fetch = accessApi();
+    renderList();
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Let Bob maintain Gartenarbeit?" });
+    expect(dialog).toHaveTextContent("Can change the vault's structure: the board's columns, checkpoints.");
+    expect(within(dialog).getByRole("button", { name: "Raise to maintain" })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(within(await bob()).getByLabelText("Role")).toHaveValue("read");
+    expect(requests(fetch, "PUT")).toHaveLength(0);
+    // Asked again, the field starts empty.
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+    expect(within(await screen.findByRole("alertdialog")).getByLabelText("Your password")).toHaveValue("");
+  });
+
+  it("raises to maintain with the password in the request, a wrong one changing nothing", async () => {
+    members = [member()];
+    let puts = 0;
+    const fetch = accessApi({
+      "PUT /api/vaults/Gartenarbeit/memberships/m1/role": () => {
+        if (puts++ === 0) return json(400, { error: "The password is wrong." });
+        members = [member({ role: "maintain" })];
+        return json(200, { id: "m1", label: "Bob", role: "maintain", status: "active", confirm: false, expiresAt: null, redeemedAt: null, redeemer: null });
+      },
+    });
+    renderList();
+    await userEvent.selectOptions(within(await bob()).getByLabelText("Role"), "maintain");
+    const dialog = await screen.findByRole("alertdialog", { name: "Let Bob maintain Gartenarbeit?" });
+
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "not it");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Raise to maintain" }));
+    expect(await within(dialog).findByText("The password is wrong.")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "Bob" })).getByLabelText("Role")).toHaveValue("read");
+
+    await userEvent.clear(within(dialog).getByLabelText("Your password"));
+    await userEvent.type(within(dialog).getByLabelText("Your password"), "correct horse");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Raise to maintain" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByRole("listitem", { name: "Bob" })).getByLabelText("Role")).toHaveValue("maintain"));
+    const sent = requests(fetch, "PUT");
+    expect(sent).toHaveLength(2);
+    expect(await sent[1].json()).toEqual({ role: "maintain", password: "correct horse" });
+    // The password dialog of the window is never involved.
+    expect(screen.queryByRole("alertdialog", { name: "Confirm your password" })).not.toBeInTheDocument();
+  });
+
   it("confirms showing the username", async () => {
     members = [member({ status: "pending", confirm: true, acceptedAt: null })];
     const fetch = accessApi({

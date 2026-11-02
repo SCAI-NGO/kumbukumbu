@@ -29,8 +29,9 @@ export type MembershipChange =
   | { kind: "role"; id: string; role: Role };
 
 /**
- * The owner's changes to a membership, each through `api`: confirming and raising a role need the password window, and
- * a closed one asks for the password and goes on. Lowering, declining, withdrawing and revoking never do.
+ * The owner's changes to a membership, each through `api`: confirming and raising a role to write need the password
+ * window, and a closed one asks for the password and goes on. Raising to maintain takes the password each time, through
+ * `useRaiseToMaintain`. Lowering, declining, withdrawing and revoking never need it.
  */
 export function useMembershipChange(vault: string) {
   const queryClient = useQueryClient();
@@ -52,6 +53,21 @@ export function useMembershipChange(vault: string) {
     },
     onSettled: async (_, __, change) => {
       queryClient.removeQueries({ queryKey: ["membership", vault, change.id] });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
+    },
+  });
+}
+
+/**
+ * Raising a member to maintain: the owner's password goes with the request, window open or not, and opens the window.
+ * `password` is read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+ */
+export function useRaiseToMaintain(vault: string, id: string, password: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => call(api.PUT("/api/vaults/{vault}/memberships/{id}/role", { params: { path: { vault, id } }, body: { role: "maintain", password } })),
+    onSettled: async () => {
+      queryClient.removeQueries({ queryKey: ["membership", vault, id] });
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["vault-access", vault] }), queryClient.invalidateQueries({ queryKey: ["vaults"] })]);
     },
   });

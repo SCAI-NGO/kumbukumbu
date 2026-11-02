@@ -632,18 +632,72 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.DoesNotContain("members", await response.Content.ReadAsStringAsync(Ct), StringComparison.Ordinal);
     }
 
-    private static Task<HttpResponseMessage> RoleAsync(RestClient owner, string membershipId, string role) =>
-        owner.SendAsync(HttpMethod.Put, Url(owner, membershipId, "role"), new { role });
+    private static Task<HttpResponseMessage> RoleAsync(RestClient owner, string membershipId, string role, string? password = null) =>
+        owner.SendAsync(HttpMethod.Put, Url(owner, membershipId, "role"), password is null ? new { role } : new { role, password });
+
+    /// <summary>The wrong passwords counted in a row in the owner's session slot (0 when none).</summary>
+    private async Task<int> WrongPasswordsAsync(RestClient owner)
+    {
+        var slot = await app.Database.GetCollection<BsonDocument>("user_slots")
+            .Find(new BsonDocument { ["user"] = owner.User.Id, ["kind"] = UserSlotDocument.Session }).SingleAsync(Ct);
+        return slot.TryGetValue("wrongPasswords", out var wrong) ? wrong.AsInt32 : 0;
+    }
+
+    private static async Task<bool> WindowOpenAsync(RestClient owner)
+    {
+        using var session = await owner.GetAsync("/api/session");
+        return (await RestClient.JsonAsync(session))["passwordWindowOpen"]!.GetValue<bool>();
+    }
 
     [Fact]
-    public async Task Raising_a_role_needs_the_password_window()
+    public async Task Raising_to_maintain_needs_the_password_even_with_the_window_open()
+    {
+        await using var api = Timed();
+        var (alice, _, _, membershipId) = await SharedAsync(api, MemberRole.Read);
+        var revision = (await Share.MembershipAsync(app.Database, membershipId)).Revision;
+        Assert.True(await WindowOpenAsync(alice));
+
+        // Without it: refused with the window open, and no guess to count.
+        using (var without = await RoleAsync(alice, membershipId, "maintain"))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, without.StatusCode);
+            Assert.Equal("Raising a member to maintain needs your password.", await RestClient.ErrorAsync(without));
+        }
+
+        Assert.Equal(0, await WrongPasswordsAsync(alice));
+        // A wrong one answers and counts as every other password check does.
+        using (var wrong = await RoleAsync(alice, membershipId, "maintain", "not the password at all"))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
+            Assert.Equal("The password is wrong.", await RestClient.ErrorAsync(wrong));
+        }
+
+        Assert.Equal(1, await WrongPasswordsAsync(alice));
+        var unchanged = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal(("read", revision, null), (unchanged.Role, unchanged.Revision, unchanged.RoleChangedAt));
+        Assert.Empty(await VaultEvents.OfMemberAsync(app.Database, unchanged.Vault, unchanged.Member!, Ct));
+
+        // The right one works with the window closed, and opens it as every other check does.
+        CloseWindow();
+        using var raised = await RoleAsync(alice, membershipId, "maintain", RestClient.Password);
+        Assert.Equal(HttpStatusCode.OK, raised.StatusCode);
+        Assert.Equal("maintain", (await RestClient.JsonAsync(raised))["role"]!.GetValue<string>());
+        var doc = await Share.MembershipAsync(app.Database, membershipId);
+        Assert.Equal(("maintain", revision + 1), (doc.Role, doc.Revision));
+        Assert.NotNull(doc.RoleChangedAt);
+        Assert.Equal(0, await WrongPasswordsAsync(alice));
+        Assert.True(await WindowOpenAsync(alice));
+    }
+
+    [Fact]
+    public async Task Raising_to_write_keeps_the_window_rule()
     {
         await using var api = Timed();
         var (alice, _, _, membershipId) = await SharedAsync(api, MemberRole.Read);
         var revision = (await Share.MembershipAsync(app.Database, membershipId)).Revision;
         CloseWindow();
 
-        using (var refused = await RoleAsync(alice, membershipId, "maintain"))
+        using (var refused = await RoleAsync(alice, membershipId, "write"))
         {
             Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
             Assert.Equal("password-required", (await RestClient.JsonAsync(refused))["type"]!.GetValue<string>());
@@ -653,12 +707,26 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         Assert.Equal(("read", revision, null), (unchanged.Role, unchanged.Revision, unchanged.RoleChangedAt));
         Assert.Empty(await VaultEvents.OfMemberAsync(app.Database, unchanged.Vault, unchanged.Member!, Ct));
         using (var confirm = await alice.SendAsync(HttpMethod.Post, "/api/session/confirm", new { password = RestClient.Password })) Assert.Equal(HttpStatusCode.NoContent, confirm.StatusCode);
-        using var raised = await RoleAsync(alice, membershipId, "maintain");
+        // Inside the window, write needs no password in the body.
+        using var raised = await RoleAsync(alice, membershipId, "write");
         Assert.Equal(HttpStatusCode.OK, raised.StatusCode);
-        Assert.Equal("maintain", (await RestClient.JsonAsync(raised))["role"]!.GetValue<string>());
         var doc = await Share.MembershipAsync(app.Database, membershipId);
-        Assert.Equal(("maintain", revision + 1), (doc.Role, doc.Revision));
-        Assert.NotNull(doc.RoleChangedAt);
+        Assert.Equal(("write", revision + 1), (doc.Role, doc.Revision));
+    }
+
+    [Theory]
+    [InlineData("write")]
+    [InlineData("read")]
+    public async Task Lowering_needs_nothing(string role)
+    {
+        await using var api = Timed();
+        var (alice, _, _, membershipId) = await SharedAsync(api, MemberRole.Maintain);
+        CloseWindow();
+
+        using var lowered = await RoleAsync(alice, membershipId, role);
+
+        Assert.Equal(HttpStatusCode.OK, lowered.StatusCode);
+        Assert.Equal(role, (await Share.MembershipAsync(app.Database, membershipId)).Role);
     }
 
     [Fact]

@@ -322,25 +322,27 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     }
 
     [Theory]
-    [InlineData("maintain", false)]
-    [InlineData("maintain", true)]
+    [InlineData("write", false)]
+    [InlineData("write", true)]
     [InlineData("read", false)]
     public async Task A_members_role_is_raised_only_inside_the_window_and_lowered_any_time(string role, bool open)
     {
         await using var api = Timed();
         var alice = await RestClient.NewAsync(api, vault: "Gartenarbeit", remember: true);
         var bob = await RestClient.NewAsync(api, vault: "Work");
-        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", Kumbu.Server.Sharing.MemberRole.Write);
+        // Raised from read to write, lowered from write to read; maintain takes the password each time (MembershipApiTests).
+        var from = role == "read" ? Kumbu.Server.Sharing.MemberRole.Write : Kumbu.Server.Sharing.MemberRole.Read;
+        var membership = await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(alice, bob, "Garten", from);
         CloseWindow();
         if (open) await ConfirmAsync(alice);
 
         using var response = await alice.SendAsync(HttpMethod.Put, $"/api/vaults/Gartenarbeit/memberships/{membership}/role", new { role });
 
         var stored = (await Kumbu.Server.Tests.Sharing.Share.MembershipAsync(app.Database, membership)).Role;
-        if (role == "maintain" && !open)
+        if (role == "write" && !open)
         {
             await AssertPasswordRequiredAsync(response);
-            Assert.Equal("write", stored);
+            Assert.Equal("read", stored);
         }
         else
         {
@@ -714,12 +716,16 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
     [InlineData("make-admin")]
     [InlineData("password")]
     [InlineData("delete-account")]
+    [InlineData("raise-to-maintain")]
     public async Task A_wrong_password_on_any_check_counts_towards_the_five(string action)
     {
         await using var api = Timed();
         var admin = action is "delete-user" or "repeat-deletions" or "invite-admin" or "make-admin";
         var user = await RestClient.NewAsync(api, remember: true, role: admin ? Roles.Admin : Roles.User);
         var other = action is "delete-user" or "make-admin" ? await OtherUserAsync(api) : default;
+        var membership = action is "raise-to-maintain"
+            ? await Kumbu.Server.Tests.Sharing.Share.ShareWithAsync(user, await RestClient.NewAsync(api, vault: "Work"), "Garten", Kumbu.Server.Sharing.MemberRole.Read)
+            : null;
         await ConfirmWrongAsync(user, 4);
         const string password = Wrong;
 
@@ -737,6 +743,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
             "make-admin" => await user.SendAsync(HttpMethod.Patch, $"/api/admin/users/{other.Id}", new { role = Roles.Admin, password }),
             "password" => await user.SendAsync(HttpMethod.Post, "/api/password", new { oldPassword = password, newPassword = "another long passphrase here" }),
             "delete-account" => await user.SendAsync(HttpMethod.Post, "/api/account/delete", new { password, confirm = user.Username }),
+            "raise-to-maintain" => await user.SendAsync(HttpMethod.Put, $"/api/vaults/Arbeit/memberships/{membership}/role", new { role = "maintain", password }),
             _ => throw new ArgumentOutOfRangeException(nameof(action)),
         })
         {

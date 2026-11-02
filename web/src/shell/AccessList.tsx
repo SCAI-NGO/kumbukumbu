@@ -3,7 +3,17 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
-import { roles, useMembership, useMembershipChange, useRekeyVault, useVaultAccess, type Departure, type MemberAccess, type Role } from "../api/sharing";
+import {
+  roles,
+  useMembership,
+  useMembershipChange,
+  useRaiseToMaintain,
+  useRekeyVault,
+  useVaultAccess,
+  type Departure,
+  type MemberAccess,
+  type Role,
+} from "../api/sharing";
 import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
 import { timeText } from "../components/Sheet";
@@ -182,10 +192,51 @@ function Departures({ vault, left, onDone }: { vault: string; left: Departure[];
   );
 }
 
+/** Raising to maintain asks for the password each time, window open or not; cancelled, the role stays as it was. */
+function MaintainDialog({ vault, member, onClose }: { vault: string; member: MemberAccess; onClose(): void }) {
+  const id = useId();
+  const dialog = useDialog<HTMLFormElement>(onClose);
+  // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
+  const [password, setPassword] = useState("");
+  const raise = useRaiseToMaintain(vault, member.id, password);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
+      <form
+        ref={dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        aria-busy={raise.isPending}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (password) raise.mutate(undefined, { onSuccess: onClose });
+        }}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-[14px] border border-line bg-surface-2 p-5"
+      >
+        <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
+          Let {member.label} maintain {vault}?
+        </h2>
+        <p className="text-warning">{maintainSentence}</p>
+        <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+        {raise.isError && <FormError>{errorText(raise.error)}</FormError>}
+        <div className="flex gap-3">
+          <button type="button" onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
+            Cancel
+          </button>
+          <button type="submit" disabled={raise.isPending || !password} className={`${primaryButtonClass} flex-1`}>
+            Raise to maintain
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 /** One person: her role, what she connected, and what the owner can do now. */
 function Member({ vault, member, onRevoke }: { vault: string; member: MemberAccess; onRevoke(): void }) {
   const id = useId();
   const change = useMembershipChange(vault);
+  const [raising, setRaising] = useState(false);
   const role = member.role as Role;
   const invited = member.status === "pending" && !member.redeemedAt;
   const waiting = member.status === "pending" && !!member.redeemedAt;
@@ -224,7 +275,11 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
               id={`${id}-role`}
               value={role}
               disabled={change.isPending}
-              onChange={(e) => change.mutate({ kind: "role", id: member.id, role: e.target.value as Role })}
+              onChange={(e) => {
+                const to = e.target.value as Role;
+                if (to === "maintain") setRaising(true);
+                else change.mutate({ kind: "role", id: member.id, role: to });
+              }}
               className={`${inputClass} ${role === "maintain" ? "text-warning" : ""}`}
             >
               {roles.map((r) => (
@@ -253,6 +308,7 @@ function Member({ vault, member, onRevoke }: { vault: string; member: MemberAcce
         </>
       )}
       {change.isError && <FormError>{errorText(change.error)}</FormError>}
+      {raising && <MaintainDialog vault={vault} member={member} onClose={() => setRaising(false)} />}
     </li>
   );
 }
