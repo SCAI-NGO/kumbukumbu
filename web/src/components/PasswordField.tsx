@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Eye, EyeOff } from "lucide-react";
 import { useId, useState } from "react";
+import { useSession } from "../state/session";
 import { inputClass, labelClass } from "./form";
 
 /**
@@ -16,8 +17,15 @@ export function PasswordField(props: {
 }) {
   const id = useId();
   const [shown, setShown] = useState(false);
+  const username = useSession((s) => s.user?.username);
+  // Managers fill the field before a password with the username. Give them one that is meant: hidden by clipping,
+  // as they skip display: none. On the sign-in page nobody is signed in, and the real username field serves.
+  const hiddenUsername = props.autoComplete === "current-password" && username !== undefined;
   return (
     <div className="flex flex-col gap-1.5">
+      {hiddenUsername && (
+        <input type="text" value={username} readOnly tabIndex={-1} aria-hidden="true" autoComplete="username" className="sr-only" />
+      )}
       <label htmlFor={id} className={labelClass}>
         {props.label}
       </label>

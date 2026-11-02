@@ -46,6 +46,8 @@ export function TextField(props: {
   onChange(value: string): void;
   autoComplete: string;
   mono?: boolean;
+  /** For a field that isn't a username and sits before a password: the managers then leave it alone. */
+  ignoreManagers?: boolean;
 }) {
   const id = useId();
   return (
@@ -62,6 +64,7 @@ export function TextField(props: {
         autoCorrect="off"
         spellCheck={false}
         required
+        {...(props.ignoreManagers && { "data-bwignore": "true", "data-1p-ignore": "true", "data-lpignore": "true" })}
         className={`${inputClass}${props.mono ? " font-mono" : ""}`}
       />
     </div>
