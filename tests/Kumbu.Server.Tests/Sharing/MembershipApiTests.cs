@@ -565,6 +565,11 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         var keys = app.PublicApi.Services.GetRequiredService<ApiKeys>();
         var tablet = (await keys.ListAsync(alice.User, alice.UserKey, Ct)).Single(k => k.Name == "Gartenarbeit – Obsidian Tablet");
         Assert.True(await keys.RevokeAsync(alice.User, tablet.Id, Ct));
+        // Revoked, with its slot still waiting for the sweep: a revocation deletes the slots, so only the mark tells.
+        await alice.KeyAsync("Gartenarbeit – Obsidian Phone", KeyRight.Maintain, ApiKeyKind.Device);
+        var phone = (await keys.ListAsync(alice.User, alice.UserKey, Ct)).Single(k => k.Name == "Gartenarbeit – Obsidian Phone");
+        await app.Database.GetCollection<BsonDocument>("api_keys").UpdateOneAsync(
+            new BsonDocument("_id", phone.Id), new BsonDocument("$set", new BsonDocument("revokedAt", DateTime.UtcNow)), cancellationToken: Ct);
 
         var list = await AccessListAsync(alice);
 
