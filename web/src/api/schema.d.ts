@@ -7679,6 +7679,8 @@ export interface components {
             vaults: number | string;
             /** Format: int64 */
             bytesStored: number | string;
+            /** Format: int32 */
+            sharedVaults: number | string;
         };
         ApiError: {
             error: string;

@@ -783,7 +783,7 @@ public sealed class AccountApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var row = (await JsonAsync(list)).AsArray().Single(u => u!["username"]!.GetValue<string>() == username)!.AsObject();
         Assert.Equal(
-            ["active", "bytesStored", "createdAt", "display", "id", "lastActiveAt", "role", "username", "vaults"],
+            ["active", "bytesStored", "createdAt", "display", "id", "lastActiveAt", "role", "sharedVaults", "username", "vaults"],
             row.Select(p => p.Key).Order());
         Assert.NotNull(row["lastActiveAt"]?.GetValue<DateTime>());
         var id = row["id"]!.GetValue<string>();

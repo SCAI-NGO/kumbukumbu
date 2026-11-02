@@ -74,9 +74,10 @@ public sealed record CreateApiKeyRequest(string Name, IReadOnlyDictionary<string
 public sealed record CreatedApiKeyView(string Key, ApiKeyView ApiKey);
 
 /// <summary>A user in the admin's list: metadata only. <c>lastActiveAt</c> is the latest sign-in or, for a remembered
-/// session, the latest visit (its first request after 30 minutes without one); not the last request.</summary>
+/// session, the latest visit (its first request after 30 minutes without one); not the last request. <c>sharedVaults</c>:
+/// how many of their vaults have an active member (a count, never a name).</summary>
 public sealed record AdminUserView(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
 
 /// <summary>Either or both; the role is <c>user</c> or <c>admin</c>. Making someone an admin needs <c>password</c>, the
 /// acting admin's own.</summary>
@@ -394,7 +395,7 @@ public static class AccountApi
 
     private static async Task<Ok<AdminUserView[]>> ListUsersAsync(RequestCaller caller, Admin admin, CancellationToken ct) =>
         TypedResults.Ok((await admin.ListUsersAsync(caller.User!, ct))
-            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored))
+            .Select(u => new AdminUserView(u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastActiveAt, u.Vaults, u.BytesStored, u.SharedVaults))
             .ToArray());
 
     private static async Task<NoContent> UpdateUserAsync(

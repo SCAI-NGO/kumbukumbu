@@ -6,9 +6,10 @@ using MongoDB.Driver;
 namespace Kumbu.Server.Accounts;
 
 /// <summary>A user as the admin's list shows them: metadata only, never a vault's name or anything in it.
-/// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).</summary>
+/// <c>LastActiveAt</c> is the latest sign-in or visit of a remembered session (<see cref="Sessions.ResolveAsync"/>).
+/// <c>SharedVaults</c>: how many of their vaults have an active member, for the deletion dialog's choice; a number only.</summary>
 public sealed record UserSummary(
-    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored);
+    string Id, string Username, string Display, string Role, bool Active, DateTime CreatedAt, DateTime? LastActiveAt, int Vaults, long BytesStored, int SharedVaults);
 
 /// <summary>
 /// The admin's tools (accounts design, "Admin"): the user list, deactivating and reactivating, and roles. Every
@@ -37,11 +38,15 @@ public sealed class Admin(
         var vaultsByOwner = owned.Where(s => existing.Contains(s.Vault)).GroupBy(s => s.Owner!).ToDictionary(g => g.Key, g => g.Select(s => s.Vault).Distinct().ToList());
 
         var bytesByVault = await BytesByVaultAsync([.. existing], ct);
+        var memberships = db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName);
+        var mf = Builders<Sharing.MembershipDocument>.Filter;
+        var withMembers = (await memberships.Distinct(m => m.Vault, mf.In(m => m.Vault, existing) & mf.Eq(m => m.Status, Sharing.MembershipStatus.Active), cancellationToken: ct).ToListAsync(ct)).ToHashSet();
         return [.. users.Select(u =>
         {
             var vaults = vaultsByOwner.GetValueOrDefault(u.Id) ?? [];
             return new UserSummary(
-                u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, vaults.Count, vaults.Sum(v => bytesByVault.GetValueOrDefault(v)));
+                u.Id, u.Username, u.Display, u.Role, u.Active, u.CreatedAt, u.LastSignInAt, vaults.Count, vaults.Sum(v => bytesByVault.GetValueOrDefault(v)),
+                vaults.Count(withMembers.Contains));
         })];
     }
 
