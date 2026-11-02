@@ -65,6 +65,8 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
       throw notImage();
     }
     count = reader.numFrames();
+    // A GIF cut before its first image reads as one of no frames: no frame of it is past the end.
+    if (count === 0) throw notImage();
     if (frame > count) throw new PdfError(`The GIF has no frame ${frame}.`, "no_such_frame");
     image = composeFrame(reader, frame);
   }
@@ -97,7 +99,8 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
   };
 }
 
-const isGif = (b: Uint8Array) => b.length >= 6 && [0x47, 0x49, 0x46, 0x38].every((c, i) => b[i] === c) && (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61;
+const startsWith = (b: Uint8Array, at: number, s: string) => at + s.length <= b.length && [...s].every((c, i) => b[at + i] === c.charCodeAt(0));
+const isGif = (b: Uint8Array) => startsWith(b, 0, "GIF87a") || startsWith(b, 0, "GIF89a");
 
 // How many frames a GIF has, or undefined for another format and a GIF omggif can't read (which
 // Skia may still draw).
@@ -166,12 +169,12 @@ function onWhite(canvas: Canvas): Canvas {
 // The stored size from the header (PNG, JPEG, GIF, WebP), or null. Reads lengths and sizes only.
 export function imageHeader(b: Uint8Array): { width: number; height: number } | null {
   const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  const ascii = (at: number, s: string) => at + s.length <= b.length && [...s].every((c, i) => b[at + i] === c.charCodeAt(0));
+  const ascii = (at: number, s: string) => startsWith(b, at, s);
   const size = (width: number, height: number) => ({ width, height });
 
   if (ascii(0, "\x89PNG\r\n\x1a\n")) return b.length >= 24 && ascii(12, "IHDR") ? size(v.getUint32(16), v.getUint32(20)) : null;
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return jpeg(b, v);
-  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return b.length >= 10 ? size(v.getUint16(6, true), v.getUint16(8, true)) : null;
+  if (isGif(b)) return b.length >= 10 ? size(v.getUint16(6, true), v.getUint16(8, true)) : null;
   if (ascii(0, "RIFF") && ascii(8, "WEBP")) {
     if (ascii(12, "VP8 "))
       return b.length >= 30 && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a

@@ -383,6 +383,13 @@ describe("renderImage with a frame", () => {
     await expect(frame(solid(10, 10).toBuffer("image/png"), 1)).rejects.toMatchObject({ code: "not_image" });
   });
 
+  it("refuses a frame of a GIF with no image in it", async () => {
+    // Cut after the header and the global palette: omggif counts no frames and doesn't throw.
+    const gif = gifWithFrameRect(4, 4, 4, 4).subarray(0, 19);
+    await expect(frame(gif, 1)).rejects.toMatchObject({ code: "not_image" });
+    await expect(renderImage(gif, SMALL)).rejects.toMatchObject({ code: "not_image" });
+  });
+
   it("refuses a frame of a truncated GIF", async () => {
     const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
     await expect(frame(gif.subarray(0, gif.length - 6), 1)).rejects.toMatchObject({ code: "not_image" });
