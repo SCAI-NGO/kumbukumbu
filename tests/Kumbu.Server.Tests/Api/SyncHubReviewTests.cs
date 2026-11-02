@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Net;
+using System.Net.WebSockets;
 using Kumbu.Server.Sharing;
 using Kumbu.Server.Sync;
 using Kumbu.Server.Tests.Sharing;
@@ -177,6 +178,56 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
         }
 
         Assert.Equal("Garten", Assert.Single(Hub.Held, h => h.Subject.User == alice.User.Id && h.VaultId == vaultId).Name);
+
+        async Task HoldAsync()
+        {
+            read.SetResult();
+            await release.Task;
+        }
+    }
+
+    /// <summary>A new connection's refresh of its names is held while the owner renames: the rename's own apply comes
+    /// first, and the refresh mustn't put the old name back.</summary>
+    [Fact]
+    public async Task A_rename_during_a_new_connections_refresh_keeps_the_new_name()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var vaultId = await alice.VaultIdAsync();
+        var ticket = await TicketAsync(alice);
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = 1;
+        Hub.BeforeNameRefresh = s => s.User == alice.User.Id && Interlocked.Exchange(ref first, 0) == 1 ? HoldAsync() : Task.CompletedTask;
+        WebSocket tab;
+        try
+        {
+            var connecting = ConnectAsync(Api, ticket);
+            await read.Task.WaitAsync(Wait, TestContext.Current.CancellationToken);
+            using (var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+            }
+
+            release.SetResult();
+            tab = await connecting;
+        }
+        finally
+        {
+            Hub.BeforeNameRefresh = null;
+        }
+
+        using (tab)
+        {
+            using (var written = await alice.SendAsync(HttpMethod.Put, "/api/notes/Garten/plan.md", new { content = "Beete\n" }))
+            {
+                Assert.Equal(HttpStatusCode.Created, written.StatusCode);
+            }
+
+            var messages = await DrainAsync(tab, TimeSpan.FromSeconds(1.5));
+            Assert.Contains(messages, m => m.Contains("\"Garten\"", StringComparison.Ordinal));
+            Assert.DoesNotContain(messages, m => m.Contains("Gartenarbeit", StringComparison.Ordinal));
+            Assert.Equal("Garten", Assert.Single(Hub.Held, h => h.Subject.User == alice.User.Id && h.VaultId == vaultId).Name);
+        }
 
         async Task HoldAsync()
         {

@@ -85,6 +85,9 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// <summary>For tests: awaited after a recomputation read the subject's vaults, before it applies them, so a test can hold it up.</summary>
     internal Func<Subject, Task>? AfterRecomputeRead { get; set; }
 
+    /// <summary>For tests: awaited in a new connection's refresh of the names of its own vaults, before a name is applied, so a test can hold it up.</summary>
+    internal Func<Subject, Task>? BeforeNameRefresh { get; set; }
+
     /// <summary>For tests: called between an incoming frame's check and its presence entry.</summary>
     internal Action<Subject>? BeforePresenceSet { get; set; }
 
@@ -124,10 +127,12 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         {
             // A ticket issued before its owner renamed a vault holds the old name. Read after the connection is listed,
             // a rename is caught either way: one before is seen here, one after (VaultRenamed) finds the connection.
-            // RenameOwned leaves a member's alias alone.
+            // RenameOwned reads the name under the connection's gate, so this can't put back a name read before a
+            // rename that VaultRenamed applied meanwhile, and leaves a member's alias alone.
             foreach (var vaultId in connection.Vaults.Keys)
             {
-                if (catalog.Current(vaultId)?.Shown is { } shown) connection.RenameOwned(vaultId, shown);
+                if (BeforeNameRefresh is { } held) await held(grant.Subject);
+                connection.RenameOwned(vaultId, Shown);
             }
 
             var older = _connections.Keys.Where(c => c.Grant.Subject == grant.Subject).OrderByDescending(c => c.Number).Skip(MaxPerKey).ToList();
@@ -250,17 +255,22 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == memberId)) connection.Rename(membershipId, alias);
     }
 
-    /// <summary>An owner renamed her vault (rename spec §1.4): her connections that hold it as its owner name it so from
-    /// now on, and are told, so that her open tabs ask for the vault list again and take a new ticket. Members keep
+    /// <summary>An owner renamed her vault (rename spec §1.4): her connections that hold it as its owner, her open tabs
+    /// and her API keys' and devices' sockets alike, name it as the catalog shows it from now on, and are told, so that
+    /// her tabs ask for the vault list again and take a new ticket. The name is read under each connection's gate when
+    /// it is applied: of two quick renames, the later apply has the latest name, whichever call comes last. Members keep
     /// their alias and are told nothing.</summary>
-    public void VaultRenamed(string ownerId, string vaultId, string name)
+    public void VaultRenamed(string ownerId, string vaultId)
     {
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == ownerId && c.Has(vaultId)))
         {
-            connection.RenameOwned(vaultId, name);
+            connection.RenameOwned(vaultId, Shown);
             connection.Hint(vaultId);
         }
     }
+
+    /// <summary>The name the catalog shows a vault by, set before its rename returns; null for one not loaded.</summary>
+    private string? Shown(string vaultId) => catalog.Current(vaultId)?.Shown;
 
     /// <summary>For tests: how many connections are held.</summary>
     internal int Count => _connections.Count;
@@ -629,10 +639,15 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         /// <summary>The vault renamed by its owner, where this connection holds it as the owner's: never a member's
-        /// alias, which is the member's own name for it.</summary>
-        public void RenameOwned(string vaultId, string name)
+        /// alias, which is the member's own name for it. <paramref name="shown"/> is asked under the gate, so the last
+        /// apply has the latest name; a null keeps the name held.</summary>
+        public void RenameOwned(string vaultId, Func<string, string?> shown)
         {
-            lock (_gate) _vaults = _vaults.ToDictionary(v => v.Key, v => v.Key == vaultId && v.Value.Membership is null ? v.Value with { Name = name } : v.Value, StringComparer.Ordinal);
+            lock (_gate)
+            {
+                if (!_vaults.TryGetValue(vaultId, out var vault) || vault.Membership is not null || shown(vaultId) is not { } name) return;
+                _vaults = _vaults.ToDictionary(v => v.Key, v => v.Key == vaultId ? v.Value with { Name = name } : v.Value, StringComparer.Ordinal);
+            }
         }
 
         public bool IsEmpty => _vaults.Count == 0;
