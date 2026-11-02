@@ -1632,6 +1632,59 @@
       "description": "Long edge in pixels of each rendered image handed to the shell, by kind (page or image): the median of the last 5 minutes."
     },
     {
+      "type": "timeseries",
+      "id": 49,
+      "title": "Pictures turned per hour by command",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "kumbu-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 84
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "kumbu-prometheus"
+          },
+          "expr": "sum by (command) (increase(kumbu_pictures_turned_total[1h]))",
+          "legendFormat": "{{command}}",
+          "range": true
+        }
+      ],
+      "description": "Pictures img and pdf delivered turned by --rotate, by command, in the hour before each point: whether anyone turns sideways sheets."
+    },
+    {
       "type": "row",
       "id": 17,
       "title": "Vaults",
@@ -1641,7 +1694,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 84
+        "y": 92
       }
     },
     {
@@ -1656,7 +1709,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 85
+        "y": 93
       },
       "fieldConfig": {
         "defaults": {
@@ -1708,7 +1761,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 85
+        "y": 93
       },
       "fieldConfig": {
         "defaults": {
@@ -1771,7 +1824,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 85
+        "y": 93
       },
       "fieldConfig": {
         "defaults": {
@@ -1822,7 +1875,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 93
+        "y": 101
       }
     },
     {
@@ -1837,7 +1890,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 94
+        "y": 102
       },
       "fieldConfig": {
         "defaults": {
@@ -1890,7 +1943,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 94
+        "y": 102
       },
       "fieldConfig": {
         "defaults": {
@@ -1941,7 +1994,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 102
+        "y": 110
       }
     },
     {
@@ -1956,7 +2009,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 103
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
@@ -2009,7 +2062,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 103
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
@@ -2062,7 +2115,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 103
+        "y": 111
       },
       "fieldConfig": {
         "defaults": {
@@ -2123,7 +2176,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 111
+        "y": 119
       }
     },
     {
@@ -2138,7 +2191,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 112
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {
@@ -2191,7 +2244,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 112
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {
@@ -2243,7 +2296,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 112
+        "y": 120
       },
       "fieldConfig": {
         "defaults": {
@@ -2295,7 +2348,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 120
+        "y": 128
       },
       "fieldConfig": {
         "defaults": {
@@ -2357,7 +2410,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 120
+        "y": 128
       },
       "fieldConfig": {
         "defaults": {

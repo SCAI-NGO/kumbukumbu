@@ -70,6 +70,7 @@ public static class KumbuMetrics
         foreach (var mode in TextPageModes) PdfTextPagesRendered.WithLabels(Label(mode));
         foreach (var step in Enum.GetValues<SizeStep>()) ImgCalls.WithLabels(Label(step));
         foreach (var reason in Enum.GetValues<ImgRefusal>()) ImgRefusals.WithLabels(Label(reason));
+        foreach (var command in Enum.GetValues<TurnCommand>()) PicturesTurned.WithLabels(Label(command));
         foreach (var kind in Enum.GetValues<RenderKind>())
         {
             RenderDuration.WithLabels(Label(kind));
@@ -339,6 +340,9 @@ public static class KumbuMetrics
     private static readonly Counter ImgCrops = Prometheus.Metrics.CreateCounter(
         "kumbu_img_crops_total", "img calls that delivered a crop.");
 
+    private static readonly Counter PicturesTurned = Prometheus.Metrics.CreateCounter(
+        "kumbu_pictures_turned_total", "Pictures delivered turned by --rotate, by command.", new CounterConfiguration { LabelNames = ["command"] });
+
     private static readonly Counter ImgRefusals = Prometheus.Metrics.CreateCounter(
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
@@ -416,6 +420,9 @@ public static class KumbuMetrics
             case ImgRefused f:
                 ImgRefusals.WithLabels(Label(f.Reason)).Inc();
                 break;
+            case PictureTurned t:
+                PicturesTurned.WithLabels(Label(t.Command)).Inc();
+                break;
         }
     }
 
@@ -444,8 +451,11 @@ public static class KumbuMetrics
         ImgRefusal.TooLarge => "too_large",
         ImgRefusal.BadCrop => "bad_crop",
         ImgRefusal.BadSize => "bad_size",
+        ImgRefusal.BadRotate => "bad_rotate",
         _ => "unavailable",
     };
+
+    private static string Label(TurnCommand command) => command == TurnCommand.Img ? "img" : "pdf";
 
     private static string Label(RenderKind kind) => kind == RenderKind.Page ? "page" : "image";
 
@@ -594,6 +604,7 @@ public static class KumbuMetrics
         Metric("kumbu_img_calls_total", ("step", Values<SizeStep>(Label)));
         Metric("kumbu_img_crops_total");
         Metric("kumbu_img_refusals_total", ("reason", Values<ImgRefusal>(Label)));
+        Metric("kumbu_pictures_turned_total", ("command", Values<TurnCommand>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));
         Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
         Metric("kumbu_image_delivered_bytes", ("kind", kinds));

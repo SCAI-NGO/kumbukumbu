@@ -40,7 +40,10 @@ public enum PageKind { Text, Mixed, Image, Unknown }
 public enum PageDelivery { Text, Image }
 
 /// <summary>Why <c>img</c> said no.</summary>
-public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, Unavailable }
+public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, BadRotate, Unavailable }
+
+/// <summary>The command that turned a picture with <c>--rotate</c>.</summary>
+public enum TurnCommand { Img, Pdf }
 
 /// <summary>What was looked at, for the usage metrics. Only enums and flags in the records: nothing a person typed.</summary>
 public abstract record AttachmentUse;
@@ -55,6 +58,9 @@ public sealed record PdfPageRendered(PageKind Type, PdfMode Mode) : AttachmentUs
 public sealed record ImgCalled(SizeStep Step, bool Cropped) : AttachmentUse;
 
 public sealed record ImgRefused(ImgRefusal Reason) : AttachmentUse;
+
+/// <summary>A picture delivered turned by <c>--rotate</c>.</summary>
+public sealed record PictureTurned(TurnCommand Command) : AttachmentUse;
 
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels

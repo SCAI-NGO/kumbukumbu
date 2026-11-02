@@ -179,6 +179,42 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Turned_pictures_are_counted_by_command()
+    {
+        const string series = "kumbu_pictures_turned_total{command=\"img\"}";
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/sheet.png", FakePdfSidecar.SolidPng(640, 480));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png --rotate 90");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Contains("kumbu_pictures_turned_total{command=\"pdf\"}", after);
+    }
+
+    [Fact]
+    public async Task A_refused_rotate_has_its_own_reason()
+    {
+        const string series = "kumbu_img_refusals_total{reason=\"bad_rotate\"}";
+        const string unavailable = "kumbu_img_refusals_total{reason=\"unavailable\"}";
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/sheet.png", FakePdfSidecar.SolidPng(640, 480));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png --rotate 45");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(0, Scrape.Value(after, unavailable) - Scrape.Value(before, unavailable));
+    }
+
+    [Fact]
     public void A_request_the_client_got_wrong_is_no_render_failure()
     {
         Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_page", "x")));
