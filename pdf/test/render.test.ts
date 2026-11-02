@@ -4,7 +4,25 @@ import { describe, expect, it } from "vitest";
 import { encode } from "../src/encode.js";
 import { renderPage } from "../src/render.js";
 import { type Target, fit } from "../src/steps.js";
-import { A4, CROPPED_BOX, CROP_BOX, KB, LARGE, MEDIUM, ROTATED_BOX, SMALL, chartPage, cropBoxPage, noiseCanvas, photoPage, rotatedPage, threePages } from "./fixtures.js";
+import {
+  A4,
+  CORNER_COLOURS,
+  CORNER_SIDE,
+  CROPPED_BOX,
+  CROP_BOX,
+  KB,
+  LARGE,
+  MEDIUM,
+  ROTATED_BOX,
+  SMALL,
+  chartPage,
+  cornersPage,
+  cropBoxPage,
+  noiseCanvas,
+  photoPage,
+  rotatedPage,
+  threePages,
+} from "./fixtures.js";
 
 const within = (r: { width: number; height: number }, t: Target) => {
   expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(t.longEdge);
@@ -20,9 +38,9 @@ async function pixel(data: Uint8Array, x: number, y: number) {
 }
 
 // Crops a margin of 20 pt around a box (displayed points) and finds its colour inside, white outside.
-async function expectBox(pdf: Uint8Array, box: { x: number; y: number; w: number; h: number }, colour: number[]) {
+async function expectBox(pdf: Uint8Array, box: { x: number; y: number; w: number; h: number }, colour: number[], rotate = 0) {
   const margin = 20;
-  const r = await renderPage(pdf, 1, MEDIUM, { x: box.x - margin, y: box.y - margin, w: box.w + 2 * margin, h: box.h + 2 * margin });
+  const r = await renderPage(pdf, 1, MEDIUM, { x: box.x - margin, y: box.y - margin, w: box.w + 2 * margin, h: box.h + 2 * margin }, rotate);
   const scale = r.width / (box.w + 2 * margin);
   const at = (x: number, y: number) => pixel(r.data, Math.round(x * scale), Math.round(y * scale));
   const [red, green, blue] = await at(margin + box.w / 2, margin + box.h / 2);
@@ -31,6 +49,17 @@ async function expectBox(pdf: Uint8Array, box: { x: number; y: number; w: number
   for (const [x, y] of [[margin / 2, margin + box.h / 2], [margin + box.w + margin / 2, margin + box.h / 2], [margin + box.w / 2, margin / 2], [margin + box.w / 2, margin + box.h + margin / 2]])
     expect(await at(x!, y!)).toEqual([255, 255, 255, 255]);
 }
+
+type Box = { x: number; y: number; w: number; h: number };
+
+// The conversion of help pdf (spec §1.5): a region on a page W × H not turned, in the turned page.
+function turned({ x, y, w, h }: Box, W: number, H: number, rotate: number): Box {
+  if (rotate === 90) return { x: H - y - h, y: x, w: h, h: w };
+  if (rotate === 180) return { x: W - x - w, y: H - y - h, w, h };
+  return { x: y, y: W - x - w, w: h, h: w };
+}
+
+const near = (got: number[], want: readonly number[]) => [0, 1, 2].every((i) => Math.abs(got[i]! - want[i]!) <= 3);
 
 describe("fit", () => {
   it("takes the tightest of long edge, pixel budget and scale cap", () => {
@@ -109,6 +138,87 @@ describe("renderPage", () => {
     const r = await renderPage(await rotatedPage(), 1, SMALL);
     expect([r.pageWidth, r.pageHeight]).toEqual([A4.height, A4.width]);
     expect(r.width).toBeGreaterThan(r.height);
+  });
+
+  it("turns a page by each angle", async () => {
+    const pdf = await cornersPage();
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderPage(pdf, 1, SMALL, undefined, rotate);
+      expect(r.width > r.height, `${rotate}`).toBe(rotate !== 180);
+      const inset = 20;
+      const corners = [[inset, inset], [r.width - inset, inset], [r.width - inset, r.height - inset], [inset, r.height - inset]];
+      // A clockwise turn by k quarters brings the square of corner (i − k) mod 4 to corner i.
+      for (const [i, [x, y]] of corners.entries()) {
+        const want = CORNER_COLOURS[(i - rotate / 90 + 4) % 4]!;
+        const got = await pixel(r.data, x!, y!);
+        expect(near(got, want), `${rotate}: corner ${i} is ${got}`).toBe(true);
+      }
+    }
+  });
+
+  it("turns a page with its own /Rotate on top of it", async () => {
+    // As displayed (rotated by 90°), on a page of 842 × 595.
+    const box = { x: ROTATED_BOX.y, y: ROTATED_BOX.x, w: ROTATED_BOX.height, h: ROTATED_BOX.width };
+    for (const rotate of [90, 180, 270]) await expectBox(await rotatedPage(), turned(box, A4.height, A4.width, rotate), [204, 51, 51], rotate);
+  });
+
+  it("turns a page with a CropBox", async () => {
+    const box = {
+      x: CROPPED_BOX.x - CROP_BOX.x,
+      y: CROP_BOX.y + CROP_BOX.height - (CROPPED_BOX.y + CROPPED_BOX.height),
+      w: CROPPED_BOX.width,
+      h: CROPPED_BOX.height,
+    };
+    for (const rotate of [90, 180, 270])
+      await expectBox(await cropBoxPage(), turned(box, CROP_BOX.width, CROP_BOX.height, rotate), [51, 153, 51], rotate);
+  });
+
+  it("counts a crop in the turned page", async () => {
+    const pdf = await cornersPage();
+    // The top left of the page turned by 90° is its bottom-left square, by 270° its top-right one.
+    for (const [rotate, colour] of [[90, CORNER_COLOURS[3]], [270, CORNER_COLOURS[1]]] as const) {
+      const r = await renderPage(pdf, 1, SMALL, { x: 0, y: 0, w: CORNER_SIDE, h: CORNER_SIDE }, rotate);
+      expect(near(await pixel(r.data, Math.floor(r.width / 2), Math.floor(r.height / 2)), colour), `${rotate}`).toBe(true);
+    }
+    await expect(renderPage(pdf, 1, SMALL, { x: 700, y: 0, w: 100, h: 100 }, 90)).resolves.toMatchObject({ pageWidth: A4.width });
+    await expect(renderPage(pdf, 1, SMALL, { x: 0, y: 700, w: 100, h: 100 }, 90)).rejects.toMatchObject({ code: "bad_crop" });
+  });
+
+  it("reports the page's size without the turn", async () => {
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderPage(await chartPage(), 1, SMALL, undefined, rotate);
+      expect([r.pageWidth, r.pageHeight], `${rotate}`).toEqual([A4.width, A4.height]);
+      const own = await renderPage(await rotatedPage(), 1, SMALL, undefined, rotate);
+      expect([own.pageWidth, own.pageHeight], `${rotate}`).toEqual([A4.height, A4.width]);
+    }
+  });
+
+  it("the conversions in the help hit the same colour", async () => {
+    const pdf = await cornersPage();
+    const [W, H, s, extra] = [A4.width, A4.height, CORNER_SIDE, 20];
+    // Each square with 20 pt more on its inner sides: the middle of the region lies in the square.
+    const regions = [
+      { x: 0, y: 0, w: s + extra, h: s + extra },
+      { x: W - s - extra, y: 0, w: s + extra, h: s + extra },
+      { x: W - s - extra, y: H - s - extra, w: s + extra, h: s + extra },
+      { x: 0, y: H - s - extra, w: s + extra, h: s + extra },
+    ];
+    for (const rotate of [90, 180, 270])
+      for (const [i, region] of regions.entries()) {
+        const r = await renderPage(pdf, 1, SMALL, turned(region, W, H, rotate), rotate);
+        const got = await pixel(r.data, Math.floor(r.width / 2), Math.floor(r.height / 2));
+        expect(near(got, CORNER_COLOURS[i]!), `${rotate}: corner ${i} is ${got}`).toBe(true);
+      }
+  });
+
+  it("a converted region with y = 0 fits a page of fractional size", async () => {
+    const [w, h] = [595.28, 841.89];
+    const pdf = await cornersPage([w, h]);
+    const region = { x: 0, y: 0, w: CORNER_SIDE, h: CORNER_SIDE };
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderPage(pdf, 1, SMALL, turned(region, Math.floor(w), Math.floor(h), rotate), rotate);
+      expect(near(await pixel(r.data, Math.floor(r.width / 2), Math.floor(r.height / 2)), CORNER_COLOURS[0]), `${rotate}`).toBe(true);
+    }
   });
 
   it("sends a photo-like page as JPEG within small", async () => {

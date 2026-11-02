@@ -88,6 +88,23 @@ export const rotatedPage = () =>
     page.drawRectangle({ ...ROTATED_BOX, color: rgb(0.8, 0.2, 0.2) });
   });
 
+// The colours of cornersPage()'s squares, clockwise from the top left as displayed.
+export const CORNER_COLOURS = [
+  [255, 0, 0],
+  [0, 255, 0],
+  [0, 0, 255],
+  [255, 255, 0],
+] as const;
+export const CORNER_SIDE = 100;
+
+// A square in each corner, of CORNER_SIDE points, in the colours of CORNER_COLOURS.
+export const cornersPage = (size: [number, number] = [A4.width, A4.height]) =>
+  single((_, page) => {
+    const [w, h, s] = [size[0], size[1], CORNER_SIDE];
+    const at = [[0, h - s], [w - s, h - s], [w - s, 0], [0, 0]] as const;
+    at.forEach(([x, y], i) => page.drawRectangle({ x, y, width: s, height: s, color: rgb(...(CORNER_COLOURS[i]!.map((c) => c / 255) as [number, number, number])) }));
+  }, size);
+
 export const emptyPage = () => single(() => {});
 
 // The grid is one path of many subpaths, as generators often draw tables: its bounding box covers

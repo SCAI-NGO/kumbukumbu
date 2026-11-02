@@ -85,16 +85,16 @@ const ROUTES: Record<string, Route> = {
     };
   },
   "/render/page": (q, ms) => {
-    const [page, t, c] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target(q), crop(q)];
+    const [page, t, c, rotate] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target(q), crop(q), turn(q)];
     return async (body, slot) => {
-      const r = await slot.run<RenderedPage>({ kind: "page", bytes: body, page, target: t, crop: c }, ms.renderMs);
+      const r = await slot.run<RenderedPage>({ kind: "page", bytes: body, page, target: t, crop: c, rotate }, ms.renderMs);
       return (res) => image(res, r, { "X-Kumbu-Page-Width": r.pageWidth, "X-Kumbu-Page-Height": r.pageHeight });
     };
   },
   "/render/image": (q, ms) => {
-    const [t, c] = [target(q), crop(q)];
+    const [t, c, rotate] = [target(q), crop(q), turn(q)];
     return async (body, slot) => {
-      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c }, ms.renderMs);
+      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c, rotate }, ms.renderMs);
       return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight, "X-Kumbu-Transparent": r.transparent ? 1 : 0 });
     };
   },
@@ -159,6 +159,14 @@ function target(q: URLSearchParams): Target {
   };
 }
 
+// Clockwise degrees; absent is no turn.
+function turn(q: URLSearchParams): number {
+  const text = q.get("rotate");
+  if (text === null) return 0;
+  if (text !== "90" && text !== "180" && text !== "270") throw bad("rotate must be 90, 180 or 270.");
+  return Number(text);
+}
+
 function crop(q: URLSearchParams): Crop | undefined {
   const text = q.get("crop");
   if (text === null) return undefined;
@@ -169,13 +177,15 @@ function crop(q: URLSearchParams): Crop | undefined {
   return { x: x!, y: y!, w: w!, h: h! };
 }
 
-function image(res: ServerResponse, r: { data: Uint8Array; mediaType: string; width: number; height: number }, extra: Record<string, number>) {
+// Says the turn it made, so the server can tell an older sidecar that ignored rotate.
+function image(res: ServerResponse, r: { data: Uint8Array; mediaType: string; width: number; height: number; rotate: number }, extra: Record<string, number>) {
   res.writeHead(200, {
     "Content-Type": r.mediaType,
     "Content-Length": r.data.length,
     "X-Kumbu-Width": r.width,
     "X-Kumbu-Height": r.height,
     ...extra,
+    ...(r.rotate !== 0 ? { "X-Kumbu-Rotate": r.rotate } : {}),
   });
   res.end(r.data);
 }

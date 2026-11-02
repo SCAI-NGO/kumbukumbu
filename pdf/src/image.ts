@@ -2,7 +2,8 @@
 
 // Scales an image to a size target, never enlarging it. Skia applies the EXIF orientation when it
 // decodes a JPEG, so sizes and crops are in the image's displayed pixels, as the server reports
-// them. The header is checked before anything is decoded.
+// them; a turn (clockwise, in degrees) comes on top of that, and a crop counts in the turned image.
+// The header is checked before anything is decoded.
 
 import { type Canvas, createCanvas, loadImage } from "@napi-rs/canvas";
 import { type Rendered, encode } from "./encode.js";
@@ -11,9 +12,17 @@ import { type Crop, type Target, fit, inside, pixels } from "./steps.js";
 
 export const MAX_SIDE = 16_384;
 
-export type RenderedImage = Rendered & { originalWidth: number; originalHeight: number; transparent: boolean };
+export type RenderedImage = Rendered & { originalWidth: number; originalHeight: number; transparent: boolean; rotate: number };
 
-export async function renderImage(img: Uint8Array, t: Target, crop?: Crop): Promise<RenderedImage> {
+// From the image's pixels to the turned frame: whole-number matrices, so a turn at scale 1 moves
+// pixels and blends none.
+function turn(rotate: number, ow: number, oh: number): [number, number, number, number, number, number] {
+  if (rotate === 90) return [0, 1, -1, 0, oh, 0];
+  if (rotate === 180) return [-1, 0, 0, -1, ow, oh];
+  return [0, -1, 1, 0, 0, ow];
+}
+
+export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotate = 0): Promise<RenderedImage> {
   const header = imageHeader(img);
   if (!header || header.width <= 0 || header.height <= 0) throw new PdfError("The file is not an image Kumbu² can read.", "not_image");
   if (header.width > MAX_SIDE || header.height > MAX_SIDE)
@@ -29,17 +38,24 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop): Prom
     throw new PdfError("The file is not an image Kumbu² can read.", "not_image");
   }
   const { width: ow, height: oh } = image;
-  const region = crop ?? { x: 0, y: 0, w: ow, h: oh };
-  if (!inside(region, ow, oh)) throw new PdfError(`The region lies outside the image (${ow} × ${oh} px).`, "bad_crop");
+  const [tw, th] = rotate === 90 || rotate === 270 ? [oh, ow] : [ow, oh];
+  const region = crop ?? { x: 0, y: 0, w: tw, h: th };
+  if (!inside(region, tw, th)) throw new PdfError(`The region lies outside the image (${tw} × ${th} px).`, "bad_crop");
 
   const { width, height } = pixels(region.w, region.h, fit(region.w, region.h, t, 1));
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(image, region.x, region.y, region.w, region.h, 0, 0, width, height);
+  if (rotate === 0) ctx.drawImage(image, region.x, region.y, region.w, region.h, 0, 0, width, height);
+  else {
+    ctx.scale(width / region.w, height / region.h);
+    ctx.translate(-region.x, -region.y);
+    ctx.transform(...turn(rotate, ow, oh));
+    ctx.drawImage(image, 0, 0);
+  }
   const transparent = hasTransparency(canvas);
-  return { ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)), originalWidth: ow, originalHeight: oh, transparent };
+  return { ...(await encode(transparent ? onWhite(canvas) : canvas, t.bytes)), originalWidth: ow, originalHeight: oh, transparent, rotate };
 }
 
 function hasTransparency(canvas: Canvas): boolean {

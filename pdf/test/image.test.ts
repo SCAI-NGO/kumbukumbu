@@ -88,6 +88,106 @@ describe("renderImage", () => {
     expect(isRed(await pixel(top.data, 190, 10))).toBe(false);
   });
 
+  it("turns an image by 90, 180 and 270 degrees clockwise, exact to the pixel", async () => {
+    // Six colours in a 3 × 2 image; source (x, y) has colours[y * 3 + x].
+    const colours = [
+      [255, 0, 0],
+      [0, 255, 0],
+      [0, 0, 255],
+      [255, 255, 0],
+      [0, 255, 255],
+      [255, 0, 255],
+    ];
+    const canvas = createCanvas(3, 2);
+    const ctx = canvas.getContext("2d");
+    colours.forEach(([r, g, b], i) => {
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(i % 3, Math.floor(i / 3), 1, 1);
+    });
+    const png = canvas.toBuffer("image/png");
+    // Where each output pixel comes from, after a clockwise turn of the 3 × 2 source.
+    const from: Record<number, (x: number, y: number) => [number, number]> = {
+      90: (x, y) => [y, 1 - x],
+      180: (x, y) => [2 - x, 1 - y],
+      270: (x, y) => [2 - y, x],
+    };
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderImage(png, SMALL, undefined, rotate);
+      const [w, h] = rotate === 180 ? [3, 2] : [2, 3];
+      expect([r.width, r.height], `${rotate}`).toEqual([w, h]);
+      for (let y = 0; y < h; y++)
+        for (let x = 0; x < w; x++) {
+          const [sx, sy] = from[rotate]!(x, y);
+          expect(await pixel(r.data, x, y), `${rotate}: ${x},${y}`).toEqual([...colours[sy * 3 + sx]!, 255]);
+        }
+    }
+  });
+
+  it("swaps the sides for 90 and 270, and keeps them for 180", async () => {
+    const png = solid(4000, 3000).toBuffer("image/png");
+    for (const [rotate, size] of [[90, [948, 1264]], [180, [1264, 948]], [270, [948, 1264]]] as const) {
+      const r = await renderImage(png, MEDIUM, undefined, rotate);
+      expect([r.width, r.height], `${rotate}`).toEqual(size);
+    }
+  });
+
+  it("counts a crop in the turned image", async () => {
+    // 300 × 200 with a red square of 50 px in the bottom-left corner.
+    const canvas = solid(300, 200, "#ffffff");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(0, 150, 50, 50);
+    const png = canvas.toBuffer("image/png");
+    // Turned, the square lies at the top left (90), the top right (180) or the bottom right (270).
+    for (const [rotate, crop, red, white] of [
+      [90, { x: 0, y: 0, w: 100, h: 100 }, [25, 25], [75, 75]],
+      [180, { x: 200, y: 0, w: 100, h: 100 }, [75, 25], [25, 75]],
+      [270, { x: 100, y: 200, w: 100, h: 100 }, [75, 75], [25, 25]],
+    ] as const) {
+      const r = await renderImage(png, MEDIUM, crop, rotate);
+      expect([r.width, r.height]).toEqual([100, 100]);
+      expect(isRed(await pixel(r.data, red[0], red[1])), `${rotate}`).toBe(true);
+      expect(await pixel(r.data, white[0], white[1]), `${rotate}`).toEqual([255, 255, 255, 255]);
+    }
+  });
+
+  it("refuses a crop outside the turned image that fits the unturned one", async () => {
+    const png = solid(300, 200).toBuffer("image/png");
+    await expect(renderImage(png, MEDIUM, { x: 250, y: 0, w: 50, h: 50 }, 90)).rejects.toMatchObject({ code: "bad_crop" });
+    await expect(renderImage(png, MEDIUM, { x: 0, y: 250, w: 50, h: 50 }, 270)).resolves.toMatchObject({ width: 50, height: 50 });
+  });
+
+  it("turns on top of the EXIF orientation", async () => {
+    // As above: displayed 200 × 400 with the marker at the top left; a further quarter turn brings it
+    // to the top right of 400 × 200.
+    const canvas = solid(400, 200, "#ffffff");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(0, 150, 50, 50);
+    const jpeg = withSegment(canvas.toBuffer("image/jpeg", 95), exif(6));
+
+    const r = await renderImage(jpeg, MEDIUM, undefined, 90);
+    expect([r.width, r.height]).toEqual([400, 200]);
+    expect(isRed(await pixel(r.data, 390, 10))).toBe(true);
+    expect(isRed(await pixel(r.data, 10, 10))).toBe(false);
+  });
+
+  it("reports the size before the turn as the original", async () => {
+    const png = solid(4000, 3000).toBuffer("image/png");
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderImage(png, MEDIUM, undefined, rotate);
+      expect([r.originalWidth, r.originalHeight], `${rotate}`).toEqual([4000, 3000]);
+    }
+  });
+
+  it("keeps an opaque image opaque when it is turned and scaled", async () => {
+    const png = solid(1000, 700).toBuffer("image/png");
+    for (const rotate of [90, 180, 270]) {
+      const r = await renderImage(png, SMALL, undefined, rotate);
+      expect(r.transparent, `${rotate}`).toBe(false);
+    }
+  });
+
   it("refuses a crop beyond the image", async () => {
     await expect(renderImage(solid(300, 200).toBuffer("image/png"), MEDIUM, { x: 250, y: 0, w: 100, h: 100 })).rejects.toMatchObject({
       code: "bad_crop",

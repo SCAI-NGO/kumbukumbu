@@ -82,6 +82,47 @@ describe("server", () => {
     expect(r.headers.get("x-kumbu-transparent")).toBe("1");
   });
 
+  it("takes rotate on both render routes and answers X-Kumbu-Rotate", async () => {
+    const page = await post(`/render/page?page=1&${medium}&rotate=90`, await chartPage());
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-kumbu-rotate")).toBe("90");
+    expect([page.headers.get("x-kumbu-width"), page.headers.get("x-kumbu-height")]).toEqual(["1303", "920"]);
+    expect([page.headers.get("x-kumbu-page-width"), page.headers.get("x-kumbu-page-height")]).toEqual(["595", "842"]);
+
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const png = createCanvas(4000, 3000).toBuffer("image/png");
+    const image = await post(`/render/image?${medium}&rotate=270`, png);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("x-kumbu-rotate")).toBe("270");
+    expect([image.headers.get("x-kumbu-width"), image.headers.get("x-kumbu-height")]).toEqual(["948", "1264"]);
+    expect([image.headers.get("x-kumbu-original-width"), image.headers.get("x-kumbu-original-height")]).toEqual(["4000", "3000"]);
+
+    const half = await post(`/render/page?page=1&${medium}&rotate=180`, await chartPage());
+    expect(half.headers.get("x-kumbu-rotate")).toBe("180");
+  });
+
+  it("answers no X-Kumbu-Rotate without a turn", async () => {
+    const page = await post(`/render/page?page=1&${medium}`, await chartPage());
+    expect(page.status).toBe(200);
+    expect(page.headers.has("x-kumbu-rotate")).toBe(false);
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const image = await post(`/render/image?${medium}`, createCanvas(40, 30).toBuffer("image/png"));
+    expect(image.status).toBe(200);
+    expect(image.headers.has("x-kumbu-rotate")).toBe(false);
+  });
+
+  it("refuses rotate other than 90, 180 or 270", async () => {
+    const pdf = await chartPage();
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const png = createCanvas(40, 30).toBuffer("image/png");
+    for (const rotate of ["0", "45", "-90", "90.0", "abc"])
+      for (const [route, body] of [[`/render/page?page=1&${medium}`, pdf], [`/render/image?${medium}`, png]] as const) {
+        const r = await post(`${route}&rotate=${encodeURIComponent(rotate)}`, body);
+        expect(r.status, `${route} ${rotate}`).toBe(400);
+        expect(await r.json()).toEqual({ code: "bad_request", error: "rotate must be 90, 180 or 270." });
+      }
+  });
+
   it("maps errors to their status", async () => {
     const three = await threePages();
     expect((await post(`/render/page?page=9&${medium}`, three)).status).toBe(422);
