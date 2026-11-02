@@ -812,6 +812,47 @@ public sealed class SharedRekeyTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_second_re_encryption_keeps_one_notice()
+    {
+        var (alice, bob, _, vaultId, bobs, _) = await NoticeWorldAsync();
+        await RekeyOverRestAsync(alice);
+        // He gives his agent the vault again, and the next re-encryption ends that key too.
+        await KeyAsync(bob, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read });
+
+        await RekeyOverRestAsync(alice);
+
+        Assert.Equal(1, await StoredNoticesAsync(bobs));
+        Assert.Equal(BobsRekeyNotice, Assert.Single(await NoticesAsync(bob))!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_member_with_a_key_and_a_connection_gets_one_notice()
+    {
+        var (alice, bob, _, _, bobs, _) = await NoticeWorldAsync();
+        await ConnectionAsync(bob, "garden app", new Dictionary<string, string> { ["Beet"] = "read" });
+
+        await RekeyOverRestAsync(alice);
+
+        Assert.Equal(1, await StoredNoticesAsync(bobs));
+        Assert.Equal(BobsRekeyNotice, Assert.Single(await NoticesAsync(bob))!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_notice_whose_alias_does_not_open_names_no_vault()
+    {
+        var (alice, bob, _, _, bobs, _) = await NoticeWorldAsync();
+        await RekeyOverRestAsync(alice);
+        await RawNotices.UpdateOneAsync(new BsonDocument("membership", bobs), new BsonDocument("$unset", new BsonDocument("alias", "")), cancellationToken: Ct);
+
+        var notice = Assert.Single(await NoticesAsync(bob))!;
+
+        Assert.Null(notice["vault"]);
+        Assert.Equal(
+            "\"Alice\" re-encrypted a shared vault; your keys and apps for it were revoked. Give your agents that vault again.",
+            notice["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task A_notice_can_be_dismissed_and_names_no_owner_in_the_database()
     {
         var (alice, bob, _, _, bobs, _) = await NoticeWorldAsync();

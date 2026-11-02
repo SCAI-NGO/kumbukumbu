@@ -516,6 +516,7 @@ public sealed partial class VaultCatalog
         var f = Builders<SlotDocument>.Filter;
         var derived = f.Eq(sl => sl.Vault, id) & f.Ne(sl => sl.GrantedVia, null);
         var keyIds = await (await Slots.DistinctAsync(s, sl => sl.KeyId, derived & f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct);
+        // Also through keys already expired or revoked: such a member is told once more than she needs to be, which is harmless.
         var via = await (await Slots.DistinctAsync(s, sl => sl.GrantedVia, derived, cancellationToken: ct)).ToListAsync(ct);
         await Slots.DeleteManyAsync(s, derived, cancellationToken: ct);
         var keys = await RevokeKeysWithoutVaultsAsync(s, keyIds, ct);
@@ -528,8 +529,9 @@ public sealed partial class VaultCatalog
         if (theirs.Count > 0)
         {
             var users = theirs.Select(x => x.User).Distinct(StringComparer.Ordinal).ToList();
+            var m = Builders<Sharing.MembershipDocument>.Filter;
             via.AddRange(await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
-                .Find(s, m => m.Vault == id && m.Status == Sharing.MembershipStatus.Active && users.Contains(m.Member!)).Project(m => m.Id).ToListAsync(ct));
+                .Find(s, m.Eq(x => x.Vault, id) & m.Eq(x => x.Status, Sharing.MembershipStatus.Active) & m.In(x => x.Member, users)).Project(x => x.Id).ToListAsync(ct));
         }
 
         // Each is told at its next tool call once the run is done, if it still has a vault to call with (§8.4).

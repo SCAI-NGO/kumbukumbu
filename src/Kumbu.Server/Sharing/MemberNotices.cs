@@ -9,7 +9,7 @@ namespace Kumbu.Server.Sharing;
 
 /// <summary>
 /// What a member is told of a vault shared with her (collab design §7.3, §14), in two kinds: once it is gone for good
-/// ("The owner has deleted gartenarbeit."), and once a re-encryption ended her keys and apps on it (spec §3). The
+/// ("The owner has deleted gartenarbeit."), and once a re-encryption ended her keys and apps on it (rename-own-vaults design §3). The
 /// notice (collection <c>member_notices</c>) keeps a copy of her member slot's alias ciphertext and its alias key,
 /// sealed under her user key: only her session opens it, the server needn't read it, and nothing in it names the owner.
 /// A re-encryption's notice is shown only while her membership is active, naming the owner as she is then. Deleted when
@@ -35,13 +35,16 @@ public static class MemberNotices
 
     /// <summary>
     /// Inside the finish transaction of a re-encryption of <paramref name="vaultId"/>: a notice for each of
-    /// <paramref name="membershipIds"/>, the memberships whose keys and apps its start ended, that is still active.
-    /// Returns how many.
+    /// <paramref name="membershipIds"/>, the memberships whose keys and apps its start ended, that is still active. It
+    /// replaces an earlier re-encryption's notice of the same membership, which says the same. Returns how many.
     /// </summary>
     internal static async Task<int> LeaveForRekeyAsync(
         IMongoDatabase db, IClientSessionHandle s, string vaultId, IReadOnlyCollection<string> membershipIds, DateTime now, CancellationToken ct)
     {
         if (membershipIds.Count == 0) return 0;
+        var n = Builders<MemberNoticeDocument>.Filter;
+        await Docs(db).DeleteManyAsync(
+            s, n.Eq(x => x.Vault, vaultId) & n.In(x => x.Membership, membershipIds) & n.Eq(x => x.Kind, MemberNoticeDocument.VaultRekeyed), cancellationToken: ct);
         var m = Builders<MembershipDocument>.Filter;
         return await LeaveAsync(db, s, m.Eq(x => x.Vault, vaultId) & m.In(x => x.Id, membershipIds), MemberNoticeDocument.VaultRekeyed, now, ct);
     }
@@ -97,7 +100,10 @@ public static class MemberNotices
     /// (<see cref="Api.WriterLabels.Owner"/>), and only a re-encryption's names her.</summary>
     internal static string TextFor(string kind, string? alias, string owner) => kind switch
     {
-        MemberNoticeDocument.VaultRekeyed => VaultEvents.TextFor(VaultEvents.RekeyFinished, toOwner: false, owner, alias ?? "a vault shared with you", null, null),
+        // Without her alias the vault can't be named twice in a sentence.
+        MemberNoticeDocument.VaultRekeyed when alias is null =>
+            $"{VaultEvents.AtStart(owner)} re-encrypted a shared vault; your keys and apps for it were revoked. Give your agents that vault again.",
+        MemberNoticeDocument.VaultRekeyed => VaultEvents.TextFor(VaultEvents.RekeyFinished, toOwner: false, owner, alias, null, null),
         _ => $"The owner has deleted {alias ?? "a shared vault"}.",
     };
 

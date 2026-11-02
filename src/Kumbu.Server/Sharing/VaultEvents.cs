@@ -217,7 +217,7 @@ public static class VaultEvents
     };
 
     /// <summary>A person at the start of a sentence: <see cref="WriterLabels.GoneOwner"/> capitalised, a quoted name as it is.</summary>
-    private static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
+    internal static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
 
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
     private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";
