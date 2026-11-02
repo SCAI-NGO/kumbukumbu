@@ -229,6 +229,8 @@ public sealed class PdfSidecarTests
         { "an unknown region kind", """{"op":"set","path":"pages.1.regions.0.kind","value":"chart"}""" },
         { "a negative width", """{"op":"set","path":"pages.1.width","value":-1}""" },
         { "a huge number", """{"op":"set","path":"pages.1.regions.0.w","value":1e400}""" },
+        { "a null page", """{"op":"set","path":"pages.1","value":null}""" },
+        { "a null region", """{"op":"set","path":"pages.1.regions.0","value":null}""" },
     };
 
     [Theory]
@@ -242,7 +244,8 @@ public sealed class PdfSidecarTests
         foreach (var step in steps[..^1]) node = int.TryParse(step, out var i) ? node[i]! : node[step]!;
         var last = steps[^1];
         if (op["op"]!.GetValue<string>() == "remove") node.AsObject().Remove(last);
-        else node[last] = op["value"]!.DeepClone();
+        else if (node is JsonArray list) list[int.Parse(last, System.Globalization.CultureInfo.InvariantCulture)] = op["value"]?.DeepClone();
+        else node[last] = op["value"]?.DeepClone();
         var text = json.ToJsonString().Replace("1E+400", "1e400", StringComparison.Ordinal);
         var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
 
@@ -335,6 +338,10 @@ public sealed class PdfSidecarTests
         { "an infinite w", """{"op":"set","path":"pages.0.items.0.w","value":1e999}""" },
         { "no text", """{"op":"remove","path":"pages.0.text"}""" },
         { "no items", """{"op":"remove","path":"pages.1.items"}""" },
+        { "a null page", """{"op":"set","path":"pages.1","value":null}""" },
+        { "a null item", """{"op":"set","path":"pages.0.items.1","value":null}""" },
+        { "an item without at", """{"op":"remove","path":"pages.0.items.0.at"}""" },
+        { "an item without end", """{"op":"remove","path":"pages.0.items.0.end"}""" },
     };
 
     [Theory]
@@ -352,14 +359,41 @@ public sealed class PdfSidecarTests
             if (node is JsonArray array) array.RemoveAt(int.Parse(last, System.Globalization.CultureInfo.InvariantCulture));
             else node.AsObject().Remove(last);
         }
-        else if (node is JsonArray list) list[int.Parse(last, System.Globalization.CultureInfo.InvariantCulture)] = op["value"]!.DeepClone();
-        else node[last] = op["value"]!.DeepClone();
+        else if (node is JsonArray list) list[int.Parse(last, System.Globalization.CultureInfo.InvariantCulture)] = op["value"]?.DeepClone();
+        else node[last] = op["value"]?.DeepClone();
         var text = json.ToJsonString().Replace("1E+999", "1e999", StringComparison.Ordinal);
         var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
 
         var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).TextBoxesAsync(Pdf, SevenAndTwelve, Ct));
 
         Assert.True(e.Code == SidecarException.Failed, what);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("12,7")]
+    [InlineData("7,7")]
+    [InlineData("0")]
+    [InlineData("1-51")]
+    public async Task Text_boxes_are_only_asked_for_pages_ascending_distinct_and_at_most_50(string asked)
+    {
+        var pages = asked == "" ? [] : asked == "1-51" ? Enumerable.Range(1, 51).ToList() : asked.Split(',').Select(int.Parse).ToList();
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, TwoPagesOfBoxes().ToJsonString()));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Sidecar(stub).TextBoxesAsync(Pdf, pages, Ct));
+
+        Assert.Empty(stub.Seen);
+    }
+
+    [Fact]
+    public async Task Fifty_pages_may_be_asked_for_at_once()
+    {
+        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, """{"pages":[]}"""));
+
+        // The answer has no pages, so it is refused: the request itself was sent.
+        await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).TextBoxesAsync(Pdf, [.. Enumerable.Range(1, 50)], Ct));
+
+        Assert.Single(stub.Seen);
     }
 
     [Fact]

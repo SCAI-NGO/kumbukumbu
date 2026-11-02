@@ -119,6 +119,12 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
     {
+        // The caller's contract (the shell checks what a person typed): a mistake here is the server's own.
+        if (pages.Count is < 1 or > 50 || pages[0] < 1 || pages.Zip(pages.Skip(1), (a, b) => b <= a).Any(bad => bad))
+        {
+            throw new ArgumentException("Pages must be 1 to 50 numbers, from 1, strictly ascending", nameof(pages));
+        }
+
         var body = await SendAsync("text-boxes", "pages=" + string.Join(',', pages.Select(p => p.ToString(CultureInfo.InvariantCulture))), pdf, "application/pdf", RenderTimeout, ct,
             async (response, token) => await ReadAsync(response.Content, MaxTextBoxBytes, token) ?? throw Invalid("The text boxes are larger than 16 MiB"));
         return ParseTextBoxes(body, pages);
@@ -332,7 +338,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         for (var i = 0; i < a.Pages.Count; i++)
         {
             var p = a.Pages[i];
-            if (p.N != i + 1 || p.Text is null || p.Regions is null || p.Chars < 0 || p.Images < 0
+            if (p is null || p.N != i + 1 || p.Text is null || p.Regions is null || p.Chars < 0 || p.Images < 0
                 || p.Rotation is not (0 or 90 or 180 or 270) || !Point(p.Width) || !Point(p.Height)
                 || !Share(p.TextCoverage) || !Share(p.ImageCoverage) || !Share(p.VectorCoverage))
             {
@@ -349,7 +355,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             var regions = new List<PdfRegion>(p.Regions.Count);
             foreach (var r in p.Regions)
             {
-                if (r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H))
+                if (r is null || r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H))
                 {
                     throw Invalid($"A region on page {i + 1} of the analysis doesn't add up");
                 }
@@ -372,7 +378,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     private sealed record TextBoxPageJson(int N, double Width, double Height, string? Text, List<TextBoxJson>? Items);
 
-    private sealed record TextBoxJson(int At, int End, double X, double Y, double W, double H);
+    private sealed record TextBoxJson(int? At, int? End, double X, double Y, double W, double H);
 
     /// <summary>The sidecar's JSON for <c>/text-boxes</c>, checked to be the pages asked, with offsets inside the text and ascending.</summary>
     internal static IReadOnlyList<PageTextBoxes> ParseTextBoxes(byte[] body, IReadOnlyList<int> pages)
@@ -392,7 +398,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         for (var i = 0; i < pages.Count; i++)
         {
             var p = a.Pages[i];
-            if (p.N != pages[i] || p.Text is null || p.Items is null || !Point(p.Width) || !Point(p.Height))
+            if (p is null || p.N != pages[i] || p.Text is null || p.Items is null || !Point(p.Width) || !Point(p.Height))
             {
                 throw Invalid($"Page {pages[i]} of the text boxes doesn't add up");
             }
@@ -401,13 +407,13 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             var previousEnd = 0;
             foreach (var t in p.Items)
             {
-                if (t.At < previousEnd || t.End < t.At || t.End > p.Text.Length || !Point(t.X) || !Point(t.Y) || !Point(t.W) || !Point(t.H))
+                if (t is not { At: { } at, End: { } end } || at < previousEnd || end < at || end > p.Text.Length || !Point(t.X) || !Point(t.Y) || !Point(t.W) || !Point(t.H))
                 {
                     throw Invalid($"A box on page {pages[i]} of the text boxes doesn't add up");
                 }
 
-                items.Add(new TextBox(t.At, t.End, t.X, t.Y, t.W, t.H));
-                previousEnd = t.End;
+                items.Add(new TextBox(at, end, t.X, t.Y, t.W, t.H));
+                previousEnd = end;
             }
 
             result.Add(new PageTextBoxes(p.N, p.Width, p.Height, p.Text, items));
