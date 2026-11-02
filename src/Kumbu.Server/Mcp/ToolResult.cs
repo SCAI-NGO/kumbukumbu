@@ -43,7 +43,7 @@ internal static class ToolResult
         KumbuMetrics.ToolError kind;
         try
         {
-            (result, kind) = await RunBodyAsync(body);
+            (result, kind) = await GuardAsync(body);
         }
         catch
         {
@@ -65,7 +65,9 @@ internal static class ToolResult
         return From(result);
     }
 
-    private static async Task<(ShellResult Result, KumbuMetrics.ToolError Kind)> RunBodyAsync(Func<Task<ShellResult>> body)
+    /// <summary>Runs a body; vaults that can't be used at all become an error result with the reason, and the kind of
+    /// error it is. Shared by MCP and the web app's console, so both say the same.</summary>
+    internal static async Task<(ShellResult Result, KumbuMetrics.ToolError Kind)> GuardAsync(Func<Task<ShellResult>> body)
     {
         try
         {
