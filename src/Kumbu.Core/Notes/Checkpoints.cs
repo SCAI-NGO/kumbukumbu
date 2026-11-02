@@ -324,7 +324,7 @@ public sealed class Checkpoints(INoteStore store, NoteWriter writer, Plans plans
 
         if (existing.Content == then) return Written($"{path.Value} is already as in checkpoint '{name}'", existing.Path, existing.Version);
 
-        // In no changeset, like every restore: a checkpoint of its own, so it can be undone on its own.
+        // In no changeset, like a restore of a version: a checkpoint of its own, so it can be undone on its own.
         var next = NoteWriter.Next(existing, then, label, writer.Caller.ReferenceIn(path.Segments[0]), writer.Now, changeset: null, keepCurrent: true);
         return await store.TryReplaceAsync(existing, next, ct)
             ? Written($"restored {path.Value} to checkpoint '{name}'", next.Path, next.Version)

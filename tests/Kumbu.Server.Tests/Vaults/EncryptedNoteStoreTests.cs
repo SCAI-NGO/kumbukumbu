@@ -321,12 +321,45 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var trashed = Assert.Single(await Store(world.Catalog()).ListTrashAsync(P("/Work"), Ct));
         Assert.Equal((T0.AddHours(2), Writers.Dev, "two"), (trashed.DeletedAt, trashed.DeletedBy, trashed.Note.Content));
 
-        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), Ct);
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), new Changeset("c1", T0.AddHours(3)), Ct);
 
         Assert.NotNull(restored);
-        Assert.Equal(["one"], restored.History.Select(h => h.Content));
+        Assert.Equal(["two", "one"], restored.History.Select(h => h.Content));
         Assert.Equal("two", await Store(world.Catalog()).ReadAsync(P("/Work/a.md"), Ct));
         Assert.Empty(await Store(world.Catalog()).ListTrashAsync(P("/Work"), Ct));
+    }
+
+    [Fact]
+    public async Task A_restore_seals_the_changeset_it_is_given()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = New("/Work/a.md", "one");
+        await store.TryCreateAsync(note, Ct);
+        await store.TryTrashAsync(note, Writers.Dev, WriterRef.Server, T0.AddHours(1), Ct);
+        var changeset = new Changeset("c1", T0.AddHours(2));
+
+        Assert.NotNull(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(2), changeset, Ct));
+
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+        Assert.Equal(changeset, read.Changeset);
+    }
+
+    [Fact]
+    public async Task A_restore_keeps_the_restored_state_on_top_of_its_history()
+    {
+        // A write in the restore's changeset coalesces; the restored state must survive it.
+        var (world, _, store) = await WorldAsync();
+        var v1 = New("/Work/a.md", "one");
+        await store.TryCreateAsync(v1, Ct);
+        var v2 = NoteWriter.Next(v1, "two", "other", WriterRef.Server, T0.AddHours(1));
+        await store.TryReplaceAsync(v1, v2, Ct);
+        await store.TryTrashAsync(v2, Writers.Dev, WriterRef.Server, T0.AddHours(2), Ct);
+
+        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(3), new Changeset("c1", T0.AddHours(3)), Ct);
+
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+        Assert.Equal("two", read.Content);
+        Assert.Equal([("two", "other", T0.AddHours(1)), ("one", Writers.Dev, T0)], read.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt)));
     }
 
     [Fact]
@@ -354,10 +387,10 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         }
 
         await store.TryCreateAsync(New("/Work/a.md", "occupied"), Ct);
-        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0, Ct));
+        Assert.Null(await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0, new Changeset("c1", T0), Ct));
 
         await store.TryTrashAsync((await store.GetAsync(P("/Work/a.md"), Ct))!, Writers.Dev, WriterRef.Server, T0.AddHours(3), Ct);
-        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), VersionToken.Of("first"), Writers.Dev, WriterRef.Server, T0.AddHours(4), Ct);
+        await store.TryRestoreFromTrashAsync(P("/Work/a.md"), VersionToken.Of("first"), Writers.Dev, WriterRef.Server, T0.AddHours(4), new Changeset("c1", T0.AddHours(4)), Ct);
         Assert.Equal("first", await Store(world.Catalog()).ReadAsync(P("/Work/a.md"), Ct));
     }
 

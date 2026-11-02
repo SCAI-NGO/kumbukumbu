@@ -42,9 +42,10 @@ public sealed record VaultView(
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
 /// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
+/// <c>deviceKeys</c>: those of <c>apiKeys</c> that are devices, which lose the vault when it is renamed.
 /// <c>members</c>: the people it is shared with or who are invited, oldest first. <c>left</c>: who left it since it was
 /// last re-encrypted, oldest first, for the offer of a re-encryption (collab design §6.4).</summary>
-public sealed record VaultAccessView(string[] ApiKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left);
+public sealed record VaultAccessView(string[] ApiKeys, string[] DeviceKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left);
 
 /// <summary>A member who left the vault: the owner's <c>label</c> for her, and when (<c>leftAt</c>).</summary>
 public sealed record DepartureView(string Label, DateTime LeftAt);
@@ -75,6 +76,9 @@ public sealed record EmbeddingProviderView(string Name, string Label, string? De
 public sealed record SetEmbeddingsRequest(string Provider);
 
 public sealed record CreateVaultRequest(string Name);
+
+/// <summary>The name the owner sees her vault under from now on; the vault's stored paths keep the name it was made with.</summary>
+public sealed record RenameVaultRequest(string Name);
 
 /// <summary>The owner's current password, and <c>confirm</c>: the vault's name, typed out exactly.</summary>
 public sealed record DeleteVaultRequest(string Password, string Confirm);
@@ -191,6 +195,7 @@ public static class NoteApi
         api.MapPost("/vaults/{vault}/rekey", RekeyVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 429, 503);
         api.MapGet("/vaults/{vault}/tree", TreeAsync).Errors(400, 401, 404, 503);
         api.MapPut("/vaults/{vault}/embeddings", SetEmbeddingsAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 503);
+        api.MapPut("/vaults/{vault}/name", RenameVaultAsync).WithMetadata(SessionOnlyMetadata.Instance).Errors(400, 401, 403, 404, 409, 429, 503);
         api.MapGet("/embeddings", ListEmbeddingProviders).Errors(401, 503);
 
         api.MapGet("/notes/{vault}/{**path}", ReadAsync).Errors(400, 401, 404, 503);
@@ -263,6 +268,45 @@ public static class NoteApi
         return TypedResults.Ok(await ViewAsync(store, catalog, unlocked.Notes.Count, access, caller, ct));
     }
 
+    /// <summary>The owner renames her vault (rename spec §1.4): no password, since it is undone by renaming again and
+    /// removes no access. A member's alias answers 404, as on the other owner-only endpoints. Her open pairing codes go,
+    /// also when the outcome isn't known; her sockets, of open tabs and of her API keys and devices, are renamed and
+    /// told, also when the outcome isn't known (then, unless the vault was loaded again meanwhile, only told); members keep their alias and are told nothing. Nothing of the name is logged.</summary>
+    private static async Task<NoContent> RenameVaultAsync(
+        string vault, RenameVaultRequest body, EncryptedNoteStore store, VaultCatalog catalog, RequestCaller caller, AccountLimits limits,
+        Pairings pairings, Sync.SyncHub hub, CancellationToken ct)
+    {
+        if (limits.AliasRename(caller.User!.Id) is { } retryAfter) throw ApiErrors.TooMany(retryAfter);
+        var name = VaultNames.Check(body.Name);
+        var root = ApiPaths.Parse(vault, null, note: false);
+        var access = (await store.UnlockedVaultsAsync(ct)).FirstOrDefault(v => v.Name == root.Segments[0])
+            ?? throw ApiErrors.NotFound($"You have no vault named '{root.Segments[0]}'.");
+        if (!access.IsOwner) throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        if (string.Equals(name, access.Name, StringComparison.Ordinal)) return TypedResults.NoContent();
+        try
+        {
+            await catalog.RenameVaultAsync(caller.User.Id, caller.UserKey!, access.Vault, name, ct);
+        }
+        // Exactly ArgumentException, her slot not found, as ApiErrors maps it: its subclasses come from bugs.
+        catch (ArgumentException e) when (e.GetType() == typeof(ArgumentException))
+        {
+            throw ApiErrors.NotFound($"You have no vault named '{access.Name}'.");
+        }
+        // As the catalog has it: anything but a refusal may come after the commit. Her sockets are told too: the catalog
+        // forgot the vault, so they keep the name they hold, but her tabs read the vault list again and take a new ticket.
+        catch (Exception e) when (e is not (VaultNameTakenException or VaultBusyException or VaultDeletedException))
+        {
+            pairings.DropAll(caller.User.Id);
+            hub.VaultRenamed(caller.User.Id, access.Id);
+            throw;
+        }
+
+        // An open code would hand a device the old name, which no longer finds the vault.
+        pairings.DropAll(caller.User.Id);
+        hub.VaultRenamed(caller.User.Id, access.Id);
+        return TypedResults.NoContent();
+    }
+
     /// <summary>A vault as the caller sees it: the level from <see cref="EncryptedNoteStore.VaultInfoAsync"/>, the one her
     /// requests act at, and <c>canWrite</c> derived from it; the owner's member count, a member's own membership and
     /// whether she still has to OK its embedding provider (collab design §8.5).</summary>
@@ -306,7 +350,7 @@ public static class NoteApi
     {
         var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
             ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
+        return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.DeviceKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
             m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
             [.. m.Credentials.Select(c => new MemberCredentialView(c.Name, c.Kind, c.LastUsedAt))]))],
             [.. list.Left.Select(d => new DepartureView(d.Label, d.LeftAt))]));

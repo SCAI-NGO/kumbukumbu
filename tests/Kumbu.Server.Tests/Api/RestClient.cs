@@ -103,6 +103,23 @@ public sealed class RestClient
         return (result.IsError ?? false, Assert.IsType<TextContentBlock>(result.Content[0]).Text);
     }
 
+    /// <summary>One call of <paramref name="tool"/> over MCP as <paramref name="bearer"/>, with its whole result: for the
+    /// write tools, and for images in what <c>sh</c> answers.</summary>
+    public async Task<CallToolResult> ToolAsync(string tool, Dictionary<string, object?> args, string bearer)
+    {
+        var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(_api.Server.BaseAddress, "mcp"),
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {bearer}" },
+            },
+            _api.CreateClient(),
+            NullLoggerFactory.Instance,
+            ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: Ct);
+        return await client.CallToolAsync(tool, args, cancellationToken: Ct);
+    }
+
     /// <summary>As <see cref="ShAsync"/>, with every text block of the result, the notices appended to it included.</summary>
     public async Task<IReadOnlyList<string>> ShBlocksAsync(string command, string bearer)
     {

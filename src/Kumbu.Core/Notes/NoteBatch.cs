@@ -36,8 +36,8 @@ public sealed class NoteBatch
     /// exists).</summary>
     public List<(TrashedAttachment Trashed, StoredAttachment Restored)> AttachmentRestores { get; } = [];
 
-    /// <summary>The writer's changeset, recorded with every move and trashed note or attachment of the batch; null for
-    /// a restore.</summary>
+    /// <summary>The writer's changeset, recorded with every move and trashed note or attachment of the batch. A restored
+    /// attachment carries its own.</summary>
     public Changeset? Changeset { get; init; }
 
     public bool HasAttachments =>

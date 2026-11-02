@@ -88,7 +88,7 @@ public sealed record ActivityFileView(
     string Path, string Kind, string? From, string? Version, string? Before, bool BeforeLost, bool Trashed, string? To, string FileKind = "note");
 
 /// <summary>A changeset: what one writer did close together in time, <c>from</c> to <c>to</c>. <c>id</c> is null for
-/// writes that join no changeset (a restore, a seed, older moves and removals; one row per commit). <c>writerKind</c> as
+/// writes that join no changeset (a restore of a version or a checkpoint, a seed, older moves and removals; one row per commit). <c>writerKind</c> as
 /// on a note; <c>restore</c>: the row restored a version or a checkpoint. <c>key</c> tells rows apart for paging.</summary>
 public sealed record ActivityRowView(string? Id, string Writer, string? WriterKind, DateTime From, DateTime To, IReadOnlyList<ActivityFileView> Files, string Key, bool Restore);
 

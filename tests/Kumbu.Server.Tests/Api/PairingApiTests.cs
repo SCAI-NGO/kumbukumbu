@@ -184,6 +184,30 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
     /// and it revokes the vault's keys all the same: the codes are dropped with the request, not only with an answer.
     /// </summary>
     [Fact]
+    public async Task A_vault_is_still_found_when_a_rekey_finishes_while_it_is_looked_up()
+    {
+        var user = await NewAsync(Api);
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        catalog.FindBetweenReads = async () =>
+        {
+            catalog.FindBetweenReads = null;
+            using var between = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
+            Assert.Equal(HttpStatusCode.OK, between.StatusCode);
+        };
+
+        try
+        {
+            using var rekey = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
+
+            Assert.Equal(HttpStatusCode.OK, rekey.StatusCode);
+        }
+        finally
+        {
+            catalog.FindBetweenReads = null;
+        }
+    }
+
+    [Fact]
     public async Task A_rekey_given_up_by_its_client_still_drops_the_open_pairing_codes()
     {
         var bound = TimeSpan.FromSeconds(30);
@@ -221,6 +245,90 @@ public sealed class PairingApiTests(KumbuAppFactory app) : IAsyncDisposable
         // The given-up run goes on to its end; a second run waits behind it.
         using var again = await user.SendAsync(HttpMethod.Post, $"/api/vaults/{user.Vault}/rekey", new { password = Password });
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+    }
+
+    private static async Task RenameAsync(RestClient user, string vault, string name)
+    {
+        using var renamed = await user.SendAsync(HttpMethod.Put, $"/api/vaults/{vault}/name", new { name });
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+    }
+
+    /// <summary>A code made before would hand a device the old name. <see cref="RestClient.Vault"/> stays
+    /// <c>Gartenarbeit</c>, so later paths are spelt out.</summary>
+    [Fact]
+    public async Task A_rename_drops_open_pairing_codes()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+
+        await RenameAsync(user, "Gartenarbeit", "Garten");
+
+        Assert.False(IsOpen(code));
+        using (var old = await RedeemAsync(code, "Laptop"))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+        }
+
+        using var made = await user.SendAsync(HttpMethod.Post, "/api/vaults/Garten/pairing", new { });
+        Assert.Equal(HttpStatusCode.Created, made.StatusCode);
+        using var redeemed = await RedeemAsync((await JsonAsync(made))["code"]!.GetValue<string>(), "Laptop");
+        Assert.Equal(HttpStatusCode.Created, redeemed.StatusCode);
+        var body = await JsonAsync(redeemed);
+        Assert.Equal(("Garten", "Garten – Obsidian Laptop"), (body["vault"]!.GetValue<string>(), body["keyName"]!.GetValue<string>()));
+    }
+
+    /// <summary>A rename that fails with an outcome unknown may have committed all the same: its codes go too.</summary>
+    [Fact]
+    public async Task A_rename_whose_outcome_is_unknown_drops_open_pairing_codes()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        var code = (await CodeAsync(user))["code"]!.GetValue<string>();
+        var catalog = Api.Services.GetRequiredService<VaultCatalog>();
+        catalog.MetaFaultAt = point => point == "inside-rename" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await user.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" });
+            Assert.Equal(HttpStatusCode.InternalServerError, renamed.StatusCode);
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.False(IsOpen(code));
+        using var old = await RedeemAsync(code, "Laptop");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_old_device_gets_404_by_the_old_name()
+    {
+        var user = await NewAsync(Api, vault: "Gartenarbeit");
+        await user.CreateAsync("plan.md", "Beete\n");
+        using var paired = await RedeemAsync((await CodeAsync(user))["code"]!.GetValue<string>(), "Laptop");
+        var key = (await JsonAsync(paired))["key"]!.GetValue<string>();
+
+        await RenameAsync(user, "Gartenarbeit", "Garten");
+
+        // What the plugin reads as "this key can't open the vault any more".
+        using (var gone = await user.GetAsync("/api/vaults/Gartenarbeit/versions", key))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        }
+
+        using (var created = await user.SendAsync(HttpMethod.Post, "/api/vaults", new { name = "Gartenarbeit" }))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        }
+
+        using (var other = await user.GetAsync("/api/vaults/Gartenarbeit/versions", key))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
+        }
+
+        using var versions = await user.GetAsync("/api/vaults/Garten/versions", key);
+        Assert.Equal(HttpStatusCode.OK, versions.StatusCode);
+        Assert.Equal(["/Garten/plan.md"], (await JsonAsync(versions))["notes"]!.AsArray().Select(n => n!["path"]!.GetValue<string>()).ToArray());
     }
 
     [Fact]

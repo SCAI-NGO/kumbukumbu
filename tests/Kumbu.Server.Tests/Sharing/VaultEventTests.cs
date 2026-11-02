@@ -121,6 +121,24 @@ public sealed class VaultEventTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task The_owner_sees_it_in_her_activity()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit");
+        var vaultId = await alice.VaultIdAsync();
+
+        using (var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        }
+
+        Assert.Equal(["You renamed this vault."], await ActivityTextsAsync(alice, "Garten"));
+        // A plain document: neither the old name nor the new.
+        var stored = Assert.Single(await app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName).Find(new BsonDocument("vault", vaultId)).ToListAsync(Ct));
+        Assert.Equal(VaultEvents.VaultRenamed, stored["kind"].AsString);
+        Assert.DoesNotContain("Garten", stored.ToJson(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Events_go_with_the_vault()
     {
         var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);

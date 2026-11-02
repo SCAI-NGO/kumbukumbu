@@ -22,7 +22,7 @@ public sealed record ActivityFile(
     string FileKind = "note");
 
 /// <summary>A changeset of a vault: what one writer did close together in time.</summary>
-/// <param name="Id">Null for writes that join no changeset (restore, seed) or moves/removals recorded before moves
+/// <param name="Id">Null for writes that join no changeset (a restore of a version or a checkpoint, seed) or moves/removals recorded before moves
 /// and trash records carried one; those of one writer at one instant (one commit) are one row.</param>
 /// <param name="Key">Tells rows apart, also rows that end at the same instant: the paging cursor is (<c>To</c>, <c>Key</c>).
 /// Opaque per viewer when <see cref="Activity.Rows"/> is given a row key (collab design §8.2).</param>

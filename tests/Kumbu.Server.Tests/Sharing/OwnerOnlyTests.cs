@@ -64,6 +64,32 @@ public sealed class OwnerOnlyTests(KumbuAppFactory app)
         Assert.Equal("Work", (await RestClient.JsonAsync(bobs))["name"]!.GetValue<string>());
     }
 
+    [Fact]
+    public async Task A_member_may_not_rename_the_vault()
+    {
+        var (alice, bob, _, membership) = await SharedAsync();
+
+        foreach (var role in new[] { MemberRole.Read, MemberRole.Write, MemberRole.Maintain })
+        {
+            await Share.SetRoleAsync(app.Database, membership, role);
+            // Also to the name he has for it already, which the owner's own rename would answer with 204 and do nothing.
+            foreach (var name in new[] { "Beet", "garten" })
+            {
+                using var refused = await bob.SendAsync(HttpMethod.Put, "/api/vaults/garten/name", new { name });
+                Assert.Equal(HttpStatusCode.NotFound, refused.StatusCode);
+                Assert.Equal("You have no vault named 'garten'.", await RestClient.ErrorAsync(refused));
+            }
+        }
+
+        using (var alices = await alice.GetAsync("/api/vaults"))
+        {
+            Assert.Equal(["Gartenarbeit"], (await RestClient.JsonAsync(alices)).AsArray().Select(v => v!["name"]!.GetValue<string>()).ToArray());
+        }
+
+        using var bobs = await bob.GetAsync("/api/vaults");
+        Assert.Equal(["Work", "garten"], (await RestClient.JsonAsync(bobs)).AsArray().Select(v => v!["name"]!.GetValue<string>()).Order(StringComparer.Ordinal).ToArray());
+    }
+
     [Theory]
     [InlineData("delete")]
     [InlineData("rekey")]

@@ -202,7 +202,8 @@ public static class Security
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
 /// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL. Peeking at an
-/// account invitation, 20 per minute per network. Renaming a vault shared with one, 30 per minute per user.
+/// account invitation, 20 per minute per network. Renaming a vault, one's own or one shared with one, 30 per minute
+/// per user (together).
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
@@ -264,8 +265,9 @@ public sealed class AccountLimits : IDisposable
     public const int MetadataFetchesPerHost = 10;
 
     /// <summary>
-    /// A member's renames of vaults shared with her, a minute per user (spec §1.3): each one is a transaction on her
-    /// member slot. A person renames a vault now and then; a loop of them gets 30 a minute.
+    /// A member's renames of vaults shared with her and an owner's renames of her own vaults, together a minute per user
+    /// (spec §1.3; rename spec §1.4): each one is a transaction on her member or user slot. A person renames a vault now
+    /// and then; a loop of them gets 30 a minute.
     /// </summary>
     public const int AliasRenamesPerUser = 30;
 
@@ -341,7 +343,8 @@ public sealed class AccountLimits : IDisposable
     public TimeSpan? MetadataFetch(HttpContext context, string host) =>
         Take(_metadataFetchByAddress, Address(context)) ?? Take(_metadataFetchByHost, host.ToLowerInvariant());
 
-    /// <summary>A member's rename of a vault shared with her, counted per user across her sessions.</summary>
+    /// <summary>A member's rename of a vault shared with her, or an owner's of her own vault, counted together per user
+    /// across her sessions.</summary>
     public TimeSpan? AliasRename(string userId) => Take(_aliasRenameByUser, userId);
 
     public const string HistoryScansRefused = "Too many searches of earlier versions or reads of activity; try again in a minute.";

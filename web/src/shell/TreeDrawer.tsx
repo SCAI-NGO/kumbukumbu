@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -20,10 +20,11 @@ import ExportConfirm from "../data/ExportConfirm";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
 import AccessList from "./AccessList";
-import MemberPanel from "./MemberPanel";
+import MemberPanel, { LeaveVaultDialog } from "./MemberPanel";
 import ConnectObsidianDialog from "./ConnectObsidianDialog";
 import DeleteVaultDialog from "./DeleteVaultDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
+import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
 import VaultSwitcher from "./VaultSwitcher";
 
@@ -338,9 +339,12 @@ export default function TreeDrawer(props: {
   const [sharing, setSharing] = useState(false);
   const [member, setMember] = useState(false);
   const [deletingVault, setDeletingVault] = useState<string | null>(null);
+  const [renamingVault, setRenamingVault] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<{ vault: string; membership: string } | null>(null);
   const sidebar = useSidebarWidth();
   const [resizing, setResizing] = useState(false);
   const active = vaults.data?.find((v) => v.name === activeVault);
+  const membership = active?.membership;
   const embeddings = active?.embeddings;
   const level = levelOf(active);
   const createBoard = useBoardAction(activeVault ?? "");
@@ -392,6 +396,8 @@ export default function TreeDrawer(props: {
           ...(owner
             ? [
                 { label: "Share…", icon: Users, onSelect: () => setSharing(true) },
+                // Held as chosen: the rename changes the active vault before the dialog closes.
+                { label: "Rename vault…", icon: Pencil, onSelect: () => setRenamingVault(activeVault) },
               ]
             : []),
           { label: "Connect Obsidian…", icon: Link2, onSelect: () => setConnecting(true) },
@@ -403,6 +409,8 @@ export default function TreeDrawer(props: {
     ...(owner && embeddings && providers.data?.some((p) => p.external) ? [{ label: "Search by meaning…", icon: Sparkles, onSelect: () => setChoosingEmbeddings(true) }] : []),
     // Last, away from the everyday entries; the dialog Settings has, with the name typed and the password.
     ...(owner && activeVault ? [{ label: "Delete vault…", icon: Trash2, onSelect: () => setDeletingVault(activeVault) }] : []),
+    // A member's way out, last for the same reason. Held as chosen: leaving forgets the active vault before the dialog closes.
+    ...(membership && activeVault ? [{ label: "Leave this vault…", icon: LogOut, onSelect: () => setLeaving({ vault: activeVault, membership }) }] : []),
   ];
 
   const style = { "--sidebar-width": `${sidebar.width}px` } as CSSProperties;
@@ -478,7 +486,9 @@ export default function TreeDrawer(props: {
     <>
       {sharing && activeVault && <AccessList vault={activeVault} onClose={() => setSharing(false)} />}
       {member && activeVault && <MemberPanel vault={activeVault} onClose={() => setMember(false)} />}
+      {renamingVault && <RenameVaultDialog vault={renamingVault} onClose={() => setRenamingVault(null)} />}
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
+      {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />

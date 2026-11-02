@@ -26,6 +26,11 @@ public sealed class VaultDocument
     [BsonElement("rekeyEnded"), BsonIgnoreIfNull]
     public List<string>? RekeyEnded { get; set; }
 
+    /// <summary>The ids of the memberships those keys and connections were of; the finish leaves each that is still
+    /// active a notice (<see cref="Sharing.MemberNotices"/>), also after a resume.</summary>
+    [BsonElement("rekeyEndedMembers"), BsonIgnoreIfNull]
+    public List<string>? RekeyEndedMembers { get; set; }
+
     /// <summary>Written by every transaction that creates or activates a membership, so that two at once conflict and
     /// the member limits hold (collab design §13 M8).</summary>
     [BsonElement("membershipsChanged"), BsonIgnoreIfDefault]
