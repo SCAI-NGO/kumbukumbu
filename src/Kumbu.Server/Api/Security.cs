@@ -202,7 +202,8 @@ public static class Security
 /// successful or not: each one costs an Argon2 run, so the limits also bound the memory and CPU a client can make
 /// the server spend. Searching earlier versions and reading a vault's activity, 60 per minute per user (together).
 /// Fetching an OAuth client's metadata document, 10 per minute per address and 10 per host of its URL. Peeking at an
-/// account invitation, 20 per minute per network. Renaming a vault shared with one, 30 per minute per user.
+/// account invitation, 20 per minute per network. Renaming a vault, one's own or one shared with one, 30 per minute
+/// per user (together).
 /// Sliding windows, as in <see cref="WrongKeyLimiter"/>.
 /// </summary>
 public sealed class AccountLimits : IDisposable
