@@ -379,6 +379,19 @@ public class PdfCommandTests
     }
 
     [Fact]
+    public async Task Info_gives_a_figure_flush_with_the_edge_a_region_ready_for_crop()
+    {
+        var page = new PdfPage(1, 595.3, 842, 0, PageType.Mixed, 900, 0.2, 0.004, 0.3, 1, [new PdfRegion("drawing", 100.6, 10, 494.7, 20)]);
+        await Upload("/Papers/e.pdf", new PdfAnalysis("a", 1, 1, null, null, [page]));
+
+        var info = await Run("pdf info /Papers/e.pdf");
+        var crop = await Run("pdf /Papers/e.pdf 1 --crop 100,10,495,20");
+
+        Assert.EndsWith("drawing 100,10,495,20", info.Output);
+        Assert.False(crop.IsError, crop.Output);
+    }
+
+    [Fact]
     public async Task Info_lists_eight_regions_a_page_and_a_scan_without_text()
     {
         PdfRegion[] many = [.. Enumerable.Range(0, 11).Select(i => new PdfRegion("drawing", 10 * i, 20.4, 30.6, 40))];
@@ -387,7 +400,7 @@ public class PdfCommandTests
         var lines = (await Run("pdf info /Papers/b.pdf")).Output.Split('\n');
 
         Assert.Equal("Pages: 1 mixed, 2 image", lines[1]);
-        Assert.Equal("p1 mixed: vector drawing ≈ 50 % — regions (pt, x,y,w,h): " + string.Join("; ", Enumerable.Range(0, 8).Select(i => $"drawing {10 * i},20,31,40")) + "; …and 3 more", lines[2]);
+        Assert.Equal("p1 mixed: vector drawing ≈ 50 % — regions (pt, x,y,w,h): " + string.Join("; ", Enumerable.Range(0, 8).Select(i => $"drawing {10 * i},20,31,41")) + "; …and 3 more", lines[2]);
         Assert.Equal("p2 image: one image covers the page, no text layer — regions (pt, x,y,w,h): image 0,0,595,842", lines[3]);
     }
 

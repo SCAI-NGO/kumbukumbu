@@ -64,4 +64,31 @@ public class CropTests
         Assert.False(Crop.TryParse(text, out _, out var error));
         Assert.Contains("x,y,w,h", error);
     }
+
+    [Fact]
+    public void Enclosing_rounds_outward()
+    {
+        Assert.Equal("10,20,31,41", Crop.Enclosing(10.4, 20.6, 30, 40, 595, 842)!.ToString());
+    }
+
+    [Fact]
+    public void Enclosing_stays_within_the_page()
+    {
+        var crop = Crop.Enclosing(100.6, 10, 494.7, 20, 595.3, 842)!;
+
+        Assert.Equal("100,10,495,20", crop.ToString());
+        Assert.Equal(595, crop.X + crop.Width);
+    }
+
+    [Fact]
+    public void Enclosing_keeps_whole_numbers()
+    {
+        Assert.Equal(new Crop(72, 300, 451, 260), Crop.Enclosing(72, 300, 451, 260, 595, 842));
+    }
+
+    [Fact]
+    public void Enclosing_of_a_box_past_the_edge_is_null()
+    {
+        Assert.Null(Crop.Enclosing(595.1, 10, 5, 5, 595.3, 842));
+    }
 }

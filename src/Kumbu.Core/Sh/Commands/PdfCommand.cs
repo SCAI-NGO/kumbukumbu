@@ -286,7 +286,8 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var found = page.Type == PageType.Image
             ? "one image covers the page" + (page.Chars == 0 ? ", no text layer" : "")
             : string.Join(", ", Figures(page, small: false));
-        var regions = page.Regions.Take(MaxRegions).Select(r => $"{r.Kind} {Point(r.X)},{Point(r.Y)},{Point(r.Width)},{Point(r.Height)}").ToList();
+        var regions = page.Regions.Take(MaxRegions).Select(r => (r.Kind, Region: Crop.Enclosing(r.X, r.Y, r.Width, r.Height, page.Width, page.Height)))
+            .Where(r => r.Region is not null).Select(r => $"{r.Kind} {r.Region}").ToList();
         if (page.Regions.Count > MaxRegions) regions.Add($"…and {page.Regions.Count - MaxRegions} more");
         var listed = regions.Count == 0 ? "" : $" — regions (pt, x,y,w,h): {string.Join("; ", regions)}";
         return $"p{page.Number} {AttachmentText.TypeName(page.Type)}: {found}{listed}";
