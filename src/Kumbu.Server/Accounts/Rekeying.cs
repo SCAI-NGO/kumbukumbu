@@ -140,17 +140,19 @@ public sealed class Rekeying(
         // Only what has access now: a key or app past its expiry or revoked has none to lose, even while its slots
         // wait for the sweep.
         var now = time.GetUtcNow().UtcDateTime;
-        var keyNames = (await keys.ListAsync(user, userKey, ct))
-            .Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).Select(k => k.Name);
+        var live = (await keys.ListAsync(user, userKey, ct)).Where(k => keyIds.Contains(k.Id) && k.RevokedAt is null && !(k.ExpiresAt <= now)).ToList();
         var connectionNames = (await connections.ListAsync(user, userKey, ct))
             .Where(c => connectionIds.Contains(c.Id) && c.RevokedAt is null && !(c.ExpiresAt <= now)).Select(c => c.Name);
         var vaultKey = await catalog.OwnerVaultKeyAsync(user.Id, userKey, vaultId, ct);
         var members = await memberships.AccessListAsync(vaultId, vaultKey, ct);
         var left = await memberships.DeparturesAsync(vaultId, vaultKey, ct);
-        return new VaultAccessList([.. keyNames.Order(StringComparer.Ordinal)], [.. connectionNames.Order(StringComparer.Ordinal)], members, left);
+        return new VaultAccessList(
+            [.. live.Select(k => k.Name).Order(StringComparer.Ordinal)],
+            [.. live.Where(k => k.Kind == ApiKeyKind.Device).Select(k => k.Name).Order(StringComparer.Ordinal)],
+            [.. connectionNames.Order(StringComparer.Ordinal)], members, left);
     }
 }
 
-/// <summary>The owner's access list of a vault: her own keys' and apps' names, the memberships, and who left since the
-/// vault was last re-encrypted.</summary>
-internal sealed record VaultAccessList(string[] ApiKeys, string[] Connections, IReadOnlyList<Sharing.MemberAccess> Members, IReadOnlyList<Sharing.Departure> Left);
+/// <summary>The owner's access list of a vault: her own keys' and apps' names, those of the keys that are devices, the
+/// memberships, and who left since the vault was last re-encrypted.</summary>
+internal sealed record VaultAccessList(string[] ApiKeys, string[] DeviceKeys, string[] Connections, IReadOnlyList<Sharing.MemberAccess> Members, IReadOnlyList<Sharing.Departure> Left);

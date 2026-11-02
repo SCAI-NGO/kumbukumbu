@@ -8409,6 +8409,7 @@ export interface components {
         };
         VaultAccessView: {
             apiKeys: string[];
+            deviceKeys: string[];
             connections: string[];
             members: components["schemas"]["MemberAccessView"][];
             left: components["schemas"]["DepartureView"][];

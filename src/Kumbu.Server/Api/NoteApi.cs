@@ -42,9 +42,10 @@ public sealed record VaultView(
 
 /// <summary>Who has access to the owner's vault. <c>apiKeys</c> and <c>connections</c>: what would lose access if the
 /// vault were re-encrypted, the names of her API keys with access to it and of her connected apps that list it.
+/// <c>deviceKeys</c>: those of <c>apiKeys</c> that are devices, which lose the vault when it is renamed.
 /// <c>members</c>: the people it is shared with or who are invited, oldest first. <c>left</c>: who left it since it was
 /// last re-encrypted, oldest first, for the offer of a re-encryption (collab design §6.4).</summary>
-public sealed record VaultAccessView(string[] ApiKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left);
+public sealed record VaultAccessView(string[] ApiKeys, string[] DeviceKeys, string[] Connections, MemberAccessView[] Members, DepartureView[] Left);
 
 /// <summary>A member who left the vault: the owner's <c>label</c> for her, and when (<c>leftAt</c>).</summary>
 public sealed record DepartureView(string Label, DateTime LeftAt);
@@ -347,7 +348,7 @@ public static class NoteApi
     {
         var list = await rekeying.AccessAsync(caller.User!, caller.UserKey!, vault, ct)
             ?? throw ApiErrors.NotFound($"You have no vault named '{vault}'.");
-        return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
+        return TypedResults.Ok(new VaultAccessView(list.ApiKeys, list.DeviceKeys, list.Connections, [.. list.Members.Select(m => new MemberAccessView(
             m.Id, m.Label, Sharing.MemberRoles.ToText(m.Role), m.Status, m.Confirm, m.AcceptedAt, m.RedeemedAt, m.ExpiresAt,
             [.. m.Credentials.Select(c => new MemberCredentialView(c.Name, c.Kind, c.LastUsedAt))]))],
             [.. list.Left.Select(d => new DepartureView(d.Label, d.LeftAt))]));
