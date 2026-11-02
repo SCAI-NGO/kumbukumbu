@@ -202,6 +202,7 @@ def matplotlib_figures(out: Path, rng: random.Random) -> list[Path]:
         elif layout == "side-by-side":
             figs = [new_figure(rng, 1, used, small=True), new_figure(rng, 2, used, small=True)]
             paragraph(fig, 56, 60, 480, 6)
+            # About 11 % of the page each, labels included, as in the playbook.
             chart(fig, figs[0], 85, 270, 180, 170, "below")
             chart(fig, figs[1], 360, 270, 180, 170, "below")
             paragraph(fig, 56, 560, 480, 8)
@@ -325,9 +326,14 @@ def calc_figures(out: Path, rng: random.Random) -> list[Path]:
         elif layout == "side-by-side":
             figs = [new_figure(rng, 1, used, small=True), new_figure(rng, 2, used, small=True)]
             lines(ws, 1, 5, 80)
-            chart(wb, figs[0], "A8", 7.4, 6.8, "b")
-            chart(wb, figs[1], "E8", 7.4, 6.8, "b")
-            lines(ws, 27, 6, 80)
+            # About 11 % of the page each, as in the playbook: narrower columns and margins, so
+            # that both fit side by side without the page being scaled down.
+            for col in "ABCDEFGH":
+                ws.column_dimensions[col].width = 9
+            ws.page_margins.left = ws.page_margins.right = 0.3
+            chart(wb, figs[0], "A8", 9, 9.2, "b")
+            chart(wb, figs[1], "F8", 9, 9.2, "b")
+            lines(ws, 29, 6, 80)
         elif layout == "between-paragraphs":
             f = new_figure(rng, 1, used)
             lines(ws, 1, 10, 80)

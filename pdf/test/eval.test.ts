@@ -69,7 +69,32 @@ describe("the eval of regions with labels", () => {
     const piece = { kind: "drawing" as const, x: 240, y: 180, w: 50, h: 70 };
     expect(judge(items, [{ ...tight, w: 120, labelled: { x: 50, y: 80, w: 180, h: 200 } }, piece])[0]!.failures).toContain("drawing outside");
 
-    // No region at all.
+    // No region at all, or only one beyond the figure's labels.
     expect(judge(items, [])[0]).toMatchObject({ by: "none", complete: false, failures: ["no region"] });
+    const elsewhere = { kind: "drawing" as const, x: 100, y: 600, w: 200, h: 100 };
+    expect(judge(items, [elsewhere])[0]).toMatchObject({ by: "none", complete: false });
+    expect(judge(items, [elsewhere])[0]!.failures).toContain("no region");
+  });
+
+  it("gives each of two figures on a page the region nearest its labels", () => {
+    // Figure A as above; figure B the same, 300 points lower.
+    const b = (it: Item) => ({ ...it, text: it.text.replace("zqA3", "zqB7"), y: it.y + 300 });
+    const two = [...items.slice(0, 5), ...items.slice(0, 5).map(b)];
+    const lower = { ...tight, y: tight.y + 300, labelled: { ...labelled, y: labelled.y + 300 } };
+    const figB: FigureManifest = { ...figure, figure: 2, token: "zqB7", labels: ["zqB7 north", "zqB7 south"] };
+    // Listed lower first, so that order alone can't give the right answer.
+    const results = judge(two, [lower, { ...tight, labelled }], [figure, figB]);
+    expect(results.map((r) => [r.token, r.pass, r.failures])).toEqual([
+      ["zqA3", true, []],
+      ["zqB7", true, []],
+    ]);
+  });
+
+  it("counts only a token followed by a number as a tick label", () => {
+    const ticks = { ...figure, minTickLabels: 3 };
+    // Two ticks and "zqA3 north": not three.
+    expect(judge(items, [{ ...tight, labelled }], [ticks])[0]!.failures).toEqual(["too few tick labels"]);
+    const { runs } = classifyItems(items, body);
+    expect(runs.get("zqA3")).toContain("zqA3northzqA3south");
   });
 });

@@ -237,8 +237,9 @@ async function layoutPdf(layout: string, rnd: Random, words: { body: string[]; l
     case "side-by-side": {
       figures.push(fig(1, true), fig(2, true));
       d.paragraph(56, 60, 480, 6);
-      d.chart(figures[0]!, { x: 95, y: 280, w: 175, h: 160 }, "below");
-      d.chart(figures[1]!, { x: 365, y: 280, w: 175, h: 160 }, "below");
+      // About 11 % of the page each, labels included, as in the playbook.
+      d.chart(figures[0]!, { x: 95, y: 270, w: 190, h: 182 }, "below");
+      d.chart(figures[1]!, { x: 365, y: 270, w: 190, h: 182 }, "below");
       d.paragraph(56, 560, 480, 8);
       break;
     }

@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { analyse } from "../src/analyse.js";
 import { textBoxes } from "../src/boxes.js";
-import type { Box, PageType, Region } from "../src/classify.js";
+import { type Box, type PageType, type Region, RULES_VERSION } from "../src/classify.js";
 import * as fixtures from "../test/fixtures.js";
 
 export const LAYOUTS = [
@@ -33,6 +33,8 @@ export type Manifest = { generator: string; layout: string; page: number; contro
 /** Share of an item's area that must lie in the judged box for "complete". */
 export const COMPLETE_AREA = 0.9;
 export const BARS = { overall: 0.9, generator: 0.8, layout: 0.7, figures: 60 } as const;
+/** Page types and tight regions are held to those of rules 1, which the baseline must have been made by. */
+export const BASELINE_RULES = 1;
 
 // A region as the analysis gives it, with its box of labels once the rule has one.
 export type JudgedRegion = Region & { labelled?: Box };
@@ -159,11 +161,13 @@ export function judgeFigures(items: Item[], regions: JudgedRegion[], figures: Fi
       const cs = mine.map(centre);
       const mid = { x: cs.reduce((s, c) => s + c.x, 0) / cs.length, y: cs.reduce((s, c) => s + c.y, 0) / cs.length };
       const region = regions.reduce((best, r) => (distance(mid, r) < distance(mid, best) ? r : best));
+      const span = bounds(mine);
+      // A region that doesn't even reach the span of the figure's labels is someone else's.
+      if (shareIn(region, span) === 0) failures.add("no region");
       const judged = region.labelled ?? region;
-      by = region.labelled ? "labelled" : "tight";
+      by = failures.has("no region") ? "none" : region.labelled ? "labelled" : "tight";
       // Its drawing: that region, and any other whose centre lies within the figure's labels, as a
       // chart that falls apart into pieces does.
-      const span = bounds(mine);
       const drawing = regions.filter((r) => r === region || holds(span, centre(r)));
       if (drawing.some((r) => shareIn(r, judged) < COMPLETE_AREA)) failures.add("drawing outside");
       if (mine.some((c) => shareIn(c, judged) < COMPLETE_AREA)) failures.add("label outside");
@@ -215,7 +219,7 @@ const FIXTURES: Record<string, () => Promise<Uint8Array>> = {
   rotatedTextPage: fixtures.rotatedTextPage,
 };
 
-type Baseline = { seeds: number[]; pages: Record<string, { type: PageType; regions: Region[] }> };
+type Baseline = { rules: number; seeds: number[]; pages: Record<string, { type: PageType; regions: Region[]; control?: boolean }> };
 const tight = (rs: JudgedRegion[]): Region[] => rs.map(({ kind, x, y, w, h }) => ({ kind, x, y, w, h }));
 
 export function parseSeeds(s: string): number[] {
@@ -244,12 +248,17 @@ async function main(argv: string[]) {
   const out = argv[0];
   const at = argv.indexOf("--seeds");
   if (!out || out.startsWith("--") || at < 0 || !argv[at + 1]) {
-    console.error("usage: regions.js <out> --seeds 1-5 [--baseline] [--verbose]");
+    console.error("usage: regions.js <out> --seeds 1-5 [--baseline [--force]] [--verbose]");
     process.exit(2);
   }
   const seeds = parseSeeds(argv[at + 1]!);
   const writeBaseline = argv.includes("--baseline");
   const verbose = argv.includes("--verbose");
+  const baselinePath = join(out, "baseline.json");
+  if (writeBaseline && existsSync(baselinePath) && !argv.includes("--force")) {
+    console.error(`${baselinePath} exists; add --force to write it again.`);
+    process.exit(2);
+  }
 
   const cache = new Map<string, Measured>();
   const measured = async (key: string, bytes: () => Promise<Uint8Array> | Uint8Array, page = 1) => {
@@ -265,6 +274,7 @@ async function main(argv: string[]) {
   const judgedBy = { labelled: 0, tight: 0, none: 0 };
   let controls = 0;
   let bodyLines = 0;
+  const controlKeys = new Set<string>();
   const lines: string[] = [];
 
   for (const seed of seeds) {
@@ -285,6 +295,7 @@ async function main(argv: string[]) {
         const m = await measured(key, () => new Uint8Array(readFileSync(pdf)), manifest.page);
         if (manifest.control) {
           controls++;
+          controlKeys.add(key);
           const n = bodyLinesInLabelled(m.items, m.regions);
           bodyLines += n;
           if (n > 0 && verbose) lines.push(`${key}: ${n} body line(s) in a with-labels region`);
@@ -310,7 +321,6 @@ async function main(argv: string[]) {
   }
 
   // Page types and tight regions against rules 1, on the baseline's seeds and the fixtures.
-  const baselinePath = join(out, "baseline.json");
   const current = async (key: string): Promise<Measured | null> => {
     if (key.startsWith("fixture:")) return measured(key, FIXTURES[key.slice(8)]!);
     const path = join(out, key);
@@ -321,19 +331,22 @@ async function main(argv: string[]) {
     const pages: Baseline["pages"] = {};
     for (const key of keys) {
       const m = (await current(key))!;
-      pages[key] = { type: m.type, regions: tight(m.regions) };
+      pages[key] = { type: m.type, regions: tight(m.regions), ...(controlKeys.has(key) ? { control: true } : {}) };
     }
-    writeFileSync(baselinePath, JSON.stringify({ seeds, pages } satisfies Baseline, null, 1) + "\n");
+    writeFileSync(baselinePath, JSON.stringify({ rules: RULES_VERSION, seeds, pages } satisfies Baseline, null, 1) + "\n");
   }
   let compared = 0;
   let typeDiffs = 0;
   let regionDiffs = 0;
   let missing = 0;
   let baseSeeds: number[] = [];
+  let baseRules: number | undefined;
+  let baseControls = 0;
   const hasBaseline = existsSync(baselinePath);
   if (hasBaseline) {
     const base = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline;
     baseSeeds = base.seeds;
+    baseRules = base.rules;
     for (const [key, want] of Object.entries(base.pages)) {
       const m = await current(key);
       if (!m) {
@@ -345,7 +358,9 @@ async function main(argv: string[]) {
       if (JSON.stringify(tight(m.regions)) !== JSON.stringify(want.regions)) regionDiffs++;
       if (verbose && (m.type !== want.type || JSON.stringify(tight(m.regions)) !== JSON.stringify(want.regions)))
         lines.push(`${key}: differs from the baseline`);
-      if (key.startsWith("fixture:")) {
+      // The baseline's controls are checked on every run, held-out seeds or not; once each.
+      if (key.startsWith("fixture:") || (want.control && !controlKeys.has(key))) {
+        if (want.control) baseControls++;
         const n = bodyLinesInLabelled(m.items, m.regions);
         bodyLines += n;
         if (n > 0 && verbose) lines.push(`${key}: ${n} body line(s) in a with-labels region`);
@@ -366,13 +381,17 @@ async function main(argv: string[]) {
     },
     {
       name: `each layout ≥ ${BARS.layout * 100} %`,
-      ok: lays.every((l) => share(byLayout.get(l)!) >= BARS.layout),
+      ok: lays.length === LAYOUTS.length && lays.every((l) => share(byLayout.get(l)!) >= BARS.layout),
       value: `lowest ${lays.map((l) => pct(byLayout.get(l)!.pass, byLayout.get(l)!.figures)).sort((a, b) => parseFloat(a) - parseFloat(b))[0] ?? "-"}`,
     },
     {
       name: "page types and tight regions as the baseline",
-      ok: hasBaseline && typeDiffs === 0 && regionDiffs === 0 && missing === 0,
-      value: hasBaseline ? `${typeDiffs} type(s), ${regionDiffs} region list(s) differ, ${missing} missing` : "no baseline",
+      ok: hasBaseline && baseRules === BASELINE_RULES && typeDiffs === 0 && regionDiffs === 0 && missing === 0,
+      value: !hasBaseline
+        ? "no baseline"
+        : baseRules !== BASELINE_RULES
+          ? `the baseline was made by rules ${baseRules ?? "unknown"}, not ${BASELINE_RULES}`
+          : `${typeDiffs} type(s), ${regionDiffs} region list(s) differ, ${missing} missing`,
     },
     { name: "no body line in a with-labels region", ok: bodyLines === 0, value: `${bodyLines}` },
   ];
@@ -394,10 +413,10 @@ async function main(argv: string[]) {
   p(`${"unidentified items".padEnd(22)}${GENERATORS.map((g) => String(unidentified.get(g)).padStart(12)).join("")}${String(u).padStart(8)}`);
   p("(figures per kind; unidentified in text items, counted for neither side)");
   p();
-  p(`Controls: ${controls} pages of the judged seeds; fixtures: ${Object.keys(FIXTURES).length}`);
+  p(`Controls checked for body lines: ${controls} of the judged seeds, ${baseControls} more of the baseline's; fixtures: ${Object.keys(FIXTURES).length}`);
   p(
     hasBaseline
-      ? `Baseline (seeds ${baseSeeds.join(",")} and the fixtures${writeBaseline ? ", written now" : ""}): ${compared} pages compared`
+      ? `Baseline (rules ${baseRules ?? "unknown"}, seeds ${baseSeeds.join(",")} and the fixtures${writeBaseline ? ", written now" : ""}): ${compared} pages compared`
       : "Baseline: none (run with --baseline to write one)",
   );
   p();
