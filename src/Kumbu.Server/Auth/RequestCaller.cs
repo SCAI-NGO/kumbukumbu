@@ -105,6 +105,8 @@ public sealed class RequestCaller : ICaller
     /// deactivated) says so instead.</summary>
     public string ReadOnlySentence(string vault) =>
         ReadOnlyCode(vault) is { } code ? VaultAccess.ReadOnlySentence(code, vault)
+        // The same for every name the caller doesn't have, so it tells nothing of other people's vaults.
+        : Level(vault) is null ? (Kind == CallerKind.Session ? $"you have no vault named {vault}" : $"this key has no vault named {vault}")
         : Kind == CallerKind.Session ? $"you can only read vault {vault}"
         : RoleHoldsBack(vault) ? $"your role in vault {vault} is read, and a key never acts above your role; only the owner can change it"
         : $"this key can only read vault {vault}";
