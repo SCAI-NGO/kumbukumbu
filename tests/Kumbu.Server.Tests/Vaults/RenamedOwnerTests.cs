@@ -1058,6 +1058,12 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.NotFound, versions.StatusCode);
         }
 
+        // Its key keeps its access, now under the new name (the rename removes none): what pairing again gets.
+        var renamedVersions = (await GetAsync(w, "/api/vaults/Garten/versions", device)).Json;
+        Assert.Contains("/Garten/plan.md", renamedVersions["notes"]!.AsArray().Select(n => n!["path"]!.GetValue<string>()));
+        AssertSomeUnderGarten(renamedVersions);
+        Assert.Equal(StateOf(renamedVersions), renamedVersions["state"]!.GetValue<string>());
+
         // 7. A new vault Gartenarbeit: a vault of its own.
         w = w with { DecoyId = await NewDecoyAsync(alice) };
         Assert.NotEqual(w.Id, w.DecoyId);
