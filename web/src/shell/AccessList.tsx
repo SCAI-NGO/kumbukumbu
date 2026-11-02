@@ -10,6 +10,7 @@ import {
   useRaiseToMaintain,
   useRekeyVault,
   useVaultAccess,
+  withdrawnSentence,
   type Departure,
   type MemberAccess,
   type Role,
@@ -82,11 +83,11 @@ function RevokeDialog({ vault, member, onDone, onClose }: { vault: string; membe
         await call(api.POST("/api/vaults/{vault}/memberships/{id}/revoke", { params: { path: { vault, id: member.id } } }));
         setRevoked(true);
       }
-      if (reencrypt) await call(api.POST("/api/vaults/{vault}/rekey", { params: { path: { vault } }, body: { password } }));
+      return reencrypt ? await call(api.POST("/api/vaults/{vault}/rekey", { params: { path: { vault } }, body: { password } })) : null;
     },
-    onSuccess: () => {
+    onSuccess: (view) => {
       setPassword("");
-      onDone(reencrypt ? `${label}'s access is revoked, and ${vault} is re-encrypted.` : `${label}'s access is revoked.`);
+      onDone((reencrypt ? `${label}'s access is revoked, and ${vault} is re-encrypted.` : `${label}'s access is revoked.`) + withdrawnSentence(view));
     },
     onSettled: () => Promise.all(["vault-access", "vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] }))),
   });
@@ -167,9 +168,9 @@ function Departures({ vault, left, onDone }: { vault: string; left: Departure[];
             e.preventDefault();
             if (password)
               rekey.mutate(undefined, {
-                onSuccess: () => {
+                onSuccess: (view) => {
                   setPassword("");
-                  onDone(`${vault} is re-encrypted.`);
+                  onDone(`${vault} is re-encrypted.${withdrawnSentence(view)}`);
                 },
               });
           }}

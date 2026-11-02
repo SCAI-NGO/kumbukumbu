@@ -79,7 +79,9 @@ describe("replyText", () => {
 
 Hello,
 
-as you requested, we deleted your Kumbu² account "anna" and all notes in it on 2026-10-27 10:15 UTC. This includes every vault, its history, trash and checkpoints, your API keys and your app connections.
+as you requested, we deleted your Kumbu² account "anna" and all notes in it on 2026-10-27 10:15 UTC. This includes every vault of yours, its history, trash and checkpoints, your API keys and your app connections.
+
+Text you wrote in a vault someone else shared with you stays in that vault, without your name.
 
 Copies that AI tools or other apps read from your notes are outside Kumbu². Please delete them there, for example in your chat history.
 
@@ -90,6 +92,12 @@ In future, if you still have access, you can export your notes first and delete 
 Kind regards
 [your privacy contact]
 `);
+  });
+
+  it("says when a shared vault stays for its members, rather than that it is gone", () => {
+    const reply = replyText({ ...receipt, sharedVaultsScheduled: ["2026-11-03T10:15:00Z"] });
+    expect(reply).toContain("A vault you shared stays readable for its members until 2026-11-03 10:15 UTC, and is deleted then.");
+    expect(replyText(receipt)).not.toContain("stays readable");
   });
 
   it("promises no deletion after a restore when the id isn't on the deletion list", () => {

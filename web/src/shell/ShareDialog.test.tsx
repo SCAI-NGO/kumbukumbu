@@ -40,6 +40,7 @@ function renderShare(queryClient = new QueryClient({ defaultOptions: { queries: 
 
 async function fill(label = "Bob", password = "correct horse") {
   await userEvent.type(screen.getByLabelText("Who it is for"), label);
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
   await userEvent.type(screen.getByLabelText("Your password"), password);
 }
 
@@ -51,6 +52,18 @@ describe("ShareDialog", () => {
     expect(field).toHaveAttribute("data-bwignore");
     expect(field).toHaveAttribute("data-1p-ignore");
     expect(field).toHaveAttribute("data-lpignore");
+  });
+
+  it("asks the password in a step of its own, with no text field beside it for a manager to fill", async () => {
+    fakeApi({});
+    renderShare();
+    expect(screen.queryByLabelText("Your password")).not.toBeInTheDocument();
+    await fill("Bob");
+    expect(screen.queryByLabelText("Who it is for")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByLabelText("Who it is for")).toHaveValue("Bob");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByLabelText("Your password")).toHaveValue("");
   });
 
   it("shows the link once and forgets it on close", async () => {
@@ -76,9 +89,9 @@ describe("ShareDialog", () => {
     await waitFor(() => expect(JSON.stringify(queryClient.getMutationCache().getAll().map((m) => m.state))).not.toContain("share#"));
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain("share#");
     await userEvent.click(screen.getByRole("button", { name: "Open" }));
-    expect(screen.getByRole("button", { name: "Create link" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Invitation link")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Your password")).toHaveValue("");
+    expect(screen.queryByLabelText("Your password")).not.toBeInTheDocument();
   });
 
   it("shows maintain in the warning colour", async () => {
@@ -97,6 +110,7 @@ describe("ShareDialog", () => {
     const fetch = fakeApi({ "POST /api/vaults/Gartenarbeit/invitations": () => json(400, { error: "The password is wrong." }) });
     renderShare();
     await userEvent.type(screen.getByLabelText("Who it is for"), "Bob");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByRole("button", { name: "Create link" })).toBeDisabled();
     await userEvent.type(screen.getByLabelText("Your password"), "wrong");
     await userEvent.click(screen.getByRole("button", { name: "Create link" }));
@@ -114,10 +128,10 @@ describe("ShareDialog", () => {
       },
     });
     renderShare();
-    await fill("Carol");
     await userEvent.click(screen.getByRole("radio", { name: "Read" }));
     await userEvent.click(screen.getByRole("radio", { name: "30 days" }));
     await userEvent.click(screen.getByRole("checkbox", { name: /Ask me to confirm before access is granted/ }));
+    await fill("Carol");
     await userEvent.click(screen.getByRole("button", { name: "Create link" }));
     await screen.findByLabelText("Invitation link");
     expect(body).toEqual({ password: "correct horse", label: "Carol", role: "read", expiresInDays: 30, confirm: true });

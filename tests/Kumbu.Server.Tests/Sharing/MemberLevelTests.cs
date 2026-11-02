@@ -69,7 +69,7 @@ public sealed class MemberLevelTests(KumbuAppFactory app)
         using (var note = await PutAsync(bob, "/api/notes/garten/a.md")) Assert.Equal(HttpStatusCode.Created, note.StatusCode);
         using var board = await PutAsync(bob, Board);
 
-        await AssertRefusedAsync(board, "structural", "Only those who may maintain *garten*");
+        await AssertRefusedAsync(board, "structural", "Your role there is write; only the owner can change it.");
     }
 
     [Fact]
@@ -80,7 +80,8 @@ public sealed class MemberLevelTests(KumbuAppFactory app)
 
         using var refused = await PutAsync(bob, "/api/notes/garten/a.md", key);
 
-        await AssertRefusedAsync(refused, "read-only", "this key can only read vault garten");
+        // The key isn't what holds it back: a new key wouldn't help, only the owner can.
+        await AssertRefusedAsync(refused, "read-only", "your role in vault garten is read, and a key never acts above your role; only the owner can change it");
     }
 
     [Fact]
@@ -92,7 +93,18 @@ public sealed class MemberLevelTests(KumbuAppFactory app)
         using (var note = await PutAsync(bob, "/api/notes/garten/a.md", key)) Assert.Equal(HttpStatusCode.Created, note.StatusCode);
         using var board = await PutAsync(bob, Board, key);
 
-        await AssertRefusedAsync(board, "structural", "Only those who may maintain *garten*");
+        await AssertRefusedAsync(board, "structural", "Your role there is write, and a key never acts above your role; only the owner can change it.");
+    }
+
+    [Fact]
+    public async Task A_write_key_of_a_maintain_member_is_held_back_by_the_key()
+    {
+        var (bob, vaultId, _) = await SharedAsync(MemberRole.Maintain);
+        var key = await KeyAsync(bob, vaultId, KeyRight.Write);
+
+        using var board = await PutAsync(bob, Board, key);
+
+        await AssertRefusedAsync(board, "structural", "This key is set to write; it takes a key with maintain.");
     }
 
     [Fact]

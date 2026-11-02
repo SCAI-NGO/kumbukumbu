@@ -5,7 +5,8 @@ import { useLocation } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { errorText } from "../api/error-text";
 import { useVaults } from "../api/notes";
-import ConfirmTyped from "../components/ConfirmTyped";
+import { withdrawnSentence } from "../api/sharing";
+import ConfirmTyped, { repeats } from "../components/ConfirmTyped";
 import SharedVaultsChoiceField, { defaultSharedVaultsChoice, type SharedVaultsChoice } from "../components/SharedVaultsChoice";
 import { AccountScreen, FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { PasswordField } from "../components/PasswordField";
@@ -473,9 +474,9 @@ function RekeyVaultDialog({ vault, onDone, onClose }: { vault: string; onDone(me
       const keys = Number(view.revokedApiKeys);
       const apps = Number(view.disconnectedApps);
       onDone(
-        keys + apps === 0
+        (keys + apps === 0
           ? `${vault} is re-encrypted.`
-          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`,
+          : `${vault} is re-encrypted. ${plural(keys, "API key was", "API keys were")} revoked and ${plural(apps, "app was", "apps were")} disconnected.`) + withdrawnSentence(view),
       );
       await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
       onClose();
@@ -553,7 +554,7 @@ function DeleteAccountSection() {
   // Her own vaults with an active member: the ones the server asks about. A vault shared with nobody isn't one.
   const shared = (vaults.data ?? []).filter((v) => v.owner == null && Number(v.members ?? 0) > 0);
   const remove = useMutation({
-    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: typed, ...(shared.length > 0 && { sharedVaults: choice }) } })),
+    mutationFn: () => call(api.POST("/api/account/delete", { body: { password, confirm: me.username, ...(shared.length > 0 && { sharedVaults: choice }) } })),
     onSuccess: () => {
       setPassword("");
       queryClient.clear();
@@ -565,7 +566,7 @@ function DeleteAccountSection() {
   if (!me) return null;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (password && typed === me.username) remove.mutate();
+    if (password && repeats(typed, me.username)) remove.mutate();
   };
 
   return (
@@ -596,7 +597,7 @@ function DeleteAccountSection() {
             <PasswordField label="Current password" value={password} onChange={setPassword} autoComplete="current-password" />
             <div className="flex flex-col gap-1.5">
               <label htmlFor={`${id}-confirm`} className={labelClass}>
-                Type {me.username} to confirm
+                Type <span className="normal-case">{me.username}</span> to confirm
               </label>
               <input
                 id={`${id}-confirm`}
@@ -610,7 +611,7 @@ function DeleteAccountSection() {
               />
             </div>
             {remove.isError && <FormError>{errorText(remove.error)}</FormError>}
-            <button type="submit" disabled={remove.isPending || vaults.isPending || !password || typed !== me.username} className={primaryButtonClass}>
+            <button type="submit" disabled={remove.isPending || vaults.isPending || !password || !repeats(typed, me.username)} className={primaryButtonClass}>
               Delete my account
             </button>
           </form>

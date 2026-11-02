@@ -100,6 +100,13 @@ export function useRekeyVault(vault: string, password: string) {
   });
 }
 
+/** What a re-encryption withdrew (collab design §7.1), as the end of the sentence that reports it; empty if nothing. */
+export function withdrawnSentence(view: { withdrawnInvitations?: number | string } | null) {
+  const count = Number(view?.withdrawnInvitations ?? 0);
+  if (count === 0) return "";
+  return ` ${count === 1 ? "1 open invitation was" : `${count} open invitations were`} withdrawn; send a new link if you still want them in.`;
+}
+
 export type MemberNotice = components["schemas"]["MemberNoticeView"];
 
 /** The caller leaves a vault shared with her: from the next request on, none of her credentials reaches it. */

@@ -93,7 +93,8 @@ public sealed class WriterLabels(RequestCaller caller, ApiKeys keys, Connections
         {
             return credential == Memberships.SessionWriter
                 ? (caller.Kind == CallerKind.Session ? You : caller.User?.Username ?? caller.Writer, Kinded(Self))
-                : (own.Writers.GetValueOrDefault(credential) ?? PlainWriterLabels.UnknownWriter, Kinded(reference.Kind == WriterRef.Device ? Device : Agent));
+                : ((own.Writers.GetValueOrDefault(credential) ?? PlainWriterLabels.UnknownWriter) + (caller.Kind != CallerKind.Session && writer == access.WriterId ? " (this key)" : ""),
+                    Kinded(reference.Kind == WriterRef.Device ? Device : Agent));
         }
 
         return (AnotherUser, Kinded(OtherKind(reference)));

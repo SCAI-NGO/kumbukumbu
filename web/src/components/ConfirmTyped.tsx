@@ -5,7 +5,10 @@ import { FormError, inputClass, labelClass, primaryButtonClass, secondaryButtonC
 import { PasswordField } from "./PasswordField";
 import { useDialog } from "../hooks/useDialog";
 
-/** A confirmation that is only possible after typing `word` exactly: for actions that lock someone out, let them back in or delete for good.
+/** Whether `typed` repeats `word`: its point is attention, not spelling, so case and surrounding spaces don't count. */
+export const repeats = (typed: string, word: string) => typed.trim().toLowerCase() === word.toLowerCase();
+
+/** A confirmation that is only possible after typing `word`: for actions that lock someone out, let them back in or delete for good.
  * Without `word`, only the password is asked for (`password` must be given then). */
 export default function ConfirmTyped({
   title,
@@ -37,7 +40,7 @@ export default function ConfirmTyped({
   const id = useId();
   const dialog = useDialog<HTMLFormElement>(onClose);
   const [typed, setTyped] = useState("");
-  const ready = (word === undefined || typed === word) && (password === undefined || password !== "");
+  const ready = (word === undefined || repeats(typed, word)) && (password === undefined || password !== "");
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-bg/80 p-4 sm:items-center">
@@ -63,7 +66,7 @@ export default function ConfirmTyped({
         {word !== undefined && (
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`${id}-word`} className={labelClass}>
-              Type {word} to confirm
+              Type <span className="normal-case">{word}</span> to confirm
             </label>
             <input
               id={`${id}-word`}

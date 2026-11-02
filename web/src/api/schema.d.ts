@@ -8218,6 +8218,8 @@ export interface components {
             revokedApiKeys: number | string;
             /** Format: int32 */
             disconnectedApps: number | string;
+            /** Format: int32 */
+            withdrawnInvitations?: number | string;
         };
         RenameAliasRequest: {
             alias: string;

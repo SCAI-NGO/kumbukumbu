@@ -311,7 +311,7 @@ public sealed class HistoryApiTests(KumbuAppFactory app)
             Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
             var body = await JsonAsync(refused);
             Assert.Equal("structural", Text(body, "code"));
-            Assert.Equal("restore: This checkpoint changes the board's structure; only those who may maintain *Arbeit* can restore it.", Text(body, "error"));
+            Assert.Equal("restore: This checkpoint changes the board's structure; only those who may maintain *Arbeit* can restore it. This key is set to write; it takes a key with maintain.", Text(body, "error"));
         }
 
         Assert.Contains("Active", Text(await user.ReadAsync("Board/Board.md"), "content"), StringComparison.Ordinal);

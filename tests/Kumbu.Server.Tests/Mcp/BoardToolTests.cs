@@ -138,6 +138,6 @@ public sealed class BoardToolTests(KumbuAppFactory app)
 
         Assert.NotEqual(true, added.IsError);
         Assert.True(renamed.IsError);
-        Assert.Equal($"board: Only those who may maintain *{vault}* can change its board's columns.", Text(renamed));
+        Assert.Equal($"board: Only those who may maintain *{vault}* can change its board's columns. This key is set to write; it takes a key with maintain.", Text(renamed));
     }
 }

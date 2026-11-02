@@ -32,6 +32,9 @@ export default function ShareDialog({ vault, onClose }: { vault: string; onClose
   const [confirm, setConfirm] = useState(false);
   // Read through the closure, not passed as the mutation's variables, which the mutation cache would keep.
   const [password, setPassword] = useState("");
+  // The password is asked in a step of its own: Bitwarden filled the text field beside it with the username in spite
+  // of data-bwignore, which silently changes who the invitation is for.
+  const [asking, setAsking] = useState(false);
   const [link, setLink] = useState<string | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
 
@@ -48,10 +51,11 @@ export default function ShareDialog({ vault, onClose }: { vault: string; onClose
     },
   });
 
-  const ready = label.trim() !== "" && password !== "";
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (ready && !create.isPending) create.mutate();
+    if (!asking) {
+      if (label.trim() !== "") setAsking(true);
+    } else if (password !== "" && !create.isPending) create.mutate();
   };
 
   return (
@@ -91,8 +95,32 @@ export default function ShareDialog({ vault, onClose }: { vault: string; onClose
               Done
             </button>
           </>
-        ) : (
+        ) : asking ? (
           <form onSubmit={submit} className="flex flex-col gap-4" aria-busy={create.isPending}>
+            <p className="text-text-body">
+              A link for <em>{label.trim()}</em> to {roleLabels[role].toLowerCase()}. Your password confirms it.
+            </p>
+            <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
+            {create.isError && <FormError>{errorText(create.error)}</FormError>}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPassword("");
+                  create.reset();
+                  setAsking(false);
+                }}
+                className={secondaryButtonClass}
+              >
+                Back
+              </button>
+              <button type="submit" disabled={password === "" || create.isPending} className={primaryButtonClass}>
+                Create link
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={submit} className="flex flex-col gap-4">
             <TextField label="Who it is for" value={label} onChange={setLabel} autoComplete="off" ignoreManagers />
             <p className="-mt-2 text-sm text-muted">Your name for them, shown only to you. Whoever opens the link gets in under it.</p>
 
@@ -135,14 +163,12 @@ export default function ShareDialog({ vault, onClose }: { vault: string; onClose
             </p>
             <p className="text-sm text-text-body">New members see everything in the vault, also what was written before they joined.</p>
 
-            <PasswordField label="Your password" value={password} onChange={setPassword} autoComplete="current-password" />
-            {create.isError && <FormError>{errorText(create.error)}</FormError>}
             <div className="flex gap-2">
               <button type="button" onClick={onClose} className={secondaryButtonClass}>
                 Cancel
               </button>
-              <button type="submit" disabled={!ready || create.isPending} className={primaryButtonClass}>
-                Create link
+              <button type="submit" disabled={label.trim() === ""} className={primaryButtonClass}>
+                Continue
               </button>
             </div>
           </form>

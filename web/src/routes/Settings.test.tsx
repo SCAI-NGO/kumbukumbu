@@ -412,10 +412,11 @@ describe("Settings", () => {
     await userEvent.click(within(vaultsSection).getByRole("button", { name: "Delete Diary" }));
     const dialog = screen.getByRole("alertdialog", { name: "Delete Diary?" });
     const confirm = within(dialog).getByRole("button", { name: "Delete vault" });
-    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "diary");
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "diar");
     expect(confirm).toBeDisabled();
     await userEvent.clear(within(dialog).getByLabelText("Type Diary to confirm"));
-    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "Diary");
+    // Case doesn't count: the label reads in capitals, and the point is attention, not spelling.
+    await userEvent.type(within(dialog).getByLabelText("Type Diary to confirm"), "DIARY");
     expect(confirm).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText("Your password"), "my password, long");
     await userEvent.click(confirm);

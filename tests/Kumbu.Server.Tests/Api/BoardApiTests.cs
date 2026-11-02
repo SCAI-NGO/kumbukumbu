@@ -284,7 +284,7 @@ public sealed class BoardApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Forbidden, renamed.StatusCode);
         var body = await RestClient.JsonAsync(renamed);
         Assert.Equal("structural", body["code"]!.GetValue<string>());
-        Assert.Equal("Only those who may maintain *Work* can change its board's columns.", body["error"]!.GetValue<string>());
+        Assert.Equal("Only those who may maintain *Work* can change its board's columns. This key is set to write; it takes a key with maintain.", body["error"]!.GetValue<string>());
         Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
         Assert.Equal(["Task"], Titles(await RestClient.JsonAsync(await user.GetAsync(Board(user))), "Ideas"));
     }

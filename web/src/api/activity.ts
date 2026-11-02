@@ -78,7 +78,9 @@ export function writerText({ writer, writerKind }: Pick<ActivityRow, "writer" | 
     case "device":
       return `You in Obsidian (${deviceOf(writer)})`;
     case "agent":
-      return `Agent ${writer}`;
+      // The owner's agent says so itself; the two anonymous writers read as whose agent it is.
+      if (writer.endsWith("'s agent")) return writer;
+      return writer === "another user" || writer === "a former member" ? `Agent of ${writer}` : `Agent ${writer}`;
     default:
       return writer;
   }

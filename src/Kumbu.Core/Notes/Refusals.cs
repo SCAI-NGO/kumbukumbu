@@ -24,8 +24,13 @@ public static class Refusals
     public static ShellResult Of(string command, string code, string sentence) =>
         ShellResult.Error($"{command.Split(' ')[0]}: {sentence}") with { Code = code };
 
-    /// <summary>The refusal of a structural change in <paramref name="vault"/>, saying who can make it.</summary>
-    public static ShellResult StructuralChange(string command, string vault) => Of(command, Structural, command is "mkcp" or "rmcp"
-        ? $"Only those who may maintain *{vault}* can make or remove its checkpoints."
-        : $"Only those who may maintain *{vault}* can change its board's columns.");
+    /// <summary>The refusal of a structural change in <paramref name="vault"/>, saying who can make it and, in
+    /// <paramref name="limit"/> (<see cref="ICaller.StructuralLimit"/>), what holds this caller back.</summary>
+    public static ShellResult StructuralChange(string command, string vault, string limit = "") => Of(command, Structural, command switch
+    {
+        "mkcp" or "rmcp" => $"Only those who may maintain *{vault}* can make or remove its checkpoints.",
+        // By any other command it is the file, of which the columns are only a part.
+        _ when command.Split(' ')[0] == "board" => $"Only those who may maintain *{vault}* can change its board's columns.",
+        _ => $"Only those who may maintain *{vault}* can change its board's file, Board/Board.md.",
+    } + (limit.Length == 0 ? "" : " " + limit));
 }

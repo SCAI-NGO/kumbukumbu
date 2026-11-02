@@ -101,7 +101,8 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
                 return ShellResult.Error($"write: {path.Value} was created by someone else just now; cat it and try again");
             }
 
-            return Written($"created {path.Value} ({Lines.Count(content)}){await NewlyAmbiguousAsync(path, ct)}", note);
+            var shared = (await store.VaultInfoAsync(path.Segments[0], ct))?.Shared == true ? $". {path.Segments[0]} is shared: others can read this note" : "";
+            return Written($"created {path.Value} ({Lines.Count(content)}){await NewlyAmbiguousAsync(path, ct)}{shared}", note);
         }
 
         if (existing is null) return await MissingAsync(tool, path, ct);

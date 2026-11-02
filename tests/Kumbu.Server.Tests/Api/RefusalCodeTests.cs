@@ -132,7 +132,7 @@ public sealed class RefusalCodeTests(KumbuAppFactory app)
         var (isError, text) = await world.User.ShAsync("rm /Gartenarbeit/Board/Board.md", key);
 
         Assert.True(isError);
-        Assert.Equal("rm: Only those who may maintain *Gartenarbeit* can change its board's columns.", text);
+        Assert.Equal("rm: Only those who may maintain *Gartenarbeit* can change its board's file, Board/Board.md. This key is set to write; it takes a key with maintain.", text);
     }
 
     [Fact]
