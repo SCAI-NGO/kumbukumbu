@@ -36,14 +36,14 @@ public sealed record Crop(double X, double Y, double Width, double Height)
         return true;
     }
 
-    /// <summary>The whole-number region that holds the box: x and y rounded down, the far edges up, then cut at the page's size rounded down. Null if nothing is left.</summary>
+    /// <summary>The whole-number region that holds the box: x and y rounded down, the far edges up, then cut at the page's edges (0 and its size rounded down). Null if nothing is left.</summary>
     public static Crop? Enclosing(double x, double y, double width, double height, double pageWidth, double pageHeight)
     {
         var right = Math.Min(Math.Ceiling(x + width), Math.Floor(pageWidth));
         var bottom = Math.Min(Math.Ceiling(y + height), Math.Floor(pageHeight));
-        var left = Math.Floor(x);
-        var top = Math.Floor(y);
-        return left < 0 || top < 0 || right <= left || bottom <= top ? null : new Crop(left, top, right - left, bottom - top);
+        var left = Math.Max(0, Math.Floor(x));
+        var top = Math.Max(0, Math.Floor(y));
+        return right <= left || bottom <= top ? null : new Crop(left, top, right - left, bottom - top);
     }
 
     /// <summary>"x,y,w,h" with a decimal point and at most four places, never an exponent, as <c>--crop</c> and the sidecar take it.</summary>

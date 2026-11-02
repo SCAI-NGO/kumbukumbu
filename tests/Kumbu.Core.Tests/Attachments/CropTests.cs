@@ -91,4 +91,16 @@ public class CropTests
     {
         Assert.Null(Crop.Enclosing(595.1, 10, 5, 5, 595.3, 842));
     }
+
+    [Fact]
+    public void Enclosing_of_a_box_past_the_left_edge_is_cut_at_zero()
+    {
+        Assert.Equal("0,1,10,11", Crop.Enclosing(-0.3, 1.5, 10, 10, 595, 842)!.ToString());
+    }
+
+    [Fact]
+    public void Enclosing_of_a_box_past_the_top_edge_is_cut_at_zero()
+    {
+        Assert.Equal("1,0,11,10", Crop.Enclosing(1.5, -0.3, 10, 10, 595, 842)!.ToString());
+    }
 }

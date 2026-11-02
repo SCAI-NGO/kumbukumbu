@@ -392,6 +392,19 @@ public class PdfCommandTests
     }
 
     [Fact]
+    public async Task Info_leaves_out_a_region_past_the_page_and_does_not_count_it()
+    {
+        PdfRegion[] regions = [new PdfRegion("drawing", 700, 10, 20, 20), .. Enumerable.Range(0, 9).Select(i => new PdfRegion("image", 10 * i, 5, 8, 8))];
+        await Upload("/Papers/f.pdf", new PdfAnalysis("a", 1, 1, null, null, [Mixed(1, 0.5, regions)]));
+
+        var line = (await Run("pdf info /Papers/f.pdf")).Output.Split('\n')[2];
+
+        Assert.DoesNotContain("drawing 7", line);
+        Assert.Equal(8, line.Split("image ").Length - 1);
+        Assert.EndsWith("; …and 1 more", line);
+    }
+
+    [Fact]
     public async Task Info_lists_eight_regions_a_page_and_a_scan_without_text()
     {
         PdfRegion[] many = [.. Enumerable.Range(0, 11).Select(i => new PdfRegion("drawing", 10 * i, 20.4, 30.6, 40))];
