@@ -6,15 +6,16 @@ namespace Kumbu.Core.Attachments;
 /// <summary>
 /// An image ready for the model, with the size it had before scaling (pixels for an image, points for a page).
 /// <paramref name="Transparent"/>: it had see-through areas, which are delivered on white.
+/// <paramref name="Frames"/>: the number of frames of a GIF whose count the sidecar knows.
 /// </summary>
-public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight, bool Transparent = false);
+public sealed record Picture(byte[] Data, string MediaType, int Width, int Height, double OriginalWidth, double OriginalHeight, bool Transparent = false, int? Frames = null);
 
 /// <summary>
 /// Why pixels or an analysis couldn't be had: what <c>img</c> tells apart in its refusals, the sidecar away or busy
 /// (<c>Unavailable</c>), and an analysis that couldn't run for that reason (<c>AnalysisUnavailable</c>), which
 /// <c>pdf</c> tells apart from one that is merely pending. <c>Failed</c> is anything else (this file, this page).
 /// </summary>
-public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, AnalysisUnavailable }
+public enum PixelsProblem { Failed, Unavailable, TooLarge, BadCrop, BadFrame, AnalysisUnavailable }
 
 /// <summary>Raised for an expected failure; the message is a sentence for the model.</summary>
 public sealed class PixelsUnavailableException(string message, PixelsProblem problem = PixelsProblem.Failed) : Exception(message)
@@ -25,7 +26,7 @@ public sealed class PixelsUnavailableException(string message, PixelsProblem pro
     public Sh.ShellErrorKind? Kind => Problem switch
     {
         PixelsProblem.Unavailable or PixelsProblem.AnalysisUnavailable => Sh.ShellErrorKind.Unavailable,
-        PixelsProblem.TooLarge or PixelsProblem.BadCrop => Sh.ShellErrorKind.Invalid,
+        PixelsProblem.TooLarge or PixelsProblem.BadCrop or PixelsProblem.BadFrame => Sh.ShellErrorKind.Invalid,
         _ => null,
     };
 }
@@ -40,7 +41,7 @@ public enum PageKind { Text, Mixed, Image, Unknown }
 public enum PageDelivery { Text, Image }
 
 /// <summary>Why <c>img</c> said no.</summary>
-public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, BadRotate, Unavailable }
+public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, BadRotate, BadFrame, Unavailable }
 
 /// <summary>The command that turned a picture with <c>--rotate</c>.</summary>
 public enum TurnCommand { Img, Pdf }
@@ -65,8 +66,8 @@ public sealed record PictureTurned(TurnCommand Command) : AttachmentUse;
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
 {
-    /// <summary>The image at a step, optionally cropped (original pixel coordinates, EXIF-oriented).</summary>
-    Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, CancellationToken ct);
+    /// <summary>The image at a step, optionally cropped (original pixel coordinates, EXIF-oriented); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
+    Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct);
 
     /// <summary>A rendered page (1-based), optionally a region in displayed points.</summary>
     Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct);

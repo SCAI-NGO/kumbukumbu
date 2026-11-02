@@ -17,17 +17,17 @@ namespace Kumbu.Server.Attachments;
 public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog catalog, IPdfSidecar sidecar, PdfAnalyses analyses, PdfAnalysisRunner runner) : IAttachmentPixels
 {
     /// <summary>The header is checked before the bytes leave this process: a file claiming a huge canvas is never sent to be decoded.</summary>
-    public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, CancellationToken ct)
+    public async Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
         if (ImageHeader.Read(bytes, out var problem) is null) throw new PixelsUnavailableException(TooLarge(path, state, problem), PixelsProblem.TooLarge);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "image rendering", path, null, crop));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Image, () => sidecar.RenderImageAsync(bytes, SizeSteps.Of(step), crop, rotate, frame, ct), e => Refused(e, "image rendering", path, null, crop, frame));
     }
 
     public async Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct)
     {
         var bytes = await BytesAsync(path, state, ct);
-        return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "PDF rendering", path, page, crop));
+        return await MeasuredAsync(KumbuMetrics.RenderKind.Page, () => sidecar.RenderPageAsync(bytes, page, SizeSteps.Of(step), crop, rotate, ct), e => Refused(e, "PDF rendering", path, page, crop, null));
     }
 
     /// <summary>A render timed and counted: its duration whatever came of it, a failure by reason, a picture by size.</summary>
@@ -106,19 +106,24 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
         return $"{path} can't be looked at: {char.ToLowerInvariant(problem![0])}{problem[1..]}";
     }
 
-    private static PixelsUnavailableException Refused(SidecarException e, string what, VaultPath path, int? page, Crop? crop) => new(e.Code switch
+    private static PixelsUnavailableException Refused(SidecarException e, string what, VaultPath path, int? page, Crop? crop, int? frame) => new(e.Code switch
     {
         SidecarException.Unavailable or SidecarException.Busy => $"{what} is unavailable right now; try again later",
+        SidecarException.Timeout when frame is not null => $"finding frame {frame} of {path} took too long",
+        "too_large" when frame is not null => $"{path} is too large for --frame (at most 16 megapixels); img without --frame shows its first frame",
         SidecarException.Timeout => $"rendering {path} took too long; try a smaller --size or a --crop",
         SidecarException.Aborted => $"rendering {path} stopped part way (the renderer may have run out of memory); try a smaller --size or a --crop",
         SidecarException.Encrypted => PdfAnalysisRunner.PasswordProtected,
         "no_such_page" => $"{path} has no page {page}",
+        "no_such_frame" => $"{path} has no frame {frame}; img without --frame says how many it has",
         "bad_crop" => $"the crop {crop} lies outside {(page is null ? "the image" : $"page {page}")}",
         _ => $"{path} couldn't be rendered",
     }, e.Code switch
     {
         SidecarException.Unavailable or SidecarException.Busy => PixelsProblem.Unavailable,
         "bad_crop" => PixelsProblem.BadCrop,
+        "no_such_frame" => PixelsProblem.BadFrame,
+        "too_large" when frame is not null => PixelsProblem.TooLarge,
         _ => PixelsProblem.Failed,
     });
 }

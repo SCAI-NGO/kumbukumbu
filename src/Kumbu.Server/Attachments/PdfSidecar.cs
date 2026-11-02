@@ -20,8 +20,8 @@ public interface IPdfSidecar
     /// <summary>Page <paramref name="page"/> (1-based) rendered to fit <paramref name="target"/>, optionally a region in displayed points, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270).</summary>
     Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
 
-    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270).</summary>
-    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
+    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
+    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct);
 }
 
 /// <summary>An analysis as the sidecar answers it: the measurements, and the text of each analysed page (index 0 = page 1).</summary>
@@ -82,6 +82,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         ["too_large"] = HttpStatusCode.RequestEntityTooLarge,
         ["no_such_page"] = HttpStatusCode.UnprocessableEntity,
         ["bad_crop"] = HttpStatusCode.UnprocessableEntity,
+        ["no_such_frame"] = HttpStatusCode.UnprocessableEntity,
         [SidecarException.Encrypted] = HttpStatusCode.UnprocessableEntity,
         [SidecarException.Busy] = HttpStatusCode.ServiceUnavailable,
         [SidecarException.Timeout] = HttpStatusCode.GatewayTimeout,
@@ -104,16 +105,17 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
         SendAsync("render/page", $"page={page.ToString(CultureInfo.InvariantCulture)}&{Query(target, crop, rotate)}", pdf, "application/pdf", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, rotate, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
+            (response, token) => PictureAsync(response, target, rotate, null, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
 
-    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
-        SendAsync("render/image", Query(target, crop, rotate), image, "application/octet-stream", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, rotate, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
+    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) =>
+        SendAsync("render/image", Query(target, crop, rotate, frame), image, "application/octet-stream", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, frame, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
 
-    private static string Query(StepLimits target, Crop? crop, int rotate) =>
+    private static string Query(StepLimits target, Crop? crop, int rotate, int? frame = null) =>
         string.Create(CultureInfo.InvariantCulture, $"longEdge={target.LongEdge}&pixels={target.Pixels}&bytes={target.Bytes}")
         + (crop is null ? "" : "&crop=" + crop)
-        + (rotate == 0 ? "" : string.Create(CultureInfo.InvariantCulture, $"&rotate={rotate}"));
+        + (rotate == 0 ? "" : string.Create(CultureInfo.InvariantCulture, $"&rotate={rotate}"))
+        + (frame is null ? "" : string.Create(CultureInfo.InvariantCulture, $"&frame={frame}"));
 
     /// <summary>
     /// One request with its own time limit. A time-out of this client, a refused connection or a failed name lookup,
@@ -210,7 +212,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         return buffer.ToArray();
     }
 
-    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, int rotate, string originalWidth, string originalHeight, CancellationToken ct)
+    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, int rotate, int? frame, string originalWidth, string originalHeight, CancellationToken ct)
     {
         var mediaType = response.Content.Headers.ContentType?.MediaType;
         if (mediaType is not ("image/png" or "image/jpeg")) throw Invalid("The answer is not a PNG or JPEG image");
@@ -222,6 +224,18 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         // An older sidecar ignores a parameter it doesn't know and answers the picture unturned: absent counts as 0.
         var turned = response.Headers.TryGetValues("X-Kumbu-Rotate", out var echo) ? echo.FirstOrDefault() : null;
         if ((turned ?? "0") != rotate.ToString(CultureInfo.InvariantCulture)) throw Invalid("The image isn't turned as asked");
+
+        // The same for the frame: none asked, none answered.
+        var shown = response.Headers.TryGetValues("X-Kumbu-Frame", out var frameEcho) ? frameEcho.FirstOrDefault() : null;
+        if (shown != frame?.ToString(CultureInfo.InvariantCulture)) throw Invalid("The image isn't the frame asked for");
+        int? frames = null;
+        if (response.Headers.TryGetValues("X-Kumbu-Frames", out var counted))
+        {
+            if (!int.TryParse(counted.FirstOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count <= 0) throw Invalid("The answer has no valid X-Kumbu-Frames");
+            frames = count;
+        }
+
+        if (frame > frames) throw Invalid("The frame asked for lies past the frames of the image");
 
         var width = Whole(response, "X-Kumbu-Width");
         var height = Whole(response, "X-Kumbu-Height");
@@ -235,7 +249,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         // Likewise its pixel budget, give or take a row and a column of rounding.
         if ((long)w * h > target.Pixels + w + h) throw Invalid("The image has more pixels than the size step");
         var transparent = response.Headers.TryGetValues("X-Kumbu-Transparent", out var values) && values.Contains("1");
-        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight), transparent);
+        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight), transparent, frames);
     }
 
     private static int Whole(HttpResponseMessage response, string header) =>

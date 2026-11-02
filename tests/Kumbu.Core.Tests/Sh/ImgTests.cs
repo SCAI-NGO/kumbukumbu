@@ -27,7 +27,7 @@ public class ImgTests
 
         public Exception? Fail { get; set; }
 
-        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, CancellationToken ct)
+        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
         {
             Requests.Add((path, step, crop));
             Rotations.Add(rotate);

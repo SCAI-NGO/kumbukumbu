@@ -755,7 +755,7 @@ public sealed class RenamedOwnerTests(KumbuAppFactory app)
         var page = await pixels.PageAsync(pdf, (await store.GetAttachmentAsync(pdf, Ct))!.Current, 1, SizeStep.Small, null, 0, Ct);
         Assert.NotEmpty(page.Data);
         var png = P("/Garten/Bilder/a.png");
-        var image = await pixels.ImageAsync(png, (await store.GetAttachmentAsync(png, Ct))!.Current, SizeStep.Small, null, 0, Ct);
+        var image = await pixels.ImageAsync(png, (await store.GetAttachmentAsync(png, Ct))!.Current, SizeStep.Small, null, 0, null, Ct);
         Assert.NotEmpty(image.Data);
     });
 

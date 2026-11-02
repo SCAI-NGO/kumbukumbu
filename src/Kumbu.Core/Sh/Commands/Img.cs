@@ -94,7 +94,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         Picture picture;
         try
         {
-            picture = await pixels.ImageAsync(path, state, step, crop, rotate, ct);
+            picture = await pixels.ImageAsync(path, state, step, crop, rotate, null, ct);
         }
         catch (PixelsUnavailableException e)
         {
@@ -102,6 +102,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
             {
                 PixelsProblem.TooLarge => ImgRefusal.TooLarge,
                 PixelsProblem.BadCrop => ImgRefusal.BadCrop,
+                PixelsProblem.BadFrame => ImgRefusal.BadFrame,
                 _ => ImgRefusal.Unavailable,
             }));
             return ShellResult.Error($"img: {e.Message}") with { Kind = e.Kind };

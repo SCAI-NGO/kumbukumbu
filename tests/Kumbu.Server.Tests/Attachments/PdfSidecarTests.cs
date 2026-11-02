@@ -80,7 +80,7 @@ public sealed class PdfSidecarTests
         {
             () => sidecar.AnalyseAsync(Pdf, 2, Ct),
             () => sidecar.RenderPageAsync(Pdf, 1, Medium, null, 0, Ct),
-            () => sidecar.RenderImageAsync(FakePdfSidecar.SolidPng(4, 4), Medium, null, 0, Ct),
+            () => sidecar.RenderImageAsync(FakePdfSidecar.SolidPng(4, 4), Medium, null, 0, null, Ct),
         })
         {
             var e = await Assert.ThrowsAsync<SidecarException>(call);
@@ -101,7 +101,7 @@ public sealed class PdfSidecarTests
         {
             () => sidecar.AnalyseAsync(Pdf, 2000, Ct),
             () => sidecar.RenderPageAsync(Pdf, 1, Medium, null, 0, Ct),
-            () => sidecar.RenderImageAsync(FakePdfSidecar.SolidPng(4, 4), Medium, null, 0, Ct),
+            () => sidecar.RenderImageAsync(FakePdfSidecar.SolidPng(4, 4), Medium, null, 0, null, Ct),
         })
         {
             var e = await Assert.ThrowsAsync<SidecarException>(call);
@@ -330,7 +330,7 @@ public sealed class PdfSidecarTests
         var stub = new Stub((_, _) => Image(jpeg, "image/jpeg", 724, 1568, ("X-Kumbu-Original-Width", "1440"), ("X-Kumbu-Original-Height", "3120")));
         var image = FakePdfSidecar.SolidPng(1440, 3120);
 
-        var picture = await Sidecar(stub).RenderImageAsync(image, Medium, null, 0, Ct);
+        var picture = await Sidecar(stub).RenderImageAsync(image, Medium, null, 0, null, Ct);
 
         Assert.Equal("http://pdf.test:8090/render/image?longEdge=1568&pixels=1200000&bytes=409600", Assert.Single(stub.Seen).Request.RequestUri!.ToString());
         Assert.Equal(("image/jpeg", 724, 1568, 1440d, 3120d), (picture.MediaType, picture.Width, picture.Height, picture.OriginalWidth, picture.OriginalHeight));
@@ -343,7 +343,7 @@ public sealed class PdfSidecarTests
         var jpeg = Jpeg(724, 1568);
         var stub = new Stub((_, _) => Image(jpeg, "image/jpeg", 724, 1568, ("X-Kumbu-Original-Width", "1440"), ("X-Kumbu-Original-Height", "3120"), ("X-Kumbu-Transparent", "1")));
 
-        var picture = await Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(1440, 3120), Medium, null, 0, Ct);
+        var picture = await Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(1440, 3120), Medium, null, 0, null, Ct);
 
         Assert.True(picture.Transparent);
     }
@@ -384,7 +384,7 @@ public sealed class PdfSidecarTests
         var stub = new Stub((_, _) => Image(png, "image/png", 100, 50, ("X-Kumbu-Rotate", "90"), ("X-Kumbu-Page-Width", "595"), ("X-Kumbu-Page-Height", "842"), ("X-Kumbu-Original-Width", "50"), ("X-Kumbu-Original-Height", "100")));
 
         await Sidecar(stub).RenderPageAsync(Pdf, 2, Medium, new Crop(1, 2, 3, 4), 90, Ct);
-        await Sidecar(stub).RenderImageAsync(png, Medium, null, 90, Ct);
+        await Sidecar(stub).RenderImageAsync(png, Medium, null, 90, null, Ct);
 
         Assert.Equal("http://pdf.test:8090/render/page?page=2&longEdge=1568&pixels=1200000&bytes=409600&crop=1,2,3,4&rotate=90", stub.Seen[0].Request.RequestUri!.ToString());
         Assert.Equal("http://pdf.test:8090/render/image?longEdge=1568&pixels=1200000&bytes=409600&rotate=90", stub.Seen[1].Request.RequestUri!.ToString());
@@ -397,7 +397,7 @@ public sealed class PdfSidecarTests
         var stub = new Stub((_, _) => Image(png, "image/png", 100, 50, ("X-Kumbu-Page-Width", "595"), ("X-Kumbu-Page-Height", "842"), ("X-Kumbu-Original-Width", "100"), ("X-Kumbu-Original-Height", "50")));
 
         await Sidecar(stub).RenderPageAsync(Pdf, 2, Medium, null, 0, Ct);
-        await Sidecar(stub).RenderImageAsync(png, Medium, null, 0, Ct);
+        await Sidecar(stub).RenderImageAsync(png, Medium, null, 0, null, Ct);
 
         Assert.DoesNotContain("rotate", stub.Seen[0].Request.RequestUri!.Query);
         Assert.DoesNotContain("rotate", stub.Seen[1].Request.RequestUri!.Query);
@@ -418,7 +418,7 @@ public sealed class PdfSidecarTests
     private static async Task AssertNotTurnedAsync(Stub stub, int asked)
     {
         var page = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).RenderPageAsync(Pdf, 1, Medium, null, asked, Ct));
-        var image = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, asked, Ct));
+        var image = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, asked, null, Ct));
 
         Assert.All(new[] { page, image }, e => Assert.Equal((SidecarException.Failed, "The image isn't turned as asked"), (e.Code, e.Message)));
     }
@@ -444,9 +444,115 @@ public sealed class PdfSidecarTests
         var plain = Echoing(null);
 
         Assert.Equal(100, (await Sidecar(turned).RenderPageAsync(Pdf, 1, Medium, null, 270, Ct)).Width);
-        Assert.Equal(100, (await Sidecar(turned).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, 270, Ct)).Width);
+        Assert.Equal(100, (await Sidecar(turned).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, 270, null, Ct)).Width);
         Assert.Equal(100, (await Sidecar(plain).RenderPageAsync(Pdf, 1, Medium, null, 0, Ct)).Width);
-        Assert.Equal(100, (await Sidecar(plain).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, 0, Ct)).Width);
+        Assert.Equal(100, (await Sidecar(plain).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, 0, null, Ct)).Width);
+    }
+
+    /// <summary>Answers a picture of 100 × 50 px with the given <c>X-Kumbu-Frame</c> and <c>X-Kumbu-Frames</c> (none if null).</summary>
+    private static Stub Framing(string? frame, string? frames)
+    {
+        (string, string)[] extra =
+        [
+            ("X-Kumbu-Original-Width", "100"), ("X-Kumbu-Original-Height", "50"),
+            .. frame is null ? Array.Empty<(string, string)>() : [("X-Kumbu-Frame", frame)],
+            .. frames is null ? Array.Empty<(string, string)>() : [("X-Kumbu-Frames", frames)],
+        ];
+        return new Stub((_, _) => Image(FakePdfSidecar.SolidPng(100, 50), "image/png", 100, 50, extra));
+    }
+
+    private static Task<Picture> FramedAsync(Stub stub, int? asked) =>
+        Sidecar(stub).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, null, 0, asked, Ct);
+
+    [Fact]
+    public async Task A_frame_goes_into_the_query()
+    {
+        var stub = Framing("3", "5");
+
+        await FramedAsync(stub, 3);
+        var turned = new Stub((_, _) => Image(FakePdfSidecar.SolidPng(100, 50), "image/png", 100, 50, ("X-Kumbu-Original-Width", "50"), ("X-Kumbu-Original-Height", "100"), ("X-Kumbu-Rotate", "90"), ("X-Kumbu-Frame", "3")));
+        await Sidecar(turned).RenderImageAsync(FakePdfSidecar.SolidPng(100, 50), Medium, new Crop(1, 2, 3, 4), 90, 3, Ct);
+
+        Assert.Equal("http://pdf.test:8090/render/image?longEdge=1568&pixels=1200000&bytes=409600&frame=3", stub.Seen[0].Request.RequestUri!.ToString());
+        Assert.Equal("http://pdf.test:8090/render/image?longEdge=1568&pixels=1200000&bytes=409600&crop=1,2,3,4&rotate=90&frame=3", turned.Seen[0].Request.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task No_frame_leaves_the_query_as_it_was()
+    {
+        var stub = Framing(null, null);
+
+        await FramedAsync(stub, null);
+
+        Assert.DoesNotContain("frame", stub.Seen[0].Request.RequestUri!.Query);
+    }
+
+    private static async Task AssertNotTheFrameAsync(Stub stub, int? asked)
+    {
+        var e = await Assert.ThrowsAsync<SidecarException>(() => FramedAsync(stub, asked));
+
+        Assert.Equal((SidecarException.Failed, "The image isn't the frame asked for"), (e.Code, e.Message));
+    }
+
+    [Fact]
+    public async Task An_answer_without_the_frame_echo_is_refused() => await AssertNotTheFrameAsync(Framing(null, "5"), 3);
+
+    [Fact]
+    public async Task An_answer_with_a_frame_unasked_is_refused() => await AssertNotTheFrameAsync(Framing("3", "5"), null);
+
+    [Theory]
+    [InlineData("2")]
+    [InlineData("03")]
+    [InlineData("3.0")]
+    [InlineData("abc")]
+    public async Task An_answer_with_another_frame_is_refused(string echo) => await AssertNotTheFrameAsync(Framing(echo, "5"), 3);
+
+    [Fact]
+    public async Task The_count_of_frames_reaches_the_picture()
+    {
+        Assert.Equal(5, (await FramedAsync(Framing("3", "5"), 3)).Frames);
+        Assert.Equal(5, (await FramedAsync(Framing(null, "5"), null)).Frames);
+    }
+
+    [Fact]
+    public async Task A_missing_count_of_frames_is_null()
+    {
+        Assert.Null((await FramedAsync(Framing("3", null), 3)).Frames);
+        Assert.Null((await FramedAsync(Framing(null, null), null)).Frames);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("3.5")]
+    [InlineData("abc")]
+    public async Task A_malformed_count_of_frames_is_refused(string frames)
+    {
+        var e = await Assert.ThrowsAsync<SidecarException>(() => FramedAsync(Framing("3", frames), 3));
+
+        Assert.Equal(SidecarException.Failed, e.Code);
+        Assert.Equal("The answer has no valid X-Kumbu-Frames", e.Message);
+    }
+
+    [Fact]
+    public async Task A_frame_past_the_count_is_refused()
+    {
+        var e = await Assert.ThrowsAsync<SidecarException>(() => FramedAsync(Framing("7", "5"), 7));
+
+        Assert.Equal((SidecarException.Failed, "The frame asked for lies past the frames of the image"), (e.Code, e.Message));
+        Assert.Equal(7, (await FramedAsync(Framing("7", "7"), 7)).Frames);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.UnprocessableEntity, "no_such_frame", "no_such_frame")]
+    [InlineData(HttpStatusCode.InternalServerError, "no_such_frame", "failed")]
+    public async Task No_such_frame_is_known_with_its_status(HttpStatusCode status, string code, string known)
+    {
+        var stub = new Stub((_, _) => Json(status, $$"""{"error":"There is no frame 7.","code":"{{code}}"}"""));
+
+        var e = await Assert.ThrowsAsync<SidecarException>(() => FramedAsync(stub, 7));
+
+        Assert.Equal(known, e.Code);
     }
 
     /// <summary>A JPEG of SOI, one SOF0 frame header and EOI: enough for its header to say the size.</summary>

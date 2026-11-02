@@ -388,7 +388,7 @@ public static class KumbuMetrics
     public static void Rendered(RenderKind kind, TimeSpan elapsed) => RenderDuration.WithLabels(Label(kind)).Observe(elapsed.TotalSeconds);
 
     /// <summary>A page or crop the request got wrong: a refusal of the request, not a failure of the render.</summary>
-    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop";
+    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame";
 
     public static void RenderFailed(RenderKind kind, FailReason reason) => RenderFailures.WithLabels(Label(kind), Label(reason)).Inc();
 
@@ -452,6 +452,7 @@ public static class KumbuMetrics
         ImgRefusal.BadCrop => "bad_crop",
         ImgRefusal.BadSize => "bad_size",
         ImgRefusal.BadRotate => "bad_rotate",
+        ImgRefusal.BadFrame => "bad_frame",
         _ => "unavailable",
     };
 

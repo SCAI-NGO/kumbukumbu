@@ -44,6 +44,15 @@ public sealed class FakePdfSidecar : IPdfSidecar
     /// <summary>The turn each image request asked for, beside <see cref="ImageRequests"/>.</summary>
     public List<int> ImageRotations { get; } = [];
 
+    /// <summary>The frame each image request asked for (null for none), beside <see cref="ImageRequests"/>.</summary>
+    public List<int?> ImageFrames { get; } = [];
+
+    /// <summary>
+    /// The number of frames an image is answered with, given the frame asked (null: no count). A frame past a known
+    /// count is <c>no_such_frame</c>. Null: no image has frames.
+    /// </summary>
+    public Func<int?, int?>? FramesOf { get; set; }
+
     public async Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct)
     {
         Interlocked.Increment(ref _analyses);
@@ -63,16 +72,18 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return new Picture(SolidPng(width, height), "image/png", width, height, PageSize.Width, PageSize.Height);
     }
 
-    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, CancellationToken ct)
+    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct)
     {
         Interlocked.Increment(ref _renders);
-        lock (ImageRequests) { ImageRequests.Add((target, crop)); ImageRotations.Add(rotate); }
+        lock (ImageRequests) { ImageRequests.Add((target, crop)); ImageRotations.Add(rotate); ImageFrames.Add(frame); }
         await AnswerAsync(ct);
+        var frames = FramesOf?.Invoke(frame);
+        if (frame > frames) throw new SidecarException("no_such_frame", $"The image has {frames} frames.");
         var original = ImageHeader.Read(image.Span, out _) ?? (640, 480);
         var (w, h) = crop is null ? (original.Width, original.Height) : ((int)crop.Width, (int)crop.Height);
         if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w, h, target);
-        return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height);
+        return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height, Frames: frames);
     }
 
     private async Task AnswerAsync(CancellationToken ct)

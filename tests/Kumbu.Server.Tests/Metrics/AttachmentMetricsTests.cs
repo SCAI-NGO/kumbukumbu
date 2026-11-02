@@ -5,6 +5,8 @@ using Kumbu.Server.Attachments;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Attachments;
+using Kumbu.Server.Tests.Vaults;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -234,10 +236,48 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task A_frame_past_the_end_isnt_a_failed_render()
+    {
+        const string series = "kumbu_render_failures_total{kind=\"image\",reason=\"failed\"}";
+        await using var host = Host(app, new FakePdfSidecar { FramesOf = _ => 3 });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/clip.png", FakePdfSidecar.SolidPng(40, 30));
+        var pixels = new AttachmentPixels(
+            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
+            host.Services.GetRequiredService<VaultCatalog>(), host.Services.GetRequiredService<IPdfSidecar>(),
+            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var state = await StateAsync(host, user, "Samples/clip.png");
+        var path = VaultWorld.P($"/{user.Vault}/Samples/clip.png");
+        var before = await Scrape.TextAsync(app);
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() =>
+            pixels.ImageAsync(path, state, SizeStep.Small, null, 0, 7, Ct));
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(PixelsProblem.BadFrame, e.Problem);
+        Assert.Equal(0, Scrape.Value(after, series) - Scrape.Value(before, series));
+    }
+
+    [Fact]
+    public async Task A_bad_frame_has_its_own_reason()
+    {
+        const string series = "kumbu_img_refusals_total{reason=\"bad_frame\"}";
+        const string unavailable = "kumbu_img_refusals_total{reason=\"unavailable\"}";
+        var before = await Scrape.TextAsync(app);
+
+        KumbuMetrics.AttachmentUsed(new ImgRefused(ImgRefusal.BadFrame));
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(0, Scrape.Value(after, unavailable) - Scrape.Value(before, unavailable));
+    }
+
+    [Fact]
     public void A_request_the_client_got_wrong_is_no_render_failure()
     {
         Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_page", "x")));
         Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("bad_crop", "x")));
+        Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_frame", "x")));
         Assert.False(KumbuMetrics.IsRequestMistake(new SidecarException(SidecarException.Timeout, "x")));
         Assert.Equal(KumbuMetrics.FailReason.Invalid, KumbuMetrics.FailReasonOf(new SidecarException(SidecarException.Encrypted, "x")));
         Assert.Equal(KumbuMetrics.FailReason.Failed, KumbuMetrics.FailReasonOf(new SidecarException("other", "x")));
