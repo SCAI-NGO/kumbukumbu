@@ -11,7 +11,7 @@ const view = {
   requestId: "r1",
   client: { name: "Claude · claude.ai", host: "claude.ai", verified: true },
   redirectHost: "claude.ai",
-  connection: { name: "Work", vaults: { Arbeit: "write", Privat: "read" }, expiresAt: null as string | null, currentClient: null },
+  connection: { name: "Work", vaults: { Arbeit: "write", Privat: "read" }, actsAs: {} as Record<string, string>, expiresAt: null as string | null, currentClient: null },
   renewal: false,
   problem: null as string | null,
 };
@@ -66,6 +66,16 @@ describe("Consent", () => {
     expect(maintain).toHaveClass("text-warning");
     expect(maintain.closest("li")).toHaveTextContent("Arbeit: read, write and maintain");
     expect(screen.getByText("Privat: read")).toBeInTheDocument();
+  });
+
+  it("shows a right that her role caps as what it acts as", async () => {
+    const capped = { ...view.connection, vaults: { Gartenarbeit: "write", Privat: "read" }, actsAs: { Gartenarbeit: "read" } };
+    api({ "GET /api/oauth/requests/r1": () => json(200, { ...view, connection: capped }) });
+    renderApp("/consent?request=r1");
+    const shared = (await screen.findByText(/^Gartenarbeit:/)).closest("li")!;
+    expect(shared).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit");
+    expect(shared.querySelector("em")).toHaveTextContent("Gartenarbeit");
+    expect(screen.getByText(/^Privat:/).closest("li")).toHaveTextContent(/^Privat: read$/);
   });
 
   it("warns about an app that registered itself and shows the expiry", async () => {

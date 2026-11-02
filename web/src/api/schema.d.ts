@@ -7810,6 +7810,9 @@ export interface components {
             vaults: {
                 [key: string]: string;
             };
+            actsAs: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -7825,6 +7828,9 @@ export interface components {
         ConsentConnectionView: {
             name: string;
             vaults: {
+                [key: string]: string;
+            };
+            actsAs: {
                 [key: string]: string;
             };
             /** Format: date-time */

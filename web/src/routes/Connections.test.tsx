@@ -17,6 +17,7 @@ const base = {
   name: "Work",
   url,
   vaults: { Arbeit: "write" },
+  actsAs: {} as Record<string, string>,
   createdAt: "2026-10-01T09:00:00Z",
   lastUsedAt: null as string | null,
   expiresAt: null as string | null,
@@ -266,5 +267,36 @@ describe("connections and vaults shared with the user", () => {
     const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
     await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
     expect(item).toHaveTextContent("Others can write into Gartenarbeit.");
+  });
+
+  const garden = [
+    { name: "Arbeit", notes: 3, embeddings: "internal", pending: false, canWrite: true, level: "owner", shared: false },
+    { name: "Gartenarbeit", notes: 2, embeddings: "internal", pending: false, canWrite: false, level: "read", owner: '"Alice"', shared: true, membership: "m1" },
+  ];
+  // As the server sends it: the stored right in `vaults`, and in `actsAs` what it acts as where her role caps it.
+  const capped = { ...base, vaults: { Gartenarbeit: "write" }, actsAs: { Gartenarbeit: "read" } };
+
+  it('a capped connection reads "write, acts as read while you can only read Gartenarbeit"', async () => {
+    api([capped], { "GET /api/vaults": () => json(200, garden) });
+    renderApp("/keys");
+    const item = (await screen.findByRole("heading", { name: "Work" })).closest("li")!;
+    await waitFor(() => expect(item).toHaveTextContent("Gartenarbeit: write, acts as read while you can only read Gartenarbeit"));
+    expect(within(item).getByText(/acts as read/).querySelector("em")).toHaveTextContent("Gartenarbeit");
+  });
+
+  it("changing rights starts from the stored right, so an unrelated save keeps write", async () => {
+    const bodies: unknown[] = [];
+    api([capped], {
+      "GET /api/vaults": () => json(200, garden),
+      "PUT /api/connections/c1/vaults": async (r) => (bodies.push(await r.json()), json(200, { ...capped, vaults: { Arbeit: "read", Gartenarbeit: "write" } })),
+    });
+    renderApp("/keys");
+    await userEvent.click(await screen.findByRole("button", { name: "Change rights of Work" }));
+    const dialog = screen.getByRole("dialog", { name: "Change rights" });
+    await waitFor(() => expect(within(within(dialog).getByRole("group", { name: /Gartenarbeit/ })).getByLabelText("Read and write")).toBeChecked());
+    await userEvent.click(within(within(dialog).getByRole("group", { name: "Arbeit" })).getByLabelText("Read"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(bodies).toEqual([{ vaults: { Arbeit: "read", Gartenarbeit: "write" } }]));
   });
 });

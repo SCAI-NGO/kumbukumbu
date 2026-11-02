@@ -14,12 +14,13 @@ public sealed record ClientView(string Name, string Host, bool Verified);
 
 /// <summary>
 /// A connection as its owner sees it: <c>url</c> is its connector URL, to paste into the app; vault names with
-/// <c>read</c> or <c>write</c>. <c>state</c> is <c>waiting</c>, <c>connected</c>, <c>needs_reconnect</c>,
+/// <c>read</c> or <c>write</c>, as stored; <c>actsAs</c>: the vaults shared with her where her role caps that right, with
+/// the right the connection acts with there until she is raised. <c>state</c> is <c>waiting</c>, <c>connected</c>, <c>needs_reconnect</c>,
 /// <c>revoked</c> or <c>expired</c>; <c>reason</c> (e.g. <c>rights_changed</c>) goes with the last three;
 /// <c>client</c> is null until an app was authorised.
 /// </summary>
 public sealed record ConnectionView(
-    string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
+    string Id, string Name, string Url, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime CreatedAt, DateTime? LastUsedAt, DateTime? ExpiresAt, DateTime? RevokedAt,
     string State, string? Reason, ClientView? Client);
 
 /// <summary><c>vaults</c>: vault name → <c>read</c> or <c>write</c>. <c>expiresInDays</c>: 30, 90 or 365; left
@@ -40,9 +41,10 @@ public sealed record SetConnectionVaultsRequest(IReadOnlyDictionary<string, stri
 /// </summary>
 public sealed record ConsentView(string RequestId, ClientView Client, string RedirectHost, ConsentConnectionView? Connection, bool Renewal, string? Problem);
 
-/// <summary>A connection on the consent page: its name, vault name → <c>read</c> or <c>write</c>, its expiry, and the app
-/// it is authorised for now, if any.</summary>
-public sealed record ConsentConnectionView(string Name, IReadOnlyDictionary<string, string> Vaults, DateTime? ExpiresAt, ClientView? CurrentClient);
+/// <summary>A connection on the consent page: its name, vault name → <c>read</c> or <c>write</c>, <c>actsAs</c> as in
+/// <see cref="ConnectionView"/>, its expiry, and the app it is authorised for now, if any.</summary>
+public sealed record ConsentConnectionView(
+    string Name, IReadOnlyDictionary<string, string> Vaults, IReadOnlyDictionary<string, string> ActsAs, DateTime? ExpiresAt, ClientView? CurrentClient);
 
 /// <summary><c>allow</c>: the user's Allow (true) or Deny (false).</summary>
 public sealed record ConsentDecisionRequest(bool Allow);
@@ -173,10 +175,11 @@ public static class ConnectionApi
         // A meta that doesn't open with the user key was changed in the database: nothing to show or to authorise.
         if (connections.OpenMeta(caller.User!, caller.UserKey!, doc) is not { } meta) return ("revoked", null, false);
 
-        var open = await caller.OpenVaultsAsync(ct);
+        var (vaults, actsAs) = Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), await caller.OpenVaultsAsync(ct));
         var view = new ConsentConnectionView(
             meta.Name,
-            Shown(OAuthTokens.Rights(doc, meta, request.ReadOnly), open),
+            vaults,
+            actsAs,
             doc.ExpiresAt,
             meta.Client is { } c ? new ClientView(c.Name, c.Host, c.Verified) : null);
         var renewal = doc.AuthorisedAt is not null || meta.Client is not null;
@@ -221,28 +224,43 @@ public static class ConnectionApi
     private static async Task<NoContent> RevokeAsync(string id, RequestCaller caller, Connections connections, CancellationToken ct) =>
         await connections.RevokeAsync(caller.User!, id, ct) ? TypedResults.NoContent() : throw ApiErrors.NotFound("You have no such connection that isn't revoked.");
 
-    /// <summary>The rights as the connection will act: by the caller's name for each vault, and on a shared vault no
-    /// higher than her role (collab design §3.3). A vault that no longer opens for the user isn't listed: it has no name to show.</summary>
-    private static Dictionary<string, string> Shown(IEnumerable<KeyValuePair<string, KeyRight>> rights, IReadOnlyList<VaultAccess> open)
+    /// <summary>The rights by the caller's name for each vault, as stored, so that changing them starts from what she
+    /// gave; and, where a shared vault's role caps one (collab design §3.3), what the connection acts as there. A vault
+    /// that no longer opens for the user isn't listed: it has no name to show.</summary>
+    private static (Dictionary<string, string> Vaults, Dictionary<string, string> ActsAs) Shown(
+        IEnumerable<KeyValuePair<string, KeyRight>> rights, IReadOnlyList<VaultAccess> open)
     {
         var byId = open.ToDictionary(v => v.Id, StringComparer.Ordinal);
-        return rights.Where(v => byId.ContainsKey(v.Key)).ToDictionary(
-            v => byId[v.Key].Name,
-            v => KeyRights.ToText(byId[v.Key].Membership is { } membership ? VaultCatalog.Capped(v.Value, membership) : v.Value));
+        var vaults = new Dictionary<string, string>(StringComparer.Ordinal);
+        var actsAs = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (id, right) in rights)
+        {
+            if (!byId.TryGetValue(id, out var vault)) continue;
+            vaults[vault.Name] = KeyRights.ToText(right);
+            if (vault.Membership is { } membership && VaultCatalog.Capped(right, membership) is var capped && capped != right)
+                actsAs[vault.Name] = KeyRights.ToText(capped);
+        }
+
+        return (vaults, actsAs);
     }
 
-    private static ConnectionView View(ConnectionInfo info, IReadOnlyList<VaultAccess> open, string origin) => new(
-        info.Id,
-        info.Name,
-        OAuthUrls.Resource(origin, info.Id),
-        Shown(info.Vaults, open),
-        info.CreatedAt,
-        info.LastUsedAt,
-        info.ExpiresAt,
-        info.RevokedAt,
-        StateText(info.State),
-        info.Reason,
-        info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null);
+    private static ConnectionView View(ConnectionInfo info, IReadOnlyList<VaultAccess> open, string origin)
+    {
+        var (vaults, actsAs) = Shown(info.Vaults, open);
+        return new(
+            info.Id,
+            info.Name,
+            OAuthUrls.Resource(origin, info.Id),
+            vaults,
+            actsAs,
+            info.CreatedAt,
+            info.LastUsedAt,
+            info.ExpiresAt,
+            info.RevokedAt,
+            StateText(info.State),
+            info.Reason,
+            info.Client is { } client ? new ClientView(client.Name, client.Host, client.Verified) : null);
+    }
 
     private static string StateText(ConnectionState state) => state switch
     {

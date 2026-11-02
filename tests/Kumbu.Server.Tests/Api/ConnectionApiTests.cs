@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Kumbu.Server.Accounts;
 using Kumbu.Server.Sharing;
+using Kumbu.Server.Tests.OAuth;
 using Kumbu.Server.Tests.Sharing;
 using Microsoft.AspNetCore.Mvc.Testing;
 
@@ -85,17 +86,26 @@ public sealed class ConnectionApiTests(KumbuAppFactory app)
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var json = await JsonAsync(created);
         var id = json["id"]!.GetValue<string>();
-        Assert.Equal("read", json["vaults"]!["Garten"]!.GetValue<string>());
-        Assert.Equal("write", json["vaults"]!["Work"]!.GetValue<string>());
+        AssertStoredAndActsAs(json, new() { ["Garten"] = "write", ["Work"] = "write" });
 
         using var list = await bob.GetAsync("/api/connections");
-        var listed = Assert.Single((await JsonAsync(list)).AsArray())!;
-        Assert.Equal("read", listed["vaults"]!["Garten"]!.GetValue<string>());
-        Assert.Equal("write", listed["vaults"]!["Work"]!.GetValue<string>());
+        AssertStoredAndActsAs(Assert.Single((await JsonAsync(list)).AsArray())!, new() { ["Garten"] = "write", ["Work"] = "write" });
 
         using var changed = await bob.SendAsync(
             HttpMethod.Put, $"/api/connections/{id}/vaults", new { vaults = new Dictionary<string, string> { ["Garten"] = "write" } });
-        Assert.Equal("read", (await JsonAsync(changed))["vaults"]!["Garten"]!.GetValue<string>());
+        AssertStoredAndActsAs(await JsonAsync(changed), new() { ["Garten"] = "write" });
+
+        var client = await OAuthFlow.RegisterAsync(Api, "https://claude.test/cb");
+        var flow = await OAuthFlow.StartAsync(Api, bob, id, client, "https://claude.test/cb");
+        using var consent = await flow.GetConsentAsync();
+        AssertStoredAndActsAs((await JsonAsync(consent))["connection"]!, new() { ["Garten"] = "write" });
+    }
+
+    /// <summary>The stored rights stay as asked; <c>actsAs</c> names only the shared vault, where her read role caps them.</summary>
+    private static void AssertStoredAndActsAs(JsonNode view, Dictionary<string, string> stored)
+    {
+        Assert.Equal(stored, view["vaults"]!.AsObject().ToDictionary(v => v.Key, v => v.Value!.GetValue<string>()));
+        Assert.Equal(new Dictionary<string, string> { ["Garten"] = "read" }, view["actsAs"]!.AsObject().ToDictionary(v => v.Key, v => v.Value!.GetValue<string>()));
     }
 
     [Fact]

@@ -6,7 +6,7 @@ import { errorText } from "../api/error-text";
 import type { components } from "../api/schema";
 import { AuthScreen, FormError, primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { useSession } from "../state/session";
-import { RightText } from "./rights";
+import { ActsAs } from "./rights";
 
 type View = components["schemas"]["ConsentView"];
 
@@ -134,7 +134,7 @@ export default function Consent() {
       <ul className="flex flex-col divide-y divide-line rounded-[12px] border border-line bg-surface">
         {Object.entries(connection.vaults).map(([vault, right]) => (
           <li key={vault} className="px-4 py-3 break-words text-text">
-            {vault}: <RightText right={right} />
+            {vault}: <ActsAs right={right} level={connection.actsAs[vault]} vault={vault} />
           </li>
         ))}
       </ul>
