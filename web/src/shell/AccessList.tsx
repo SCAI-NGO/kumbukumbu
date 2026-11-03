@@ -56,8 +56,8 @@ function Redeemed({ vault, member, onGrant, onDecline, pending }: { vault: strin
 function ReencryptWhy({ id, who }: { id: string; who: string }) {
   return (
     <p id={id} className="text-sm text-text-body">
-      Only needed if {who} could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up
-      again.
+      Only needed if {who} could get hold of an old backup of this server. It doesn't help if {who} can also change this server's database. Everyone's app
+      connections and keys for this vault stop working and need to be set up again.
     </p>
   );
 }

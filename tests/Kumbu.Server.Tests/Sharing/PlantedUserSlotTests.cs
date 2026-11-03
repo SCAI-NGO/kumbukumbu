@@ -99,6 +99,9 @@ public sealed class PlantedUserSlotTests(KumbuAppFactory app)
     public async Task His_re_encryption_locks_the_owner_out()
     {
         var (alice, bob, _, _) = await PlantedAsync();
+        var f = Builders<SlotDocument>.Filter;
+        var hersFilter = f.Eq(s => s.Kind, SlotDocument.User) & f.Eq(s => s.Lookup, VaultCatalog.UserSlotLookup(alice.UserKey, alice.User.Id));
+        var before = await Catalog.Slots.Find(hersFilter).SingleAsync(Ct);
 
         using (var rekeyed = await bob.SendAsync(HttpMethod.Post, "/api/vaults/Gartenarbeit/rekey", new { password = RestClient.Password }))
         {
@@ -106,6 +109,8 @@ public sealed class PlantedUserSlotTests(KumbuAppFactory app)
         }
 
         // The run moves only the slot of the user who started it, so hers still wraps the old key.
+        var after = await Catalog.Slots.Find(hersFilter).SingleAsync(Ct);
+        Assert.Equal(before.Wrapped, after.Wrapped);
         using var hers = await alice.GetAsync("/api/notes/Gartenarbeit/plan.md");
         Assert.NotEqual(HttpStatusCode.OK, hers.StatusCode);
         using var his = await bob.GetAsync("/api/notes/Gartenarbeit/plan.md");
