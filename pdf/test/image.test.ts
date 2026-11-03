@@ -473,6 +473,41 @@ describe("the limit on frames", () => {
     for (const gif of fixtures) expect(gifFrameCount(gif)).toBe(new GifReader(gif).numFrames());
   });
 
+  it("never counts fewer frames than omggif reads, whatever the extensions say", () => {
+    // An application extension whose size isn't 11: omggif skips 17 bytes after its label and checks
+    // nothing, where a walk of sub-blocks would read its size byte as one, and could be led along a
+    // chain through every frame that omggif goes on to read.
+    const n = 20_000;
+    const head = [...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff];
+    const ext = [0x21, 0xff, 32, ...new Array(16).fill(1)];
+    const tiny = [0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 20, ...new Array(20).fill(1), 0];
+    tiny[16] = 32;
+    const hidden = new Uint8Array(head.length + ext.length + n * tiny.length + 18);
+    hidden.set(head);
+    hidden.set(ext, head.length);
+    for (let i = 0; i < n; i++) hidden.set(tiny, head.length + ext.length + i * tiny.length);
+    const end = hidden.length - 18;
+    hidden[end] = 0x3b;
+    hidden[end + 16] = 0;
+    hidden[end + 17] = 0x3b;
+    const gce = (bytes: number[]) => {
+      const b = gifWithFrameRect(4, 4, 4, 4);
+      return new Uint8Array([...b.subarray(0, 19), 0x21, 0xf9, ...bytes, ...b.subarray(19)]);
+    };
+    const polyglots = [hidden, gce([4, 0, 0, 0, 0, 0]), gce([5, 0, 0, 0, 0, 0, 0]), gce([4, 0, 0, 0, 0, 7, 0])];
+    for (const gif of polyglots) {
+      const walked = gifFrameCount(gif);
+      let read: number | undefined;
+      try {
+        read = new GifReader(gif).numFrames();
+      } catch {
+        read = undefined;
+      }
+      if (read !== undefined) expect(walked === undefined || walked >= Math.min(read, MAX_FRAMES + 1)).toBe(true);
+    }
+    expect(frames(hidden)).toBeUndefined();
+  });
+
   it("gives no count, and doesn't throw, for a truncated block or what is no GIF", () => {
     const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
     expect(gifFrameCount(gif.subarray(0, gif.length - 6))).toBeUndefined();

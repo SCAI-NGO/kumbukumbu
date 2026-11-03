@@ -65,7 +65,7 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
     const walked = gifFrameCount(img);
     if (walked === undefined) throw notImage();
     if (walked > MAX_FRAMES)
-      throw new PdfError(`The GIF has too many frames for a frame: at most ${MAX_FRAMES.toLocaleString("en-GB")}.`, "too_large");
+      throw new PdfError("The GIF has too many frames for a frame: at most 10,000.", "too_large");
     let reader: GifReader;
     try {
       reader = new GifReader(img);
@@ -124,8 +124,12 @@ export function frames(bytes: Uint8Array): number | undefined {
 }
 
 // The frames of a GIF counted by walking its blocks, allocating nothing per frame, and stopping at
-// MAX_FRAMES + 1; undefined for another format and for blocks that run past the end. Extensions
-// are skipped whatever their label: omggif, which knows only some, still decides what it can read.
+// MAX_FRAMES + 1; undefined for another format and for blocks that run past the end. Extensions are
+// skipped by omggif's own rules, so the walk reaches every frame omggif would read: an application
+// extension takes 17 bytes after its label unless its size is 11 and it isn't NETSCAPE2.0 (then its
+// sub-blocks), a graphic control 6; a label omggif doesn't know gives no count, as omggif throws.
+const NETSCAPE = [0x0b, ...new TextEncoder().encode("NETSCAPE2.0"), 0x03, 0x01];
+
 export function gifFrameCount(b: Uint8Array): number | undefined {
   if (!isGif(b) || b.length < 13) return undefined;
   const palette = (flags: number) => (flags & 0x80 ? 3 << ((flags & 7) + 1) : 0);
@@ -141,8 +145,20 @@ export function gifFrameCount(b: Uint8Array): number | undefined {
     const block = b[p++];
     if (block === 0x3b) break;
     if (block === 0x21) {
-      p++;
-      if (!subBlocks()) return undefined;
+      const label = b[p++];
+      if (label === 0xff) {
+        const netscape = NETSCAPE.every((v, i) => b[p + i] === v) && b[p + 16] === 0;
+        if (b[p] !== 0x0b || netscape) p += 17;
+        else {
+          p += 12;
+          if (!subBlocks()) return undefined;
+        }
+      } else if (label === 0xf9) {
+        if (b[p] !== 4 || b[p + 5] !== 0) return undefined;
+        p += 6;
+      } else if (label === 0xfe) {
+        if (!subBlocks()) return undefined;
+      } else return undefined;
     } else if (block === 0x2c) {
       if (p + 9 > b.length) return undefined;
       p += 9 + palette(b[p + 8]!) + 1;
