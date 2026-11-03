@@ -45,7 +45,7 @@ export const MAX_CLUSTERED = 20_000;
 /** Text boxes of fewer characters may be a figure's labels; longer ones (body text, captions) stop its growth. */
 export const LABEL_CHARS = 30;
 /** A labelled box takes in labels, legend swatches and pieces of its chart that lie this close to it. */
-export const LABEL_GAP_PT = 12;
+export const LABEL_GAP_PT = 40;
 /** Above this many text boxes, or as many path boxes that may be a chart's marks, a page's regions gain no labelled box. */
 export const MAX_LABELLED = 5_000;
 
@@ -186,7 +186,7 @@ function region(kind: Region["kind"], b: Box, labelled: Box | null | undefined, 
 }
 
 type Found = { kind: Region["kind"]; box: Box; grows: boolean };
-type Chart = { members: number[]; box: Box; grows: boolean; drawing: boolean; alive: boolean };
+type Chart = { members: number[]; box: Box; was: Box; grows: boolean; drawing: boolean; alive: boolean };
 type Grown = { box: Box; pieces: Chart[] };
 
 // The labelled box of each region (index as in found), or null where it gains none. Each region
@@ -200,14 +200,13 @@ type Grown = { box: Box; pieces: Chart[] };
 // in the way.
 function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
   const order = found.map((_, i) => i).sort((a, b) => byPosition(found[a]!.box, found[b]!.box) || found[a]!.kind.localeCompare(found[b]!.kind));
-  const charts: Chart[] = order.map((i) => ({ members: [i], box: found[i]!.box, grows: found[i]!.grows, drawing: found[i]!.kind === "drawing", alive: true }));
+  const charts: Chart[] = order.map((i) => ({ members: [i], box: found[i]!.box, was: found[i]!.box, grows: found[i]!.grows, drawing: found[i]!.kind === "drawing", alive: true }));
   const label = (t: Box) => t.chars !== undefined && t.chars < LABEL_CHARS;
   const candidates = [...text.filter(label), ...marks].sort(byPosition);
   const blockers = text.filter((t) => !label(t)).map(centre);
   const taken = new Uint8Array(candidates.length);
   const reach = (chart: Chart, other: Chart) => Math.min(...other.members.map((m) => gap(chart.box, found[m]!.box)));
-  // Nearness is measured to a chart's own regions, never to its grown box, so the chart processed
-  // first doesn't win what lies nearer its neighbour.
+  // Between charts, nearness is measured to their own regions.
   const tight = (chart: Chart) => chart.members.map((m) => found[m]!.box);
   const own = (chart: Chart, b: Box) => Math.min(...tight(chart).map((t) => gap(t, b)));
   const apart = (a: Chart, b: Chart) => Math.min(...tight(b).map((t) => own(a, t)));
@@ -244,12 +243,11 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
 
   const takeLabel = (chart: Chart, k: number): boolean => {
     const c = candidates[k]!;
-    const d = gap(chart.box, c);
+    const d = gap(chart.was, c);
     const mid = centre(c);
     if (d > LABEL_GAP_PT) return false;
     if (found.some((f, i) => !chart.members.includes(i) && holds(f.box, mid))) return false;
-    const mine = own(chart, c);
-    if (others(chart).some((o) => own(o, c) < mine)) return false;
+    if (others(chart).some((o) => gap(o.was, c) < d)) return false;
     const grown = grow(chart, union(chart.box, c), [c]);
     if (!grown) return false;
     accept(chart, grown);
@@ -266,9 +264,12 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
     return true;
   };
 
+  // A label is measured to the boxes the charts had when the round began, so all grow by one ring a
+  // round and the chart processed first doesn't win what lies nearer its neighbour's labels.
   let changed = true;
   while (changed) {
     changed = false;
+    for (const chart of charts) chart.was = chart.box;
     for (const chart of charts) {
       if (!chart.alive || !chart.grows) continue;
       const near: { d: number; k: number; piece?: Chart }[] = [];

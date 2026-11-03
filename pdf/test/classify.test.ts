@@ -123,6 +123,11 @@ describe("regions with labels", () => {
     expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 200, w: 300, h: 244 } }]);
   });
 
+  it("a label further than LABEL_GAP_PT stays out", () => {
+    const c = classify(page({ pathBoxes: [chart], textBoxes: [text(150, 401 + LABEL_GAP_PT, 60, 10, 9)] }));
+    expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200 }]);
+  });
+
   it("a long caption stops the growth", () => {
     // The label is within reach, but the box taking it in would hold the caption's centre.
     const c = classify(page({ pathBoxes: [chart], textBoxes: [text(100, 404, 300, 10, 60), text(60, 405, 30, 10, 6), text(150, 186, 60, 10, 8)] }));
@@ -160,15 +165,23 @@ describe("regions with labels", () => {
 
   it("a chart's axis lines and ticks lead to its labels and tie its pieces together", () => {
     // Bars further apart than LABEL_GAP_PT, the axes as lines of no thickness, tick labels beyond the axes.
-    const bars = [box(100, 200, 40, 200), box(170, 200, 40, 200), box(240, 200, 40, 200)];
-    const axes = [box(90, 200, 0, 200), box(90, 400, 200, 0), box(118, 400, 0, 4), box(188, 400, 0, 4), box(258, 400, 0, 4)];
+    const G = LABEL_GAP_PT;
+    const bars = [box(100, 200, 40, 200), box(150 + G, 200, 40, 200), box(200 + 2 * G, 200, 40, 200)];
+    const axes = [box(90, 200, 0, 200), box(90, 400, 150 + 2 * G, 0), box(120, 400, 0, 4), box(170 + G, 400, 0, 4), box(220 + 2 * G, 400, 0, 4)];
     const c = classify(
       page({
         pathBoxes: [...bars, ...axes],
-        textBoxes: [text(60, 195, 26, 10, 5), text(60, 395, 26, 10, 5), text(105, 408, 30, 10, 6), text(175, 408, 30, 10, 6), text(245, 408, 30, 10, 6), text(60, 440, 400, 10, 70)],
+        textBoxes: [
+          text(60, 195, 26, 10, 5),
+          text(60, 395, 26, 10, 5),
+          text(105, 408, 30, 10, 6),
+          text(155 + G, 408, 30, 10, 6),
+          text(205 + 2 * G, 408, 30, 10, 6),
+          text(60, 440, 400, 10, 70),
+        ],
       }),
     );
-    const labelled = { x: 60, y: 195, w: 230, h: 223 };
+    const labelled = { x: 60, y: 195, w: 180 + 2 * G, h: 223 };
     expect(c.regions).toEqual(bars.map((b) => ({ kind: "drawing", ...b, labelled })));
   });
 
@@ -180,7 +193,7 @@ describe("regions with labels", () => {
     ]);
   });
 
-  it("a label goes to the chart whose own region lies nearer, not to one grown towards it", () => {
+  it("a label goes to the nearer chart, whichever grows first", () => {
     // The left chart takes the first label and so grows to 2 pt from the second, which lies 10 pt from
     // the right chart's own region and further than LABEL_GAP_PT from the left one's.
     const G = LABEL_GAP_PT;
