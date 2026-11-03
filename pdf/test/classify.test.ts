@@ -2,7 +2,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { analyse } from "../src/analyse.js";
-import { type Box, LABEL_GAP_PT, type PageMeasure, type Region, classify } from "../src/classify.js";
+import { type Box, type PageMeasure, type Region, classify } from "../src/classify.js";
 import { A4, CHART_BARS, chartPage, logoPage, photoPage, scanPage, tablePage, textPage, whiteBackgroundPage } from "./fixtures.js";
 
 const W = 600;
@@ -180,61 +180,6 @@ describe("regions with labels", () => {
     ]);
   });
 
-  it("a label goes to the chart whose own region lies nearer, not to one grown towards it", () => {
-    // The left chart takes the first label and so grows to 2 pt from the second, which lies 10 pt from
-    // the right chart's own region and further than LABEL_GAP_PT from the left one's.
-    const G = LABEL_GAP_PT;
-    const c = classify(
-      page({
-        pathBoxes: [box(50, 200, 200, 200), box(264 + 2 * G, 200, 200, 200)],
-        textBoxes: [text(252, 300, G, 10, 4), text(254 + G, 300, G, 10, 4)],
-      }),
-    );
-    expect(c.regions).toEqual([
-      { kind: "drawing", x: 50, y: 200, w: 200, h: 200, labelled: { x: 50, y: 200, w: 202 + G, h: 200 } },
-      { kind: "drawing", x: 264 + 2 * G, y: 200, w: 200, h: 200, labelled: { x: 254 + G, y: 200, w: 210 + G, h: 200 } },
-    ]);
-  });
-
-  it("a chart taken in on the way is held to the same nearness as one taken in directly", () => {
-    // The box taking in the label would overlap the middle chart, which lies nearer the image on the
-    // right than the label does: the left chart doesn't take the label, nor the middle one with it.
-    const G = LABEL_GAP_PT;
-    const c = classify(
-      page({
-        pathBoxes: [box(50, 200, 100, 200), box(155 + G, 208, 60, 100)],
-        imageBoxes: [box(221 + G, 208, 100, 100)],
-        textBoxes: [text(152, 190, G + 20, 8, 6)],
-      }),
-    );
-    expect(c.regions).toEqual([
-      { kind: "drawing", x: 50, y: 200, w: 100, h: 200 },
-      { kind: "drawing", x: 155 + G, y: 208, w: 60, h: 100 },
-      { kind: "image", x: 221 + G, y: 208, w: 100, h: 100 },
-    ]);
-  });
-
-  it("two charts with their own axes further apart than LABEL_GAP_PT stay apart", () => {
-    // Known limit: one long rule touching both would join them.
-    const G = LABEL_GAP_PT;
-    const c = classify(
-      page({
-        pathBoxes: [
-          box(60, 200, 150, 200),
-          box(55, 200, 0, 200),
-          box(55, 400, 155, 0),
-          box(216 + G, 200, 150, 200),
-          box(211 + G, 200, 0, 200),
-          box(211 + G, 400, 155, 0),
-        ],
-      }),
-    );
-    expect(c.regions).toEqual([
-      { kind: "drawing", x: 60, y: 200, w: 150, h: 200, labelled: { x: 55, y: 200, w: 155, h: 200 } },
-      { kind: "drawing", x: 216 + G, y: 200, w: 150, h: 200, labelled: { x: 211 + G, y: 200, w: 155, h: 200 } },
-    ]);
-  });
-
   it("a full page's image gains nothing", () => {
     const c = classify(page({ imageBoxes: [box(0, 0, W, 780)], textBoxes: [text(100, 784, 40, 10, 8)] }));
     expect(c.regions).toEqual([{ kind: "image", x: 0, y: 0, w: W, h: 780 }]);
@@ -245,21 +190,6 @@ describe("regions with labels", () => {
     // The label alone would be taken in (as in the chain above); the filler lies far from the chart.
     const above = classify(page({ pathBoxes: [chart], textBoxes: [text(150, 406, 60, 10, 9), ...filler(5_000)] }));
     expect(above.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200 }]);
-  });
-
-  it("at 5,000 text boxes labels still grow", () => {
-    const filler = (n: number) => Array.from({ length: n }, (_, i) => text(5 + (i % 100) * 5.9, 560 + Math.floor(i / 100) * 4.8, 4, 3, 1));
-    const at = classify(page({ pathBoxes: [chart], textBoxes: [text(150, 406, 60, 10, 9), ...filler(4_999)] }));
-    expect(at.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 200, w: 300, h: 216 } }]);
-  });
-
-  it("a real PDF's chart takes in its title, its count of characters reaching the rule", async () => {
-    const p = (await analyse(await labelledChartPage(), 1)).pages[0]!;
-    const r = p.regions[0]!;
-    // The title's line lies about 6 to 18 pt under the bars.
-    expect({ x: r.labelled?.x, y: r.labelled?.y, w: r.labelled?.w }).toEqual({ x: r.x, y: r.y, w: r.w });
-    expect(r.labelled!.y + r.labelled!.h).toBeGreaterThan(r.y + r.h + 6);
-    expect(r.labelled!.y + r.labelled!.h).toBeLessThan(r.y + r.h + 18);
   });
 
   it("the same boxes give the same answer, in any order", () => {

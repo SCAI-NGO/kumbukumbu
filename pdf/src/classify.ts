@@ -206,29 +206,20 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
   const blockers = text.filter((t) => !label(t)).map(centre);
   const taken = new Uint8Array(candidates.length);
   const reach = (chart: Chart, other: Chart) => Math.min(...other.members.map((m) => gap(chart.box, found[m]!.box)));
-  // Nearness is measured to a chart's own regions, never to its grown box, so the chart processed
-  // first doesn't win what lies nearer its neighbour.
-  const tight = (chart: Chart) => chart.members.map((m) => found[m]!.box);
-  const own = (chart: Chart, b: Box) => Math.min(...tight(chart).map((t) => gap(t, b)));
-  const apart = (a: Chart, b: Chart) => Math.min(...tight(b).map((t) => own(a, t)));
   const others = (...not: Chart[]) => charts.filter((c) => c.alive && !not.includes(c));
 
   // The chart's box grown to next, with the drawings of other charts it would then overlap taken
-  // in, each within LABEL_GAP_PT of what brought it in and no nearer a third chart, as one taken
-  // in directly; null if it would overlap anything else or reach a blocker's centre.
-  const grow = (chart: Chart, next: Box, by: Box[]): Grown | null => {
+  // in, each within LABEL_GAP_PT of what brought it in; null if it would overlap anything else or
+  // reach a blocker's centre.
+  const grow = (chart: Chart, next: Box, by: Box): Grown | null => {
     const pieces: Chart[] = [];
-    const near = [...by];
+    const near = [by];
     for (;;) {
       const hit = others(chart, ...pieces).filter((o) => overlaps(next, o.box));
       if (hit.length === 0) break;
-      const fits = (o: Chart) => {
-        const d = Math.min(...near.map((b) => own(o, b)));
-        return d <= LABEL_GAP_PT && !others(chart, ...pieces, ...hit).some((t) => apart(t, o) < d);
-      };
-      if (hit.some((o) => !chart.drawing || !o.drawing || !o.grows || !fits(o))) return null;
+      if (hit.some((o) => !chart.drawing || !o.drawing || !o.grows || !near.some((b) => gap(b, o.box) <= LABEL_GAP_PT))) return null;
       pieces.push(...hit);
-      near.push(...hit.flatMap(tight));
+      near.push(...hit.map((o) => o.box));
       next = hit.reduce((b, o) => union(b, o.box), next);
     }
     const now = [chart.box, ...pieces.map((p) => p.box)];
@@ -248,9 +239,8 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
     const mid = centre(c);
     if (d > LABEL_GAP_PT) return false;
     if (found.some((f, i) => !chart.members.includes(i) && holds(f.box, mid))) return false;
-    const mine = own(chart, c);
-    if (others(chart).some((o) => own(o, c) < mine)) return false;
-    const grown = grow(chart, union(chart.box, c), [c]);
+    if (others(chart).some((o) => gap(o.box, c) < d)) return false;
+    const grown = grow(chart, union(chart.box, c), c);
     if (!grown) return false;
     accept(chart, grown);
     taken[k] = 1;
@@ -259,8 +249,8 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
   const takeChart = (chart: Chart, piece: Chart): boolean => {
     const d = reach(chart, piece);
     if (!piece.alive || d > LABEL_GAP_PT || reach(piece, chart) > LABEL_GAP_PT) return false;
-    if (others(chart, piece).some((o) => apart(o, piece) < apart(chart, piece))) return false;
-    const grown = grow(chart, union(chart.box, piece.box), tight(piece));
+    if (others(chart, piece).some((o) => reach(o, piece) < d)) return false;
+    const grown = grow(chart, union(chart.box, piece.box), piece.box);
     if (!grown) return false;
     accept(chart, grown);
     return true;
