@@ -161,7 +161,7 @@ describe("AccessList", () => {
     expect(rekey).not.toBeChecked();
     expect(rekey).toBeEnabled();
     expect(rekey).toHaveAccessibleDescription(
-      "Only needed if Bob could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up again.",
+      "Only needed if Bob could get hold of an old backup of this server. It doesn't help if Bob can also change this server's database. Everyone's app connections and keys for this vault stop working and need to be set up again.",
     );
     // Off, it asks for no password and runs nothing but the revoke.
     expect(within(dialog).queryByLabelText("Your password")).not.toBeInTheDocument();
@@ -228,7 +228,7 @@ describe("AccessList", () => {
     const offer = await screen.findByRole("region", { name: /^Bob left Gartenarbeit 31 Oct 2026/ });
     const button = within(offer).getByRole("button", { name: "Re-encrypt Gartenarbeit…" });
     expect(button).toHaveAccessibleDescription(
-      "Only needed if Bob could get hold of an old backup of this server. Everyone's app connections and keys for this vault stop working and need to be set up again.",
+      "Only needed if Bob could get hold of an old backup of this server. It doesn't help if Bob can also change this server's database. Everyone's app connections and keys for this vault stop working and need to be set up again.",
     );
     expect(requests(fetch, "POST")).toHaveLength(0);
 
