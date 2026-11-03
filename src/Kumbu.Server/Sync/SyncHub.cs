@@ -259,12 +259,15 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// and her API keys' and devices' sockets alike, name it as the catalog shows it from now on, and are told, so that
     /// her tabs ask for the vault list again and take a new ticket. The name is read under each connection's gate when
     /// it is applied: of two quick renames, the later apply has the latest name, whichever call comes last. Members keep
-    /// their alias and are told nothing.</summary>
-    public void VaultRenamed(string ownerId, string vaultId)
+    /// their alias and are told nothing. With <paramref name="names"/>, known only when the rename's outcome is, each
+    /// is sent <c>{"type":"renamed","vault":"…","from":"…"}</c> ahead of the hint, so that a second tab on the old name
+    /// follows (polish spec §2).</summary>
+    public void VaultRenamed(string ownerId, string vaultId, (string From, string To)? names = null)
     {
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == ownerId && c.Has(vaultId)))
         {
             connection.RenameOwned(vaultId, Shown);
+            if (names is (var from, var to)) connection.Renamed(vaultId, JsonSerializer.Serialize(new { type = "renamed", vault = to, from }));
             connection.Hint(vaultId);
         }
     }
@@ -523,7 +526,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         /// <summary>Presence, apart from the hints: the last state per note, which a newer one replaces before it is sent.</summary>
         private readonly ConcurrentDictionary<(string Vault, string Path), string> _presence = new();
 
-        /// <summary>Wakes the send loop for either; one pending wake is enough, since the loop takes all there is.</summary>
+        /// <summary>The renamed frames, in their order, by the vault's id.</summary>
+        private readonly ConcurrentQueue<(string Vault, string Message)> _renamed = new();
+
+        /// <summary>Wakes the send loop for any of them; one pending wake is enough, since the loop takes all there is.</summary>
         private readonly Channel<byte> _wake = Channel.CreateBounded<byte>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
 
         private readonly ConcurrentDictionary<string, byte> _waiting = new();
@@ -569,6 +575,14 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         {
             if (!_vaults.ContainsKey(vaultId)) return;
             _out.Writer.TryWrite(vaultId);
+            _wake.Writer.TryWrite(0);
+        }
+
+        /// <summary>Apart from the hints, which coalesce: each rename is its own frame, and only for the owner's hold.</summary>
+        public void Renamed(string vaultId, string message)
+        {
+            if (!_vaults.TryGetValue(vaultId, out var vault) || vault.Membership is not null) return;
+            _renamed.Enqueue((vaultId, message));
             _wake.Writer.TryWrite(0);
         }
 
@@ -658,7 +672,7 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
             _wake.Writer.TryComplete();
         }
 
-        /// <summary>Presence first, the last state of each note, then the hints in their order.</summary>
+        /// <summary>Presence first, the last state of each note, then the renames, then the hints in their order.</summary>
         public async Task SendLoopAsync(CancellationToken ct)
         {
             while (await _wake.Reader.WaitToReadAsync(ct))
@@ -669,6 +683,11 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                 foreach (var key in _presence.Keys)
                 {
                     if (_presence.TryRemove(key, out var message) && _vaults.ContainsKey(key.Vault) && !await SendAsync(message, ct)) return;
+                }
+
+                while (_renamed.TryDequeue(out var renamed))
+                {
+                    if (_vaults.ContainsKey(renamed.Vault) && !await SendAsync(renamed.Message, ct)) return;
                 }
 
                 // Under the name the vault has when the hint goes out: a rename since the change counts.

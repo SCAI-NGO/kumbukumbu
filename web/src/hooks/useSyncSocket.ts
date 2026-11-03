@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, call, HttpError } from "../api/client";
 import { vaultHinted } from "../api/history";
 import { useVaults } from "../api/notes";
+import { followRename } from "../api/sharing";
 import { presenceKey, useSyncStatus } from "../state/sync";
 
 /** The server closed the socket for a newer one of this session (more than four tabs): reconnecting would replace that one. */
@@ -17,8 +19,11 @@ const socketUrl = (ticket: string) => {
   return `${protocol === "https:" ? "wss" : "ws"}://${host}/api/ws?ticket=${encodeURIComponent(ticket)}`;
 };
 
-/** A frame from the server; `vault` is the caller's own name for it (an alias for a vault shared with her). */
-function onFrame(queryClient: QueryClient, data: unknown) {
+/**
+ * A frame from the server; `vault` is the caller's own name for it (an alias for a vault shared with her). `renamed`
+ * comes to the owner's sockets only, `from` naming the vault as it was.
+ */
+function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unknown) {
   if (typeof data !== "string") return;
   let frame: unknown;
   try {
@@ -27,6 +32,7 @@ function onFrame(queryClient: QueryClient, data: unknown) {
     return;
   }
   if (!frame || typeof frame !== "object" || !("type" in frame) || !("vault" in frame) || typeof frame.vault !== "string") return;
+  if (frame.type === "renamed" && "from" in frame && typeof frame.from === "string") followRename(queryClient, navigate, frame.from, frame.vault);
   if (frame.type === "changed") vaultHinted(queryClient, frame.vault);
   if (frame.type === "presence" && "path" in frame && typeof frame.path === "string" && "editors" in frame && Array.isArray(frame.editors)) {
     const key = presenceKey(frame.vault, frame.path);
@@ -52,6 +58,10 @@ const down = { connected: false, editors: {}, send: () => false };
  */
 export function useSyncSocket() {
   const queryClient = useQueryClient();
+  // Not a dependency of the socket: a new navigate mustn't open it again.
+  const navigateNow = useNavigate();
+  const navigate = useRef(navigateNow);
+  navigate.current = navigateNow;
   const vaults = useVaults();
   const [generation, setGeneration] = useState(0);
   /** The vault names when the ticket was asked for, null before the list is in. */
@@ -97,7 +107,7 @@ export function useSyncSocket() {
         if (opened.current) for (const key of ["tree", "vaults", "history", "trash", "checkpoints", "changes", "version", "links", "backlinks"]) void queryClient.invalidateQueries({ queryKey: [key] });
         opened.current = true;
       };
-      s.onmessage = (e: MessageEvent) => onFrame(queryClient, e.data);
+      s.onmessage = (e: MessageEvent) => onFrame(queryClient, navigate.current, e.data);
       s.onclose = (e: CloseEvent) => {
         if (socket !== s) return;
         socket = null;

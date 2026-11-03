@@ -671,7 +671,9 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         await RenameToGartenAsync(alice);
 
         // Unprompted: her open tabs ask for the vault list again, and take a new ticket.
+        Assert.Equal(Renamed("Garten", "Gartenarbeit"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
         Assert.Equal(Changed("Garten"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
+        Assert.Equal(Renamed("Garten", "Gartenarbeit"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
         Assert.Equal(Changed("Garten"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
         Assert.Equal(["Garten", "Garten"], Hub.Held.Where(h => h.VaultId == vaultId && h.Subject.User == alice.User.Id).Select(h => h.Name).ToArray());
         Assert.Equal("Beet", Assert.Single(Hub.Held, h => h.VaultId == vaultId && h.Subject.User == bob.User.Id).Name);
@@ -682,6 +684,41 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         Assert.Equal(Changed("Garten"), await ReceiveAsync(tab, TimeSpan.FromSeconds(2)));
         Assert.Equal(Changed("Garten"), await ReceiveAsync(device, TimeSpan.FromSeconds(2)));
         Assert.Equal(Changed("Beet"), await ReceiveAsync(bobs, TimeSpan.FromSeconds(2)));
+    }
+
+    private static string Renamed(string vault, string from) => new JsonObject { ["type"] = "renamed", ["vault"] = vault, ["from"] = from }.ToJsonString();
+
+    /// <summary>Her tab's, her agent's and her device's sockets alike, the old and the new name ahead of the hint: a
+    /// second tab on the old name follows.</summary>
+    [Fact]
+    public async Task A_rename_tells_her_sockets_the_old_and_the_new_name()
+    {
+        var (alice, _, vaultId, key) = await RenamableAsync();
+        var (agentKey, _) = await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            alice.User, alice.UserKey, DateTime.UtcNow, "Agent", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Read }, Ct);
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        using var agent = await SyncSockets.OpenAsync(Api, alice, agentKey);
+        using var device = await SyncSockets.OpenAsync(Api, alice, key);
+        await HeldAsync(vaultId, 3);
+
+        await RenameToGartenAsync(alice);
+
+        foreach (var socket in new[] { tab, agent, device })
+        {
+            Assert.Equal([Renamed("Garten", "Gartenarbeit"), Changed("Garten")], await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(1.5)));
+        }
+    }
+
+    [Fact]
+    public async Task A_member_gets_no_renamed_frame()
+    {
+        var (alice, bob, vaultId, _) = await RenamableAsync();
+        using var bobs = await SyncSockets.OpenAsync(Api, bob);
+        await HeldAsync(vaultId, 1);
+
+        await RenameToGartenAsync(alice);
+
+        Assert.Empty(await SyncSockets.DrainAsync(bobs, TimeSpan.FromSeconds(1.5)));
     }
 
     /// <summary>A rename that committed but answers as if it failed: her sockets are told all the same, so her tabs ask
@@ -719,6 +756,30 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         await HeldAsync(vaultId, 3);
         await WriteAsync(alice);
         Assert.Contains(Changed("Garten"), await SyncSockets.DrainAsync(reopened, TimeSpan.FromSeconds(1.5)));
+    }
+
+    /// <summary>Not knowing the names, the hub sends nothing that would move a tab: only the hint.</summary>
+    [Fact]
+    public async Task A_rename_whose_outcome_is_unknown_sends_no_renamed_frame()
+    {
+        var (alice, _, vaultId, key) = await RenamableAsync();
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        using var device = await SyncSockets.OpenAsync(Api, alice, key);
+        await HeldAsync(vaultId, 2);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        catalog.MetaFaultAt = point => point == "after-rename-commit" ? throw new InvalidOperationException("The answer was lost.") : Task.CompletedTask;
+        try
+        {
+            using var renamed = await alice.SendAsync(HttpMethod.Put, "/api/vaults/Gartenarbeit/name", new { name = "Garten" });
+            Assert.Equal(HttpStatusCode.InternalServerError, renamed.StatusCode);
+        }
+        finally
+        {
+            catalog.MetaFaultAt = null;
+        }
+
+        Assert.Equal([Changed("Gartenarbeit")], await SyncSockets.DrainAsync(tab, TimeSpan.FromSeconds(1.5)));
+        Assert.Equal([Changed("Gartenarbeit")], await SyncSockets.DrainAsync(device, TimeSpan.FromSeconds(1.5)));
     }
 
     [Fact]

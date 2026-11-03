@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { api, call } from "./client";
 import { noteUrl } from "./paths";
 import { movedPath, useEditor } from "../state/editor";
@@ -161,10 +161,26 @@ function forgetOnceUnused(queryClient: QueryClient, matches: (query: Query) => b
 }
 
 /**
- * The owner's new name for her vault; her open note, recent notes and drawer move with it. Here, not in the dialog's
- * `mutate`: a dialog closed meanwhile would skip that, and the store would move without the URL. Moved and navigated
- * first, and the refetches not waited for, so that the note still shown and the dialog's access list don't ask again
- * under the old name.
+ * The owner's vault `vault`, now named `name`, in this tab: on her own rename's answer, or on the sync socket's
+ * `renamed` frame for another tab's. Her open note, recent notes, drawer and unsaved text move with it. Moved and
+ * navigated first, and the refetches not waited for, so that the note still shown and the dialog's access list don't
+ * ask again under the old name. A tab that moved already matches nothing under the old name and stays.
+ */
+export function followRename(queryClient: QueryClient, navigate: NavigateFunction, vault: string, name: string) {
+  const [from, to] = [`/${vault}/`, `/${name.normalize("NFC").trim()}/`];
+  const editor = useEditor.getState();
+  const open = editor.currentPath;
+  editor.moved(from, to);
+  if (editor.activeVault === vault) editor.setActiveVault(to.slice(1, -1));
+  // The drawer shows only on `/` and on a note, so an open note is all there is to follow.
+  if (open?.startsWith(from)) navigate(noteUrl(movedPath(open, from, to)), { replace: true });
+  forgetOnceUnused(queryClient, (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(from))));
+  void Promise.all(["vaults", "keys", "connections", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+}
+
+/**
+ * The owner's new name for her vault. Followed here, not in the dialog's `mutate`: a dialog closed meanwhile would
+ * skip that, and the store would move without the URL.
  */
 export function useRenameVault() {
   const queryClient = useQueryClient();
@@ -172,17 +188,7 @@ export function useRenameVault() {
   return useMutation({
     mutationFn: async ({ vault, name }: { vault: string; name: string }) =>
       void (await call(api.PUT("/api/vaults/{vault}/name", { params: { path: { vault } }, body: { name } }))),
-    onSuccess: (_, { vault, name }) => {
-      const [from, to] = [`/${vault}/`, `/${name.normalize("NFC").trim()}/`];
-      const editor = useEditor.getState();
-      const open = editor.currentPath;
-      editor.moved(from, to);
-      if (editor.activeVault === vault) editor.setActiveVault(to.slice(1, -1));
-      // The drawer shows only on `/` and on a note, so an open note is all there is to follow.
-      if (open?.startsWith(from)) navigate(noteUrl(movedPath(open, from, to)), { replace: true });
-      forgetOnceUnused(queryClient, (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(from))));
-      void Promise.all(["vaults", "keys", "connections", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
-    },
+    onSuccess: (_, { vault, name }) => followRename(queryClient, navigate, vault, name),
   });
 }
 

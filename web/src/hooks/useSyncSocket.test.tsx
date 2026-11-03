@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useVersionPoll } from "../api/history";
+import { routerFuture } from "../router";
+import { useEditor } from "../state/editor";
 import { useSyncStatus } from "../state/sync";
 import { fakeApi, json } from "../test/app";
 import { FakeSocket } from "../test/socket";
@@ -21,6 +24,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   useSyncStatus.setState({ connected: false, editors: {} });
+  useEditor.getState().reset();
 });
 
 /** The server: a new ticket for every request, and the vault list `vaults` holds now. */
@@ -42,14 +46,34 @@ function Shell({ poll }: { poll?: number }) {
   return null;
 }
 
-function mount(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }), poll?: number) {
+/** Inside the router, as the shell is: on `/`, or on the note at `at`. */
+function mount(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }), poll?: number, at = "/") {
+  const element = <Shell poll={poll} />;
+  const router = createMemoryRouter(
+    [
+      { path: "/", element },
+      { path: "/notes/*", element },
+    ],
+    { initialEntries: [at], future: routerFuture },
+  );
   const view = render(
     <QueryClientProvider client={queryClient}>
-      <Shell poll={poll} />
+      <RouterProvider router={router} future={{ v7_startTransition: true }} />
     </QueryClientProvider>,
   );
-  return { queryClient, view };
+  return { queryClient, view, router };
 }
+
+/** A second tab of the owner on `at`, its socket open. */
+async function tabOn(at: string) {
+  server([{ name: "Garten" }, { name: "Work" }]);
+  const { router } = mount(undefined, undefined, `/notes/${at}`);
+  await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+  last().open();
+  return router;
+}
+
+const renamed = { type: "renamed", vault: "Garten", from: "Gartenarbeit" };
 
 const invalidated = (queryClient: QueryClient, key: unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
 
@@ -166,5 +190,64 @@ describe("the sync socket", () => {
     await waitFor(() => expect(FakeSocket.all).toHaveLength(2));
     expect(first.closed).toBe(true);
     expect(ticketOf(last())).toBe("t2");
+  });
+
+  it("moves a tab on the old name to the new one", async () => {
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md", "/Work/a.md"] });
+    const router = await tabOn("Gartenarbeit/plan.md");
+
+    last().frame(renamed);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/plan.md"));
+    // In place of the old name's entry: Back doesn't lead to a note that is no longer there.
+    expect(router.state.historyAction).toBe("REPLACE");
+    expect(useEditor.getState().activeVault).toBe("Garten");
+    expect(useEditor.getState().currentPath).toBe("/Garten/plan.md");
+    expect(useEditor.getState().recentPaths).toEqual(["/Garten/plan.md", "/Work/a.md"]);
+  });
+
+  it("keeps unsaved text across the move", async () => {
+    const draft = { username: "alice", path: "/Gartenarbeit/plan.md", text: "Beete, noch nicht gesichert.\n", version: "v1" };
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", draft });
+    const router = await tabOn("Gartenarbeit/plan.md");
+
+    last().frame(renamed);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/notes/Garten/plan.md"));
+    expect(useEditor.getState().draft).toEqual({ ...draft, path: "/Garten/plan.md" });
+  });
+
+  it("leaves a tab on another vault alone", async () => {
+    useEditor.setState({ activeVault: "Work", currentPath: "/Work/plan.md", recentPaths: ["/Work/plan.md"] });
+    const router = await tabOn("Work/plan.md");
+
+    last().frame({ type: "renamed", vault: "Beet", from: "Garten" });
+
+    expect(router.state.location.pathname).toBe("/notes/Work/plan.md");
+    expect(router.state.historyAction).toBe("POP");
+    expect(useEditor.getState()).toMatchObject({ activeVault: "Work", currentPath: "/Work/plan.md", recentPaths: ["/Work/plan.md"] });
+  });
+
+  it("leaves the tab that renamed alone", async () => {
+    // It moved on its own answer already: the old name matches nothing here.
+    useEditor.setState({ activeVault: "Garten", currentPath: "/Garten/plan.md", recentPaths: ["/Garten/plan.md"] });
+    const router = await tabOn("Garten/plan.md");
+
+    last().frame(renamed);
+
+    expect(router.state.location.pathname).toBe("/notes/Garten/plan.md");
+    expect(router.state.historyAction).toBe("POP");
+    expect(useEditor.getState()).toMatchObject({ activeVault: "Garten", currentPath: "/Garten/plan.md", recentPaths: ["/Garten/plan.md"] });
+  });
+
+  it("ignores a frame with no from", async () => {
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md"] });
+    const router = await tabOn("Gartenarbeit/plan.md");
+
+    last().frame({ type: "renamed", vault: "Garten" });
+
+    expect(router.state.location.pathname).toBe("/notes/Gartenarbeit/plan.md");
+    expect(router.state.historyAction).toBe("POP");
+    expect(useEditor.getState()).toMatchObject({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md"] });
   });
 });
