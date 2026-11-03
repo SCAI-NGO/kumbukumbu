@@ -331,19 +331,6 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
     }
 
     [Fact]
-    public async Task Regions_with_no_labelled_box_are_stored_in_their_old_shape()
-    {
-        var w = await WorldAsync();
-        await w.Analyses.StoreAsync(w.Vault, w.BlobId, Book(2, PageText, regions: 2), Ct);
-
-        var part = await w.Catalog.PdfParts.Find(d => d.Vault == w.Vault.Id && d.Part == 0).SingleAsync(Ct);
-        var header = w.Vault.OpenPdfAnalysis<System.Text.Json.Nodes.JsonObject>(part);
-
-        Assert.NotEmpty(header["Pages"]![0]!["Regions"]!.AsArray());
-        Assert.DoesNotContain("Labelled", header.ToJsonString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task At_most_32_regions_a_page_are_kept()
     {
         var w = await WorldAsync();

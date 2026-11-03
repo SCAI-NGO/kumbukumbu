@@ -2,7 +2,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Kumbu.Core.Attachments;
 using Kumbu.Server.Vaults;
 using MongoDB.Driver;
@@ -440,9 +439,7 @@ internal sealed record PageRecord(
 }
 
 /// <summary><see cref="Labelled"/> is null in a record stored before regions had one.</summary>
-internal sealed record RegionRecord(
-    string Kind, double X, double Y, double Width, double Height,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] PdfBox? Labelled = null);
+internal sealed record RegionRecord(string Kind, double X, double Y, double Width, double Height, PdfBox? Labelled = null);
 
 internal sealed record PartRecord(int Part, int First, int Last);
 
