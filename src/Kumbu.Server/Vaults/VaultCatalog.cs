@@ -1310,6 +1310,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>For tests, as <see cref="RekeyFaultAt"/>: a point in a load between reading the vault's meta and its
+    /// documents, with the vault's id.</summary>
+    internal Func<string, Task>? LoadBetweenReads { get; set; }
+
     private async Task<UnlockedVault?> LoadAsync(string id, byte[] vaultKey, CancellationToken ct)
     {
         await EnterLoadingAsync(id, ct);
@@ -1343,11 +1347,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // Never in the working set, never with a current key id, never announced to the search index.
             // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
             if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, DisplayName = meta.DisplayName };
-            // Outside its period (under _loading, as every start's and finish's change of state, and with no start in
-            // transition): a start whose commit went unanswered didn't commit after all.
-            _pending.TryRemove(id, out _);
 
             var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, DisplayName = meta.DisplayName };
+            if (LoadBetweenReads is { } between) await between(id);
             var notes = ImmutableDictionary.CreateBuilder<VaultPath, (MongoDB.Bson.ObjectId, StoredNote)>();
             var damaged = ImmutableHashSet.CreateBuilder<string>();
             foreach (var d in await Notes.Find(n => n.Vault == id).ToListAsync(ct))
@@ -1392,6 +1394,11 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 .Select(t => (t.Id, t.Trashed!))];
 
             RecordKey(vault);
+            // Outside its period (under _loading, as every start's and finish's change of state, and with no start in
+            // transition): a start whose commit went unanswered didn't commit after all, or a finish's did. Only once
+            // this key is recorded, so that an object made with an older one stays refused meanwhile, also when the
+            // reads above fail; and before the vault is published, which it may then be written and indexed under.
+            _pending.TryRemove(id, out _);
             _open[id] = vault;
             log.LogInformation("Unlocked vault {VaultId} ({Notes})", vault.Id, vault.Notes.Count == 1 ? "1 note" : $"{vault.Notes.Count} notes");
             KumbuMetrics.VaultUnlocked();

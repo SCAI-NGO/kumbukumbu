@@ -301,6 +301,58 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app) : IAsyncDisposable
         }
     }
 
+    [Fact]
+    public async Task A_load_under_the_new_key_keeps_an_old_object_refused_until_the_key_is_recorded()
+    {
+        var (alice, id) = await AliceAsync();
+        // Made with K, as a request or the search index's queue may still hold it.
+        var old = Catalog.Current(id)!;
+        var hold = new Hold().At("inside-finish", () => throw new InvalidOperationException("the finish's answer is lost"));
+        var run = Run(alice, id, hold);
+        try
+        {
+            await ReachedAsync(hold, "inside-finish", run);
+            hold.Release("inside-finish");
+            await Assert.ThrowsAsync<InvalidOperationException>(() => run.WaitAsync(Bound, Ct));
+        }
+        finally
+        {
+            await EndAsync(hold, run);
+        }
+
+        // The fixture's own host, on the same database, finishes the run: this host is left as after a finish whose
+        // commit went unanswered, the vault marked and K still its current key.
+        await app.PublicApi.Services.GetRequiredService<VaultCatalog>().RekeyAsync(id, alice.User.Id, alice.UserKey, Ct);
+
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Catalog.LoadBetweenReads = async vault =>
+        {
+            if (vault == id && reached.TrySetResult()) await release.Task;
+        };
+        try
+        {
+            // Her slot gives K′ now: the load finds the vault outside its period.
+            var read = alice.GetAsync(alice.Url("plan.md"));
+            await Task.WhenAny(reached.Task, read).WaitAsync(Bound, Ct);
+            Assert.True(reached.Task.IsCompleted, "Alice's read didn't load the vault.");
+            Assert.Throws<VaultBusyException>(() => Catalog.CheckWritable(old));
+            Assert.False(Catalog.MayIndex(old));
+
+            release.SetResult();
+            using var response = await read.WaitAsync(Bound, Ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            // K′ recorded: the old object is refused as made with a key no longer the vault's.
+            Assert.Throws<VaultBusyException>(() => Catalog.CheckWritable(old));
+            Assert.Equal(KeyIdOf(await alice.VaultKeyAsync()), Catalog.Current(id)!.KeyId);
+        }
+        finally
+        {
+            release.TrySetResult();
+            Catalog.LoadBetweenReads = null;
+        }
+    }
+
     private Task<RekeySummary> Run(RestClient alice, string id, Hold hold, CancellationToken? ct = null)
     {
         Catalog.RekeyFaultAt = hold.Hook(Catalog, id);
