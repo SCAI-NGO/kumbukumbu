@@ -711,6 +711,19 @@ public class PdfCommandTests
         Assert.Equal(2, _pixels.Used.Count(u => u == new PictureTurned(TurnCommand.Pdf)));
     }
 
+    [Theory]
+    [InlineData("--rotate=-90", 270)]
+    [InlineData("--rotate -90", 270)]
+    public async Task A_minus_turns_the_page_the_other_way(string option, int clockwise)
+    {
+        await Upload("/Work/a.pdf", Twelve());
+
+        var result = await Run($"pdf /Work/a.pdf 4 --images=all {option}");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(clockwise, Assert.Single(_pixels.Rotations));
+    }
+
     [Fact]
     public async Task The_last_rotate_wins()
     {
@@ -736,14 +749,14 @@ public class PdfCommandTests
     [Theory]
     [InlineData("pdf /Work/a.pdf 4 --images --rotate 45", "45")]
     [InlineData("pdf /Work/a.pdf 4 --crop 1,1,10,10 --rotate=0", "0")]
-    [InlineData("pdf /Work/none.pdf 4 --images=all --rotate=-90", "-90")]
+    [InlineData("pdf /Work/none.pdf 4 --images=all --rotate=-45", "-45")]
     public async Task A_bad_rotate_is_refused(string line, string angle)
     {
         await Upload("/Work/a.pdf", Twelve());
 
         var result = await Run(line);
 
-        Assert.Equal(ShellResult.Error($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees, not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(ShellResult.Error($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
         Assert.Empty(_pixels.PageRequests);
         Assert.Empty(_pixels.AnalysisRequests);
     }
@@ -913,6 +926,7 @@ public class PdfCommandTests
                                 it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
                                 'rg --regions' are for the page not turned: x,y,w,h on a page W×H, with W and H rounded
                                 down, is H-y-h,x,h,w when turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
+                                -90, -180 and -270 turn the other way: -90 is 270, -270 is 90.
             """.ReplaceLineEndings("\n"), help);
         Assert.Contains("x,y,w,h on a page W×H, with W and H rounded\n", help);
         Assert.Contains("\n                    down, is H-y-h,x,h,w when turned by 90", help);

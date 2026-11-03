@@ -30,7 +30,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
                             applied). The part is then scaled to the step like a whole image.
           --rotate D        turn the picture clockwise by 90, 180 or 270 degrees, on top of the camera's rotation,
                             for a sheet lying on its side. With it, --crop counts in the turned picture, from its
-                            top left.
+                            top left. -90, -180 and -270 turn the other way: -90 is 270, -270 is 90.
           --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img
                             says how many there are.
           An image reduced to under 75 % of its width says so: small text and digits may be misread then,
@@ -65,7 +65,7 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
         var rotate = 0;
         if (options.Value("rotate") is { } turn && !Rotation.TryParse(turn, out rotate))
         {
-            return Refused(ImgRefusal.BadRotate, $"img: --rotate turns clockwise by 90, 180 or 270 degrees, not '{turn}' (leave it out for no turn)");
+            return Refused(ImgRefusal.BadRotate, $"img: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '{turn}' (leave it out for no turn)");
         }
 
         int? frame = null;
