@@ -110,7 +110,7 @@ Relaxes nothing in §5.1. Prices **something outside MongoDB** (§5.2). **Not a 
 
 ## 5. Option C: no change to pins, state it honestly
 
-Keep today's pins. Reword line 63 to say plainly that re-encrypting doesn't cut off a former member with database write access. Costs nothing, promises nothing.
+Keep today's pins. Reword line 63 to say plainly that re-encrypting doesn't cut off a former member with database write access. Costs nothing, promises nothing. The proposed wording, with two additions this run found, is in §8.1.
 
 ## 6. Recommendation
 
@@ -133,6 +133,32 @@ Keep today's pins. Reword line 63 to say plainly that re-encrypting doesn't cut 
 **Beside the re-encrypt offer (Option A):** "Re-encrypting gives a new key only to the people ticked in the list, even if someone kept a copy of the old key. Check the list: anyone who left or was removed earlier and is still listed keeps access."
 
 **Proposed wording for `docs/security-architecture.md:63` (Option A built):** "**An ex-member who can also write the live database** can't be given the new key by a re-encryption: it wraps the new key only to the memberships the owner keeps in the list she confirms, each through a pin sealed under a key only she and that member hold. Within the time since the last re-encryption, he can make a membership that ended look active again, and it is then in that list; only the owner's unticking stops it. And whoever can write the database can put back the whole state before a re-encryption, the owner's slot included, after which what she writes is under the old key again; nothing in the database tells this from the present (§2, "Rollback")."
+
+### 8.1 If Option C ships first (0.3.1)
+
+Proposed wording for `docs/security-architecture.md`, for whoever makes the change. The run doesn't change that file. Each passage says what is true of the code at `715260a`. Line numbers are as of that commit.
+
+**Line 63, replaced:**
+
+> - **An ex-member who can also write the live database** keeps his way in through a re-encryption. A membership's pin is sealed under the vault key, which every member held (§3, "Keypairs, member slots and pins"). So he can write a pin naming his own key into a membership, someone else's or one he inserts or revives, and the finish of a re-encryption wraps the new vault key to it. Re-encrypting cuts off a former member who can't write the database, not one who can. Against someone who has both, the way out is a new vault: export the shared vault, import it into a new one of the owner's, and invite again only those who should keep it. The new vault has a key he never held. Its history, checkpoints and settings don't come along (§6, "Export and import").
+
+**Line 66 ("Rollback by someone with write access to the database"), a sentence appended:**
+
+> This also undoes a re-encryption. Someone who kept the old vault key and can write the database can put the vault's documents, its meta and its owner's slot back as they were before it. After the server's next restart the vault opens under the old key again, and whatever is written to it from then on is sealed under a key he holds. The server knows which key is a vault's current one only in memory (`Vaults/VaultCatalog.Rekey.cs`, `_keyIds`, `_rekeyed`; a vault not loaded since the restart counts as current).
+
+**§4, the row "Database write access" (line 224), first column, a sentence appended:**
+
+> With a vault's key as well (a former member's, say), write a `user` slot for his own account that wraps it: the server then lists that vault as one of his own and lets him use an owner's routes on it, until its owner re-encrypts it (`Vaults/VaultCatalog.cs`, `OpenForUserAsync`).
+
+and in the second column, "Gain access to an existing user's vaults" becomes "Gain access to an existing user's vaults without a key one of them held".
+
+**This last passage is derived from reading the code and not tested.** The user-slot branch of `OpenForUserAsync` (`Vaults/VaultCatalog.cs:205–252`) opens any `user` slot under the caller's lookup and loads the vault as owned. Nothing there checks that the vault is his. Before it goes in, a test should confirm it: a slot written to the database for another user's vault, then his `ls /`. It should also check which owner routes it opens: invitations, role changes, "Re-encrypt vault". If the test shows that something does check ownership, the passage goes or is narrowed.
+
+**The re-encrypt offer** (line 195, revoke dialog), its sentence replaced:
+
+> "Only needed if Bob could get hold of an old backup of this server. It doesn't help if Bob can also change this server's database. Everyone's app connections and keys for this vault stop working and need to be set up again."
+
+**§9 ("What comes next")** keeps "Pins that hold against this", now pointing at this design (Options A and B) instead of "planned for 0.3.1".
 
 ## 9. What was and wasn't tested
 

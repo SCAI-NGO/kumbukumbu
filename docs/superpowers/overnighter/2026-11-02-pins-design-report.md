@@ -66,8 +66,8 @@ Option B closes the within-epoch residuals and A3.5 in the main model, but not i
 2. **Which option.** *Recommendation:* build A's authenticity layer and decide on B. A closes the classes the earlier attempts failed on. B is the only route to durable revocations and to A3.5.
 3. **Owner's list at every shared re-key start**, with rotation-driven re-keys of shared vaults waiting for it. *Recommendation:* accept it with A. It could be dropped with B.
 4. **Departures** (above). *Recommendation:* decide together with option B.
-5. **Size.** A takes two to three weeks, not one. *Recommendation:* if 0.3.1 must ship within a week, ship Option C's honest wording and build A for a later release.
-6. **The planted user slot** (Surprise 3). *Recommendation:* confirm with a test, then document it.
+5. **Size.** A takes two to three weeks, not one. *Recommendation:* if 0.3.1 must ship within a week, ship Option C's honest wording and build A for a later release. The wording is ready in the design, §8.1 (added 2026-11-03 at the maintainer's request): line 63, a sentence on rollback undoing a re-encryption, the planted user slot in §4, and the revoke dialog's sentence.
+6. **The planted user slot** (Surprise 3). *Recommendation:* confirm with a test, then document it. Wording proposed in the design, §8.1, marked untested.
 
 ## Pull request
 
