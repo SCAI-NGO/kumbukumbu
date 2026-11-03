@@ -1,11 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { describe, expect, it } from "vitest";
-import { type Box, type PageMeasure, classify } from "../src/classify.js";
+import { analyse } from "../src/analyse.js";
+import { type Box, type PageMeasure, type Region, classify } from "../src/classify.js";
+import { A4, CHART_BARS, chartPage, logoPage, photoPage, scanPage, tablePage, textPage, whiteBackgroundPage } from "./fixtures.js";
 
 const W = 600;
 const H = 800;
 const page = (m: Partial<PageMeasure>): PageMeasure => ({ width: W, height: H, textBoxes: [], imageBoxes: [], pathBoxes: [], ...m });
 const box = (x: number, y: number, w: number, h: number): Box => ({ x, y, w, h });
+const text = (x: number, y: number, w: number, h: number, chars: number): Box => ({ x, y, w, h, chars });
+const tight = (regions: Region[]) => regions.map(({ kind, x, y, w, h }) => ({ kind, x, y, w, h }));
+
+// chartPage's bars with a title just under them, as an axis title would lie.
+async function labelledChartPage() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([A4.width, A4.height]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const bar of CHART_BARS) page.drawRectangle({ ...bar, color: rgb(0.2, 0.4, 0.8) });
+  page.drawText("Sales by month", { x: 220, y: 318, size: 10, font });
+  return doc.save();
+}
 
 describe("classify", () => {
   it("calls a page with one image over 85 % of it an image page", () => {
@@ -87,5 +102,133 @@ describe("classify", () => {
 
   it("calls an empty page text with nothing covered", () => {
     expect(classify(page({}))).toEqual({ type: "text", textCoverage: 0, imageCoverage: 0, vectorCoverage: 0, images: 0, regions: [] });
+  });
+});
+
+describe("regions with labels", () => {
+  const chart = box(100, 200, 300, 200);
+
+  it("a legend right of a chart joins its region", () => {
+    const c = classify(
+      page({
+        pathBoxes: [chart, box(420, 246, 8, 8)],
+        textBoxes: [text(410, 230, 50, 10, 6), text(432, 245, 40, 10, 10), text(50, 600, 400, 12, 70)],
+      }),
+    );
+    expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 200, w: 372, h: 200 } }]);
+  });
+
+  it("a chain follows a legend's second line", () => {
+    const c = classify(page({ pathBoxes: [chart], textBoxes: [text(150, 406, 60, 10, 9), text(150, 420, 60, 10, 9), text(150, 434, 60, 10, 9)] }));
+    expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 200, w: 300, h: 244 } }]);
+  });
+
+  it("a long caption stops the growth", () => {
+    // The label is within reach, but the box taking it in would hold the caption's centre.
+    const c = classify(page({ pathBoxes: [chart], textBoxes: [text(100, 404, 300, 10, 60), text(60, 405, 30, 10, 6), text(150, 186, 60, 10, 8)] }));
+    expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 186, w: 300, h: 214 } }]);
+  });
+
+  it("a label closer to another figure stays with that figure", () => {
+    // Two separate charts side by side; the label between them is in reach of both, nearer the right one.
+    const c = classify(
+      page({
+        pathBoxes: [box(50, 200, 200, 200), box(330, 200, 200, 200)],
+        textBoxes: [text(261, 300, 64, 10, 12), text(306, 220, 20, 10, 3)],
+      }),
+    );
+    expect(c.regions).toEqual([
+      { kind: "drawing", x: 50, y: 200, w: 200, h: 200 },
+      { kind: "drawing", x: 330, y: 200, w: 200, h: 200, labelled: { x: 261, y: 200, w: 269, h: 200 } },
+    ]);
+  });
+
+  it("two pieces of one chart share one labelled box", () => {
+    // A grouped bar chart that falls apart into one region per group, each with its category label.
+    const c = classify(
+      page({
+        pathBoxes: [box(100, 200, 100, 200), box(220, 200, 100, 200)],
+        textBoxes: [text(92, 404, 116, 10, 10), text(212, 404, 116, 10, 10), text(80, 260, 10, 80, 14), text(330, 250, 40, 10, 8)],
+      }),
+    );
+    const labelled = { x: 80, y: 200, w: 290, h: 214 };
+    expect(c.regions).toEqual([
+      { kind: "drawing", x: 100, y: 200, w: 100, h: 200, labelled },
+      { kind: "drawing", x: 220, y: 200, w: 100, h: 200, labelled },
+    ]);
+  });
+
+  it("a chart's axis lines and ticks lead to its labels and tie its pieces together", () => {
+    // Bars further apart than LABEL_GAP_PT, the axes as lines of no thickness, tick labels beyond the axes.
+    const bars = [box(100, 200, 40, 200), box(170, 200, 40, 200), box(240, 200, 40, 200)];
+    const axes = [box(90, 200, 0, 200), box(90, 400, 200, 0), box(118, 400, 0, 4), box(188, 400, 0, 4), box(258, 400, 0, 4)];
+    const c = classify(
+      page({
+        pathBoxes: [...bars, ...axes],
+        textBoxes: [text(60, 195, 26, 10, 5), text(60, 395, 26, 10, 5), text(105, 408, 30, 10, 6), text(175, 408, 30, 10, 6), text(245, 408, 30, 10, 6), text(60, 440, 400, 10, 70)],
+      }),
+    );
+    const labelled = { x: 60, y: 195, w: 230, h: 223 };
+    expect(c.regions).toEqual(bars.map((b) => ({ kind: "drawing", ...b, labelled })));
+  });
+
+  it("a label inside another region stays there", () => {
+    const c = classify(page({ pathBoxes: [chart], imageBoxes: [box(100, 404, 300, 100)], textBoxes: [text(110, 406, 40, 10, 6), text(150, 186, 60, 10, 8)] }));
+    expect(c.regions).toEqual([
+      { kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 186, w: 300, h: 214 } },
+      { kind: "image", x: 100, y: 404, w: 300, h: 100 },
+    ]);
+  });
+
+  it("a full page's image gains nothing", () => {
+    const c = classify(page({ imageBoxes: [box(0, 0, W, 780)], textBoxes: [text(100, 784, 40, 10, 8)] }));
+    expect(c.regions).toEqual([{ kind: "image", x: 0, y: 0, w: W, h: 780 }]);
+  });
+
+  it("above 5,000 text boxes nothing grows", () => {
+    const filler = (n: number) => Array.from({ length: n }, (_, i) => text(5 + (i % 100) * 5.9, 560 + Math.floor(i / 100) * 4.8, 4, 3, 1));
+    // The label alone would be taken in (as in the chain above); the filler lies far from the chart.
+    const above = classify(page({ pathBoxes: [chart], textBoxes: [text(150, 406, 60, 10, 9), ...filler(5_000)] }));
+    expect(above.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200 }]);
+  });
+
+  it("the same boxes give the same answer, in any order", () => {
+    const pathBoxes = [box(50, 100, 200, 200), box(330, 100, 200, 200), box(100, 450, 100, 200), box(220, 450, 100, 200), box(540, 150, 8, 8), box(90, 650, 240, 0)];
+    const textBoxes = [
+      text(261, 200, 64, 10, 12),
+      text(306, 120, 20, 10, 3),
+      text(552, 148, 30, 10, 6),
+      text(92, 654, 116, 10, 10),
+      text(212, 654, 116, 10, 10),
+      text(80, 500, 10, 80, 14),
+      text(100, 670, 300, 10, 60),
+      text(150, 306, 60, 10, 9),
+      text(150, 320, 60, 10, 9),
+    ];
+    const expected = classify(page({ pathBoxes, textBoxes }));
+    for (let turn = 1; turn < textBoxes.length; turn++) {
+      const rotate = <T>(list: T[], by: number) => [...list.slice(by % list.length), ...list.slice(0, by % list.length)];
+      expect(classify(page({ pathBoxes: rotate(pathBoxes, turn).reverse(), textBoxes: rotate(textBoxes, turn) }))).toEqual(expected);
+    }
+  });
+
+  it("no fixture changes its page type or tight region", async () => {
+    const whole = [{ kind: "image", x: 0, y: 0, w: A4.width, h: A4.height }];
+    const chartRegion = [{ kind: "drawing", x: 70, y: 102, w: 424, h: 410 }];
+    const expected: [string, () => Promise<Uint8Array>, string, unknown[]][] = [
+      ["textPage", textPage, "text", []],
+      ["chartPage", chartPage, "mixed", chartRegion],
+      ["labelledChartPage", labelledChartPage, "mixed", chartRegion],
+      ["logoPage", logoPage, "text", []],
+      ["scanPage", () => scanPage(false), "image", whole],
+      ["scanPage with text", () => scanPage(true), "image", whole],
+      ["tablePage", tablePage, "text", []],
+      ["whiteBackgroundPage", whiteBackgroundPage, "text", []],
+      ["photoPage", photoPage, "image", whole],
+    ];
+    for (const [name, make, type, regions] of expected) {
+      const p = (await analyse(await make(), 1)).pages[0]!;
+      expect({ name, type: p.type, regions: tight(p.regions) }).toEqual({ name, type, regions });
+    }
   });
 });

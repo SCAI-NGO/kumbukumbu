@@ -3,8 +3,12 @@ namespace Kumbu.Core.Attachments;
 
 public enum PageType { Text, Mixed, Image }
 
-/// <summary>A figure on a page, in points of the page as displayed, from the top left.</summary>
-public sealed record PdfRegion(string Kind, double X, double Y, double Width, double Height);
+/// <summary>A box in points of the page as displayed, from the top left.</summary>
+public sealed record PdfBox(double X, double Y, double Width, double Height);
+
+/// <summary>A figure on a page, in points of the page as displayed, from the top left; <see cref="Labelled"/> the larger box
+/// that also holds its labels and legend, found by position, if it has one.</summary>
+public sealed record PdfRegion(string Kind, double X, double Y, double Width, double Height, PdfBox? Labelled = null);
 
 public sealed record PdfPage(
     int Number, double Width, double Height, int Rotation, PageType Type, int Chars,

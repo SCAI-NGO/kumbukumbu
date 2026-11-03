@@ -312,7 +312,9 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         int N, double Width, double Height, int Rotation, int Chars, string? Text, string? Type,
         double TextCoverage, double ImageCoverage, double VectorCoverage, int Images, List<RegionJson>? Regions);
 
-    private sealed record RegionJson(string? Kind, double X, double Y, double W, double H);
+    private sealed record RegionJson(string? Kind, double X, double Y, double W, double H, BoxJson? Labelled);
+
+    private sealed record BoxJson(double X, double Y, double W, double H);
 
     /// <summary>The sidecar's JSON (<c>pdf/src/analyse.ts</c>), checked to add up; <see cref="SidecarException.Failed"/> if it doesn't.</summary>
     internal static SidecarAnalysis ParseAnalysis(byte[] body, int maxPages)
@@ -355,12 +357,14 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             var regions = new List<PdfRegion>(p.Regions.Count);
             foreach (var r in p.Regions)
             {
-                if (r is null || r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H))
+                if (r is null || r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H)
+                    || r.Labelled is { } l && (!Point(l.X) || !Point(l.Y) || !Point(l.W) || !Point(l.H)))
                 {
                     throw Invalid($"A region on page {i + 1} of the analysis doesn't add up");
                 }
 
-                regions.Add(new PdfRegion(r.Kind, r.X, r.Y, r.W, r.H));
+                var labelled = r.Labelled is { } b ? new PdfBox(b.X, b.Y, b.W, b.H) : null;
+                regions.Add(new PdfRegion(r.Kind, r.X, r.Y, r.W, r.H, labelled));
             }
 
             pages.Add(new PdfPage(p.N, p.Width, p.Height, p.Rotation, type, p.Chars, p.TextCoverage, p.ImageCoverage, p.VectorCoverage, p.Images, regions));

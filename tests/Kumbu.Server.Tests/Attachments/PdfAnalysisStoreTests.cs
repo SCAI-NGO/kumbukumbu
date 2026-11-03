@@ -293,6 +293,44 @@ public sealed class PdfAnalysisStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task A_labelled_box_survives_the_store()
+    {
+        var w = await WorldAsync();
+        var book = Book(2, PageText);
+        var labelled = new PdfRegion("drawing", 72, 300, 451, 260, new PdfBox(48.5, 290, 520, 300.1));
+        book = book with { Analysis = book.Analysis with { Pages = [.. book.Analysis.Pages.Select(p => p with { Regions = [labelled, new PdfRegion("image", 80, 90, 200, 120)] })] } };
+
+        var stored = await w.Analyses.StoreAsync(w.Vault, w.BlobId, book, Ct);
+
+        Assert.Equal(Json(book.Analysis), Json(stored));
+        var read = await w.Analyses.HeaderAsync(w.Vault, w.BlobId, Ct);
+        Assert.Equal(Json(book.Analysis), Json(read));
+        Assert.Equal(labelled, read!.Pages[1].Regions[0]);
+    }
+
+    [Fact]
+    public async Task An_analysis_stored_before_labelled_regions_reads_without_them()
+    {
+        var w = await WorldAsync();
+        var book = Book(2, PageText, regions: 2);
+        await w.Analyses.StoreAsync(w.Vault, w.BlobId, book, Ct);
+
+        // Part 0 as a server before labelled regions sealed it: regions of five fields.
+        var part = await w.Catalog.PdfParts.Find(d => d.Vault == w.Vault.Id && d.Part == 0).SingleAsync(Ct);
+        var header = w.Vault.OpenPdfAnalysis<System.Text.Json.Nodes.JsonObject>(part);
+        foreach (var page in header["Pages"]!.AsArray())
+            foreach (var region in page!["Regions"]!.AsArray()) region!.AsObject().Remove("Labelled");
+        Assert.DoesNotContain("Labelled", header.ToJsonString(), StringComparison.Ordinal);
+        await w.Catalog.PdfParts.UpdateOneAsync(d => d.Id == part.Id,
+            Builders<PdfAnalysisDocument>.Update.Set(d => d.Blob, w.Vault.SealPdfAnalysis(w.BlobId, 0, header)), cancellationToken: Ct);
+
+        var read = await w.Analyses.HeaderAsync(w.Vault, w.BlobId, Ct);
+
+        Assert.Equal(Json(book.Analysis), Json(read));
+        Assert.All(read!.Pages.SelectMany(p => p.Regions), r => Assert.Null(r.Labelled));
+    }
+
+    [Fact]
     public async Task At_most_32_regions_a_page_are_kept()
     {
         var w = await WorldAsync();

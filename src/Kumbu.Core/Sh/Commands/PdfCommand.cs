@@ -55,7 +55,9 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
           --crop x,y,w,h    one page only: a part of it, rendered anew, without the text; drawings stay sharp,
                             but a photo in the PDF has only the detail it was stored with; in points of the
                             page as displayed (1 pt = 1/72 inch), x and y from the top left, as 'pdf info'
-                            gives the regions, which leave out a figure's labels and legend when those are text
+                            gives the regions. A region is the figure's drawing or image alone; 'with labels' adds
+                            the text and legend around it, found by position, so it may miss something or take
+                            in a line too many.
           --rotate D        turn each page shown as an image clockwise by 90, 180 or 270 degrees, for a sheet lying
                             on its side; needs --images, --images=all or --crop, and leaves the text as it is. With
                             it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
@@ -281,15 +283,16 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
     private static string Metadata(string? text) =>
         text is null ? "" : new string([.. text.Select(c => char.IsControl(c) || c is '\u2028' or '\u2029' ? ' ' : c)]).Trim();
 
-    /// <summary>"p4 mixed: vector drawing ≈ 35 % — regions (pt, x,y,w,h): drawing 72,300,451,260; image 80,90,200,120".</summary>
+    /// <summary>"p4 mixed: vector drawing ≈ 35 % — regions (pt, x,y,w,h): drawing 72,300,451,260 with labels 48,290,520,300; image 80,90,200,120".</summary>
     private static string InfoLine(PdfPage page)
     {
         var found = page.Type == PageType.Image
             ? "one image covers the page" + (page.Chars == 0 ? ", no text layer" : "")
             : string.Join(", ", Figures(page, small: false));
-        var fitting = page.Regions.Select(r => (r.Kind, Region: Crop.Enclosing(r.X, r.Y, r.Width, r.Height, page.Width, page.Height)))
+        var fitting = page.Regions.Select(r => (r.Kind, Region: Crop.Enclosing(r.X, r.Y, r.Width, r.Height, page.Width, page.Height),
+                Labelled: r.Labelled is { } l ? Crop.Enclosing(l.X, l.Y, l.Width, l.Height, page.Width, page.Height) : null))
             .Where(r => r.Region is not null).ToList();
-        var regions = fitting.Take(MaxRegions).Select(r => $"{r.Kind} {r.Region}").ToList();
+        var regions = fitting.Take(MaxRegions).Select(r => $"{r.Kind} {r.Region}" + (r.Labelled is { } l ? $" with labels {l}" : "")).ToList();
         if (fitting.Count > MaxRegions) regions.Add($"…and {fitting.Count - MaxRegions} more");
         var listed = regions.Count == 0 ? "" : $" — regions (pt, x,y,w,h): {string.Join("; ", regions)}";
         return $"p{page.Number} {AttachmentText.TypeName(page.Type)}: {found}{listed}";

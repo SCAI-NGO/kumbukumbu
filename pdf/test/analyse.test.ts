@@ -30,7 +30,7 @@ async function onlyPage(bytes: Uint8Array): Promise<PageAnalysis> {
 
 describe("analyse", () => {
   it("names the analyser", () => {
-    expect(ANALYSER).toBe("pdfjs-dist@6.4.299+rules.1");
+    expect(ANALYSER).toBe("pdfjs-dist@6.4.299+rules.2");
   });
 
   it("reports the number of pages to analyse before analysing them", async () => {

@@ -39,7 +39,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
     public const int MaxPages = 2000;
 
     /// <summary>The sidecar's <c>ANALYSER</c> (<c>pdf/src/analyse.ts</c>): an analysis by another counts as outdated.</summary>
-    public const string Analyser = "pdfjs-dist@6.4.299+rules.1";
+    public const string Analyser = "pdfjs-dist@6.4.299+rules.2";
 
     /// <summary>Regions kept per page: <c>pdf info</c> shows a few, and part 0 must stay small however many a page has.</summary>
     public const int MaxRegions = 32;
@@ -81,7 +81,7 @@ public sealed class PdfAnalyses(VaultCatalog catalog, ILogger<PdfAnalyses> log)
         var a = analysis.Analysis;
         var pages = a.Pages.Select(p => new PageRecord(
             p.Number, p.Width, p.Height, p.Rotation, p.Type, p.Chars, p.TextCoverage, p.ImageCoverage, p.VectorCoverage, p.Images,
-            [.. p.Regions.Take(MaxRegions).Select(r => new RegionRecord(r.Kind, r.X, r.Y, r.Width, r.Height))])).ToList();
+            [.. p.Regions.Take(MaxRegions).Select(r => new RegionRecord(r.Kind, r.X, r.Y, r.Width, r.Height, r.Labelled))])).ToList();
         var texts = Chunk(analysis.PageTexts);
         var header = new HeaderRecord(a.Analyser, a.PageCount, a.AnalysedPages, a.Title, a.Author, pages,
             [.. texts.Select((t, i) => new PartRecord(i + 1, t.Segments[0].Page, t.Segments[^1].Page))], null, requested);
@@ -435,10 +435,11 @@ internal sealed record PageRecord(
 {
     public PdfPage ToPage() => new(
         Number, Width, Height, Rotation, Type, Chars, TextCoverage, ImageCoverage, VectorCoverage, Images,
-        [.. Regions.Select(r => new PdfRegion(r.Kind, r.X, r.Y, r.Width, r.Height))]);
+        [.. Regions.Select(r => new PdfRegion(r.Kind, r.X, r.Y, r.Width, r.Height, r.Labelled))]);
 }
 
-internal sealed record RegionRecord(string Kind, double X, double Y, double Width, double Height);
+/// <summary><see cref="Labelled"/> is null in a record stored before regions had one.</summary>
+internal sealed record RegionRecord(string Kind, double X, double Y, double Width, double Height, PdfBox? Labelled = null);
 
 internal sealed record PartRecord(int Part, int First, int Last);
 

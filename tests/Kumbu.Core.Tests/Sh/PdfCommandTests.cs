@@ -381,6 +381,28 @@ public class PdfCommandTests
     }
 
     [Fact]
+    public async Task Info_prints_a_region_with_labels()
+    {
+        var page = Mixed(4, regions: [new PdfRegion("drawing", 72, 300, 451, 260, new PdfBox(48.3, 290, 519.4, 299.6)), new PdfRegion("image", 80, 90, 200, 120)]);
+        await Upload("/Papers/l.pdf", Twelve() with { Pages = [.. Twelve().Pages.Select(p => p.Number == 4 ? page : p)] });
+
+        var info = await Run("pdf info /Papers/l.pdf");
+
+        Assert.Contains("\np4 mixed: vector drawing ≈ 35 % — regions (pt, x,y,w,h): drawing 72,300,451,260 with labels 48,290,520,300; image 80,90,200,120", info.Output);
+    }
+
+    [Fact]
+    public async Task An_entry_without_labels_stays_as_today()
+    {
+        var page = Mixed(4, regions: [new PdfRegion("drawing", 72, 300, 451, 260, null), new PdfRegion("image", 80, 90, 200, 120)]);
+        await Upload("/Papers/n.pdf", new PdfAnalysis("a", 1, 1, null, null, [page with { Number = 1 }]));
+
+        var info = await Run("pdf info /Papers/n.pdf");
+
+        Assert.EndsWith("\np1 mixed: vector drawing ≈ 35 % — regions (pt, x,y,w,h): drawing 72,300,451,260; image 80,90,200,120", info.Output);
+    }
+
+    [Fact]
     public async Task Info_gives_a_figure_flush_with_the_edge_a_region_ready_for_crop()
     {
         var page = new PdfPage(1, 595.3, 842, 0, PageType.Mixed, 900, 0.2, 0.004, 0.3, 1, [new PdfRegion("drawing", 100.6, 10, 494.7, 20)]);
@@ -640,6 +662,16 @@ public class PdfCommandTests
 
         _pixels.AnalysisFails = new PixelsUnavailableException(Locked);
         Assert.Equal($"striped.pdf: PDF, 2.1 MB — {Locked}", (await Run("cat /Papers/striped.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task The_help_says_what_with_labels_is()
+    {
+        var help = (await Run("help pdf")).Output;
+        var words = string.Join(' ', help.Split((char[])[' ', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
+        Assert.Contains("as 'pdf info' gives the regions. A region is the figure's drawing or image alone; 'with labels' adds the text and legend around it, found by position, so it may miss something or take in a line too many.", words);
+        Assert.DoesNotContain("which leave out a figure's labels and legend", words);
     }
 
     [Fact]

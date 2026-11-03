@@ -5,7 +5,7 @@
 
 import { AnnotationMode, OPS, Util, version, type PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
-import { pageText } from "./boxes.js";
+import { itemBox, pageText } from "./boxes.js";
 import { type Box, type Classified, type PageMeasure, RULES_VERSION, classify } from "./classify.js";
 import { PdfError, openPdf } from "./pdfjs.js";
 
@@ -67,15 +67,15 @@ async function analysePage(page: PDFPageProxy): Promise<PageAnalysis> {
 
   const content = await page.getTextContent();
   const { text } = pageText(content.items);
-  // The coverage boxes stay as stored textCoverage was measured (RULES_VERSION 1): every item as
-  // horizontal. Where text lies is boxes.ts's.
+  // Turned text lies where boxes.ts says, as a figure's turned axis title must; the count tells a
+  // label from body text.
   const textBoxes: Box[] = [];
   for (const item of content.items) {
     if (!("str" in item)) continue;
     const t = item as TextItem;
     if (t.str.trim() === "") continue;
-    const [, , , , e, f] = t.transform as number[];
-    textBoxes.push(displayed(IDENTITY, e!, f!, e! + t.width, f! + t.height));
+    const box = itemBox(t, viewport);
+    if (box) textBoxes.push({ ...box, chars: [...t.str.trim()].length });
   }
 
   // Annotations (form fields, stamps, comments) are left out: they are not the page's content.
