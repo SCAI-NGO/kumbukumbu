@@ -13,12 +13,12 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
 
     public string Name => "img";
 
-    public string Usage => "img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]";
+    public string Usage => "img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]";
 
     public string Summary => "show an image attachment to the model";
 
     public string Help => $"""
-        img <path> [--size small|medium|large] [--rotate 90|180|270] [--frame N] [--crop x,y,w,h]
+        img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]
           Show an image attachment (png, jpg, gif, webp): the result is a line of text naming the file,
           its version, the original size and what was delivered, followed by the image itself. The image
           is scaled down to the size step, never enlarged, and sent as PNG, or as JPEG if the PNG would

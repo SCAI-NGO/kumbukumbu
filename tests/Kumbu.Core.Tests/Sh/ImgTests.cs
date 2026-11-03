@@ -450,10 +450,10 @@ public class ImgTests
     {
         var help = (await Run("help img")).Output;
 
-        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--frame N] [--crop x,y,w,h]\n", help);
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]\n", help);
         Assert.Contains("  --rotate D        turn the picture clockwise by 90, 180 or 270 degrees, on top of the camera's rotation,", help);
         Assert.Contains("for a sheet lying on its side. With it, --crop counts in the turned picture, from its", help);
-        Assert.Equal("img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
     }
 
     private static byte[] Gif() => [.. "GIF89a"u8.ToArray(), .. new byte[100]];
@@ -595,10 +595,10 @@ public class ImgTests
     {
         var help = (await Run("help img")).Output;
 
-        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--frame N] [--crop x,y,w,h]\n", help);
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]\n", help);
         Assert.Contains("  --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img", help);
         Assert.Contains("A GIF is shown as a still, its first frame unless --frame says otherwise.", help);
-        Assert.Equal("img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
     }
 
     [Fact]
