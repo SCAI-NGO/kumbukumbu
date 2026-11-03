@@ -676,6 +676,32 @@ public class RgPdfTests
     }
 
     [Fact]
+    public async Task A_page_of_many_items_gives_each_line_its_own_region()
+    {
+        await Upload("/V/p.pdf", 1, _ => string.Join('\n', Enumerable.Repeat("needle", 300)));
+        BoxesOf(_ => [.. Enumerable.Range(0, 300).Select(k => new TextBox(7 * k, 7 * k + 6, 72, 20 + 2 * k, 40, 10))]);
+
+        var lines = (await Run("rg --regions needle /V/p.pdf")).Output.Split('\n');
+
+        Assert.Equal(300, lines.Length);
+        Assert.Equal("/V/p.pdf:p1:crop=69,17,46,16: needle", lines[0]);
+        Assert.Equal("/V/p.pdf:p1:crop=69,317,46,16: needle", lines[150]);
+        Assert.Equal("/V/p.pdf:p1:crop=69,615,46,16: needle", lines[299]);
+    }
+
+    [Fact]
+    public async Task The_suggested_commands_quote_a_path_with_a_space()
+    {
+        await Upload("/V/my paper.pdf", 55, _ => "needle");
+        BoxesOf(_ => [new TextBox(0, 6, 72, 100, 40, 10)], (_, n) => n == 2 ? "other" : "needle");
+
+        var lines = (await Run("rg --regions needle \"/V/my paper.pdf\"")).Output.Split('\n');
+
+        Assert.Equal("No regions on some pages of /V/my paper.pdf: its stored text comes from an older analysis. pdf info \"/V/my paper.pdf\" renews it.", lines[0]);
+        Assert.Equal("Regions for /V/my paper.pdf only on its first 50 pages with matches; use -m, or look at one page: pdf \"/V/my paper.pdf\" 51.", lines[1]);
+    }
+
+    [Fact]
     public async Task A_stopped_sidecar_loses_no_match()
     {
         await Revenues();

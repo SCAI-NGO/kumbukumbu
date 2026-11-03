@@ -13,7 +13,7 @@ The last phase gate of the branch:
 | Suite | Command | Result |
 |---|---|---|
 | Server and core | `dotnet test --solution Kumbu.slnx` | 3589 tests: 3583 passed, 6 skipped (4 for the model and a TensorX key, 2 that need root), 0 failed. A first run had one failure in `PairingTests.A_code_redeems_while_its_session_lives_though_another_of_the_user_ended`, which this branch doesn't touch; 5 of 5 reruns green |
-| PDF sidecar | `pnpm -C pdf test` | 8 files, 139 tests passed (the gate predates the limits on frames and canvas found below; with them, 8 files, 145 tests) |
+| PDF sidecar | `pnpm -C pdf test` | 8 files, 139 tests passed (the gate predates the limits on frames and canvas found below; with them, 8 files, 146 tests) |
 | Web app | `pnpm -C web test --run` | 85 files, 1368 tests passed |
 
 ## What I did and saw
@@ -235,7 +235,7 @@ The client round of the playbook's new steps, which this run can't do, as it has
 
 **Verdict.** Regions with labels are not reliable enough: on held-out figures they passed 84.4 % (seeds 101–110) and 83.3 % (seeds 201–210) against a bar of 90 %, with Calc at 65.6 % and 60.0 % against 80 %, so they are left out.
 
-The attempt widened the regions of `pdf info` and `rg --regions` to take in a figure's axis labels, tick labels and legend. It was measured on generated figures (`tools/attachment-probes/make_figure_pdfs.py`, `pnpm -C pdf eval:regions`) with a bar of 90 % overall, 80 % per generator and 70 % per layout, and with the page types, the tight regions and the body lines held to the baseline. Its box could also take in neighbouring drawing regions of the same chart (grouped bars split into tight regions per group). On seeds 1–5, which the tuning saw, it went from 48.9 % (first version) to 87.4 % (after round 2); the held-out rounds, on seeds the tuning never saw, are the verdict.
+The attempt widened the regions of `pdf info` to take in a figure's axis labels, tick labels and legend. It was measured on generated figures (`tools/attachment-probes/make_figure_pdfs.py`, `pnpm -C pdf eval:regions`) with a bar of 90 % overall, 80 % per generator and 70 % per layout, and with the page types, the tight regions and the body lines held to the baseline. Its box could also take in neighbouring drawing regions of the same chart (grouped bars split into tight regions per group). On seeds 1–5, which the tuning saw, it went from 48.9 % (first version) to 87.4 % (after round 2); the held-out rounds, on seeds the tuning never saw, are the verdict.
 
 ### Held-out round 1: seeds 101–110, rules at 0c6309a
 

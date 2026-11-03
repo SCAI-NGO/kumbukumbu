@@ -47,7 +47,7 @@ public enum ImgRefusal { Note, Pdf, NotFound, TooLarge, BadCrop, BadSize, BadRot
 public enum TurnCommand { Img, Pdf }
 
 /// <summary>
-/// What <c>rg --regions</c> could give a PDF with matches: regions on all its pages with matches (<c>Delivered</c>), on
+/// What <c>rg --regions</c> could give a PDF with matches: the sidecar answered (<c>Delivered</c>), on
 /// fewer or none for its limits (<c>Limited</c>), or none as the sidecar failed or the time was spent (<c>Unavailable</c>).
 /// </summary>
 public enum RegionOutcome { Delivered, Limited, Unavailable }
@@ -84,7 +84,7 @@ public sealed record PageTextBoxes(int Number, double Width, double Height, stri
 /// <summary>Pixels and analyses of attachments, which the commands <c>img</c> and <c>pdf</c> reach without knowing where they are made.</summary>
 public interface IAttachmentPixels
 {
-    /// <summary>The image at a step, optionally cropped (original pixel coordinates, EXIF-oriented); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
+    /// <summary>The image at a step, optionally cropped (original pixel coordinates, EXIF-oriented; in the turned frame when <paramref name="rotate"/> is not 0); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
     Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct);
 
     /// <summary>A rendered page (1-based), optionally a region in displayed points.</summary>

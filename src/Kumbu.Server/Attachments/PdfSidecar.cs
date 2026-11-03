@@ -378,7 +378,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
 
     private sealed record TextBoxPageJson(int N, double Width, double Height, string? Text, List<TextBoxJson>? Items);
 
-    private sealed record TextBoxJson(int? At, int? End, double X, double Y, double W, double H);
+    private sealed record TextBoxJson(int? At, int? End, double? X, double? Y, double? W, double? H);
 
     /// <summary>The sidecar's JSON for <c>/text-boxes</c>, checked to be the pages asked, with offsets inside the text and ascending.</summary>
     internal static IReadOnlyList<PageTextBoxes> ParseTextBoxes(byte[] body, IReadOnlyList<int> pages)
@@ -407,12 +407,12 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             var previousEnd = 0;
             foreach (var t in p.Items)
             {
-                if (t is not { At: { } at, End: { } end } || at < previousEnd || end < at || end > p.Text.Length || !Point(t.X) || !Point(t.Y) || !Point(t.W) || !Point(t.H))
+                if (t is not { At: { } at, End: { } end, X: { } x, Y: { } y, W: { } w, H: { } h } || at < previousEnd || end < at || end > p.Text.Length || !Point(x) || !Point(y) || !Point(w) || !Point(h))
                 {
                     throw Invalid($"A box on page {pages[i]} of the text boxes doesn't add up");
                 }
 
-                items.Add(new TextBox(at, end, t.X, t.Y, t.W, t.H));
+                items.Add(new TextBox(at, end, x, y, w, h));
                 previousEnd = end;
             }
 

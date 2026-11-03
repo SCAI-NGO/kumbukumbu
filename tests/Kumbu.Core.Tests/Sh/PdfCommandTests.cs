@@ -659,7 +659,7 @@ public class PdfCommandTests
         Assert.Contains("rg finds text in PDFs", help);
         Assert.Contains("semsearch finds their pages by\n  meaning (1. /Work/paper.pdf p7)", help);
         Assert.Contains("Neither finds the text of pages without a text layer (scans)", help);
-        Assert.Contains("A PDF of more than 2000 pages is analysed up to\n  page 2000, and says so.", help);
+        Assert.Contains("A PDF of more than 2000 pages is analysed up to page 2000, and says so.", help);
         Assert.Contains("cover 5 % of it or more", help);
         Assert.Contains("— add --images=all or --crop to see it ---", help);
         Assert.Contains("1 small image ≈ 3 %", help);

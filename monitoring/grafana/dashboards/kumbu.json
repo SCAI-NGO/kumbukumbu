@@ -1788,7 +1788,7 @@
           "range": true
         }
       ],
-      "description": "PDFs with matches in rg --regions searches, by outcome, in the hour before each point: delivered (regions on all their pages with matches), limited (past 8 PDFs or 50 pages), unavailable (the sidecar failed or the time was spent). Whether anyone asks where matches lie."
+      "description": "PDFs with matches in rg --regions searches, by outcome, in the hour before each point: delivered (the sidecar answered), limited (past 8 PDFs or 50 pages), unavailable (the sidecar failed or the time was spent). Whether anyone asks where matches lie."
     },
     {
       "type": "row",

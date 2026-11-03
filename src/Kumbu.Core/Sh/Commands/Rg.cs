@@ -30,7 +30,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     private const string NoRegions = "No regions: PDF rendering is unavailable right now. The matches are all here.";
 
-    /// <summary>The time a search spends on regions before it asks for no further PDF's; a call under way runs to its own limit.</summary>
+    /// <summary>The time a search spends on regions before it asks for no further PDFs; a call under way runs to its own limit.</summary>
     internal TimeSpan RegionBudget { get; init; } = TimeSpan.FromSeconds(20);
 
     private static readonly Option[] Spec =
@@ -440,7 +440,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     /// <summary>
     /// The text boxes of the held pages of one PDF, by page, from one request; a page whose text differs from the stored
-    /// text has none. Every failure gives none and asks for no further PDF's: the matches print without regions.
+    /// text has none. Every failure gives none and asks for no further PDFs: the matches print without regions.
     /// </summary>
     private async Task<Dictionary<int, PageTextBoxes>> RegionsAsync(VaultPath path, AttachmentState state, List<HeldPage> held, RegionSearch regions, CancellationToken ct)
     {
@@ -468,12 +468,12 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 {
                     if (!answer.TryGetValue(page.Page, out var boxes)) continue;
                     if (string.Equals(boxes.Text, page.Text, StringComparison.Ordinal)) found[page.Page] = boxes;
-                    else regions.Note($"No regions on some pages of {path.Value}: its stored text comes from an older analysis. pdf info {path.Value} renews it.");
+                    else regions.Note($"No regions on some pages of {path.Value}: its stored text comes from an older analysis. pdf info {SectionLookup.Quote(path)} renews it.");
                 }
 
                 if (held.Count > MaxRegionPages)
                 {
-                    regions.Note($"Regions for {path.Value} only on its first {MaxRegionPages} pages with matches; use -m, or look at one page: pdf {path.Value} {held[MaxRegionPages].Page}.");
+                    regions.Note($"Regions for {path.Value} only on its first {MaxRegionPages} pages with matches; use -m, or look at one page: pdf {SectionLookup.Quote(path)} {held[MaxRegionPages].Page}.");
                     outcome = RegionOutcome.Limited;
                 }
             }
@@ -503,10 +503,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         {
             var (from, to) = (offset + start, offset + start + length);
             var (left, top, right, bottom) = (double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
-            foreach (var item in page.Items)
+            for (var i = FirstEndingAfter(page.Items, from); i < page.Items.Count; i++)
             {
+                var item = page.Items[i];
                 if (item.At >= to) break;
-                if (item.End <= from) continue;
                 (left, top) = (Math.Min(left, item.X), Math.Min(top, item.Y));
                 (right, bottom) = (Math.Max(right, item.X + item.Width), Math.Max(bottom, item.Y + item.Height));
             }
@@ -520,6 +520,20 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
         if (crops.Count == 0) return null;
         var shown = string.Join(';', crops.Take(MaxRegionsPerLine));
         return crops.Count > MaxRegionsPerLine ? $"{shown};+{crops.Count - MaxRegionsPerLine} more" : shown;
+    }
+
+    /// <summary>The index of the first item that ends after <paramref name="from"/>; the items ascend, so their ends do too.</summary>
+    private static int FirstEndingAfter(IReadOnlyList<TextBox> items, int from)
+    {
+        int low = 0, high = items.Count;
+        while (low < high)
+        {
+            var mid = (low + high) / 2;
+            if (items[mid].End <= from) low = mid + 1;
+            else high = mid;
+        }
+
+        return low;
     }
 
     private static ShellResult SearchInput(Search search, Options options, IReadOnlyList<string> operands, string input)

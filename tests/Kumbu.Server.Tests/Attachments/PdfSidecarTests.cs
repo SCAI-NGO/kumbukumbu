@@ -342,6 +342,10 @@ public sealed class PdfSidecarTests
         { "a null item", """{"op":"set","path":"pages.0.items.1","value":null}""" },
         { "an item without at", """{"op":"remove","path":"pages.0.items.0.at"}""" },
         { "an item without end", """{"op":"remove","path":"pages.0.items.0.end"}""" },
+        { "an item without x", """{"op":"remove","path":"pages.0.items.0.x"}""" },
+        { "an item without y", """{"op":"remove","path":"pages.0.items.0.y"}""" },
+        { "an item without w", """{"op":"remove","path":"pages.0.items.0.w"}""" },
+        { "an item without h", """{"op":"remove","path":"pages.0.items.0.h"}""" },
     };
 
     [Theory]
