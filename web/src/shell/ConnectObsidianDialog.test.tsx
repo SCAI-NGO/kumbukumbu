@@ -132,6 +132,23 @@ describe("Connect Obsidian", () => {
     expect(await within(dialog).findByText("N3WC-0D20")).toBeInTheDocument();
   });
 
+  it("copies the pairing code, the newest one, and has nothing to copy once it ran out", async () => {
+    api();
+    const { u, dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+
+    await u.click(within(dialog).getByRole("button", { name: "Copy the pairing code" }));
+    expect(await navigator.clipboard.readText()).toBe("K7QM-4XDA");
+
+    act(() => vi.advanceTimersByTime(10 * 60_000 + 1_000));
+    await waitFor(() => expect(within(dialog).queryByRole("button", { name: "Copy the pairing code" })).not.toBeInTheDocument());
+
+    await u.click(within(dialog).getByRole("button", { name: "New code" }));
+    await within(dialog).findByText("N3WC-0D20");
+    await u.click(within(dialog).getByRole("button", { name: "Copy the pairing code" }));
+    expect(await navigator.clipboard.readText()).toBe("N3WC-0D20");
+  });
+
   it("asks for a new code with the chosen expiry", async () => {
     api();
     const { u, dialog } = await openDialog();
