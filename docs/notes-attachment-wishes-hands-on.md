@@ -230,3 +230,100 @@ The client round of the playbook's new steps, which this run can't do, as it has
 - [ ] An animated GIF: does the model follow the note line to `--frame N`, and say which frame it saw?
 - [ ] One of the real private PDFs: `rg --regions` for a figure named in the text, then `pdf … --crop` with the numbers it gave; does the crop show the line, and does the model widen it for the rest of a table row?
 - [ ] On the server after the release: both images from the same tag (`KUMBU_IMAGE` and `KUMBU_PDF_IMAGE`); the echo of §1.3 refuses a picture from an older sidecar, but only the same tag gives the new options.
+
+## Regions with labels: the attempt
+
+**Verdict.** Regions with labels are not reliable enough: on held-out figures they passed 84.4 % (seeds 101–110) and 83.3 % (seeds 201–210) against a bar of 90 %, with Calc at 65.6 % and 60.0 % against 80 %, so they are left out.
+
+The attempt widened the regions of `pdf info` and `rg --regions` to take in a figure's axis labels, tick labels and legend. It was measured on generated figures (`tools/attachment-probes/make_figure_pdfs.py`, `pnpm -C pdf eval:regions`) with a bar of 90 % overall, 80 % per generator and 70 % per layout, and with the page types, the tight regions and the body lines held to the baseline. Its box could also take in neighbouring drawing regions of the same chart (grouped bars split into tight regions per group). On seeds 1–5, which the tuning saw, it went from 48.9 % (first version) to 87.4 % (after round 2); the held-out rounds, on seeds the tuning never saw, are the verdict.
+
+### Held-out round 1: seeds 101–110, rules at 0c6309a
+
+270 figures, judged by labelled box 243, by tight box 1, with no region 26.
+
+| generator | figures | pass | % |
+|---|---|---|---|
+| matplotlib | 90 | 86 | 95.6 % |
+| calc | 90 | 59 | 65.6 % |
+| pdf-lib | 90 | 83 | 92.2 % |
+| all | 270 | 228 | 84.4 % |
+
+| layout | figures | pass | % |
+|---|---|---|---|
+| legend-right | 30 | 28 | 93.3 % |
+| legend-below | 30 | 29 | 96.7 % |
+| side-by-side | 60 | 39 | 65.0 % |
+| between-paragraphs | 30 | 27 | 90.0 % |
+| two-columns | 30 | 20 | 66.7 % |
+| long-caption | 30 | 28 | 93.3 % |
+| turned-page | 30 | 29 | 96.7 % |
+| turned-labels | 30 | 28 | 93.3 % |
+
+| failures by kind | matplotlib | calc | pdf-lib | all |
+|---|---|---|---|---|
+| no region | 0 | 23 | 3 | 26 |
+| drawing outside | 0 | 0 | 0 | 0 |
+| label outside | 3 | 2 | 6 | 11 |
+| label missing | 0 | 0 | 0 | 0 |
+| too few tick labels | 0 | 0 | 0 | 0 |
+| body text inside | 0 | 0 | 0 | 0 |
+| other figure inside | 1 | 10 | 2 | 13 |
+
+Not met: overall 90 % (84.4 %), each generator 80 % (Calc 65.6 %), each layout 70 % (lowest side-by-side 65.0 %). Met: at least 60 figures, page types and tight regions as the baseline, no body line in a region with labels.
+
+### Held-out round 2: seeds 201–210, rules at 8dfdddb
+
+270 figures, judged by labelled box 239, by tight box 1, with no region 30. One tuning round was allowed between the two, chosen from the failures on seeds 1–5 only.
+
+| generator | figures | pass | % |
+|---|---|---|---|
+| matplotlib | 90 | 86 | 95.6 % |
+| calc | 90 | 54 | 60.0 % |
+| pdf-lib | 90 | 85 | 94.4 % |
+| all | 270 | 225 | 83.3 % |
+
+| layout | figures | pass | % |
+|---|---|---|---|
+| legend-right | 30 | 27 | 90.0 % |
+| legend-below | 30 | 29 | 96.7 % |
+| side-by-side | 60 | 36 | 60.0 % |
+| between-paragraphs | 30 | 26 | 86.7 % |
+| two-columns | 30 | 23 | 76.7 % |
+| long-caption | 30 | 30 | 100.0 % |
+| turned-page | 30 | 28 | 93.3 % |
+| turned-labels | 30 | 26 | 86.7 % |
+
+| failures by kind | matplotlib | calc | pdf-lib | all |
+|---|---|---|---|---|
+| no region | 0 | 26 | 4 | 30 |
+| drawing outside | 0 | 0 | 0 | 0 |
+| label outside | 2 | 3 | 3 | 8 |
+| label missing | 0 | 0 | 0 | 0 |
+| too few tick labels | 0 | 0 | 0 | 0 |
+| body text inside | 0 | 0 | 0 | 0 |
+| other figure inside | 2 | 11 | 2 | 15 |
+
+Not met: overall 90 % (83.3 %), each generator 80 % (Calc 60.0 %), each layout 70 % (lowest side-by-side 60.0 %). Met: the same two as in round 1. Nothing was changed after this run: no third look, no bar, seed set or corpus.
+
+### Constants at the end
+
+`LABEL_CHARS` 30; `LABEL_GAP_PT` 40 (12 at the first version); `ROW_GAP_PT` 3 (new in round 2); `MAX_LABELLED` 5,000; `RULES_VERSION` 2. Unchanged for rules 1: `THIN_PT` 2, `MERGE_PT` 6, `MIN_FIGURE` 0.01, `FULL_PAGE_IMAGE` 0.85, `MIXED` 0.25, `GRID` 200, `MAX_CLUSTERED` 20,000. The large gap kept no body text out; the blockers did (no body line in any region, controls and fixtures included).
+
+### What limited it
+
+- **Figures with no region at all** (26 and 30 of 270; 23 and 26 of them Calc, which is 26 % and 29 % of its 90 figures). Rules 1 finds nothing there, tight regions may not change, and a rule that only widens existing regions has nothing to widen. On seeds 1–5 this capped Calc at 73.3 %, and no tuning could move it.
+- **Neighbour assignment on side-by-side pages** ("other figure inside": 13 and 15, mostly Calc). A chart whose partner has no region takes in the partner's labels, and nothing in position and character count tells the two apart. Side-by-side was the lowest layout in both rounds (65.0 % and 60.0 %).
+- **Labels beyond reach** ("label outside": 11 and 8), for example a legend further from its plot than the gap, and merged rows of category labels, which are one item of 30 or more characters and so look like body text to the blockers.
+
+### The attempt's commits
+
+- Stage A, stays: `0d15f64` Measure regions with a corpus of generated figures; `8c0395e` (the baseline guard and the sizes side by side).
+- Stage B: `2b72e26` Try regions that take in a figure's labels and legend.
+- Stage C: `3b9dd06` Measure a label's nearness to the other charts' own regions; `b4de89a` Store regions with no labelled box in their old shape (review fixes); `0c6309a` Tune the growth of labelled regions (round 1: `LABEL_GAP_PT` 12 to 40); `8dfdddb` Tune the growth of labelled regions (round 2: `ROW_GAP_PT` 3).
+- Reverted by five revert commits, `3416997` to `8f8e29d`. `RULES_VERSION` stays 1, `PdfAnalyses.Analyser` keeps `+rules.1`, and `help pdf` keeps its present sentence. The script, the eval and the corpus stay.
+
+### Where a later attempt would start
+
+The eval and the corpus are still there: `uv run tools/attachment-probes/make_figure_pdfs.py <dir> --seed N` and `pnpm -C pdf eval:regions <dir> --seeds A-B`, with seeds 1–5 for tuning and fresh seeds for each verdict. The first problem is finding a region for Calc charts under rules 1, before any rule about labels: the figures that have none. After that, telling a chart's own labels from a neighbour's on side-by-side pages, and merged rows of category labels from body lines.
+
+This measures geometry on generated pages, not whether a model reads a chart better, and not the maintainer's real PDFs; a first real PDF that disagrees would have outweighed the table either way.
