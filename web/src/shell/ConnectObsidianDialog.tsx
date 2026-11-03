@@ -128,6 +128,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
                   <p className={labelClass}>Pairing code</p>
                   <p className="font-mono text-[32px] font-bold tracking-[0.12em] text-text">{code.code}</p>
                   <p className="text-sm text-muted">valid for {left(remaining)} · single use</p>
+                  <CopyButton value={code.code} label="Copy" name="Copy the pairing code" className={copyClass} onResult={() => {}} />
                 </>
               ) : (
                 isPending && <p className="text-sm text-muted">Asking for a code…</p>

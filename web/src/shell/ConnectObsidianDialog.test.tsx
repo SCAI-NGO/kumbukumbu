@@ -132,6 +132,30 @@ describe("Connect Obsidian", () => {
     expect(await within(dialog).findByText("N3WC-0D20")).toBeInTheDocument();
   });
 
+  it("offers to copy the pairing code while it is valid", async () => {
+    api();
+    const { u, dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+    // After userEvent.setup, which puts a clipboard stub of its own on navigator.
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+
+    await u.click(within(dialog).getByRole("button", { name: "Copy the pairing code" }));
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenCalledWith("K7QM-4XDA");
+  });
+
+  it("has no copy button once the code has run out", async () => {
+    api();
+    const { dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+    expect(within(dialog).getByRole("button", { name: "Copy the pairing code" })).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(10 * 60_000 + 1000));
+    await waitFor(() => expect(within(dialog).queryByText("K7QM-4XDA")).not.toBeInTheDocument());
+    expect(within(dialog).queryByRole("button", { name: "Copy the pairing code" })).not.toBeInTheDocument();
+  });
+
   it("asks for a new code with the chosen expiry", async () => {
     api();
     const { u, dialog } = await openDialog();
