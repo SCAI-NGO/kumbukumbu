@@ -617,7 +617,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
             ("create", () => stale.TryCreateAsync(New("/Arbeit/new.md", "new"), Ct)),
             ("replace", () => stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct)),
             ("trash", () => stale.TryTrashAsync(plan, "lea", WriterRef.Server, Now, Ct)),
-            ("restore", () => stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, Ct)),
+            ("restore", () => stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, new Changeset("c1", Now), Ct)),
             ("move", () => stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", WriterRef.Server, Now, Ct)),
             ("checkpoint", () => stale.TryAddCheckpointAsync(Cp("drei", "/Arbeit/plan.md", plan), [new Note(plan.Path, plan.Content)], Ct)),
             ("uncheckpoint", () => stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct)),
@@ -674,7 +674,7 @@ public sealed class RekeyTests(MongoFixture fixture) : IAsyncDisposable
         Assert.False(await stale.TryReplaceAsync(plan, NoteWriter.Next(plan, "overwritten", "lea", WriterRef.Server, Now), Ct));
         Assert.False(await stale.TryTrashAsync(b, "lea", WriterRef.Server, Now, Ct));
         Assert.NotEmpty(await stale.TryCommitAsync(new NoteBatch { Moves = { (plan, plan with { Path = P("/Arbeit/x.md"), Revision = plan.Revision + 1 }) } }, "lea", WriterRef.Server, Now, Ct));
-        Assert.Null(await stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, Ct));
+        Assert.Null(await stale.TryRestoreFromTrashAsync(P("/Arbeit/weg.md"), null, "lea", WriterRef.Server, Now, new Changeset("c1", Now), Ct));
         Assert.False(await stale.TryRemoveCheckpointAsync("Arbeit", checkpoint.Name, Ct));
 
         Assert.Equal(after, await RawAsync(id));

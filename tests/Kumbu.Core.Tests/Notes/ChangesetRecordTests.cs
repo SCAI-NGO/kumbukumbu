@@ -106,14 +106,62 @@ public class ChangesetRecordTests
     }
 
     [Fact]
-    public async Task A_restore_joins_no_changeset()
+    public async Task A_restore_from_the_trash_joins_the_writers_changeset()
     {
-        // A trash restore: the note comes back without a changeset.
-        Assert.False((await _writer.RemoveAsync(P("/Work/old.md"), Ct)).IsError);
-        await Run("restore /Work/old.md");
-        Assert.Null((await _store.GetAsync(P("/Work/old.md"), Ct))!.Changeset);
+        await Create("/Work/a.md", "a\n");
+        await Create("/Work/c.md", "c\n");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await _writer.RemoveAsync(P("/Work/c.md"), Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
 
-        // A checkpoint restore that trashes a note created since: its trash record has none either.
+        Assert.False((await _writer.RestoreAsync(P("/Work/c.md"), null, Ct)).IsError);
+
+        var a = (await _store.GetAsync(P("/Work/a.md"), Ct))!;
+        var c = (await _store.GetAsync(P("/Work/c.md"), Ct))!;
+        Assert.NotNull(c.Changeset);
+        Assert.Equal(a.Changeset!.Id, c.Changeset!.Id);
+    }
+
+    [Fact]
+    public async Task A_restore_after_the_idle_time_starts_a_new_changeset()
+    {
+        await Create("/Work/a.md", "a\n");
+        await Create("/Work/c.md", "c\n");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await _writer.RemoveAsync(P("/Work/c.md"), Ct)).IsError);
+        _time.Advance(new FixedCaller(Writers.Dev).ChangesetIdle + TimeSpan.FromMinutes(1));
+
+        Assert.False((await _writer.RestoreAsync(P("/Work/c.md"), null, Ct)).IsError);
+
+        var a = (await _store.GetAsync(P("/Work/a.md"), Ct))!;
+        var c = (await _store.GetAsync(P("/Work/c.md"), Ct))!;
+        Assert.NotNull(c.Changeset);
+        Assert.NotEqual(a.Changeset!.Id, c.Changeset!.Id);
+    }
+
+    [Fact]
+    public async Task A_write_after_a_restore_from_the_trash_keeps_the_restored_text_in_history()
+    {
+        // c.md has a history, so the next write in its changeset coalesces.
+        await Create("/Work/c.md", "c1\n");
+        Assert.False((await _writer.WriteAsync("/Work/c.md", "c2\n", VersionToken.Of("c1\n"), Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await _writer.RemoveAsync(P("/Work/c.md"), Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await _writer.RestoreAsync(P("/Work/c.md"), null, Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False((await _writer.WriteAsync("/Work/c.md", "c3\n", VersionToken.Of("c2\n"), Ct)).IsError);
+
+        var c = (await _store.GetAsync(P("/Work/c.md"), Ct))!;
+        Assert.Equal("c3\n", c.Content);
+        Assert.Equal(["c2\n", "c1\n"], c.History.Select(h => h.Content));
+    }
+
+    [Fact]
+    public async Task A_checkpoint_restore_joins_no_changeset()
+    {
+        // A checkpoint restore that trashes a note created since: its trash record has none.
         await Run("mkcp /Work before");
         await Create("/Work/new.md", "new\n");
         await Run("mv /Work/older.md /Work/moved.md");

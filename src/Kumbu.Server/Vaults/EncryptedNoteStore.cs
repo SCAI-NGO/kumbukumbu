@@ -761,7 +761,7 @@ public sealed class EncryptedNoteStore(
             .OrderByDescending(t => t.DeletedAt)];
     }
 
-    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, CancellationToken ct)
+    public async Task<StoredNote?> TryRestoreFromTrashAsync(VaultPath path, string? version, string writer, WriterRef reference, DateTime at, Changeset changeset, CancellationToken ct)
     {
         if (await VaultAsync(path, ct) is not { } access) return null;
         var vault = access.Vault;
@@ -776,7 +776,7 @@ public sealed class EncryptedNoteStore(
             if (latest.Trashed is null) return null;
 
             var note = latest.Trashed.Note;
-            restored = note with { Revision = note.Revision + 1, LastWriter = writer, LastWriteAt = at, Changeset = null, Ref = reference };
+            restored = NoteWriter.Restored(note, writer, reference, at, changeset);
             var id = ObjectId.GenerateNewId();
             WriterRef.RequireStorable(restored.Ref);
             if (!await InsertNoteAsync(session, vault, id, restored, ct)) return null;
@@ -997,7 +997,8 @@ public sealed class EncryptedNoteStore(
     private VaultPath Shown(UnlockedVault vault, VaultPath path) => _byId.TryGetValue(vault.Id, out var a) ? a.ToCaller(path) : path;
 
     // What the store hands out is in the caller's view (Shown), what it is given back is stored in the vault's own
-    // (Stored): its notes' paths are sealed under the vault's own name. For the owner both are the same objects.
+    // (Stored): its notes' paths are sealed under the vault's own name. Both are the same objects unless the caller sees
+    // the vault under another name: a member's alias, or the name its owner renamed it to.
 
     private static StoredNote Shown(VaultAccess a, StoredNote n) => a.Renamed ? n with { Path = a.ToCaller(n.Path) } : n;
 

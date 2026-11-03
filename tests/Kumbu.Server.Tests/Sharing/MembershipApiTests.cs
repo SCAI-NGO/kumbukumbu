@@ -529,6 +529,55 @@ public sealed class MembershipApiTests(KumbuAppFactory app)
         return await RestClient.JsonAsync(response);
     }
 
+    private static string[] Strings(System.Text.Json.Nodes.JsonNode list, string field) => [.. list[field]!.AsArray().Select(k => k!.GetValue<string>())];
+
+    [Fact]
+    public async Task The_access_view_names_device_keys()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
+        await alice.KeyAsync("Gartenarbeit – Obsidian Laptop", KeyRight.Maintain, ApiKeyKind.Device);
+        await alice.KeyAsync("Claude", KeyRight.Maintain);
+
+        var list = await AccessListAsync(alice);
+
+        Assert.Equal(["Claude", "Gartenarbeit – Obsidian Laptop"], Strings(list, "apiKeys"));
+        Assert.Equal(["Gartenarbeit – Obsidian Laptop"], Strings(list, "deviceKeys"));
+    }
+
+    [Fact]
+    public async Task No_device_key_is_an_empty_list()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
+        await alice.KeyAsync("Claude", KeyRight.Maintain);
+
+        var list = await AccessListAsync(alice);
+
+        Assert.Equal(["Claude"], Strings(list, "apiKeys"));
+        Assert.Empty(Strings(list, "deviceKeys"));
+    }
+
+    [Fact]
+    public async Task A_revoked_device_key_is_not_listed()
+    {
+        var alice = await RestClient.NewAsync(app.PublicApi, vault: "Gartenarbeit");
+        await alice.KeyAsync("Gartenarbeit – Obsidian Laptop", KeyRight.Maintain, ApiKeyKind.Device);
+        await alice.KeyAsync("Gartenarbeit – Obsidian Tablet", KeyRight.Maintain, ApiKeyKind.Device);
+        var keys = app.PublicApi.Services.GetRequiredService<ApiKeys>();
+        var tablet = (await keys.ListAsync(alice.User, alice.UserKey, Ct)).Single(k => k.Name == "Gartenarbeit – Obsidian Tablet");
+        Assert.True(await keys.RevokeAsync(alice.User, tablet.Id, Ct));
+        // Revoked, its slot kept: a revocation deletes the slots in the same transaction, so this state is only
+        // reachable by a direct write. The filter on the mark guards it all the same.
+        await alice.KeyAsync("Gartenarbeit – Obsidian Phone", KeyRight.Maintain, ApiKeyKind.Device);
+        var phone = (await keys.ListAsync(alice.User, alice.UserKey, Ct)).Single(k => k.Name == "Gartenarbeit – Obsidian Phone");
+        await app.Database.GetCollection<BsonDocument>("api_keys").UpdateOneAsync(
+            new BsonDocument("_id", phone.Id), new BsonDocument("$set", new BsonDocument("revokedAt", DateTime.UtcNow)), cancellationToken: Ct);
+
+        var list = await AccessListAsync(alice);
+
+        Assert.Equal(["Gartenarbeit – Obsidian Laptop"], Strings(list, "apiKeys"));
+        Assert.Equal(["Gartenarbeit – Obsidian Laptop"], Strings(list, "deviceKeys"));
+    }
+
     [Fact]
     public async Task The_access_list_shows_Bob_his_role_and_his_credentials_by_name()
     {

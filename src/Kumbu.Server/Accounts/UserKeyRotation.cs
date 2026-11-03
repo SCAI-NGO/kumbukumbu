@@ -12,10 +12,16 @@ public sealed record KeptSession(ObjectId SlotId, byte[] OldWrapped, byte[] NewW
 
 /// <summary>A vault slot wrapped again under the new user key; <c>NewNameId</c> null: unset. A member slot also has its
 /// alias key sealed under the new user key (<c>NewAliasKey</c>), and is written only if its alias is still
-/// <c>OldAlias</c>, the one its new name hash was computed from: a rename in between makes the rotation conflict.</summary>
+/// <c>OldAlias</c>, the one its new name hash was computed from: a rename in between makes the rotation conflict. A user
+/// slot (<c>CheckNameId</c>) likewise only if its name hash is still <c>OldNameId</c>, the one read with the meta its new
+/// hash was computed from, null for none: the owner's rename of her vault in between conflicts too.</summary>
 public sealed record SlotRewrap(ObjectId Id, byte[] OldWrapped, byte[] NewWrapped, byte[]? NewNameId)
 {
     public byte[]? OldAlias { get; init; }
+
+    public byte[]? OldNameId { get; init; }
+
+    public bool CheckNameId { get; init; }
 
     public byte[]? NewAliasKey { get; init; }
 }
@@ -368,6 +374,8 @@ public sealed class UserKeyRotation(IMongoDatabase db, Argon2Kdf kdf, TimeProvid
             if (slot.NewAliasKey is { } aliasKey) update = update.Set(s => s.AliasKey, aliasKey);
             var filter = f.Eq(s => s.Id, slot.Id) & f.Eq(s => s.Lookup, rotation.OldLookup) & f.Eq(s => s.Wrapped, slot.OldWrapped);
             if (slot.OldAlias is { } alias) filter &= f.Eq(s => s.Alias, alias);
+            // Null matches a slot without a name hash too.
+            if (slot.CheckNameId) filter &= f.Eq(s => s.NameId, slot.OldNameId);
             Require(await Slots.UpdateOneAsync(session, filter, update, cancellationToken: ct));
         }
 

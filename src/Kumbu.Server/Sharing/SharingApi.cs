@@ -295,14 +295,32 @@ public static class SharingApi
         }
     }
 
-    /// <summary>The caller's notices of vaults deleted for everyone, newest first, each naming the vault by her alias,
-    /// opened with her user key; never the owner.</summary>
+    /// <summary>The caller's notices of shared vaults, newest first, each naming the vault by her alias, opened with her
+    /// user key. One of a vault deleted for everyone never names the owner; one of a re-encryption is listed only while
+    /// her membership is active, and names the owner as she is now, read through it: the notice itself names nobody.</summary>
     private static async Task<Ok<MemberNoticeView[]>> NoticesAsync(
         RequestCaller caller, Memberships memberships, MongoDB.Driver.IMongoDatabase db, TimeProvider time, CancellationToken ct)
     {
         await memberships.EnsureReadyAsync(ct);
         var notices = await MemberNotices.ListAsync(db, caller.User!.Id, caller.UserKey!, time.GetUtcNow().UtcDateTime, ct);
-        return TypedResults.Ok(notices.Select(n => new MemberNoticeView(n.Notice.Id.ToString(), n.Notice.Kind, n.Notice.At, n.Alias, MemberNotices.TextFor(n.Alias))).ToArray());
+        var active = await MemberNotices.ActiveOwnersAsync(
+            db, caller.User.Id, [.. notices.Where(n => n.Notice.Kind == MemberNoticeDocument.VaultRekeyed).Select(n => n.Notice.Membership)], ct);
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        var result = new List<MemberNoticeView>();
+        foreach (var (notice, alias) in notices)
+        {
+            var owner = "";
+            if (notice.Kind == MemberNoticeDocument.VaultRekeyed)
+            {
+                // Once she has left, was removed, or the vault is gone, "give your agents it again" is wrong.
+                if (!active.TryGetValue(notice.Membership, out var ownerId)) continue;
+                if (!owners.TryGetValue(ownerId, out owner)) owners[ownerId] = owner = WriterLabels.Owner(await memberships.DisplayNameAsync(ownerId, ct));
+            }
+
+            result.Add(new MemberNoticeView(notice.Id.ToString(), notice.Kind, notice.At, alias, MemberNotices.TextFor(notice.Kind, alias, owner)));
+        }
+
+        return TypedResults.Ok(result.ToArray());
     }
 
     /// <summary>Dismissing one of her own notices; any other id answers 404.</summary>

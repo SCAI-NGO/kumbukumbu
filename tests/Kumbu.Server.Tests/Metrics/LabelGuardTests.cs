@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Globalization;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
@@ -173,6 +174,13 @@ public sealed partial class LabelGuardTests(KumbuAppFactory app)
         {
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", KumbuAppFactory.Token);
             await http.GetAsync($"/api/notes/{Marker}/x.md", Ct);
+        }
+
+        var console = await Api.RestClient.NewAsync(app.PublicApi, vault: "Work");
+        foreach (var body in new object[] { new { call = "sh", command = $"rg {Marker} /" }, new { call = "sh", command = Marker }, new { call = "cd", path = $"/Work/{Marker}" } })
+        {
+            using var answered = await console.SendAsync(HttpMethod.Post, "/api/console", body);
+            Assert.Equal(HttpStatusCode.OK, answered.StatusCode);
         }
 
         using var publicClient = app.PublicApi.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions

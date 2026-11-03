@@ -243,7 +243,7 @@ public class AttachmentWriterTests
         Assert.Equal(version, restored.Version!.Token);
         var attachment = await Get("/Work/x.png");
         Assert.Equal(version, attachment.Version);
-        Assert.Null(attachment.Changeset);
+        Assert.NotNull(attachment.Changeset);
         Assert.Empty(await _store.ListAttachmentTrashAsync(P("/Work/x.png"), Ct));
         await using var blob = await _store.OpenBlobAsync("Work", attachment.Current.BlobId, Ct);
         using var read = new MemoryStream();
@@ -252,6 +252,43 @@ public class AttachmentWriterTests
 
         Assert.Equal("restore: /Work/x.png exists; to go back to an earlier version, give one from 'history /Work/x.png'",
             (await writer.RestoreAsync("/Work/x.png", null, Ct)).Output);
+    }
+
+    [Fact]
+    public async Task Restore_from_trash_joins_the_writers_changeset()
+    {
+        var writer = Writer();
+        await Write(writer, "/Work/a.png", Png(1), null);
+        await Write(writer, "/Work/x.png", Png(2), null);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await writer.RemoveAsync("/Work/x.png", Ct);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        Assert.False((await writer.RestoreAsync("/Work/x.png", null, Ct)).IsError);
+
+        var restored = await Get("/Work/x.png");
+        Assert.NotNull(restored.Changeset);
+        Assert.Equal((await Get("/Work/a.png")).Changeset!.Id, restored.Changeset!.Id);
+    }
+
+    [Fact]
+    public async Task A_write_after_a_restore_from_trash_keeps_the_restored_state_in_history()
+    {
+        // x.png has a history, so the next write in its changeset coalesces.
+        var writer = Writer();
+        var v1 = await Write(writer, "/Work/x.png", Png(1), null);
+        var v2 = await Write(writer, "/Work/x.png", Png(2), v1);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await writer.RemoveAsync("/Work/x.png", Ct);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.False((await writer.RestoreAsync("/Work/x.png", null, Ct)).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        var v3 = await Write(writer, "/Work/x.png", Png(3), v2);
+
+        var attachment = await Get("/Work/x.png");
+        Assert.Equal(v3, attachment.Version);
+        Assert.Equal([v2, v1], attachment.History.Select(h => h.State.Version));
     }
 
     [Fact]

@@ -43,6 +43,9 @@ public static class VaultEvents
     // The vault's, for every member: no membership.
     public const string ProviderChanged = "provider-changed";
 
+    /// <summary>The owner renamed her vault (rename spec §1.4): hers alone, as members keep their alias. No name is stored.</summary>
+    public const string VaultRenamed = "vault-renamed";
+
     /// <summary>A re-keying of the shared vault finished; members' credentials on it were revoked (collab design §7.1);
     /// <see cref="VaultEventDocument.Credentials"/> are those that lost it, for their notices.</summary>
     public const string RekeyFinished = "rekey-finished";
@@ -189,6 +192,7 @@ public static class VaultEvents
         (true, MembershipLeft) => $"{person} left {vault}.",
         (true, RoleChanged) => $"You changed {person}'s role to {role}.",
         (true, ProviderChanged) => "You changed the embedding provider.",
+        (true, VaultRenamed) => "You renamed this vault.",
         (true, RekeyFinished) => $"{vault} was re-encrypted; members' keys and apps for it were revoked.",
         (true, ClosingStarted) => $"{vault} is closing{Until(until)}.",
         (true, OwnerInactive) => "Your account was deactivated; members can only read.",
@@ -217,7 +221,7 @@ public static class VaultEvents
     };
 
     /// <summary>A person at the start of a sentence: <see cref="WriterLabels.GoneOwner"/> capitalised, a quoted name as it is.</summary>
-    private static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
+    internal static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
 
     /// <summary>"The owner (\"Alice\")", or "The owner" alone once her account is gone.</summary>
     private static string TheOwner(string owner) => owner == WriterLabels.GoneOwner ? "The owner" : $"The owner ({owner})";

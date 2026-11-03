@@ -75,7 +75,7 @@ export default function SharedBanner({ vault: name, refusal }: { vault: string |
   );
 }
 
-/** Notices of shared vaults the owner deleted for everyone, by the member's own name for them; each until dismissed. */
+/** Notices of shared vaults, by the member's own name for them; each until dismissed. */
 export function MemberNotices() {
   const notices = useMemberNotices();
   const dismiss = useDismissNotice();

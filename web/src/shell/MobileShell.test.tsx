@@ -387,18 +387,20 @@ describe("the shell", () => {
     expect(useEditor.getState().activeVault).toBe("Home");
   });
 
-  it("links to access and settings, and to admin only for admins", async () => {
+  it("links to access, settings and the console, and to admin only for admins", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
     expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/keys");
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(within(account).getByRole("link", { name: "Console" })).toHaveAttribute("href", "/console");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
   it.each([
     ["Access", "Access"],
     ["Settings", "Settings"],
+    ["Console", "Console"],
     ["Admin", "Users"],
   ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
     signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
@@ -680,8 +682,8 @@ describe("vaults shared with the user", () => {
 
     await openDrawer();
     await within(drawer()).findByText("Sweets");
-    // Reading, the trash, activity, checkpoints, the gallery, her side of the sharing and the export stay; nothing that writes, nor the owner's choices.
-    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…"]);
+    // Reading, the trash, activity, checkpoints, the gallery, pairing her own device, her side of the sharing, the export and leaving stay; nothing that writes, nor the owner's choices.
+    expect(await menuItems("Actions for Rezepte")).toEqual(["Trash", "Activity", "Checkpoints", "Gallery", "Connect Obsidian…", "Shared with you…", "Export as ZIP…", "Leave this vault…"]);
     expect(within(drawer()).queryByRole("button", { name: "Actions for Sweets" })).not.toBeInTheDocument();
     expect(within(drawer()).queryByRole("button", { name: "Actions for soup" })).not.toBeInTheDocument();
   });

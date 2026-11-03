@@ -516,16 +516,30 @@ public sealed partial class VaultCatalog
         var f = Builders<SlotDocument>.Filter;
         var derived = f.Eq(sl => sl.Vault, id) & f.Ne(sl => sl.GrantedVia, null);
         var keyIds = await (await Slots.DistinctAsync(s, sl => sl.KeyId, derived & f.Eq(sl => sl.Kind, SlotDocument.ApiKey) & f.Exists(sl => sl.KeyId), cancellationToken: ct)).ToListAsync(ct);
+        // Also through keys already expired or revoked: such a member is told once more than she needs to be, which is harmless.
+        var via = await (await Slots.DistinctAsync(s, sl => sl.GrantedVia, derived, cancellationToken: ct)).ToListAsync(ct);
         await Slots.DeleteManyAsync(s, derived, cancellationToken: ct);
         var keys = await RevokeKeysWithoutVaultsAsync(s, keyIds, ct);
 
         var c = Builders<Accounts.ConnectionDocument>.Filter;
         var theirs = await db.GetCollection<Accounts.ConnectionDocument>(Accounts.Connections.CollectionName)
-            .Find(s, c.AnyEq(x => x.Vaults, id) & c.Ne(x => x.User, ownerId) & c.Eq(x => x.RevokedAt, null)).Project(x => x.Id).ToListAsync(ct);
-        var connections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, [id], Now, ct, reason: Accounts.ConnectionReasons.Rekeyed, only: theirs);
+            .Find(s, c.AnyEq(x => x.Vaults, id) & c.Ne(x => x.User, ownerId) & c.Eq(x => x.RevokedAt, null)).Project(x => new { x.Id, x.User }).ToListAsync(ct);
+        var connections = await Accounts.ConnectionRevocation.RemoveVaultsAsync(db, s, [id], Now, ct, reason: Accounts.ConnectionReasons.Rekeyed, only: [.. theirs.Select(x => x.Id)]);
+        // A connection never authorised has no slot to name its membership by: its user's active one on this vault.
+        if (theirs.Count > 0)
+        {
+            var users = theirs.Select(x => x.User).Distinct(StringComparer.Ordinal).ToList();
+            var m = Builders<Sharing.MembershipDocument>.Filter;
+            via.AddRange(await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName)
+                .Find(s, m.Eq(x => x.Vault, id) & m.Eq(x => x.Status, Sharing.MembershipStatus.Active) & m.In(x => x.Member, users)).Project(x => x.Id).ToListAsync(ct));
+        }
+
         // Each is told at its next tool call once the run is done, if it still has a vault to call with (§8.4).
-        var ended = keyIds.OfType<string>().Concat(theirs).ToList();
+        var ended = keyIds.OfType<string>().Concat(theirs.Select(x => x.Id)).ToList();
         if (ended.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEnded, ended), cancellationToken: ct);
+        // Their memberships, for the finish's notices; kept as the ids are, so that a resumed run still knows them.
+        var endedMembers = via.OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        if (endedMembers.Count > 0) await Vaults.UpdateOneAsync(s, v => v.Id == id, Builders<VaultDocument>.Update.AddToSetEach(v => v.RekeyEndedMembers, endedMembers), cancellationToken: ct);
         return new MembersCredentials(keys, connections);
     }
 
@@ -567,7 +581,7 @@ public sealed partial class VaultCatalog
             Builders<VaultDocument>.Filter.Eq(v => v.Id, id) & Builders<VaultDocument>.Filter.Eq(v => v.Meta, doc.Meta),
             Builders<VaultDocument>.Update
                 .Set(v => v.Meta, VaultCrypto.Seal(VaultCrypto.Derive(start.NewKey, "kumbu/v1/content", []), JsonSerializer.SerializeToUtf8Bytes(meta), $"vault:{id}"))
-                .Unset(v => v.RekeyStartedAt).Unset(v => v.RekeyEnded),
+                .Unset(v => v.RekeyStartedAt).Unset(v => v.RekeyEnded).Unset(v => v.RekeyEndedMembers),
             cancellationToken: ct);
         if (vault.MatchedCount != 1) throw Mismatch("the vault document");
         // Wrapped to the keys pinned under K, never to a key the database names (HARD RULE 3).
@@ -579,6 +593,9 @@ public sealed partial class VaultCatalog
         {
             await Sharing.VaultEvents.RecordAsync(db, s, id, Sharing.VaultEvents.RekeyFinished, null, Now, null, ct, credentials: doc.RekeyEnded);
         }
+
+        // Each member whose keys or apps it ended, and who is still one, is told until she dismisses it.
+        await Sharing.MemberNotices.LeaveForRekeyAsync(db, s, id, doc.RekeyEndedMembers ?? [], Now, ct);
 
         await Users.UpdateOneAsync(
             s,

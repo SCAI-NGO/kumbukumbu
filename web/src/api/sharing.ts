@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type Query, type QueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { api, call } from "./client";
-import { useEditor } from "../state/editor";
+import { noteUrl } from "./paths";
+import { movedPath, useEditor } from "../state/editor";
 import type { components } from "./schema";
 
 export type MemberAccess = components["schemas"]["MemberAccessView"];
@@ -137,6 +139,49 @@ export function useRenameAlias() {
       if (useEditor.getState().activeVault === vault) editor.setActiveVault(to);
       queryClient.removeQueries({ predicate: (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(`/${vault}/`))) });
       await Promise.all(["vaults", "keys", "connections"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    },
+  });
+}
+
+/**
+ * Drops the queries `matches` names, each once nothing observes it. One still shown (the note, before the router has
+ * moved on) would otherwise be made again at once and fetched under a name that no longer finds anything.
+ */
+function forgetOnceUnused(queryClient: QueryClient, matches: (query: Query) => boolean) {
+  const cache = queryClient.getQueryCache();
+  const forget = () => {
+    const found = cache.findAll({ predicate: matches });
+    for (const q of found) if (q.getObserversCount() === 0) cache.remove(q);
+    return found.some((q) => q.getObserversCount() > 0);
+  };
+  if (!forget()) return;
+  const stop = cache.subscribe((event) => {
+    if (event.type === "observerRemoved" && !forget()) stop();
+  });
+}
+
+/**
+ * The owner's new name for her vault; her open note, recent notes and drawer move with it. Here, not in the dialog's
+ * `mutate`: a dialog closed meanwhile would skip that, and the store would move without the URL. Moved and navigated
+ * first, and the refetches not waited for, so that the note still shown and the dialog's access list don't ask again
+ * under the old name.
+ */
+export function useRenameVault() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  return useMutation({
+    mutationFn: async ({ vault, name }: { vault: string; name: string }) =>
+      void (await call(api.PUT("/api/vaults/{vault}/name", { params: { path: { vault } }, body: { name } }))),
+    onSuccess: (_, { vault, name }) => {
+      const [from, to] = [`/${vault}/`, `/${name.normalize("NFC").trim()}/`];
+      const editor = useEditor.getState();
+      const open = editor.currentPath;
+      editor.moved(from, to);
+      if (editor.activeVault === vault) editor.setActiveVault(to.slice(1, -1));
+      // The drawer shows only on `/` and on a note, so an open note is all there is to follow.
+      if (open?.startsWith(from)) navigate(noteUrl(movedPath(open, from, to)), { replace: true });
+      forgetOnceUnused(queryClient, (q) => q.queryKey.some((k) => typeof k === "string" && (k === vault || k.startsWith(from))));
+      void Promise.all(["vaults", "keys", "connections", "search", "changes"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
     },
   });
 }

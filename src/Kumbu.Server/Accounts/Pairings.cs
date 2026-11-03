@@ -102,7 +102,8 @@ public sealed class Pairings : IDisposable
     /// Drops every open code of the user, each with its copy of the user key: on sign-out, a sign-in over a session,
     /// a session ended by wrong passwords, a password change, a recovery, a re-encryption of the account or of a vault,
     /// ending the other sessions, a deactivation or a deletion. Such a code could no longer be redeemed anyway (or
-    /// wasn't meant to be), but its copy of the user key would stay in memory until it expired.
+    /// wasn't meant to be), but its copy of the user key would stay in memory until it expired. Also when the user
+    /// renamed a vault of hers: a code holds the vault's name, and would hand a device one that no longer finds it.
     /// </summary>
     public void DropAll(string userId)
     {
