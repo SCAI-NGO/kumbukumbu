@@ -122,7 +122,7 @@ Refusals of §2.3:
 | `img /Demo/Clips/animated.gif --frame 1-3` | `img: --frame is one frame, counting from 1, not '1-3'` (likewise `'0'`, `'x'`) |
 | `img /Demo/Screens/shot.png --frame 2` | `img: --frame is for GIFs; /Demo/Screens/shot.png is a PNG` (a JPEG: `is a JPEG`) |
 | `img /Demo/Clips/animated.gif --frame 7` | `img: /Demo/Clips/animated.gif has no frame 7; img without --frame says how many it has` |
-| `img /Demo/Clips/big.gif --frame 1` | `img: /Demo/Clips/big.gif is too large for --frame (at most 16 megapixels); img without --frame shows its first frame` |
+| `img /Demo/Clips/big.gif --frame 1` | `img: /Demo/Clips/big.gif is too large for --frame (at most 16 megapixels); img without --frame shows its first frame` (the sentence before the limit on frames below; now `… (at most 16 megapixels and 10,000 frames); …`) |
 | `pdf /Demo/Scans/mix.pdf 7 --frame 2` | `pdf: unrecognized option '--frame'` |
 
 ### `rg --regions` (spec §3.7)
@@ -182,17 +182,31 @@ The GIFs: 16 MiB each, a few full-canvas frames with disposal 3, then as many 1 
 | 16 MP, 1004 frames in 1.3 MB | 4000 × 4000 | 54 × 200 | `false 0` | 1,105,334,272 B (peak) |
 | 16 MP, no `--frame` (today's path) | 4000 × 4000 | 108 × 200 | `false 0` | 1,277,190,144 B (peak) |
 
-So a lower cap doesn't hold: the sidecar is killed at 4 MP as at 16. The memory goes with the number of frames, not with the canvas. Measured in a single process, `omggif`'s reader alone, which lists every frame when it is made, takes the process from 60 to 183 MiB for 650,000 frames; composing frame 250,000 of a 4 MP GIF peaks at 405 MiB (frame 5: 314 MiB), of which the canvas is 16 MB. Two workers like that, 18 bodies of 16 MiB in the main thread and the memory of workers ended on their time limit come to more than 1536 MiB once jobs reach the canvas. The cap stays at 16 MP, as lowering it would cost GIFs and buy nothing; see "Not fixed".
+So a lower cap doesn't hold: the sidecar is killed at 4 MP as at 16. With these files the memory goes with the number of frames, not with the canvas. Measured in a single process, `omggif`'s reader alone, which lists every frame when it is made, takes the process from 60 to 183 MiB for 650,000 frames; composing frame 250,000 of a 4 MP GIF peaks at 405 MiB (frame 5: 314 MiB), of which the canvas is 16 MB.
+
+**After the limit on frames.** The sidecar now counts a GIF's frames by walking its blocks, before `omggif` is given the file, and the composing path takes at most 10,000 frames (`too_large` beyond, with the server's sentence `… is too large for --frame (at most 16 megapixels and 10,000 frames); img without --frame shows its first frame`); a plain `img` of a GIF with more is drawn as before, its count unknown. The cap on the canvas stays 16 MP. Measured again, with the same container and load:
+
+| Run | Answers | `memory.max_usage_in_bytes`, `failcnt` | `OOMKilled RestartCount` |
+|---|---|---|---|
+| The 600,000-frame GIFs with `--frame` | 504 × 413 (`The GIF has too many frames for a frame: at most 10,000.`), in about 1 s each, 28 rounds | 663,519,232 B, 0 | `false 0` |
+| The same GIFs, no `--frame` | 144 × 200, 8 rounds | 1,021,755,392 B, 0 (before: 1,277,190,144 B) | `false 0` |
+| 16 MP, 10,000 frames (4 or 6 full frames with disposal 3, then 1 × 1 ones, padded to 16 MiB with a comment), frames 9,999 down, a minute | 18 × 200, then killed | highest sample 1,554,231,296 B | `true 0` (exit 137) |
+| The same with 2,000 frames (`MAX_FRAMES` set to 2,000 for the run), a minute | 36 × 200 | 1,401,872,384 B, 0 | `false 0` |
+| The same with 2,000 frames, two minutes | 58 × 200, then killed | highest sample 1,507,762,176 B | `true 0` (exit 137) |
+| 8 MP (`MAX_FRAME_PIXELS` set to 8,000,000 for the run), 10,000 frames, two minutes | 126 × 200 | 1,608,753,152 B, 0 | `false 0` |
+
+The limit on frames closes what the first runs found: the 600,000-frame GIFs are refused at once, and today's path with them needs a fifth less. It doesn't close the rest. With frames no longer the cost, two workers composing 16 MP canvases one job after another, with 16 MiB bodies queued, still pass 1536 MiB within one or two minutes, whether a GIF has 10,000 frames or 2,000; and at 8 MP the peak ends 2 MiB under the limit. The usage climbs from round to round rather than standing at a level, which points at memory that ended workers leave behind (each job runs in a new worker thread) more than at any one job. `MAX_FRAMES` stays 10,000, as 2,000 changed nothing; see "Not fixed".
 
 ## Found in hands-on
 
 Fixed on the branch:
 
 - **`help img` named `--frame` before `--crop`** (`img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]`, and the same in the help's first line), where the design (§1.5) and `docs/concept.md` have `[--crop x,y,w,h] [--frame N]`, the order of the help's paragraphs. Now as the design has it, checked again on the stack.
+- **A GIF of many tiny frames got the sidecar killed through `--frame`** at any canvas cap (the memory section). The composing path now takes at most 10,000 frames, counted before `omggif` lists them, and a plain `img` of such a GIF no longer builds `omggif`'s list either; spec §2.2 and §2.3 say so, with the new sentence.
 
 Not fixed, for a decision:
 
-- **A GIF of many tiny frames can get the sidecar killed through `--frame`** (above). Spec §2.2's estimate counts the canvas and not the frames, and its remedy, a lower cap, doesn't help. What would: a limit on the number of frames, found by walking the GIF's blocks before `omggif` lists them (no object per frame); or a smaller heap for image jobs than the worker's 384 MB; or fewer bodies held in the queue. Each changes the design, so it is left to the maintainer. Until then the sidecar restarts (`restart: unless-stopped`), and what dies with it are the jobs under way. Today's path held with the same files (`false 0`, 1,277,190,144 B).
+- **Sustained `--frame` load on large GIFs can still get the sidecar killed** (above). The frames are bounded now; what remains grows with the jobs run, at 16 MP within a minute or two of two workers composing back to back with full queues, and at 8 MP to within 2 MiB of the limit. Candidates, each a design change: a lower canvas cap together with an answer to the growth; reusing workers, or limiting what an ended one leaves (`MALLOC_ARENA_MAX`, inconclusive here); one worker for the composing path; fewer bodies in the queue. Until then the sidecar restarts (`restart: unless-stopped`), and what dies with it are the jobs under way.
 
 Not reached by hand, covered by tests: the "older analysis" notice of §3.4 (it needs a PDF analysed by an older analyser) and a GIF whose frame count is unknown (one Skia draws and `omggif` refuses).
 
