@@ -126,8 +126,8 @@ export function frames(bytes: Uint8Array): number | undefined {
 // The frames of a GIF counted by walking its blocks, allocating nothing per frame, and stopping at
 // MAX_FRAMES + 1; undefined for another format and for blocks that run past the end. Extensions are
 // skipped by omggif's own rules, so the walk reaches every frame omggif would read: an application
-// extension takes 17 bytes after its label unless its size is 11 and it isn't NETSCAPE2.0 (then its
-// sub-blocks), a graphic control 6; a label omggif doesn't know gives no count, as omggif throws.
+// extension takes 17 bytes after its label unless its size is 11 and it isn't NETSCAPE2.0 (then it
+// skips 12 bytes and walks sub-blocks), a graphic control 6; a label omggif doesn't know gives no count, as omggif throws.
 const NETSCAPE = [0x0b, ...new TextEncoder().encode("NETSCAPE2.0"), 0x03, 0x01];
 
 export function gifFrameCount(b: Uint8Array): number | undefined {

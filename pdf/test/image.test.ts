@@ -508,6 +508,36 @@ describe("the limit on frames", () => {
     expect(frames(hidden)).toBeUndefined();
   });
 
+  it("skips an application extension as omggif does, whatever its size or name", () => {
+    // Each extension is one that omggif reads differently from a plain walk, followed by 20,000
+    // one-pixel frames; a walk that skips it by another rule lands on a trailer and counts none.
+    const n = 20_000;
+    const name = [...new TextEncoder().encode("NETSCAPE2.0")];
+    const lure = [11, ...name.slice(0, 10), 0x31, 6, 1, 1, 1, 1, 0x3b, 1, 0]; // byte 17 is a trailer
+    const cases: Record<string, number[]> = {
+      "a size of 20": [20, ...new Array(11).fill(1), 20, ...new Array(4).fill(1)],
+      "a size of 11 and another name": lure,
+      "NETSCAPE2.0 with a byte at +16 that isn't 0": [11, ...name, 3, 1, 1, 1, 4, 0x3b, 1, 1, 1, 0],
+    };
+    const head = [...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff];
+    const tiny = [0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 20, ...new Array(20).fill(1), 0];
+    tiny[16] = 32;
+    for (const [what, ext] of Object.entries(cases)) {
+      const gif = new Uint8Array(head.length + 2 + ext.length + n * tiny.length + 18);
+      gif.set(head);
+      gif.set([0x21, 0xff, ...ext], head.length);
+      for (let i = 0; i < n; i++) gif.set(tiny, head.length + 2 + ext.length + i * tiny.length);
+      // The chain of the frames' 32s ends here, on a 0 and then a trailer.
+      gif[gif.length - 18] = 0x3b;
+      gif[gif.length - 2] = 0;
+      gif[gif.length - 1] = 0x3b;
+      const read = new GifReader(gif).numFrames();
+      const walked = gifFrameCount(gif);
+      expect(read, what).toBe(n);
+      expect(walked === undefined || walked >= Math.min(read, MAX_FRAMES + 1), what).toBe(true);
+    }
+  });
+
   it("gives no count, and doesn't throw, for a truncated block or what is no GIF", () => {
     const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
     expect(gifFrameCount(gif.subarray(0, gif.length - 6))).toBeUndefined();
