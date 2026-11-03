@@ -38,6 +38,7 @@ public sealed class PlantedUserSlotTests(KumbuAppFactory app)
         // The labels and contexts are spelt out: he needs only his own user key and the vault key, no secret of the server.
         var vaultId = await alice.VaultIdAsync();
         var kek = VaultCrypto.Derive(bob.UserKey, "kumbu/v1/user-slot-kek", Encoding.UTF8.GetBytes(vaultId));
+        var keptKey = await alice.VaultKeyAsync();
         await Catalog.Slots.InsertOneAsync(
             new SlotDocument
             {
@@ -46,7 +47,7 @@ public sealed class PlantedUserSlotTests(KumbuAppFactory app)
                 Lookup = VaultCatalog.UserSlotLookup(bob.UserKey, bob.User.Id),
                 Owner = bob.User.Id,
                 NameId = VaultCatalog.AliasNameId(bob.UserKey, "Gartenarbeit"),
-                Wrapped = VaultCrypto.Seal(kek, await alice.VaultKeyAsync(), $"slot:{vaultId}:{SlotDocument.User}"),
+                Wrapped = VaultCrypto.Seal(kek, keptKey, $"slot:{vaultId}:{SlotDocument.User}"),
                 CreatedAt = DateTime.UtcNow,
             },
             cancellationToken: Ct);
