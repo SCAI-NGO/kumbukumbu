@@ -409,20 +409,31 @@ public class VersionCommandsTests
         Assert.DoesNotContain("(restored)", (await Run("history /Demo")).Output, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task A_text_changed_back_is_not_marked(bool sameChangeset)
+    private async Task<string[]> ChangePlanBack(TimeSpan after)
     {
         await WritePlanV2();
-        _time.Advance(TimeSpan.FromMinutes(sameChangeset ? 1 : 11));
+        _time.Advance(after);
         Assert.False((await _writer.WriteAsync("/Demo/plan.md", V1, V(V2), CancellationToken.None)).IsError);
-
-        var history = await PlanHistory();
-        // In one changeset, V2 coalesces away and V1 lies directly on V1, as after a restore.
-        if (sameChangeset) Assert.Equal([V(V1), V(V1)], history.Select(l => l[..12]));
-        Assert.DoesNotContain(history, l => l.Contains("(restored)", StringComparison.Ordinal));
         Assert.DoesNotContain("(restored)", (await Run("history /Demo")).Output, StringComparison.Ordinal);
+        return await PlanHistory();
+    }
+
+    [Fact]
+    public async Task A_text_changed_back_in_one_changeset_is_not_marked()
+    {
+        var history = await ChangePlanBack(TimeSpan.FromMinutes(1));
+
+        // V2 coalesces away and V1 lies directly on V1, as after a restore.
+        Assert.Equal([$"{V(V1)}  2026-10-23 14:01 UTC  dev  4 lines  (current)", $"{V(V1)}  2026-10-01 12:00 UTC  seed  4 lines"], history);
+    }
+
+    [Fact]
+    public async Task A_text_changed_back_across_changesets_is_not_marked()
+    {
+        var history = await ChangePlanBack(TimeSpan.FromMinutes(11));
+
+        Assert.Equal([V(V1), V(V2), V(V1)], history.Select(l => l[..12]));
+        Assert.DoesNotContain(history, l => l.Contains("(restored)", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -40,6 +40,10 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             Restored = false,
         };
 
+    /// <summary>An attachment back from the trash, as <see cref="NoteWriter.Restored"/> brings back a note.</summary>
+    public static StoredAttachment Restored(StoredAttachment trashed, string writer, WriterRef reference, DateTime now, Changeset changeset) =>
+        Next(trashed, trashed.Current, writer, reference, now, changeset, keepCurrent: true) with { Restored = true };
+
     /// <summary>
     /// Creates an attachment (no version) or overwrites it (the version the writer last read). The bytes are stored
     /// before the record: if the record then can't be written, the blob is left unreferenced, and the blob sweep
@@ -240,10 +244,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
                     : ShellResult.Error($"{tool}: {Shown(path)} has no version {version} in the trash ('trash {Quote(path)}' lists them)");
             }
 
-            // Its state also goes on top of its history, as for a note (NoteWriter.Restored).
-            var restored = Next(
-                trashed.Attachment, trashed.Attachment.Current, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now,
-                await ChangesetAsync(path, ct), keepCurrent: true) with { Restored = true };
+            var restored = Restored(trashed.Attachment, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, await ChangesetAsync(path, ct));
             var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
             return (await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
                 ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")

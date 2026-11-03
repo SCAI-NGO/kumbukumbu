@@ -75,7 +75,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
             var versions = new List<string>();
             foreach (var v in NoteHistory.Versions(attachment).Where(v => since is not { } s || v.WrittenAt >= s))
             {
-                versions.Add($"{v.Version}  {Time(v.WrittenAt)}  {await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct)}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}{(v.Current && attachment.Restored ? RestoredMark : "")}");
+                versions.Add($"{v.Version}  {Time(v.WrittenAt)}  {await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct)}  {AttachmentText.Summary(v.State)}{(v.Current ? Current(attachment.Restored) : "")}");
             }
 
             return ShellResult.Ok(versions.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(versions));
@@ -97,13 +97,15 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
         var lines = new List<string>();
         foreach (var v in NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s))
         {
-            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? "  (current)" : "") + (v.Current && note.Restored ? RestoredMark : ""));
+            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? Current(note.Restored) : ""));
         }
 
         return ShellResult.Ok(lines.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
 
     private const string RestoredMark = "  (restored)";
+
+    private static string Current(bool restored) => restored ? "  (current)" + RestoredMark : "  (current)";
 
     private static string NoneSince(VaultPath path, DateTime since) => $"(no versions of {path.Value} written since {Time(since)})";
 

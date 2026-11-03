@@ -356,6 +356,35 @@ public class ActivityTests
     }
 
     [Fact]
+    public async Task An_attachment_restored_from_the_trash_reads_as_a_restore()
+    {
+        var store = new InMemoryNoteStore(("/W/plan.md", "plan\n"));
+        var time = new FakeTimeProvider(T0);
+        var caller = new FixedCaller(Writers.Dev);
+        var files = new AttachmentWriter(store, store, time, caller);
+        var shell = new Kumbu.Core.Sh.Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller));
+        var ct = CancellationToken.None;
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1];
+        var version = (await files.WriteAsync("/W/shot.png", png, (4, 3), null, ct)).Result.Version!.Token;
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await shell.RunAsync("rm /W/shot.png", ct)).IsError);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await shell.RunAsync("restore /W/shot.png", ct)).IsError);
+
+        async Task<IReadOnlyList<ActivityRow>> Fold() => Activity.Rows(
+            [], [], await store.ListMovesAsync(P("/W"), ct), null, 50,
+            attachments: await store.ListAttachmentsUnderAsync(P("/W"), ct), attachmentTrash: await store.ListAttachmentTrashAsync(P("/W"), ct));
+
+        var file = Assert.Single((await Fold())[0].Files);
+        Assert.Equal(("/W/shot.png", ActivityFileKind.Restored, version, version, "image"), (file.Path, file.Kind, file.Version, file.Before, file.FileKind));
+
+        // The next upload clears the flag: no row reads as a restore any more.
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await files.WriteAsync("/W/shot.png", png.Append((byte)2).ToArray(), (4, 3), version, ct)).Result.IsError);
+        Assert.DoesNotContain(await Fold(), r => r.Files.Any(f => f.Kind == ActivityFileKind.Restored));
+    }
+
+    [Fact]
     public async Task A_text_changed_back_in_a_changeset_is_not_a_restore()
     {
         var vault = new Restoring();

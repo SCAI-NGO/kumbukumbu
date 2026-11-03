@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
@@ -135,7 +137,7 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { first } }, Writers.Dev, WriterRef.Server, Now, Ct));
         var trashed = Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
 
-        var restored = AttachmentWriter.Next(trashed.Attachment, trashed.Attachment.Current, Writers.Dev, WriterRef.Server, Now, Changeset.New(Now), keepCurrent: true) with { Restored = true };
+        var restored = AttachmentWriter.Restored(trashed.Attachment, Writers.Dev, WriterRef.Server, Now, Changeset.New(Now));
         Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, WriterRef.Server, Now, Ct));
 
         var read = (await Store(world.Catalog(time: _time)).GetAttachmentAsync(P("/Work/a.png"), Ct))!;
@@ -153,12 +155,12 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
             {"Path":"/Work/a.png","Current":{"MediaType":"image/png","Size":100,"Width":640,"Height":480,"Version":"abc","BlobId":"b1"},
              "LastWriter":"dev","LastWriteAt":"2026-10-27T12:00:00Z","History":[],"Changeset":null}
             """;
-        Assert.False(System.Text.Json.JsonSerializer.Deserialize<AttachmentPayload>(json)!.ToAttachment(1).Restored);
+        Assert.False(JsonSerializer.Deserialize<AttachmentPayload>(json)!.ToAttachment(1).Restored);
 
         var state = new AttachmentState("image/png", 100, 640, 480, "abc", "b1");
         var attachment = new StoredAttachment(P("/Work/a.png"), state, 1, Writers.Dev, T0, [], null, WriterRef.Server);
-        Assert.DoesNotContain("Restored", System.Text.Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment))), StringComparison.Ordinal);
-        Assert.Contains("\"Restored\":true", System.Text.Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment with { Restored = true }))), StringComparison.Ordinal);
+        Assert.DoesNotContain("Restored", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment))), StringComparison.Ordinal);
+        Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment with { Restored = true }))), StringComparison.Ordinal);
     }
 
     [Fact]

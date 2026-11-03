@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
@@ -386,11 +387,11 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     {
         // As sealed before the flag existed, and as a note that wasn't restored is still sealed.
         var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[],"SeedContent":null}""";
-        Assert.False(System.Text.Json.JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1).Restored);
+        Assert.False(JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1).Restored);
 
-        var written = Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        var written = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
         Assert.DoesNotContain("Restored", written, StringComparison.Ordinal);
-        Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Restored = true }))), StringComparison.Ordinal);
+        Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Restored = true }))), StringComparison.Ordinal);
     }
 
     [Fact]
