@@ -5376,6 +5376,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ConsoleRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ConsoleView"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Payload Too Large */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Too Many Requests */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiError"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/upload/{vault}/{folder}": {
         parameters: {
             query?: never;
@@ -7952,6 +8045,26 @@ export interface components {
             connection: null | components["schemas"]["ConsentConnectionView"];
             renewal: boolean;
             problem: null | string;
+        };
+        ConsolePartView: {
+            type: string;
+            text: null | string;
+            mediaType: null | string;
+            data: null | string;
+        };
+        ConsoleRequest: {
+            call?: null | string;
+            command?: null | string;
+            path?: null | string;
+        };
+        ConsoleVersionView: {
+            path: string;
+            token: string;
+        };
+        ConsoleView: {
+            parts: components["schemas"]["ConsolePartView"][];
+            isError: boolean;
+            version: null | components["schemas"]["ConsoleVersionView"];
         };
         CreateApiKeyRequest: {
             name: string;

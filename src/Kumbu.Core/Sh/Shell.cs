@@ -61,6 +61,9 @@ public sealed class Shell
     /// <summary>Adds a command after the built-in ones; for tests of what the shell does with a kind of command.</summary>
     internal void Register(ICommand command) => _commands[command.Name] = command;
 
+    /// <summary>Whether the shell has a command of this name, built in or registered.</summary>
+    public bool HasCommand(string name) => _commands.ContainsKey(name);
+
     internal static readonly string[] Readers = ["ls", "cat", "outline", "rg", "links", "backlinks", "tags", "board", "head", "tail", "wc", "sort"];
 
     /// <summary>The commands that only read notes (<see cref="Readers"/>): they run on a checkpoint as they do on the current state.</summary>
