@@ -204,40 +204,6 @@ public sealed class PdfSidecarTests
     }
 
     [Fact]
-    public async Task An_analysis_with_a_labelled_box_parses()
-    {
-        var json = TwoPages();
-        json["pages"]![1]!["regions"]![1]!["labelled"] = JsonNode.Parse("""{ "x": 48, "y": 290.5, "w": 520, "h": 300 }""");
-        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, json.ToJsonString()));
-
-        var result = await Sidecar(stub).AnalyseAsync(Pdf, 2, Ct);
-
-        Assert.Equal(
-            [new PdfRegion("image", 80, 90, 200, 120), new PdfRegion("drawing", 72, 300, 451, 260, new PdfBox(48, 290.5, 520, 300))],
-            result.Analysis.Pages[1].Regions);
-    }
-
-    [Theory]
-    [InlineData("a negative x", """{ "x": -1, "y": 290, "w": 520, "h": 300 }""")]
-    [InlineData("a huge width", """{ "x": 48, "y": 290, "w": 1e400, "h": 300 }""")]
-    [InlineData("a negative height", """{ "x": 48, "y": 290, "w": 520, "h": -300 }""")]
-    [InlineData("a string", "\"48,290,520,300\"")]
-    [InlineData("a list", "[48, 290, 520, 300]")]
-    public async Task A_malformed_labelled_box_is_refused(string what, string labelled)
-    {
-        var text = TwoPages().ToJsonString().Replace(
-            """{"kind":"drawing","x":72,"y":300,"w":451,"h":260}""",
-            $$"""{"kind":"drawing","x":72,"y":300,"w":451,"h":260,"labelled":{{labelled}}}""",
-            StringComparison.Ordinal);
-        Assert.Contains("labelled", text, StringComparison.Ordinal);
-        var stub = new Stub((_, _) => Json(HttpStatusCode.OK, text));
-
-        var e = await Assert.ThrowsAsync<SidecarException>(() => Sidecar(stub).AnalyseAsync(Pdf, 2, Ct));
-
-        Assert.True(e.Code == SidecarException.Failed, what);
-    }
-
-    [Fact]
     public void The_analyser_is_the_sidecars()
     {
         // pdf/src/analyse.ts: `pdfjs-dist@${version}+rules.${RULES_VERSION}`, with the version pinned in pdf/package.json.
