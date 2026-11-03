@@ -13,10 +13,10 @@ namespace Kumbu.Server.Sharing;
 /// <summary>
 /// What happened to a shared vault and its memberships, for the owner's and the members' activity (collab design §8.3):
 /// plain event documents (collection <c>vault_events</c>) holding ids, a kind, a time and at most a role or a date,
-/// never a name or a text. The text is built when it is read, names resolved per viewer (<see cref="TextFor"/>).
-/// The events of a membership are its owner's and its member's; those without one (<see cref="IsVaultWide"/>) are the
-/// vault's, for every member. Deleted with the vault (<see cref="VaultCatalog.DeleteVaultsAsync"/>) and with a
-/// member's account, as her memberships are.
+/// and of a re-keying the ids of the credentials and memberships it ended, never a name or a text. The text is built
+/// when it is read, names resolved per viewer (<see cref="TextFor"/>). The events of a membership are its owner's and
+/// its member's; those without one (<see cref="IsVaultWide"/>) are the vault's, for every member. Deleted with the
+/// vault (<see cref="VaultCatalog.DeleteVaultsAsync"/>) and with a member's account, as her memberships are.
 /// </summary>
 public static class VaultEvents
 {
@@ -76,7 +76,6 @@ public static class VaultEvents
     {
         var e = New(vaultId, kind, membershipId, at, role, until);
         if (credentials is { Count: > 0 }) e.Credentials = [.. credentials];
-        // Kept even when empty: no list at all is an event from before it was kept.
         if (endedMembers is not null) e.EndedMembers = [.. endedMembers];
         return Docs(db).InsertOneAsync(session, e, cancellationToken: ct);
     }

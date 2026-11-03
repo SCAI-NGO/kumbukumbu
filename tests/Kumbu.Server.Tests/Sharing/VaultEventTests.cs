@@ -247,7 +247,7 @@ public sealed class VaultEventTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task The_vaults_own_events_read_the_same_for_each_member()
+    public async Task The_vaults_own_activity_reads_as_the_feed_does()
     {
         var (alice, bob, carol, vaultId, _) = await SharedWithAKeyAsync();
 
@@ -256,7 +256,7 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         Assert.Equal([CarolLostNothing], await ActivityTextsAsync(carol, "Beete"));
 
         // Again: Bob's key no longer reached it, so the list is there and empty, and nothing of anyone's stopped working.
-        await Task.Delay(5, Ct);
+        await Task.Delay(10, Ct);
         await RekeyAsync(alice);
         Assert.Equal(new BsonArray(), (await RawRekeysAsync(vaultId))[0]["endedMembers"]);
         Assert.Equal(["\"Alice\" re-encrypted Garten. Nothing of yours stopped working.", BobLostKeys], await ActivityTextsAsync(bob, "Garten"));
