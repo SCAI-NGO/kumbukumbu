@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, levelOf, useVaults } from "../api/notes";
+import type { components } from "../api/schema";
 import { FormError, labelClass, primaryButtonClass, secondaryButtonClass } from "../components/form";
+import { timeText } from "../components/Sheet";
 import { CopyButton } from "../components/shownOnce";
 import { useDialog } from "../hooks/useDialog";
 import { ExpiryPicker } from "../routes/NewKeyDialog";
+import RevokeDialog from "../routes/RevokeDialog";
 import { maintainSentence } from "../routes/rights";
 
 /** What to add in BRAT; when the plugin is in Obsidian's community directory, the dialog says to search for it there. */
 export const pluginRepo = "SCAI-NGO/kumbu-obsidian";
 
 const copyClass = "min-h-11 flex-none rounded-[10px] border border-line px-3 text-sm font-medium text-text-body focus-visible:outline-2 focus-visible:outline-accent";
+
+type ApiKey = components["schemas"]["ApiKeyView"];
 
 /** "9:41": minutes and seconds left, never below 0:00. */
 function left(ms: number) {
@@ -42,6 +48,13 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
   const [pending, setPending] = useState(0);
   const [error, setError] = useState<unknown>(null);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  // Pairing again leaves the old device's key in place; whether it was replaced only the person knows. Keys are listed
+  // by the name the caller sees the vault under, as this dialog's vault is. Unreadable keys leave the list out.
+  const keys = useQuery({ queryKey: ["keys"], queryFn: () => call(api.GET("/api/keys")) });
+  const devices = (keys.data ?? []).filter(
+    (k) => k.kind === "device" && Object.hasOwn(k.vaults, vault) && k.revokedAt === null && (k.expiresAt === null || new Date(k.expiresAt).getTime() > now),
+  );
+  const [revoking, setRevoking] = useState<ApiKey | null>(null);
   const latest = useRef(0);
 
   const mutate = useCallback(
@@ -154,6 +167,25 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
           <p className="text-sm text-warning">The device may read, write and maintain this vault. {maintainSentence}</p>
         )}
 
+        {devices.length > 0 && (
+          <div className="flex flex-col gap-2 text-sm text-text-body">
+            <ul className="flex flex-col gap-2">
+              {devices.map((key) => (
+                <li key={key.id} className="flex items-center justify-between gap-3">
+                  <p className="min-w-0 break-words">
+                    Already connected: <span className="font-medium text-text">{key.name}</span>,{" "}
+                    {key.lastUsedAt ? `last used ${timeText(key.lastUsedAt)}` : "never used"}.
+                  </p>
+                  <button type="button" onClick={() => setRevoking(key)} aria-label={`Revoke ${key.name}`} className={`${secondaryButtonClass} flex-none`}>
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p>Revoke one only if that device is gone or is being replaced.</p>
+          </div>
+        )}
+
         <p className="text-sm text-muted">
           Each device gets its own key, named "{vault} – Obsidian &lt;device&gt;". You can revoke it under API keys. Re-encrypting this vault disconnects
           its Obsidian devices; connect them again afterwards.
@@ -163,6 +195,7 @@ export default function ConnectObsidianDialog({ vault, onClose }: { vault: strin
           Done
         </button>
       </div>
+      {revoking && <RevokeDialog apiKey={revoking} onClose={() => setRevoking(null)} />}
     </div>
   );
 }

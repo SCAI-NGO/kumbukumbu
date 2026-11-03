@@ -2,9 +2,10 @@
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { timeText } from "../components/Sheet";
 import { useEditor } from "../state/editor";
 import { useSession } from "../state/session";
-import { fakeApi, json, renderApp, user } from "../test/app";
+import { fakeApi, json, noContent, renderApp, user } from "../test/app";
 
 const workTree = { damaged: 0, root: { name: "Work", path: "/Work", folders: [], notes: [{ name: "inbox.md", path: "/Work/inbox.md", size: 10 }] } };
 
@@ -20,6 +21,21 @@ let skew = 0;
 let shared = false;
 let level: string | null = null;
 
+const device = {
+  id: "d1",
+  name: "Work – Obsidian Laptop",
+  prefix: "Ab12Cd",
+  vaults: { Work: "maintain" } as Record<string, string>,
+  createdAt: "2026-10-01T09:00:00Z",
+  lastUsedAt: "2026-11-01T09:00:00Z" as string | null,
+  revokedAt: null as string | null,
+  expiresAt: null as string | null,
+  kind: "device",
+};
+/** What GET /api/keys answers: her keys, or a status to fail with. */
+let keys: (typeof device)[] | number = [];
+let revoked: string[] = [];
+
 function api() {
   codes = 0;
   bodies = [];
@@ -27,7 +43,15 @@ function api() {
   maxInFlight = 0;
   gate = null;
   skew = 0;
+  revoked = [];
   return fakeApi({
+    "GET /api/keys": () => (typeof keys === "number" ? json(keys, { error: "Something went wrong." }) : json(200, keys)),
+    "DELETE /api/keys/*": (r) => {
+      const id = new URL(r.url).pathname.split("/").at(-1)!;
+      revoked.push(id);
+      if (typeof keys !== "number") keys = keys.filter((k) => k.id !== id);
+      return noContent();
+    },
     "GET /api/session": () => json(200, { user, previousSignInAt: null }),
     "GET /api/vaults": () => json(200, [{ name: "Work", notes: 1, embeddings: "internal", pending: false, canWrite: level !== "read", ...(level ? { level, owner: '"Alice"', membership: "m1" } : {}), ...(shared ? { shared: true, members: 1 } : {}) }]),
     "GET /api/embeddings": () => json(200, []),
@@ -58,6 +82,7 @@ afterEach(() => {
   useEditor.getState().reset();
   shared = false;
   level = null;
+  keys = [];
 });
 
 async function openDialog() {
@@ -193,5 +218,76 @@ describe("Connect Obsidian", () => {
 
     expect(await within(dialog).findByText("K7QM-4XDA")).toBeInTheDocument();
     expect(dialog).toHaveTextContent(/valid for (10:00|9:59) · single use/);
+  });
+
+  it("lists this vault's device keys", async () => {
+    keys = [device];
+    api();
+    const { dialog } = await openDialog();
+
+    expect(await within(dialog).findByText("Work – Obsidian Laptop")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(`Already connected: Work – Obsidian Laptop, last used ${timeText("2026-11-01T09:00:00Z")}.`);
+    expect(within(dialog).getByRole("button", { name: "Revoke Work – Obsidian Laptop" })).toHaveTextContent("Revoke");
+    expect(dialog).toHaveTextContent("Revoke one only if that device is gone or is being replaced.");
+  });
+
+  it("lists no other keys", async () => {
+    const past = new Date(Date.now() - 24 * 3600_000).toISOString();
+    keys = [
+      { ...device, id: "a1", name: "Claude", kind: "agent" },
+      { ...device, id: "d2", name: "Home – Obsidian Laptop", vaults: { Home: "maintain" } },
+      { ...device, id: "d3", name: "Work – Obsidian Old phone", revokedAt: "2026-10-02T09:00:00Z" },
+      { ...device, id: "d4", name: "Work – Obsidian Tablet", expiresAt: past },
+      { ...device, id: "d5", name: "Work – Obsidian Desktop", lastUsedAt: null, expiresAt: new Date(Date.now() + 24 * 3600_000).toISOString() },
+    ];
+    api();
+    const { dialog } = await openDialog();
+
+    expect(await within(dialog).findByText("Work – Obsidian Desktop")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Already connected: Work – Obsidian Desktop, never used.");
+    expect(within(dialog).getAllByRole("button", { name: /^Revoke/ })).toHaveLength(1);
+    for (const name of ["Claude", "Home – Obsidian Laptop", "Work – Obsidian Old phone", "Work – Obsidian Tablet"]) {
+      expect(dialog).not.toHaveTextContent(name);
+    }
+  });
+
+  it("shows nothing when there is no device key", async () => {
+    keys = [{ ...device, id: "a1", name: "Claude", kind: "agent" }];
+    api();
+    const { dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+
+    expect(dialog).not.toHaveTextContent("Already connected");
+    expect(dialog).not.toHaveTextContent("Revoke one only if");
+    expect(within(dialog).queryByRole("button", { name: /^Revoke/ })).not.toBeInTheDocument();
+  });
+
+  it("revokes only after confirming", async () => {
+    keys = [device, { ...device, id: "d2", name: "Work – Obsidian Phone", lastUsedAt: null }];
+    api();
+    const { u, dialog } = await openDialog();
+    await within(dialog).findByText("K7QM-4XDA");
+
+    await u.click(await within(dialog).findByRole("button", { name: "Revoke Work – Obsidian Laptop" }));
+    const confirm = screen.getByRole("alertdialog");
+    expect(confirm).toHaveTextContent("Revoke Work – Obsidian Laptop?");
+    expect(revoked).toEqual([]);
+
+    await u.click(within(confirm).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(revoked).toEqual(["d1"]);
+    await waitFor(() => expect(dialog).not.toHaveTextContent("Work – Obsidian Laptop"));
+    expect(dialog).toHaveTextContent("Already connected: Work – Obsidian Phone, never used.");
+    expect(within(dialog).getByText("K7QM-4XDA")).toBeInTheDocument();
+    expect(codes).toBe(1);
+  });
+
+  it("leaves the dialog working when the keys can't be read", async () => {
+    keys = 500;
+    api();
+    const { dialog } = await openDialog();
+
+    expect(await within(dialog).findByText("K7QM-4XDA")).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("Already connected");
   });
 });
