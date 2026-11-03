@@ -214,7 +214,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     {
         var (e, path) = await RefusedFrameAsync("too_large", 7);
 
-        Assert.Equal($"{path} is too large for --frame (at most 16 megapixels and 10,000 frames); img without --frame shows its first frame", e.Message);
+        Assert.Equal($"{path} is too large for --frame (at most 4 megapixels and 10,000 frames); img without --frame shows its first frame", e.Message);
         Assert.Equal(PixelsProblem.TooLarge, e.Problem);
     }
 

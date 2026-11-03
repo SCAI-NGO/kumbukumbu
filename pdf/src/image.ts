@@ -15,7 +15,7 @@ import { type Crop, type Target, fit, inside, pixels } from "./steps.js";
 export const MAX_SIDE = 16_384;
 // Composing holds the canvas several times over (buffer, copy, index stream, canvas), so a frame
 // has a lower cap than the plain path.
-export const MAX_FRAME_PIXELS = 16_000_000;
+export const MAX_FRAME_PIXELS = 4_000_000;
 // omggif lists every frame as an object when it opens a file, and composing makes garbage for each
 // frame before the last: a 16 MiB GIF of some 600,000 tiny frames took the sidecar past its memory
 // limit at any canvas size. So frames are counted first, without omggif, and more is refused.

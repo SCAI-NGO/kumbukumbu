@@ -356,12 +356,13 @@ describe("renderImage with a frame", () => {
     await expect(frame(gifWithFrameRect(10, 10, 1, 6, 0, 5), 1)).rejects.toMatchObject(notOutside);
   });
 
-  it("refuses to compose a GIF over 16 megapixels", async () => {
-    // 5000 × 4000 is 20 MP: within the header limits of the plain path, which goes on to decode it
-    // (Skia makes an empty canvas of the garbage after the header).
-    const header = new Uint8Array([...new TextEncoder().encode("GIF89a"), 0x88, 0x13, 0xa0, 0x0f, 0, 0, 0, ...new Array(32).fill(0xee)]);
-    await expect(frame(header, 1)).rejects.toMatchObject({ code: "too_large", message: "The GIF is too large for a frame: at most 16 megapixels." });
-    await expect(renderImage(header, SMALL)).resolves.toMatchObject({ originalWidth: 5000, originalHeight: 4000 });
+  it("refuses to compose a GIF over 4 megapixels", async () => {
+    // 2001 × 2000 is just over 4 MP: within the header limits of the plain path, which goes on to
+    // decode it (Skia makes an empty canvas of the garbage after the header).
+    const header = new Uint8Array([...new TextEncoder().encode("GIF89a"), 0xd1, 0x07, 0xd0, 0x07, 0, 0, 0, ...new Array(32).fill(0xee)]);
+    await expect(frame(header, 1)).rejects.toMatchObject({ code: "too_large", message: "The GIF is too large for a frame: at most 4 megapixels." });
+    await expect(renderImage(header, SMALL)).resolves.toMatchObject({ originalWidth: 2001, originalHeight: 2000 });
+    await expect(frame(gifWithFrameRect(2000, 2000, 1, 1), 1)).resolves.toMatchObject({ originalWidth: 2000, originalHeight: 2000 });
   });
 
   it("logs nothing while decoding a frame with a short stream", async () => {
