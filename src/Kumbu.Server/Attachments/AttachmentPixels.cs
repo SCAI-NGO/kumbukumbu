@@ -123,7 +123,7 @@ public sealed class AttachmentPixels(EncryptedNoteStore store, VaultCatalog cata
     {
         SidecarException.Unavailable or SidecarException.Busy => $"{what} is unavailable right now; try again later",
         SidecarException.Timeout when frame is not null => $"finding frame {frame} of {path} took too long",
-        "too_large" when frame is not null => $"{path} is too large for --frame (at most 16 megapixels); img without --frame shows its first frame",
+        "too_large" when frame is not null => $"{path} is too large for --frame (at most 16 megapixels and 10,000 frames); img without --frame shows its first frame",
         SidecarException.Timeout => $"rendering {path} took too long; try a smaller --size or a --crop",
         SidecarException.Aborted => $"rendering {path} stopped part way (the renderer may have run out of memory); try a smaller --size or a --crop",
         SidecarException.Encrypted => PdfAnalysisRunner.PasswordProtected,

@@ -16,6 +16,10 @@ export const MAX_SIDE = 16_384;
 // Composing holds the canvas several times over (buffer, copy, index stream, canvas), so a frame
 // has a lower cap than the plain path.
 export const MAX_FRAME_PIXELS = 16_000_000;
+// omggif lists every frame as an object when it opens a file, and composing makes garbage for each
+// frame before the last: a 16 MiB GIF of some 600,000 tiny frames took the sidecar past its memory
+// limit at any canvas size. So frames are counted first, without omggif, and more is refused.
+export const MAX_FRAMES = 10_000;
 
 export type RenderedImage = Rendered & {
   originalWidth: number;
@@ -58,6 +62,10 @@ export async function renderImage(img: Uint8Array, t: Target, crop?: Crop, rotat
     if (!isGif(img)) throw notImage();
     if (header.width * header.height > MAX_FRAME_PIXELS)
       throw new PdfError(`The GIF is too large for a frame: at most ${MAX_FRAME_PIXELS / 1_000_000} megapixels.`, "too_large");
+    const walked = gifFrameCount(img);
+    if (walked === undefined) throw notImage();
+    if (walked > MAX_FRAMES)
+      throw new PdfError(`The GIF has too many frames for a frame: at most ${MAX_FRAMES.toLocaleString("en-GB")}.`, "too_large");
     let reader: GifReader;
     try {
       reader = new GifReader(img);
@@ -105,13 +113,44 @@ const isGif = (b: Uint8Array) => startsWith(b, 0, "GIF87a") || startsWith(b, 0, 
 // How many frames a GIF has, or undefined for another format and a GIF omggif can't read (which
 // Skia may still draw).
 export function frames(bytes: Uint8Array): number | undefined {
-  if (!isGif(bytes)) return undefined;
+  const walked = gifFrameCount(bytes);
+  if (walked === undefined || walked > MAX_FRAMES) return undefined;
   try {
     const n = new GifReader(bytes).numFrames();
     return n > 0 ? n : undefined;
   } catch {
     return undefined;
   }
+}
+
+// The frames of a GIF counted by walking its blocks, allocating nothing per frame, and stopping at
+// MAX_FRAMES + 1; undefined for another format and for blocks that run past the end. Extensions
+// are skipped whatever their label: omggif, which knows only some, still decides what it can read.
+export function gifFrameCount(b: Uint8Array): number | undefined {
+  if (!isGif(b) || b.length < 13) return undefined;
+  const palette = (flags: number) => (flags & 0x80 ? 3 << ((flags & 7) + 1) : 0);
+  let p = 13 + palette(b[10]!);
+  const subBlocks = () => {
+    while (p < b.length && b[p] !== 0) p += b[p]! + 1;
+    if (p >= b.length) return false;
+    p++;
+    return true;
+  };
+  let n = 0;
+  while (p < b.length) {
+    const block = b[p++];
+    if (block === 0x3b) break;
+    if (block === 0x21) {
+      p++;
+      if (!subBlocks()) return undefined;
+    } else if (block === 0x2c) {
+      if (p + 9 > b.length) return undefined;
+      p += 9 + palette(b[p + 8]!) + 1;
+      if (!subBlocks()) return undefined;
+      if (++n > MAX_FRAMES) break;
+    } else return undefined;
+  }
+  return n;
 }
 
 // Frames 1 to n (counting from 1) on a transparent canvas, each but the last disposed of as it

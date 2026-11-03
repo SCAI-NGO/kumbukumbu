@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { GifEncoder, createCanvas, loadImage } from "@napi-rs/canvas";
+import { GifReader } from "omggif";
 import { describe, expect, it, vi } from "vitest";
-import { frames, imageHeader, renderImage } from "../src/image.js";
+import { MAX_FRAMES, frames, gifFrameCount, imageHeader, renderImage } from "../src/image.js";
 import { type GifFrame, MEDIUM, SMALL, gifOf, gifWithFrameRect } from "./fixtures.js";
 
 function solid(width: number, height: number, colour = "#3366cc") {
@@ -422,6 +423,61 @@ describe("renderImage with a frame", () => {
     const r = await renderImage(gif, SMALL);
     expect([r.width, r.height]).toEqual([4, 4]);
     expect(r.frames).toBeUndefined();
+  });
+});
+
+// A GIF of n frames of 1 × 1 px, written byte by byte: each a clear code, index 0 and an end code
+// in 3-bit codes.
+function gifOfTinyFrames(n: number) {
+  const frame = [0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0];
+  const b = new Uint8Array(19 + n * frame.length + 1);
+  b.set([...new TextEncoder().encode("GIF89a"), 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff]);
+  for (let i = 0; i < n; i++) b.set(frame, 19 + i * frame.length);
+  b[b.length - 1] = 0x3b;
+  return b;
+}
+
+describe("the limit on frames", () => {
+  it("counts a GIF of 10,000 frames, and composes its last", async () => {
+    const gif = gifOfTinyFrames(10_000);
+    expect(MAX_FRAMES).toBe(10_000);
+    expect(gifFrameCount(gif)).toBe(10_000);
+    expect(frames(gif)).toBe(10_000);
+    const r = await frame(gif, 10_000);
+    expect(r.frames).toBe(10_000);
+  });
+
+  it("gives no count for a GIF of 10,001 frames, and refuses a frame of it", async () => {
+    const gif = gifOfTinyFrames(10_001);
+    expect(gifFrameCount(gif)).toBeGreaterThan(MAX_FRAMES);
+    expect(frames(gif)).toBeUndefined();
+    await expect(frame(gif, 2)).rejects.toMatchObject({ code: "too_large", message: "The GIF has too many frames for a frame: at most 10,000." });
+    expect((await renderImage(gif, SMALL)).frames).toBeUndefined();
+  });
+
+  it("stops counting once past the limit", () => {
+    const gif = gifOfTinyFrames(30_000);
+    expect(gifFrameCount(gif)).toBe(MAX_FRAMES + 1);
+  });
+
+  it("agrees with omggif on the fixtures", () => {
+    const one = fill(RED, { width: 10, height: 10 });
+    const fixtures = [
+      gifOf(10, 10, [one]),
+      gifOf(10, 10, [one, one, one]),
+      gifOf(10, 10, [fill(RED, { x: 2, y: 2, width: 4, height: 4 }, { disposal: 2 }), fill(BLUE, { x: 6, y: 6, width: 2, height: 2 }, { disposal: 3 })]),
+      gifWithFrameRect(4, 4, 4, 4),
+      gifOfTinyFrames(25),
+    ];
+    for (const gif of fixtures) expect(gifFrameCount(gif)).toBe(new GifReader(gif).numFrames());
+  });
+
+  it("gives no count, and doesn't throw, for a truncated block or what is no GIF", () => {
+    const gif = gifOf(10, 10, [fill(RED, { width: 10, height: 10 }), fill(BLUE, { width: 10, height: 10 })]);
+    expect(gifFrameCount(gif.subarray(0, gif.length - 6))).toBeUndefined();
+    expect(gifFrameCount(gifOfTinyFrames(3).subarray(0, 19 + 12))).toBeUndefined();
+    expect(gifFrameCount(gif.subarray(0, 8))).toBeUndefined();
+    expect(gifFrameCount(solid(10, 10).toBuffer("image/png"))).toBeUndefined();
   });
 });
 

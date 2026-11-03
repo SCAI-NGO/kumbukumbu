@@ -210,11 +210,11 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
     }
 
     [Fact]
-    public async Task A_canvas_too_large_for_a_frame_says_so()
+    public async Task A_GIF_too_large_for_a_frame_says_so()
     {
         var (e, path) = await RefusedFrameAsync("too_large", 7);
 
-        Assert.Equal($"{path} is too large for --frame (at most 16 megapixels); img without --frame shows its first frame", e.Message);
+        Assert.Equal($"{path} is too large for --frame (at most 16 megapixels and 10,000 frames); img without --frame shows its first frame", e.Message);
         Assert.Equal(PixelsProblem.TooLarge, e.Problem);
     }
 
