@@ -208,6 +208,57 @@ describe("local commands", () => {
     expect(useConsole.getState().history).toEqual(["pwd", "help pwd", "clear"]);
   });
 
+  it("goes back to the notes for exit, and keeps directory, scrollback and history for coming back", async () => {
+    const { posted } = consoleApi();
+    const router = await open("/Work");
+    await run("pwd");
+    await userEvent.type(input(), "exit{Enter}");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    expect(posted).toEqual([]);
+    expect(useConsole.getState().cwd).toBe("/Work");
+    expect(useConsole.getState().entries.map((entry) => entry.typed)).toEqual(["pwd", "exit"]);
+    expect(useConsole.getState().history).toEqual(["pwd", "exit"]);
+  });
+
+  it("stays for exit with an argument, and in a pipeline", async () => {
+    const { posted } = consoleApi();
+    const router = await open();
+    await run("exit now");
+    await run("ls | exit");
+    expect(router.state.location.pathname).toBe("/console");
+    expect(posted).toEqual([]);
+    expect(lines()).toEqual(["/", "> exit now", "! Error: exit: too many arguments", "> ls | exit", "! Error: exit: can't be part of a pipeline"]);
+  });
+
+  it("takes .. alone for cd ..", async () => {
+    const { posted } = consoleApi((body) => text(body.path!));
+    await open("/Gartenarbeit/Shopping");
+    await run("..");
+    expect(posted).toEqual([{ call: "cd", path: "/Gartenarbeit" }]);
+    expect(useConsole.getState().cwd).toBe("/Gartenarbeit");
+    expect(lines()).toEqual(["/Gartenarbeit/Shopping", "> .."]);
+    await run("..");
+    expect(useConsole.getState().cwd).toBe("/");
+    await run("..");
+    expect(useConsole.getState().cwd).toBe("/");
+  });
+
+  it("sends .. with an argument to the shell, as any other word", async () => {
+    const { posted } = consoleApi(() => text("..: command not found", true));
+    await open("/Work");
+    await run(".. x");
+    expect(posted).toEqual([{ call: "sh", command: ".. x" }]);
+    expect(useConsole.getState().cwd).toBe("/Work");
+  });
+
+  it("keeps absolutely positioned text inside the scrolling output", async () => {
+    // An error's screen-reader label is absolutely positioned. Without a positioned ancestor it grows the page instead
+    // of the output, and the page scrolls away from under the input.
+    consoleApi();
+    await open();
+    expect(log()).toHaveClass("relative");
+  });
+
   it("shows its own block for help, then the agents' manual from the server", async () => {
     const { posted } = consoleApi(() => text("Kumbu² shell. All paths are absolute."));
     await open();
@@ -219,7 +270,7 @@ describe("local commands", () => {
       "→ help",
       [
         "In this console:",
-        "  cd [path], pwd, clear",
+        "  cd [path] (.. alone is cd ..), pwd, clear, exit",
         "  Relative paths work here; the console turns them into absolute ones, and → shows the result.",
         "  It only reads: restore, mv, mkdir, rm, mkcp and rmcp are refused, and the write tools aren't here.",
         "",

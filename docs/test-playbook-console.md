@@ -41,7 +41,7 @@ The console has two prompt lines, the working directory and then `>`. In the scr
 9. `cd plan.md`. *Expected:* an error line `cd: /Gartenarbeit/Shopping/plan.md: not a folder`, marked as an error by colour and by a `!` in front, and the path line stays `/Gartenarbeit/Shopping`.
 10. `cd nope`. *Expected:* `cd: /Gartenarbeit/Shopping/nope: not a folder`, and the directory stays.
 11. In the web app, make an empty folder `/Gartenarbeit/Leer` ("New folder…"). In the console: `cd ../Leer`. *Expected:* the path line reads `/Gartenarbeit/Leer`. `ls`. *Expected:* `→ ls /Gartenarbeit/Leer` and an empty answer, not an error.
-12. `cd ..`, then `cd ..` again, then `cd ..` once more. *Expected:* `/Gartenarbeit`, then `/`, then still `/`. `cd` alone from anywhere goes to `/`.
+12. `cd ..`, then `cd ..` again, then `cd ..` once more. *Expected:* `/Gartenarbeit`, then `/`, then still `/`. `cd` alone from anywhere goes to `/`. `..` alone does what `cd ..` does. `exit` goes back to the notes; opening the console again shows the directory, the scrollback and the history as they were, and `exit now` only says `exit: too many arguments`.
 13. `cd a b`. *Expected:* `cd: too many arguments`. `pwd | head`. *Expected:* `pwd: can't be part of a pipeline`.
 14. Copy one of these error lines into a text field. *Expected:* the sentence, possibly with `Error: ` in front (the screen-reader label), and no `!`. Note whether `Error: ` came along.
 
@@ -62,8 +62,8 @@ The console has two prompt lines, the working directory and then `>`. In the scr
 
 ## F. Help
 
-24. `help`. *Expected:* first the console's own block, starting `In this console:`, naming `cd [path], pwd, clear`, relative paths and `→`, and the refused commands `restore, mv, mkdir, rm, mkcp and rmcp`; then `The manual agents get, unchanged:` and the shell's manual, which still says that all paths are absolute and names the write tools. The two are clearly apart.
-25. `help cd`, `help pwd`, `help clear`. *Expected:* short local texts in British English. `help rg`. *Expected:* the shell's own text, with a `→` line.
+24. `help`. *Expected:* first the console's own block, starting `In this console:`, naming `cd [path] (.. alone is cd ..), pwd, clear, exit`, relative paths and `→`, and the refused commands `restore, mv, mkdir, rm, mkcp and rmcp`; then `The manual agents get, unchanged:` and the shell's manual, which still says that all paths are absolute and names the write tools. The two are clearly apart.
+25. `help cd`, `help pwd`, `help clear`, `help exit`. *Expected:* short local texts in British English. `help rg`. *Expected:* the shell's own text, with a `→` line.
 26. `clear`. *Expected:* the scrollback is empty, the welcome line stays. Press Up. *Expected:* `clear` and the commands before it come back one by one, and Down walks back to an empty input. A command typed twice in a row is in the history once.
 
 ## G. Pictures and PDFs

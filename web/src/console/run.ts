@@ -7,7 +7,7 @@ import { useConsole, type Output, type Running } from "./store";
 import { tokenise } from "./tokenise";
 
 /** The commands the console answers itself (console design §6). */
-const local = new Set(["cd", "pwd", "clear"]);
+const local = new Set(["cd", "pwd", "clear", "exit"]);
 
 let nextId = 1;
 
@@ -31,9 +31,10 @@ function shown(view: ConsoleView, sent: string): Output[] {
 
 /**
  * Runs a typed line: a local command here, anything else through `POST /api/console` with its paths made absolute.
- * One at a time; an answer that comes after the console was reset (the session ended) is dropped.
+ * One at a time; an answer that comes after the console was reset (the session ended) is dropped. `leave` goes back to
+ * the notes, for `exit`.
  */
-export async function run(line: string, signal: AbortSignal) {
+export async function run(line: string, signal: AbortSignal, leave: () => void) {
   const store = useConsole.getState();
   if (store.running || line.trim() === "") return;
   store.remember(line);
@@ -47,10 +48,15 @@ export async function run(line: string, signal: AbortSignal) {
   const inPipeline = stages && stages.length > 1 ? stages.find((stage) => local.has(stage[0])) : undefined;
   if (inPipeline) return done([error(`${inPipeline[0]}: can't be part of a pipeline`)]);
 
-  const [name, ...args] = stages?.length === 1 ? stages[0] : [];
+  // `..` alone is `cd ..`, as in zsh and fish.
+  const [name, ...args] = stages?.length !== 1 ? [] : stages[0].length === 1 && stages[0][0] === ".." ? ["cd", ".."] : stages[0];
   if (local.has(name) && args.length > (name === "cd" ? 1 : 0)) return done([error(`${name}: too many arguments`)]);
   if (name === "pwd") return done([text(cwd)]);
   if (name === "clear") return useConsole.setState({ entries: [] });
+  if (name === "exit") {
+    done([]);
+    return leave();
+  }
   if (name === "help" && args.length === 1 && Object.hasOwn(localHelp, args[0])) return done([text(localHelp[args[0]])]);
 
   if (name === "cd") {
