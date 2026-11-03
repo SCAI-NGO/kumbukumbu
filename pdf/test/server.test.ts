@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "../src/pool.js";
 import { MAX_BODY, createSidecar } from "../src/server.js";
-import { chartPage, encryptedPdf, threePages } from "./fixtures.js";
+import { chartPage, encryptedPdf, gifOf, threePages } from "./fixtures.js";
 
 // The built worker (vitest's global setup builds it).
 const entry = new URL("../dist/worker.js", import.meta.url);
@@ -82,6 +82,81 @@ describe("server", () => {
     expect(r.headers.get("x-kumbu-transparent")).toBe("1");
   });
 
+  it("takes rotate on both render routes and answers X-Kumbu-Rotate", async () => {
+    const page = await post(`/render/page?page=1&${medium}&rotate=90`, await chartPage());
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-kumbu-rotate")).toBe("90");
+    expect([page.headers.get("x-kumbu-width"), page.headers.get("x-kumbu-height")]).toEqual(["1303", "920"]);
+    expect([page.headers.get("x-kumbu-page-width"), page.headers.get("x-kumbu-page-height")]).toEqual(["595", "842"]);
+
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const png = createCanvas(4000, 3000).toBuffer("image/png");
+    const image = await post(`/render/image?${medium}&rotate=270`, png);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("x-kumbu-rotate")).toBe("270");
+    expect([image.headers.get("x-kumbu-width"), image.headers.get("x-kumbu-height")]).toEqual(["948", "1264"]);
+    expect([image.headers.get("x-kumbu-original-width"), image.headers.get("x-kumbu-original-height")]).toEqual(["4000", "3000"]);
+
+    const half = await post(`/render/page?page=1&${medium}&rotate=180`, await chartPage());
+    expect(half.headers.get("x-kumbu-rotate")).toBe("180");
+  });
+
+  it("answers no X-Kumbu-Rotate without a turn", async () => {
+    const page = await post(`/render/page?page=1&${medium}`, await chartPage());
+    expect(page.status).toBe(200);
+    expect(page.headers.has("x-kumbu-rotate")).toBe(false);
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const image = await post(`/render/image?${medium}`, createCanvas(40, 30).toBuffer("image/png"));
+    expect(image.status).toBe(200);
+    expect(image.headers.has("x-kumbu-rotate")).toBe(false);
+  });
+
+  it("refuses rotate other than 90, 180 or 270", async () => {
+    const pdf = await chartPage();
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const png = createCanvas(40, 30).toBuffer("image/png");
+    for (const rotate of ["0", "45", "-90", "90.0", "abc"])
+      for (const [route, body] of [[`/render/page?page=1&${medium}`, pdf], [`/render/image?${medium}`, png]] as const) {
+        const r = await post(`${route}&rotate=${encodeURIComponent(rotate)}`, body);
+        expect(r.status, `${route} ${rotate}`).toBe(400);
+        expect(await r.json()).toEqual({ code: "bad_request", error: "rotate must be 90, 180 or 270." });
+      }
+  });
+
+  const threeFrames = () => gifOf(10, 10, [0xff0000, 0x00ff00, 0x0000ff].map((colour) => ({ width: 10, height: 10, palette: [colour, 0], pixels: 0 })));
+
+  it("takes frame and answers X-Kumbu-Frame and X-Kumbu-Frames", async () => {
+    const r = await post(`/render/image?${medium}&frame=2`, threeFrames());
+    expect(r.status).toBe(200);
+    expect([r.headers.get("x-kumbu-frame"), r.headers.get("x-kumbu-frames")]).toEqual(["2", "3"]);
+    const still = await post(`/render/image?${medium}`, threeFrames());
+    expect(still.status).toBe(200);
+    expect(still.headers.has("x-kumbu-frame")).toBe(false);
+    expect(still.headers.get("x-kumbu-frames")).toBe("3");
+  });
+
+  it("answers no_such_frame with 422", async () => {
+    const r = await post(`/render/image?${medium}&frame=4`, threeFrames());
+    expect(r.status).toBe(422);
+    expect(await r.json()).toMatchObject({ code: "no_such_frame" });
+  });
+
+  it("refuses frame 0, 1000001 and 1-3", async () => {
+    for (const frame of ["0", "1000001", "1-3"]) {
+      const r = await post(`/render/image?${medium}&frame=${frame}`, threeFrames());
+      expect(r.status, frame).toBe(400);
+      expect(await r.json()).toEqual({ code: "bad_request", error: "frame must be a whole number from 1 to 1000000." });
+    }
+  });
+
+  it("answers no X-Kumbu-Frames for a PNG", async () => {
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const r = await post(`/render/image?${medium}`, createCanvas(40, 30).toBuffer("image/png"));
+    expect(r.status).toBe(200);
+    expect(r.headers.has("x-kumbu-frames")).toBe(false);
+    expect(r.headers.has("x-kumbu-frame")).toBe(false);
+  });
+
   it("maps errors to their status", async () => {
     const three = await threePages();
     expect((await post(`/render/page?page=9&${medium}`, three)).status).toBe(422);
@@ -101,6 +176,32 @@ describe("server", () => {
       expect(await r.json()).toMatchObject({ code: "bad_request" });
     }
     expect((await post("/analyse?maxPages=none", pdf)).status).toBe(400);
+  });
+
+  it("answers /text-boxes as JSON for the pages asked", async () => {
+    const r = await post("/text-boxes?pages=1,3", await threePages());
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/json");
+    const { pages } = (await r.json()) as { pages: { n: number; width: number; height: number; text: string; items: { at: number; end: number }[] }[] };
+    expect(pages.map((p) => [p.n, p.width, p.height, p.text])).toEqual([
+      [1, 595, 842, "Page 1"],
+      [3, 595, 842, "Page 3"],
+    ]);
+    expect(pages[1]!.items).toEqual([{ at: 0, end: 6, x: 50, y: 30, w: expect.any(Number), h: 12 }]);
+  });
+
+  it("refuses more than 50 pages, none, duplicates, a falling order, and anything but whole numbers", async () => {
+    const pdf = await threePages();
+    const upTo = (n: number) => Array.from({ length: n }, (_, i) => i + 1).join(",");
+    for (const q of [`pages=${upTo(51)}`, "", "pages=", "pages=1,1", "pages=3,1", "pages=0", "pages=1.5", "pages=1,x", "pages=-1", "pages=1,,2", "pages=1,", "pages= 1", "pages=1e2"]) {
+      const r = await post(`/text-boxes?${q}`, pdf);
+      expect(r.status, q).toBe(400);
+      expect(await r.json()).toMatchObject({ code: "bad_request" });
+    }
+    // Fifty pass the parameters; the PDF then lacks most of them.
+    const fifty = await post(`/text-boxes?pages=${upTo(50)}`, pdf);
+    expect(fifty.status).toBe(422);
+    expect(await fifty.json()).toMatchObject({ code: "no_such_page" });
   });
 
   it("refuses a body over 16 MiB with 413", async () => {

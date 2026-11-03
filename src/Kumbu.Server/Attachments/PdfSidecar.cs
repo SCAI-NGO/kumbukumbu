@@ -17,11 +17,14 @@ public interface IPdfSidecar
     /// <summary>The analysis of at most <paramref name="maxPages"/> pages, with each page's text.</summary>
     Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct);
 
-    /// <summary>Page <paramref name="page"/> (1-based) rendered to fit <paramref name="target"/>, optionally a region in displayed points.</summary>
-    Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct);
+    /// <summary>Page <paramref name="page"/> (1-based) rendered to fit <paramref name="target"/>, optionally a region in displayed points, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270).</summary>
+    Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct);
 
-    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels.</summary>
-    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct);
+    /// <summary>The image scaled down to fit <paramref name="target"/>, optionally cropped in its (oriented) pixels, turned <paramref name="rotate"/> degrees clockwise (0, 90, 180 or 270); <paramref name="frame"/> (1-based) picks a frame of a GIF.</summary>
+    Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct);
+
+    /// <summary>The text of <paramref name="pages"/> (ascending, distinct, at most 50) with the boxes of its items.</summary>
+    Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct);
 }
 
 /// <summary>An analysis as the sidecar answers it: the measurements, and the text of each analysed page (index 0 = page 1).</summary>
@@ -68,6 +71,9 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
     /// <summary>The largest image read: a page that doesn't fit its byte target even at the lowest quality is sent as it is.</summary>
     internal const int MaxImageBytes = 16 * 1024 * 1024;
 
+    /// <summary>The largest text-boxes answer read: 50 pages of 20,000 items stay below it.</summary>
+    internal const int MaxTextBoxBytes = 16 * 1024 * 1024;
+
     private const int MaxErrorBytes = 64 * 1024;
     private const int MaxMetadataChars = 1000;
 
@@ -82,6 +88,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         ["too_large"] = HttpStatusCode.RequestEntityTooLarge,
         ["no_such_page"] = HttpStatusCode.UnprocessableEntity,
         ["bad_crop"] = HttpStatusCode.UnprocessableEntity,
+        ["no_such_frame"] = HttpStatusCode.UnprocessableEntity,
         [SidecarException.Encrypted] = HttpStatusCode.UnprocessableEntity,
         [SidecarException.Busy] = HttpStatusCode.ServiceUnavailable,
         [SidecarException.Timeout] = HttpStatusCode.GatewayTimeout,
@@ -102,17 +109,32 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         return ParseAnalysis(body, maxPages);
     }
 
-    public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct) =>
-        SendAsync("render/page", $"page={page.ToString(CultureInfo.InvariantCulture)}&{Query(target, crop)}", pdf, "application/pdf", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
+    public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) =>
+        SendAsync("render/page", $"page={page.ToString(CultureInfo.InvariantCulture)}&{Query(target, crop, rotate)}", pdf, "application/pdf", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, null, "X-Kumbu-Page-Width", "X-Kumbu-Page-Height", token));
 
-    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct) =>
-        SendAsync("render/image", Query(target, crop), image, "application/octet-stream", RenderTimeout, ct,
-            (response, token) => PictureAsync(response, target, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
+    public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) =>
+        SendAsync("render/image", Query(target, crop, rotate, frame), image, "application/octet-stream", RenderTimeout, ct,
+            (response, token) => PictureAsync(response, target, rotate, frame, "X-Kumbu-Original-Width", "X-Kumbu-Original-Height", token));
 
-    private static string Query(StepLimits target, Crop? crop) =>
+    public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
+    {
+        // The caller's contract (the shell checks what a person typed): a mistake here is the server's own.
+        if (pages.Count is < 1 or > 50 || pages[0] < 1 || pages.Zip(pages.Skip(1), (a, b) => b <= a).Any(bad => bad))
+        {
+            throw new ArgumentException("Pages must be 1 to 50 numbers, from 1, strictly ascending", nameof(pages));
+        }
+
+        var body = await SendAsync("text-boxes", "pages=" + string.Join(',', pages.Select(p => p.ToString(CultureInfo.InvariantCulture))), pdf, "application/pdf", RenderTimeout, ct,
+            async (response, token) => await ReadAsync(response.Content, MaxTextBoxBytes, token) ?? throw Invalid("The text boxes are larger than 16 MiB"));
+        return ParseTextBoxes(body, pages);
+    }
+
+    private static string Query(StepLimits target, Crop? crop, int rotate, int? frame = null) =>
         string.Create(CultureInfo.InvariantCulture, $"longEdge={target.LongEdge}&pixels={target.Pixels}&bytes={target.Bytes}")
-        + (crop is null ? "" : "&crop=" + crop);
+        + (crop is null ? "" : "&crop=" + crop)
+        + (rotate == 0 ? "" : string.Create(CultureInfo.InvariantCulture, $"&rotate={rotate}"))
+        + (frame is null ? "" : string.Create(CultureInfo.InvariantCulture, $"&frame={frame}"));
 
     /// <summary>
     /// One request with its own time limit. A time-out of this client, a refused connection or a failed name lookup,
@@ -209,7 +231,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         return buffer.ToArray();
     }
 
-    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, string originalWidth, string originalHeight, CancellationToken ct)
+    private static async Task<Picture> PictureAsync(HttpResponseMessage response, StepLimits target, int rotate, int? frame, string originalWidth, string originalHeight, CancellationToken ct)
     {
         var mediaType = response.Content.Headers.ContentType?.MediaType;
         if (mediaType is not ("image/png" or "image/jpeg")) throw Invalid("The answer is not a PNG or JPEG image");
@@ -217,6 +239,22 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         var png = data.AsSpan().StartsWith(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
         var jpeg = data.AsSpan().StartsWith(new byte[] { 0xFF, 0xD8, 0xFF });
         if (mediaType == "image/png" ? !png : !jpeg) throw Invalid("The image's bytes are not what its type says");
+
+        // An older sidecar ignores a parameter it doesn't know and answers the picture unturned: absent counts as 0.
+        var turned = response.Headers.TryGetValues("X-Kumbu-Rotate", out var echo) ? echo.FirstOrDefault() : null;
+        if ((turned ?? "0") != rotate.ToString(CultureInfo.InvariantCulture)) throw Invalid("The image isn't turned as asked");
+
+        // The same for the frame: none asked, none answered.
+        var shown = response.Headers.TryGetValues("X-Kumbu-Frame", out var frameEcho) ? frameEcho.FirstOrDefault() : null;
+        if (shown != frame?.ToString(CultureInfo.InvariantCulture)) throw Invalid("The image isn't the frame asked for");
+        int? frames = null;
+        if (response.Headers.TryGetValues("X-Kumbu-Frames", out var counted))
+        {
+            if (!int.TryParse(counted.FirstOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count <= 0) throw Invalid("The answer has no valid X-Kumbu-Frames");
+            frames = count;
+        }
+
+        if (frame > frames) throw Invalid("The frame asked for lies past the frames of the image");
 
         var width = Whole(response, "X-Kumbu-Width");
         var height = Whole(response, "X-Kumbu-Height");
@@ -230,7 +268,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         // Likewise its pixel budget, give or take a row and a column of rounding.
         if ((long)w * h > target.Pixels + w + h) throw Invalid("The image has more pixels than the size step");
         var transparent = response.Headers.TryGetValues("X-Kumbu-Transparent", out var values) && values.Contains("1");
-        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight), transparent);
+        return new Picture(data, mediaType, w, h, Size(response, originalWidth), Size(response, originalHeight), transparent, frames);
     }
 
     private static int Whole(HttpResponseMessage response, string header) =>
@@ -300,7 +338,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         for (var i = 0; i < a.Pages.Count; i++)
         {
             var p = a.Pages[i];
-            if (p.N != i + 1 || p.Text is null || p.Regions is null || p.Chars < 0 || p.Images < 0
+            if (p is null || p.N != i + 1 || p.Text is null || p.Regions is null || p.Chars < 0 || p.Images < 0
                 || p.Rotation is not (0 or 90 or 180 or 270) || !Point(p.Width) || !Point(p.Height)
                 || !Share(p.TextCoverage) || !Share(p.ImageCoverage) || !Share(p.VectorCoverage))
             {
@@ -317,7 +355,7 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
             var regions = new List<PdfRegion>(p.Regions.Count);
             foreach (var r in p.Regions)
             {
-                if (r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H))
+                if (r is null || r.Kind is not ("image" or "drawing") || !Point(r.X) || !Point(r.Y) || !Point(r.W) || !Point(r.H))
                 {
                     throw Invalid($"A region on page {i + 1} of the analysis doesn't add up");
                 }
@@ -335,4 +373,54 @@ public sealed class PdfSidecar(HttpClient http, IOptions<KumbuOptions> options, 
         static bool Share(double v) => double.IsFinite(v) && v is >= 0 and <= 1;
         static string? Metadata(string? v) => v is null ? null : v.Length > MaxMetadataChars ? v[..MaxMetadataChars] : v;
     }
+
+    private sealed record TextBoxesJson(List<TextBoxPageJson>? Pages);
+
+    private sealed record TextBoxPageJson(int N, double Width, double Height, string? Text, List<TextBoxJson>? Items);
+
+    private sealed record TextBoxJson(int? At, int? End, double? X, double? Y, double? W, double? H);
+
+    /// <summary>The sidecar's JSON for <c>/text-boxes</c>, checked to be the pages asked, with offsets inside the text and ascending.</summary>
+    internal static IReadOnlyList<PageTextBoxes> ParseTextBoxes(byte[] body, IReadOnlyList<int> pages)
+    {
+        TextBoxesJson a;
+        try
+        {
+            a = JsonSerializer.Deserialize<TextBoxesJson>(body, Json) ?? throw Invalid("The text boxes are empty");
+        }
+        catch (JsonException)
+        {
+            throw Invalid("The text boxes are not valid JSON");
+        }
+
+        if (a.Pages is null || a.Pages.Count != pages.Count) throw Invalid("The text boxes don't add up");
+        var result = new List<PageTextBoxes>(pages.Count);
+        for (var i = 0; i < pages.Count; i++)
+        {
+            var p = a.Pages[i];
+            if (p is null || p.N != pages[i] || p.Text is null || p.Items is null || !Point(p.Width) || !Point(p.Height))
+            {
+                throw Invalid($"Page {pages[i]} of the text boxes doesn't add up");
+            }
+
+            var items = new List<TextBox>(p.Items.Count);
+            var previousEnd = 0;
+            foreach (var t in p.Items)
+            {
+                if (t is not { At: { } at, End: { } end, X: { } x, Y: { } y, W: { } w, H: { } h } || at < previousEnd || end < at || end > p.Text.Length || !Point(x) || !Point(y) || !Point(w) || !Point(h))
+                {
+                    throw Invalid($"A box on page {pages[i]} of the text boxes doesn't add up");
+                }
+
+                items.Add(new TextBox(at, end, x, y, w, h));
+                previousEnd = end;
+            }
+
+            result.Add(new PageTextBoxes(p.N, p.Width, p.Height, p.Text, items));
+        }
+
+        return result;
+    }
+
+    private static bool Point(double v) => double.IsFinite(v) && v >= 0;
 }

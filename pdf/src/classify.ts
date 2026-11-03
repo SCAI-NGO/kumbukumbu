@@ -72,7 +72,7 @@ export function classify(page: PageMeasure): Classified {
   return { type, textCoverage: cover(text), imageCoverage, vectorCoverage, images: images.length, regions };
 }
 
-function clip(b: Box, width: number, height: number): Box | null {
+export function clip(b: Box, width: number, height: number): Box | null {
   const x0 = Math.max(0, b.x);
   const y0 = Math.max(0, b.y);
   const x1 = Math.min(width, b.x + b.w);

@@ -5,6 +5,8 @@ using Kumbu.Server.Attachments;
 using Kumbu.Server.Metrics;
 using Kumbu.Server.Tests.Api;
 using Kumbu.Server.Tests.Attachments;
+using Kumbu.Server.Tests.Vaults;
+using Kumbu.Server.Vaults;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -179,10 +181,159 @@ public sealed class AttachmentMetricsTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Turned_pictures_are_counted_by_command()
+    {
+        const string series = "kumbu_pictures_turned_total{command=\"img\"}";
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/sheet.png", FakePdfSidecar.SolidPng(640, 480));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png --rotate 90");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Contains("kumbu_pictures_turned_total{command=\"pdf\"}", after);
+    }
+
+    [Fact]
+    public async Task Frames_shown_are_counted()
+    {
+        const string series = "kumbu_img_frames_total";
+        const string refusals = "kumbu_img_refusals_total{reason=\"bad_frame\"}";
+        await using var host = Host(app, new FakePdfSidecar { FramesOf = _ => 3 });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/moving.gif", [.. "GIF89a"u8, 0x58, 0x02, 0x90, 0x01, 0, 0, 0]);
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif --frame 2");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif");
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif --frame 7");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(1, Scrape.Value(after, refusals) - Scrape.Value(before, refusals));
+    }
+
+    [Fact]
+    public async Task Turned_pages_count_for_pdf()
+    {
+        const string series = "kumbu_pictures_turned_total{command=\"pdf\"}";
+        await using var host = Host(app, new FakePdfSidecar { Analysis = _ => Paper() });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a paper lying on its side"));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var pdf = $"/{user.Vault}/Samples/paper.pdf";
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"pdf {pdf} 2 --images=all --rotate 90");
+        await ShAsync(host, key, $"pdf {pdf} 2 --images=all");
+        await ShAsync(host, key, $"pdf {pdf} 2 --rotate 90");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+    }
+
+    [Fact]
+    public async Task Regions_are_counted_by_outcome()
+    {
+        static string Series(string outcome) => $"kumbu_rg_regions_total{{outcome=\"{outcome}\"}}";
+        var sidecar = new FakePdfSidecar
+        {
+            // The long paper has a match on more pages than regions are asked for.
+            Analysis = pdf => FakePdfSidecar.Canned(System.Text.Encoding.ASCII.GetString(pdf.Span).Contains("long") ? 51 : 3),
+        };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a short paper"));
+        await user.CreateFileAsync("Samples/long.pdf", Pdf("a long paper"));
+        var vault = await VaultAsync(host, user);
+        foreach (var name in new[] { "paper.pdf", "long.pdf" })
+        {
+            var blobId = Convert.FromBase64String((await StateAsync(host, user, $"Samples/{name}")).BlobId);
+            await EventuallyAsync(async () => await host.Services.GetRequiredService<PdfAnalyses>().HeaderAsync(vault, blobId, Ct) is not null, "the analysis is stored");
+        }
+
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"rg --regions 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+        await ShAsync(host, key, $"rg --regions Page /{user.Vault}/Samples/long.pdf");
+        await ShAsync(host, key, $"rg 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+        sidecar.Down = true;
+        await ShAsync(host, key, $"rg --regions 'Page 2 ' /{user.Vault}/Samples/paper.pdf");
+
+        var after = await Scrape.TextAsync(app);
+        foreach (var outcome in new[] { "delivered", "limited", "unavailable" })
+        {
+            Assert.Equal(1, Scrape.Value(after, Series(outcome)) - Scrape.Value(before, Series(outcome)));
+        }
+    }
+
+    [Fact]
+    public async Task A_refused_rotate_has_its_own_reason()
+    {
+        const string series = "kumbu_img_refusals_total{reason=\"bad_rotate\"}";
+        const string unavailable = "kumbu_img_refusals_total{reason=\"unavailable\"}";
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/sheet.png", FakePdfSidecar.SolidPng(640, 480));
+        var key = await user.KeyAsync("metrics", KeyRight.Read);
+        var before = await Scrape.TextAsync(app);
+
+        await ShAsync(host, key, $"img /{user.Vault}/Samples/sheet.png --rotate 45");
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(0, Scrape.Value(after, unavailable) - Scrape.Value(before, unavailable));
+    }
+
+    [Fact]
+    public async Task A_frame_past_the_end_isnt_a_failed_render()
+    {
+        const string series = "kumbu_render_failures_total{kind=\"image\",reason=\"failed\"}";
+        await using var host = Host(app, new FakePdfSidecar { FramesOf = _ => 3 });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/clip.png", FakePdfSidecar.SolidPng(40, 30));
+        var pixels = new AttachmentPixels(
+            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
+            host.Services.GetRequiredService<VaultCatalog>(), host.Services.GetRequiredService<IPdfSidecar>(),
+            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var state = await StateAsync(host, user, "Samples/clip.png");
+        var path = VaultWorld.P($"/{user.Vault}/Samples/clip.png");
+        var before = await Scrape.TextAsync(app);
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() =>
+            pixels.ImageAsync(path, state, SizeStep.Small, null, 0, 7, Ct));
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(PixelsProblem.BadFrame, e.Problem);
+        Assert.Equal(0, Scrape.Value(after, series) - Scrape.Value(before, series));
+    }
+
+    [Fact]
+    public async Task A_bad_frame_has_its_own_reason()
+    {
+        const string series = "kumbu_img_refusals_total{reason=\"bad_frame\"}";
+        const string unavailable = "kumbu_img_refusals_total{reason=\"unavailable\"}";
+        var before = await Scrape.TextAsync(app);
+
+        KumbuMetrics.AttachmentUsed(new ImgRefused(ImgRefusal.BadFrame));
+
+        var after = await Scrape.TextAsync(app);
+        Assert.Equal(1, Scrape.Value(after, series) - Scrape.Value(before, series));
+        Assert.Equal(0, Scrape.Value(after, unavailable) - Scrape.Value(before, unavailable));
+    }
+
+    [Fact]
     public void A_request_the_client_got_wrong_is_no_render_failure()
     {
         Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_page", "x")));
         Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("bad_crop", "x")));
+        Assert.True(KumbuMetrics.IsRequestMistake(new SidecarException("no_such_frame", "x")));
         Assert.False(KumbuMetrics.IsRequestMistake(new SidecarException(SidecarException.Timeout, "x")));
         Assert.Equal(KumbuMetrics.FailReason.Invalid, KumbuMetrics.FailReasonOf(new SidecarException(SidecarException.Encrypted, "x")));
         Assert.Equal(KumbuMetrics.FailReason.Failed, KumbuMetrics.FailReasonOf(new SidecarException("other", "x")));

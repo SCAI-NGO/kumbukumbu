@@ -6,6 +6,7 @@
 
 import { parentPort } from "node:worker_threads";
 import { analyse } from "./analyse.js";
+import { textBoxes } from "./boxes.js";
 import { renderImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import type { Job, WorkerMessage } from "./pool.js";
@@ -20,11 +21,16 @@ async function run(job: Job): Promise<{ value: unknown; transfer: ArrayBuffer[] 
       return { value: await analyse(job.bytes, job.maxPages, (pages) => post({ type: "pages", pages })), transfer: [] };
     case "page":
     case "image": {
-      const r = job.kind === "page" ? await renderPage(job.bytes, job.page, job.target, job.crop) : await renderImage(job.bytes, job.target, job.crop);
+      const r =
+        job.kind === "page"
+          ? await renderPage(job.bytes, job.page, job.target, job.crop, job.rotate)
+          : await renderImage(job.bytes, job.target, job.crop, job.rotate, job.frame);
       // A copy in a buffer of its own: Skia's buffers cannot be transferred, and a Buffer may share one.
       const data = new Uint8Array(r.data);
       return { value: { ...r, data }, transfer: [data.buffer as ArrayBuffer] };
     }
+    case "boxes":
+      return { value: await textBoxes(job.bytes, job.pages), transfer: [] };
   }
 }
 

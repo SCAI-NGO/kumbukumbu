@@ -22,9 +22,9 @@ public class SemsearchPdfTests
     {
         public List<(string Path, int First, int Last)> TextRequests { get; } = [];
 
-        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new NotSupportedException();
 
-        public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct) => throw new NotSupportedException();
 
@@ -33,6 +33,8 @@ public class SemsearchPdfTests
             TextRequests.Add((path.Value, first, last));
             return Task.FromResult<IReadOnlyList<string>?>([.. Enumerable.Range(first, last - first + 1).Select(n => $"Methods\n\n  page {n} measures how {new string('x', 200)}")]);
         }
+
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
 
         public void Count(AttachmentUse use)
         {

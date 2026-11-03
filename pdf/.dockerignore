@@ -7,3 +7,6 @@ vitest.config.ts
 Dockerfile
 .dockerignore
 vitest.setup.ts
+eval/
+eval-dist/
+tsconfig.eval.json

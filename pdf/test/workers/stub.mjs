@@ -16,7 +16,7 @@ parentPort.once("message", async (job) => {
       // What renderPage answers, for a 1 × 1 page.
       parentPort.postMessage({
         type: "done",
-        value: { data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), mediaType: "image/png", width: 1, height: 1, pageWidth: 1, pageHeight: 1 },
+        value: { data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), mediaType: "image/png", width: 1, height: 1, pageWidth: 1, pageHeight: 1, rotate: 0 },
       });
       break;
     case "slow":

@@ -89,6 +89,24 @@ public sealed class ImgToolTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Frame_passes_through_to_the_sidecar()
+    {
+        var sidecar = new FakePdfSidecar { FramesOf = _ => 3 };
+        var (host, user, key, _) = await SetUpAsync(app, sidecar);
+        await using var _ = host;
+        await user.CreateFileAsync("Samples/moving.gif", [.. "GIF89a"u8, 0x58, 0x02, 0x90, 0x01, 0, 0, 0]);
+
+        var result = await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif --frame 2 --rotate 90");
+        var plain = await ShAsync(host, key, $"img /{user.Vault}/Samples/moving.gif");
+
+        Assert.False(result.IsError, string.Join(' ', result.Content.OfType<TextContentBlock>().Select(t => t.Text)));
+        Assert.Equal([2, null], sidecar.ImageFrames);
+        Assert.Equal([90, 0], sidecar.ImageRotations);
+        Assert.Contains(", frame 2 of 3: image (GIF), original 600×400 px", Assert.IsType<TextContentBlock>(result.Content[0]).Text);
+        Assert.Contains("An animated GIF of 3 frames, shown as a still: frame 1. --frame N shows another.", Assert.IsType<TextContentBlock>(plain.Content[0]).Text);
+    }
+
+    [Fact]
     public async Task With_the_sidecar_down_it_is_a_tool_error_that_says_unavailable()
     {
         var sidecar = new FakePdfSidecar { Down = true };

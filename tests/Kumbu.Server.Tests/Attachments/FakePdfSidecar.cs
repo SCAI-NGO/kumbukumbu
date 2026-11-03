@@ -30,6 +30,13 @@ public sealed class FakePdfSidecar : IPdfSidecar
     /// <summary>The size of each page in points, as displayed (A4 by default).</summary>
     public (double Width, double Height) PageSize { get; set; } = (595, 842);
 
+    /// <summary>The boxes returned for the pages asked; by default one box over "Page n text" on each.</summary>
+    public Func<IReadOnlyList<int>, IReadOnlyList<PageTextBoxes>> TextBoxes { get; set; } = pages =>
+        [.. pages.Select(n => new PageTextBoxes(n, 595, 842, $"Page {n} text", [new TextBox(0, $"Page {n} text".Length, 72, 100, 90, 11)]))];
+
+    /// <summary>The PDF each text-boxes request carried.</summary>
+    public List<byte[]> TextBoxPdfs { get; } = [];
+
     public int Analyses => Volatile.Read(ref _analyses);
 
     public int Renders => Volatile.Read(ref _renders);
@@ -37,6 +44,21 @@ public sealed class FakePdfSidecar : IPdfSidecar
     public List<(int Page, StepLimits Target, Crop? Crop)> PageRequests { get; } = [];
 
     public List<(StepLimits Target, Crop? Crop)> ImageRequests { get; } = [];
+
+    /// <summary>The turn each page request asked for, beside <see cref="PageRequests"/>.</summary>
+    public List<int> PageRotations { get; } = [];
+
+    /// <summary>The turn each image request asked for, beside <see cref="ImageRequests"/>.</summary>
+    public List<int> ImageRotations { get; } = [];
+
+    /// <summary>The frame each image request asked for (null for none), beside <see cref="ImageRequests"/>.</summary>
+    public List<int?> ImageFrames { get; } = [];
+
+    /// <summary>
+    /// The number of frames an image is answered with, given the frame asked (null: no count). A frame past a known
+    /// count is <c>no_such_frame</c>. Null: no image has frames.
+    /// </summary>
+    public Func<int?, int?>? FramesOf { get; set; }
 
     public async Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct)
     {
@@ -46,25 +68,36 @@ public sealed class FakePdfSidecar : IPdfSidecar
         return Analysis(pdf);
     }
 
-    public async Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct)
+    public async Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct)
     {
         Interlocked.Increment(ref _renders);
-        lock (PageRequests) PageRequests.Add((page, target, crop));
+        lock (PageRequests) { PageRequests.Add((page, target, crop)); PageRotations.Add(rotate); }
         await AnswerAsync(ct);
         var (w, h) = crop is null ? PageSize : (crop.Width, crop.Height);
+        if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w * 600 / 72, h * 600 / 72, target);
         return new Picture(SolidPng(width, height), "image/png", width, height, PageSize.Width, PageSize.Height);
     }
 
-    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct)
+    public async Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct)
     {
         Interlocked.Increment(ref _renders);
-        lock (ImageRequests) ImageRequests.Add((target, crop));
+        lock (ImageRequests) { ImageRequests.Add((target, crop)); ImageRotations.Add(rotate); ImageFrames.Add(frame); }
         await AnswerAsync(ct);
+        var frames = FramesOf?.Invoke(frame);
+        if (frame > frames) throw new SidecarException("no_such_frame", $"The image has {frames} frames.");
         var original = ImageHeader.Read(image.Span, out _) ?? (640, 480);
         var (w, h) = crop is null ? (original.Width, original.Height) : ((int)crop.Width, (int)crop.Height);
+        if (crop is null && Rotation.SwapsSides(rotate)) (w, h) = (h, w);
         var (width, height) = Fit(w, h, target);
-        return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height);
+        return new Picture(SolidPng(width, height), "image/png", width, height, original.Width, original.Height, Frames: frames);
+    }
+
+    public async Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct)
+    {
+        lock (TextBoxPdfs) TextBoxPdfs.Add(pdf.ToArray());
+        await AnswerAsync(ct);
+        return TextBoxes(pages);
     }
 
     private async Task AnswerAsync(CancellationToken ct)

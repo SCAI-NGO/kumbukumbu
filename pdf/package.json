@@ -12,14 +12,18 @@
     "build": "tsc -p .",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "tsc -p tsconfig.test.json && vitest run",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "eval:regions": "tsc -p tsconfig.eval.json && node eval-dist/eval/regions.js",
+    "eval:figures": "tsc -p tsconfig.eval.json && node eval-dist/eval/figures.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.13",
+    "omggif": "1.0.10",
     "pdfjs-dist": "6.4.299"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@types/omggif": "1.0.5",
     "pdf-lib": "^1.17.1",
     "typescript": "^5.9.3",
     "vitest": "^5.0.5"

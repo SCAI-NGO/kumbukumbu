@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createCanvas } from "@napi-rs/canvas";
+import { GifWriter } from "omggif";
 import {
   PDFArray,
   PDFDocument,
@@ -88,6 +89,23 @@ export const rotatedPage = () =>
     page.drawRectangle({ ...ROTATED_BOX, color: rgb(0.8, 0.2, 0.2) });
   });
 
+// The colours of cornersPage()'s squares, clockwise from the top left as displayed.
+export const CORNER_COLOURS = [
+  [255, 0, 0],
+  [0, 255, 0],
+  [0, 0, 255],
+  [255, 255, 0],
+] as const;
+export const CORNER_SIDE = 100;
+
+// A square in each corner, of CORNER_SIDE points, in the colours of CORNER_COLOURS.
+export const cornersPage = (size: [number, number] = [A4.width, A4.height]) =>
+  single((_, page) => {
+    const [w, h, s] = [size[0], size[1], CORNER_SIDE];
+    const at = [[0, h - s], [w - s, h - s], [w - s, 0], [0, 0]] as const;
+    at.forEach(([x, y], i) => page.drawRectangle({ x, y, width: s, height: s, color: rgb(...(CORNER_COLOURS[i]!.map((c) => c / 255) as [number, number, number])) }));
+  }, size);
+
 export const emptyPage = () => single(() => {});
 
 // The grid is one path of many subpaths, as generators often draw tables: its bounding box covers
@@ -129,6 +147,50 @@ export const cropBoxPage = () =>
   single((_, page) => {
     page.setCropBox(CROP_BOX.x, CROP_BOX.y, CROP_BOX.width, CROP_BOX.height);
     page.drawRectangle({ ...CROPPED_BOX, color: rgb(0.2, 0.6, 0.2) });
+  });
+
+// The text of turnedTextPage(), drawn upwards from TURNED_AT in Helvetica at TEXT_SIZE points.
+export const TEXT_SIZE = 12;
+export const TURNED_TEXT = "A turned axis title";
+export const TURNED_AT = { x: 300, y: 300 };
+
+export const turnedTextPage = () =>
+  single(async (doc, page) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText(TURNED_TEXT, { ...TURNED_AT, size: TEXT_SIZE, font, rotate: degrees(90) });
+  });
+
+// Horizontal text on a page of /Rotate 90, at ROTATED_TEXT_AT in its portrait MediaBox.
+export const ROTATED_TEXT = "Text on a sideways sheet";
+export const ROTATED_TEXT_AT = { x: 100, y: 600 };
+
+export const rotatedTextPage = () =>
+  single(async (doc, page) => {
+    page.setRotation(degrees(90));
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText(ROTATED_TEXT, { ...ROTATED_TEXT_AT, size: TEXT_SIZE, font });
+  });
+
+// Three lines on cropBoxPage()'s CropBox: one inside it, one across its left edge, one wholly above it.
+export const CROPPED_LINES = [
+  { text: "Inside the crop", x: 100, y: 400 },
+  { text: "Across the left edge", x: 20, y: 300 },
+  { text: "Wholly outside", x: 100, y: 700 },
+] as const;
+
+export const cropBoxTextPage = () =>
+  single(async (doc, page) => {
+    page.setCropBox(CROP_BOX.x, CROP_BOX.y, CROP_BOX.width, CROP_BOX.height);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (const line of CROPPED_LINES) page.drawText(line.text, { x: line.x, y: line.y, size: TEXT_SIZE, font });
+  });
+
+// A last line that ends in spaces, which the page's text loses to trimEnd.
+export const trailingSpacesPage = () =>
+  single(async (doc, page) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText("Item one   12", { x: 50, y: 800, size: TEXT_SIZE, font });
+    page.drawText("Total   ", { x: 50, y: 780, size: TEXT_SIZE, font });
   });
 
 // A whole-page image that declares 10,000 × 10,000 pixels in a few bytes of Flate: it would cost
@@ -185,3 +247,43 @@ export const photoPage = () =>
     const photo = await doc.embedPng(noiseCanvas(600, 850).toBuffer("image/png"));
     page.drawImage(photo, { x: 0, y: 0, width: A4.width, height: A4.height });
   });
+
+// One frame of gifOf(): its rectangle, its own palette (0xRRGGBB, a power of two of at least 2
+// entries) and its indices, row by row, or one index for the whole rectangle.
+export type GifFrame = {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+  palette: number[];
+  pixels: number[] | number;
+  disposal?: number;
+  transparent?: number;
+};
+
+// A GIF written by omggif's GifWriter, which keeps palettes, offsets, disposal and transparency as
+// given (GifEncoder quantises colours and has disposals of its own).
+export function gifOf(width: number, height: number, frames: GifFrame[]): Uint8Array {
+  const buf = new Uint8Array(1024 + frames.reduce((n, f) => n + 1024 + f.width * f.height * 2, 0));
+  const writer = new GifWriter(buf, width, height, { loop: 0 });
+  for (const f of frames) {
+    const pixels = typeof f.pixels === "number" ? new Array<number>(f.width * f.height).fill(f.pixels) : f.pixels;
+    writer.addFrame(f.x ?? 0, f.y ?? 0, f.width, f.height, pixels, { palette: f.palette, disposal: f.disposal, transparent: f.transparent });
+  }
+  return buf.slice(0, writer.end());
+}
+
+// A GIF of one frame written byte by byte, with a global palette of black and white, whose frame
+// rectangle may lie anywhere: its image data is a clear code and an end code, so the stream ends
+// early (omggif then warns, and leaves the rest of the frame at index 0, black).
+export function gifWithFrameRect(canvasW: number, canvasH: number, frameW: number, frameH: number, x = 0, y = 0): Uint8Array {
+  const u16 = (v: number) => [v & 0xff, v >> 8];
+  return new Uint8Array([
+    ...new TextEncoder().encode("GIF89a"),
+    ...u16(canvasW), ...u16(canvasH), 0x80, 0, 0, // global palette of 2 colours
+    0, 0, 0, 0xff, 0xff, 0xff,
+    0x2c, ...u16(x), ...u16(y), ...u16(frameW), ...u16(frameH), 0,
+    2, 1, 0x2c, 0, // minimum code size 2; one sub-block: clear (4), end (5) in 3-bit codes
+    0x3b,
+  ]);
+}

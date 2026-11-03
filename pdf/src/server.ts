@@ -6,6 +6,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import type { Analysis } from "./analyse.js";
+import type { PageBoxes } from "./boxes.js";
 import type { RenderedImage } from "./image.js";
 import { PdfError } from "./pdfjs.js";
 import { Pool, type Reservation } from "./pool.js";
@@ -14,6 +15,7 @@ import type { Crop, Target } from "./steps.js";
 
 export const MAX_BODY = 16 * 1024 * 1024;
 export const MAX_PAGES = 2000;
+export const MAX_BOX_PAGES = 50;
 export const RENDER_MS = 10_000;
 // An analysis gets 30 s plus 0.5 s per page, at most 20 min: pdf.js decodes a scan's image even to
 // measure the page (about 0.3 s each), and an ordinary scanned book must not time out for good.
@@ -26,6 +28,7 @@ const STATUS: Record<string, number> = {
   not_image: 400,
   too_large: 413,
   no_such_page: 422,
+  no_such_frame: 422,
   bad_crop: 422,
   encrypted: 422,
   busy: 503,
@@ -85,17 +88,33 @@ const ROUTES: Record<string, Route> = {
     };
   },
   "/render/page": (q, ms) => {
-    const [page, t, c] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target(q), crop(q)];
+    const [page, t, c, rotate] = [integer(q, "page", 1, Number.MAX_SAFE_INTEGER), target(q), crop(q), turn(q)];
     return async (body, slot) => {
-      const r = await slot.run<RenderedPage>({ kind: "page", bytes: body, page, target: t, crop: c }, ms.renderMs);
+      const r = await slot.run<RenderedPage>({ kind: "page", bytes: body, page, target: t, crop: c, rotate }, ms.renderMs);
       return (res) => image(res, r, { "X-Kumbu-Page-Width": r.pageWidth, "X-Kumbu-Page-Height": r.pageHeight });
     };
   },
   "/render/image": (q, ms) => {
-    const [t, c] = [target(q), crop(q)];
+    const [t, c, rotate] = [target(q), crop(q), turn(q)];
+    const frame = q.has("frame") ? integer(q, "frame", 1, 1_000_000) : undefined;
     return async (body, slot) => {
-      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c }, ms.renderMs);
-      return (res) => image(res, r, { "X-Kumbu-Original-Width": r.originalWidth, "X-Kumbu-Original-Height": r.originalHeight, "X-Kumbu-Transparent": r.transparent ? 1 : 0 });
+      const r = await slot.run<RenderedImage>({ kind: "image", bytes: body, target: t, crop: c, rotate, frame }, ms.renderMs);
+      return (res) =>
+        image(res, r, {
+          "X-Kumbu-Original-Width": r.originalWidth,
+          "X-Kumbu-Original-Height": r.originalHeight,
+          "X-Kumbu-Transparent": r.transparent ? 1 : 0,
+          // Like X-Kumbu-Rotate, the frame it composed lets the server tell an older sidecar.
+          ...(r.frame !== undefined ? { "X-Kumbu-Frame": r.frame } : {}),
+          ...(r.frames !== undefined ? { "X-Kumbu-Frames": r.frames } : {}),
+        });
+    };
+  },
+  "/text-boxes": (q, ms) => {
+    const pages = pageList(q, "pages", MAX_BOX_PAGES);
+    return async (body, slot) => {
+      const b = await slot.run<{ pages: PageBoxes[] }>({ kind: "boxes", bytes: body, pages }, ms.renderMs);
+      return (res) => json(res, 200, b);
     };
   },
 };
@@ -151,12 +170,29 @@ function integer(q: URLSearchParams, name: string, min: number, max: number): nu
   return v;
 }
 
+// Whole numbers as integer takes them, at most max, each above the one before.
+function pageList(q: URLSearchParams, name: string, max: number): number[] {
+  const parts = (q.get(name) ?? "").split(",");
+  const pages = parts.map((p) => (/^\d{1,16}$/.test(p) ? Number(p) : NaN));
+  const ok = parts.length <= max && pages.every((v, i) => v >= 1 && v <= Number.MAX_SAFE_INTEGER && (i === 0 || v > pages[i - 1]!));
+  if (!ok) throw bad(`${name} must be 1 to ${max} whole numbers, ascending and separated by commas.`);
+  return pages;
+}
+
 function target(q: URLSearchParams): Target {
   return {
     longEdge: integer(q, "longEdge", 1, 16_384),
     pixels: integer(q, "pixels", 1, 50_000_000),
     bytes: integer(q, "bytes", 1, MAX_BODY),
   };
+}
+
+// Clockwise degrees; absent is no turn.
+function turn(q: URLSearchParams): number {
+  const text = q.get("rotate");
+  if (text === null) return 0;
+  if (text !== "90" && text !== "180" && text !== "270") throw bad("rotate must be 90, 180 or 270.");
+  return Number(text);
 }
 
 function crop(q: URLSearchParams): Crop | undefined {
@@ -169,13 +205,15 @@ function crop(q: URLSearchParams): Crop | undefined {
   return { x: x!, y: y!, w: w!, h: h! };
 }
 
-function image(res: ServerResponse, r: { data: Uint8Array; mediaType: string; width: number; height: number }, extra: Record<string, number>) {
+// Says the turn it made, so the server can tell an older sidecar that ignored rotate.
+function image(res: ServerResponse, r: { data: Uint8Array; mediaType: string; width: number; height: number; rotate: number }, extra: Record<string, number>) {
   res.writeHead(200, {
     "Content-Type": r.mediaType,
     "Content-Length": r.data.length,
     "X-Kumbu-Width": r.width,
     "X-Kumbu-Height": r.height,
     ...extra,
+    ...(r.rotate !== 0 ? { "X-Kumbu-Rotate": r.rotate } : {}),
   });
   res.end(r.data);
 }

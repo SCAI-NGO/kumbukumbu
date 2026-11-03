@@ -70,6 +70,8 @@ public static class KumbuMetrics
         foreach (var mode in TextPageModes) PdfTextPagesRendered.WithLabels(Label(mode));
         foreach (var step in Enum.GetValues<SizeStep>()) ImgCalls.WithLabels(Label(step));
         foreach (var reason in Enum.GetValues<ImgRefusal>()) ImgRefusals.WithLabels(Label(reason));
+        foreach (var command in Enum.GetValues<TurnCommand>()) PicturesTurned.WithLabels(Label(command));
+        foreach (var outcome in Enum.GetValues<RegionOutcome>()) RgRegions.WithLabels(Label(outcome));
         foreach (var kind in Enum.GetValues<RenderKind>())
         {
             RenderDuration.WithLabels(Label(kind));
@@ -339,6 +341,15 @@ public static class KumbuMetrics
     private static readonly Counter ImgCrops = Prometheus.Metrics.CreateCounter(
         "kumbu_img_crops_total", "img calls that delivered a crop.");
 
+    private static readonly Counter PicturesTurned = Prometheus.Metrics.CreateCounter(
+        "kumbu_pictures_turned_total", "Pictures delivered turned by --rotate, by command.", new CounterConfiguration { LabelNames = ["command"] });
+
+    private static readonly Counter ImgFrames = Prometheus.Metrics.CreateCounter(
+        "kumbu_img_frames_total", "img calls that delivered a chosen frame of a GIF (--frame).");
+
+    private static readonly Counter RgRegions = Prometheus.Metrics.CreateCounter(
+        "kumbu_rg_regions_total", "PDFs with matches in rg --regions searches, by what came of their regions.", new CounterConfiguration { LabelNames = ["outcome"] });
+
     private static readonly Counter ImgRefusals = Prometheus.Metrics.CreateCounter(
         "kumbu_img_refusals_total", "img calls refused, by reason.", new CounterConfiguration { LabelNames = ["reason"] });
 
@@ -384,7 +395,7 @@ public static class KumbuMetrics
     public static void Rendered(RenderKind kind, TimeSpan elapsed) => RenderDuration.WithLabels(Label(kind)).Observe(elapsed.TotalSeconds);
 
     /// <summary>A page or crop the request got wrong: a refusal of the request, not a failure of the render.</summary>
-    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop";
+    public static bool IsRequestMistake(SidecarException e) => e.Code is "no_such_page" or "bad_crop" or "no_such_frame";
 
     public static void RenderFailed(RenderKind kind, FailReason reason) => RenderFailures.WithLabels(Label(kind), Label(reason)).Inc();
 
@@ -416,6 +427,15 @@ public static class KumbuMetrics
             case ImgRefused f:
                 ImgRefusals.WithLabels(Label(f.Reason)).Inc();
                 break;
+            case ImgFrameShown:
+                ImgFrames.Inc();
+                break;
+            case PictureTurned t:
+                PicturesTurned.WithLabels(Label(t.Command)).Inc();
+                break;
+            case RegionsAsked r:
+                RgRegions.WithLabels(Label(r.Outcome)).Inc();
+                break;
         }
     }
 
@@ -444,6 +464,17 @@ public static class KumbuMetrics
         ImgRefusal.TooLarge => "too_large",
         ImgRefusal.BadCrop => "bad_crop",
         ImgRefusal.BadSize => "bad_size",
+        ImgRefusal.BadRotate => "bad_rotate",
+        ImgRefusal.BadFrame => "bad_frame",
+        _ => "unavailable",
+    };
+
+    private static string Label(TurnCommand command) => command == TurnCommand.Img ? "img" : "pdf";
+
+    private static string Label(RegionOutcome outcome) => outcome switch
+    {
+        RegionOutcome.Delivered => "delivered",
+        RegionOutcome.Limited => "limited",
         _ => "unavailable",
     };
 
@@ -593,7 +624,10 @@ public static class KumbuMetrics
         Metric("kumbu_pdf_text_pages_rendered_total", ("via", textVia));
         Metric("kumbu_img_calls_total", ("step", Values<SizeStep>(Label)));
         Metric("kumbu_img_crops_total");
+        Metric("kumbu_img_frames_total");
         Metric("kumbu_img_refusals_total", ("reason", Values<ImgRefusal>(Label)));
+        Metric("kumbu_pictures_turned_total", ("command", Values<TurnCommand>(Label)));
+        Metric("kumbu_rg_regions_total", ("outcome", Values<RegionOutcome>(Label)));
         Metric("kumbu_render_duration_seconds", ("kind", kinds));
         Metric("kumbu_render_failures_total", ("kind", kinds), ("reason", failures));
         Metric("kumbu_image_delivered_bytes", ("kind", kinds));

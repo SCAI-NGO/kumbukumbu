@@ -18,27 +18,35 @@ public class ImgTests
     {
         public List<(VaultPath Path, SizeStep Step, Crop? Crop)> Requests { get; } = [];
 
+        public List<int> Rotations { get; } = [];
+
+        public List<int?> Frames { get; } = [];
+
+        public List<AttachmentUse> Used { get; } = [];
+
         /// <summary>The picture returned; null scales the original down to the step's long edge.</summary>
         public Func<SizeStep, Crop?, AttachmentState, Picture>? Answer { get; set; }
 
         public Exception? Fail { get; set; }
 
-        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, CancellationToken ct)
+        public Task<Picture> ImageAsync(VaultPath path, AttachmentState state, SizeStep step, Crop? crop, int rotate, int? frame, CancellationToken ct)
         {
             Requests.Add((path, step, crop));
+            Rotations.Add(rotate);
+            Frames.Add(frame);
             if (Fail is not null) throw Fail;
             return Task.FromResult(Answer?.Invoke(step, crop, state) ?? new Picture(Delivered, "image/png", 724, 1568, state.Width!.Value, state.Height!.Value));
         }
 
-        public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, CancellationToken ct) => throw new NotSupportedException();
+        public Task<Picture> PageAsync(VaultPath path, AttachmentState state, int page, SizeStep step, Crop? crop, int rotate, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<PdfAnalysis?> AnalysisAsync(VaultPath path, AttachmentState state, bool runIfPending, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<string>?> PageTextAsync(VaultPath path, AttachmentState state, int first, int last, CancellationToken ct) => throw new NotSupportedException();
 
-        public void Count(AttachmentUse use)
-        {
-        }
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(VaultPath path, AttachmentState state, IReadOnlyList<int> pages, CancellationToken ct) => throw new NotSupportedException();
+
+        public void Count(AttachmentUse use) => Used.Add(use);
     }
 
     private readonly InMemoryNoteStore _store = new(("/Work/plan.md", "a note\n"));
@@ -68,6 +76,8 @@ public class ImgTests
     }
 
     private static byte[] Png(int size) => [.. PngSignature, .. new byte[size - PngSignature.Length]];
+
+    private static byte[] Jpeg() => [0xFF, 0xD8, 0xFF, 0xE0, .. new byte[996]];
 
     private static string Text(ShellResult result) => Assert.IsType<TextPart>(result.Parts![0]).Text;
 
@@ -288,6 +298,307 @@ public class ImgTests
         Assert.Contains("'help pdf'", help);
         Assert.Contains("img /Work/Screens/shot.png --crop", help);
         Assert.Contains("img ", (await Run("help attachments")).Output);
+    }
+
+    private const string TurnedImage = "With --rotate 90, --crop counts from the top left of this turned image, in its pixels.";
+
+    [Fact]
+    public async Task Rotate_goes_to_the_pixels()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+
+        var result = await Run("img /Work/Scans/sheet.jpg --rotate 270");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(270, Assert.Single(_pixels.Rotations));
+        Assert.Contains(new PictureTurned(TurnCommand.Img), _pixels.Used);
+    }
+
+    [Fact]
+    public async Task The_last_rotate_wins()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+
+        var result = await Run("img /Work/Scans/sheet.jpg --rotate 90 --rotate 180");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(180, Assert.Single(_pixels.Rotations));
+    }
+
+    [Theory]
+    [InlineData("--rotate 90 --size large --crop 0,0,300,200")]
+    [InlineData("--crop 0,0,300,200 --rotate 90 --size large")]
+    [InlineData("--size large --crop 0,0,300,200 --rotate=90")]
+    public async Task Rotate_goes_with_size_and_crop_in_any_order(string options)
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+
+        var result = await Run($"img /Work/Scans/sheet.jpg {options}");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal((P("/Work/Scans/sheet.jpg"), SizeStep.Large, new Crop(0, 0, 300, 200)), Assert.Single(_pixels.Requests));
+        Assert.Equal(90, Assert.Single(_pixels.Rotations));
+    }
+
+    [Theory]
+    [InlineData("45")]
+    [InlineData("0")]
+    [InlineData("-90")]
+    public async Task A_bad_rotate_is_refused_with_its_sentence(string angle)
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+
+        var result = await Run($"img /Work/Scans/sheet.jpg --rotate={angle}");
+
+        Assert.Equal(ShellResult.Error($"img: --rotate turns clockwise by 90, 180 or 270 degrees, not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadRotate), Assert.Single(_pixels.Used));
+        Assert.Empty(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task A_bad_rotate_is_refused_before_the_path_is_opened()
+    {
+        var result = await Run("img /Work/Scans/nothing.jpg --rotate 45");
+
+        Assert.Equal("img: --rotate turns clockwise by 90, 180 or 270 degrees, not '45' (leave it out for no turn)", result.Output);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadRotate), Assert.Single(_pixels.Used));
+    }
+
+    [Fact]
+    public async Task The_text_block_names_the_turn()
+    {
+        var version = await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+        _pixels.Answer = (_, _, _) => new Picture(Delivered, "image/png", 894, 1341, 3000, 2000);
+
+        var lines = Text(await Run("img /Work/Scans/sheet.jpg --rotate 90")).Split('\n');
+
+        Assert.Equal(
+            [
+                $"/Work/Scans/sheet.jpg (version {version}): image (JPEG), original 3000×2000 px, turned 90° clockwise to 2000×3000 px; medium: 894×1341 px PNG, {AttachmentText.Size(4)}",
+                Reduced(45),
+                TurnedImage,
+                Dropped,
+            ],
+            lines);
+    }
+
+    [Fact]
+    public async Task A_half_turn_keeps_the_sizes()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+        _pixels.Answer = (_, _, _) => new Picture(Delivered, "image/png", 1341, 894, 3000, 2000);
+
+        var lines = Text(await Run("img /Work/Scans/sheet.jpg --rotate 180")).Split('\n');
+
+        Assert.Contains("original 3000×2000 px, turned 180° clockwise to 3000×2000 px; medium: 1341×894 px PNG", lines[0]);
+        Assert.Equal(Reduced(45), lines[1]);
+        Assert.Equal("With --rotate 180, --crop counts from the top left of this turned image, in its pixels.", lines[2]);
+    }
+
+    [Fact]
+    public async Task A_crop_says_it_is_of_the_turned_image()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+        _pixels.Answer = (_, _, _) => new Picture(Delivered, "image/png", 300, 200, 3000, 2000);
+
+        var text = Text(await Run("img /Work/Scans/sheet.jpg --rotate 90 --crop 0,0,300,200"));
+
+        Assert.Contains("turned 90° clockwise to 2000×3000 px; crop 0,0,300,200 of the turned image; medium: 300×200 px PNG", text);
+        Assert.Contains(TurnedImage, text);
+    }
+
+    [Fact]
+    public async Task A_crop_outside_the_turned_image_is_refused_without_a_round_trip()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (2000, 3000));
+
+        var result = await Run("img /Work/Scans/sheet.jpg --rotate 90 --crop 0,2500,800,600");
+
+        Assert.Equal(ShellResult.Error("img: the crop 0,2500,800,600 lies outside the image as turned by --rotate 90 (3000×2000 px)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Empty(_pixels.Requests);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadCrop), Assert.Single(_pixels.Used));
+    }
+
+    [Fact]
+    public async Task A_crop_inside_the_turned_image_passes_though_outside_the_stored_one()
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (2000, 3000));
+
+        var result = await Run("img /Work/Scans/sheet.jpg --rotate 90 --crop 2500,0,400,400");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Single(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task Without_rotate_the_text_block_is_as_it_was()
+    {
+        var version = await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+        _pixels.Answer = (_, _, _) => new Picture(Delivered, "image/png", 300, 200, 3000, 2000);
+
+        var text = Text(await Run("img /Work/Scans/sheet.jpg --crop 0,0,300,200"));
+
+        Assert.Equal($"/Work/Scans/sheet.jpg (version {version}): image (JPEG), original 3000×2000 px; crop 0,0,300,200; medium: 300×200 px PNG, {AttachmentText.Size(4)}\n{Dropped}", text);
+        Assert.DoesNotContain("turned", text);
+        Assert.DoesNotContain("With --rotate", text);
+        Assert.Equal(0, Assert.Single(_pixels.Rotations));
+        Assert.DoesNotContain(_pixels.Used, u => u is PictureTurned);
+    }
+
+    [Fact]
+    public async Task The_help_names_rotate()
+    {
+        var help = (await Run("help img")).Output;
+
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]\n", help);
+        Assert.Contains("  --rotate D        turn the picture clockwise by 90, 180 or 270 degrees, on top of the camera's rotation,", help);
+        Assert.Contains("for a sheet lying on its side. With it, --crop counts in the turned picture, from its", help);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
+    }
+
+    private static byte[] Gif() => [.. "GIF89a"u8.ToArray(), .. new byte[100]];
+
+    private static Picture Still(int? frames) => new(Delivered, "image/png", 600, 400, 600, 400, Frames: frames);
+
+    private const string Animated3 = "An animated GIF of 3 frames, shown as a still: frame 1. --frame N shows another.";
+
+    [Fact]
+    public async Task A_plain_gif_of_three_frames_says_so()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var lines = Text(await Run("img /Work/Clips/animated.gif")).Split('\n');
+
+        Assert.Equal([Animated3, Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_plain_gif_of_one_frame_has_no_note()
+    {
+        await Upload("/Work/Clips/still.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(1);
+
+        var lines = Text(await Run("img /Work/Clips/still.gif")).Split('\n');
+
+        Assert.Equal([Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_plain_gif_of_unknown_count_says_todays_sentence()
+    {
+        await Upload("/Work/Clips/old.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(null);
+
+        var lines = Text(await Run("img /Work/Clips/old.gif")).Split('\n');
+
+        Assert.Equal(["A GIF is shown as a still: if it is animated, only its first frame.", Dropped], lines[1..]);
+    }
+
+    [Fact]
+    public async Task A_frame_goes_to_the_pixels()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var result = await Run("img /Work/Clips/animated.gif --frame 2");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(2, Assert.Single(_pixels.Frames));
+        Assert.Contains(_pixels.Used, u => u is ImgCalled);
+        Assert.Contains(_pixels.Used, u => u is ImgFrameShown);
+        _pixels.Used.Clear();
+        await Run("img /Work/Clips/animated.gif");
+        Assert.DoesNotContain(_pixels.Used, u => u is ImgFrameShown);
+        Assert.Null(_pixels.Frames[^1]);
+    }
+
+    [Fact]
+    public async Task The_head_names_the_frame_of_the_count()
+    {
+        var version = await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var text = Text(await Run("img /Work/Clips/animated.gif --frame 2"));
+
+        Assert.Equal($"/Work/Clips/animated.gif (version {version}), frame 2 of 3: image (GIF), original 600×400 px; medium: 600×400 px PNG, 4 B\n{Dropped}", text);
+    }
+
+    [Fact]
+    public async Task The_head_names_the_frame_with_the_count_unknown()
+    {
+        var version = await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(null);
+
+        var text = Text(await Run("img /Work/Clips/animated.gif --frame 2"));
+
+        Assert.StartsWith($"/Work/Clips/animated.gif (version {version}), frame 2: image (GIF), ", text);
+        Assert.DoesNotContain("A GIF is shown", text);
+    }
+
+    [Theory]
+    [InlineData("1-3")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("2.5")]
+    [InlineData("1000001")]
+    public async Task A_bad_frame_is_refused_with_its_sentence(string frame)
+    {
+        var result = await Run($"img /Work/Clips/nothing.gif --frame={frame}");
+
+        Assert.Equal(ShellResult.Error($"img: --frame is one frame, counting from 1, not '{frame}'") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+        Assert.Empty(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task A_frame_of_anything_but_a_gif_is_refused()
+    {
+        await Upload("/Work/Screens/shot.png", Png(1000), (1440, 3120));
+
+        var result = await Run("img /Work/Screens/shot.png --frame 2");
+
+        Assert.Equal(ShellResult.Error("img: --frame is for GIFs; /Work/Screens/shot.png is a PNG") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+        Assert.Empty(_pixels.Requests);
+    }
+
+    [Fact]
+    public async Task A_frame_past_the_end_says_so()
+    {
+        await Upload("/Work/Clips/moving.gif", Gif(), (600, 400));
+        _pixels.Fail = new PixelsUnavailableException("/Work/Clips/moving.gif has no frame 7; img without --frame says how many it has", PixelsProblem.BadFrame);
+
+        var result = await Run("img /Work/Clips/moving.gif --frame 7");
+
+        Assert.Equal(ShellResult.Error("img: /Work/Clips/moving.gif has no frame 7; img without --frame says how many it has") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(new ImgRefused(ImgRefusal.BadFrame), Assert.Single(_pixels.Used));
+    }
+
+    [Fact]
+    public async Task Frame_goes_with_rotate_crop_and_size()
+    {
+        await Upload("/Work/Clips/animated.gif", Gif(), (600, 400));
+        _pixels.Answer = (_, _, _) => Still(3);
+
+        var result = await Run("img /Work/Clips/animated.gif --size large --rotate 90 --frame 3 --crop 0,0,300,200");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal((P("/Work/Clips/animated.gif"), SizeStep.Large, new Crop(0, 0, 300, 200)), Assert.Single(_pixels.Requests));
+        Assert.Equal(90, Assert.Single(_pixels.Rotations));
+        Assert.Equal(3, Assert.Single(_pixels.Frames));
+        Assert.Contains(", frame 3 of 3: ", Text(result));
+    }
+
+    [Fact]
+    public async Task The_help_names_frame()
+    {
+        var help = (await Run("help img")).Output;
+
+        Assert.StartsWith("img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]\n", help);
+        Assert.Contains("  --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img", help);
+        Assert.Contains("A GIF is shown as a still, its first frame unless --frame says otherwise.", help);
+        Assert.Equal("img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]", new Kumbu.Core.Sh.Commands.Img(_store, _pixels).Usage);
     }
 
     [Fact]

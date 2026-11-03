@@ -128,6 +128,34 @@ public sealed class PdfToolTests(KumbuAppFactory app)
     }
 
     [Fact]
+    public async Task Regions_work_through_mcp_with_the_callers_credential()
+    {
+        var sidecar = new FakePdfSidecar { Analysis = _ => Paper() };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var other = await RestClient.NewAsync(host);
+        var mine = Pdf("a paper of mine to search");
+        await user.CreateFileAsync("Samples/paper.pdf", mine);
+        await other.CreateFileAsync("Samples/paper.pdf", Pdf("someone else's paper"));
+        foreach (var owner in new[] { user, other })
+        {
+            var vault = await VaultAsync(host, owner);
+            var blobId = Convert.FromBase64String((await StateAsync(host, owner, "Samples/paper.pdf")).BlobId);
+            await EventuallyAsync(async () => await host.Services.GetRequiredService<PdfAnalyses>().HeaderAsync(vault, blobId, Ct) is not null, "the analysis is stored");
+        }
+
+        var key = await user.KeyAsync("pdf", KeyRight.Read);
+        var path = $"/{user.Vault}/Samples/paper.pdf";
+
+        var found = await ShAsync(host, key, "rg --regions 'Page 2' /");
+
+        Assert.False(found.IsError, Text(found.Content[0]));
+        // The fake's box 72,100,90,11, grown by 3.3.
+        Assert.Equal($"{path}:p2:crop=68,96,98,19: Page 2 text", Text(Assert.Single(found.Content)));
+        Assert.Equal(mine, Assert.Single(sidecar.TextBoxPdfs));
+    }
+
+    [Fact]
     public async Task A_crop_reaches_the_sidecar_with_the_same_numbers()
     {
         var sidecar = new FakePdfSidecar { Analysis = _ => Paper() };
@@ -143,5 +171,25 @@ public sealed class PdfToolTests(KumbuAppFactory app)
         Assert.Equal(2, result.Content.Count);
         Assert.Contains("page 2 of 3 (mixed): page 595×842 pt; crop 72,300,451,260; large: ", Text(result.Content[0]));
         Assert.Equal((2, SizeSteps.Of(SizeStep.Large), (Crop?)new Crop(72, 300, 451, 260)), Assert.Single(sidecar.PageRequests));
+    }
+
+    [Fact]
+    public async Task Rotate_passes_through_to_the_sidecar()
+    {
+        var sidecar = new FakePdfSidecar { Analysis = _ => Paper() };
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("Samples/paper.pdf", Pdf("a paper lying on its side"));
+        var key = await user.KeyAsync("pdf", KeyRight.Read);
+        var path = $"/{user.Vault}/Samples/paper.pdf";
+
+        var result = await ShAsync(host, key, $"pdf {path} 2 --images=all --rotate 90");
+
+        Assert.False(result.IsError, Text(result.Content[0]));
+        Assert.Equal(2, result.Content.Count);
+        Assert.Contains("page 2 of 3 (mixed): page 595×842 pt, turned 90° clockwise to 842×595 pt; medium: 1303×920 px PNG, ", Text(result.Content[0]));
+        Assert.Contains("\nWith --rotate 90, --crop counts from the top left of this turned page, in its points.\n", Text(result.Content[0]));
+        Assert.Equal(FakePdfSidecar.SolidPng(1303, 920), Assert.IsType<ImageContentBlock>(result.Content[1]).DecodedData.ToArray());
+        Assert.Equal(90, Assert.Single(sidecar.PageRotations));
     }
 }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+using System.Globalization;
 using Kumbu.Core.Attachments;
 using Kumbu.Core.Notes;
 using Kumbu.Core.Paths;
@@ -8,16 +9,16 @@ namespace Kumbu.Core.Sh.Commands;
 
 public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
 {
-    private static readonly Option[] Spec = [new(null, "size", TakesValue: true), new(null, "crop", TakesValue: true)];
+    private static readonly Option[] Spec = [new(null, "size", TakesValue: true), new(null, "rotate", TakesValue: true), new(null, "frame", TakesValue: true), new(null, "crop", TakesValue: true)];
 
     public string Name => "img";
 
-    public string Usage => "img <path> [--size S] [--crop x,y,w,h]";
+    public string Usage => "img <path> [--size S] [--rotate D] [--crop x,y,w,h] [--frame N]";
 
     public string Summary => "show an image attachment to the model";
 
     public string Help => $"""
-        img <path> [--size small|medium|large] [--crop x,y,w,h]
+        img <path> [--size small|medium|large] [--rotate 90|180|270] [--crop x,y,w,h] [--frame N]
           Show an image attachment (png, jpg, gif, webp): the result is a line of text naming the file,
           its version, the original size and what was delivered, followed by the image itself. The image
           is scaled down to the size step, never enlarged, and sent as PNG, or as JPEG if the PNG would
@@ -27,8 +28,14 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
           --crop x,y,w,h    look at a part at full resolution instead: x and y from the top left, all four in
                             pixels of the original image (as 'cat' reports its size, rotation by the camera
                             applied). The part is then scaled to the step like a whole image.
+          --rotate D        turn the picture clockwise by 90, 180 or 270 degrees, on top of the camera's rotation,
+                            for a sheet lying on its side. With it, --crop counts in the turned picture, from its
+                            top left.
+          --frame N         a GIF only: frame N, from 1, as it looks when played. One frame a call; a plain img
+                            says how many there are.
           An image reduced to under 75 % of its width says so: small text and digits may be misread then,
-          so look at them in a crop before quoting them. A GIF is shown as a still, its first frame only.
+          so look at them in a crop before quoting them.
+          A GIF is shown as a still, its first frame unless --frame says otherwise.
           Transparent areas are shown on white.
           One call delivers one image, and img stands alone, not in a pipeline.
           A client may drop images; if none follows the text, say so to the user rather than guess.
@@ -55,6 +62,23 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
             return Refused(ImgRefusal.BadSize, $"img: --size is small, medium or large, not '{size}' (see 'help img')");
         }
 
+        var rotate = 0;
+        if (options.Value("rotate") is { } turn && !Rotation.TryParse(turn, out rotate))
+        {
+            return Refused(ImgRefusal.BadRotate, $"img: --rotate turns clockwise by 90, 180 or 270 degrees, not '{turn}' (leave it out for no turn)");
+        }
+
+        int? frame = null;
+        if (options.Value("frame") is { } frameText)
+        {
+            if (!int.TryParse(frameText, NumberStyles.None, CultureInfo.InvariantCulture, out var n) || n is < 1 or > 1_000_000)
+            {
+                return Refused(ImgRefusal.BadFrame, $"img: --frame is one frame, counting from 1, not '{frameText}'");
+            }
+
+            frame = n;
+        }
+
         Crop? crop = null;
         if (options.Value("crop") is { } cropText)
         {
@@ -71,17 +95,26 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
             return Refused(ImgRefusal.Pdf, $"img: {path.Value} is a PDF; look at its pages with pdf {SectionLookup.Quote(path)} <pages> --images (see 'help pdf')");
         }
 
-        // The pixels would answer the same, but need a round trip to find out.
-        if (crop is not null && state is { Width: { } width, Height: { } height }
-            && (crop.X + crop.Width > width + 1e-6 || crop.Y + crop.Height > height + 1e-6))
+        if (frame is not null && state.MediaType != "image/gif")
         {
-            return Refused(ImgRefusal.BadCrop, $"img: the crop {crop} lies outside the image ({width}×{height} px)");
+            return Refused(ImgRefusal.BadFrame, $"img: --frame is for GIFs; {path.Value} is a {AttachmentText.FormatName(state)}");
+        }
+
+        // The pixels would answer the same, but need a round trip to find out.
+        if (crop is not null && state is { Width: { } stored, Height: { } storedHeight })
+        {
+            var (width, height) = Rotation.SwapsSides(rotate) ? (storedHeight, stored) : (stored, storedHeight);
+            if (crop.X + crop.Width > width + 1e-6 || crop.Y + crop.Height > height + 1e-6)
+            {
+                var image = rotate == 0 ? "the image" : $"the image as turned by --rotate {rotate}";
+                return Refused(ImgRefusal.BadCrop, $"img: the crop {crop} lies outside {image} ({width}×{height} px)");
+            }
         }
 
         Picture picture;
         try
         {
-            picture = await pixels.ImageAsync(path, state, step, crop, ct);
+            picture = await pixels.ImageAsync(path, state, step, crop, rotate, frame, ct);
         }
         catch (PixelsUnavailableException e)
         {
@@ -89,16 +122,20 @@ public sealed class Img(INoteReader notes, IAttachmentPixels pixels) : ICommand
             {
                 PixelsProblem.TooLarge => ImgRefusal.TooLarge,
                 PixelsProblem.BadCrop => ImgRefusal.BadCrop,
+                PixelsProblem.BadFrame => ImgRefusal.BadFrame,
                 _ => ImgRefusal.Unavailable,
             }));
             return ShellResult.Error($"img: {e.Message}") with { Kind = e.Kind };
         }
 
         pixels.Count(new ImgCalled(step, crop is not null));
+        if (rotate != 0) pixels.Count(new PictureTurned(TurnCommand.Img));
+        if (frame is not null) pixels.Count(new ImgFrameShown());
 
-        var head = $"{path.Value} (version {state.Version})";
+        var which = frame is null ? "" : picture.Frames is { } count ? $", frame {frame} of {count}" : $", frame {frame}";
+        var head = $"{path.Value} (version {state.Version}){which}";
         var original = $"image ({AttachmentText.FormatName(state)}), original {picture.OriginalWidth:0}×{picture.OriginalHeight:0} px";
-        var text = PictureText.ForImage(head, original, step, crop, picture, gif: state.MediaType == "image/gif");
+        var text = PictureText.ForImage(head, original, step, crop, picture, gif: state.MediaType == "image/gif", rotate, frame);
         return ShellResult.Ok(text) with { Parts = [new TextPart(text), new ImagePart(picture.Data, picture.MediaType)] };
     }
 

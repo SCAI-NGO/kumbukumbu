@@ -43,8 +43,8 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         await user.CreateFileAsync("shot.png", FakePdfSidecar.SolidPng(1440, 3120));
         var pixels = Pixels(host, user);
 
-        var page = await pixels.PageAsync(At(user, "paper.pdf"), await StateAsync(host, user, "paper.pdf"), 4, SizeStep.Large, new Crop(72, 300, 451, 260), Ct);
-        var image = await pixels.ImageAsync(At(user, "shot.png"), await StateAsync(host, user, "shot.png"), SizeStep.Small, null, Ct);
+        var page = await pixels.PageAsync(At(user, "paper.pdf"), await StateAsync(host, user, "paper.pdf"), 4, SizeStep.Large, new Crop(72, 300, 451, 260), 0, Ct);
+        var image = await pixels.ImageAsync(At(user, "shot.png"), await StateAsync(host, user, "shot.png"), SizeStep.Small, null, 0, null, Ct);
 
         Assert.Equal((4, SizeSteps.Of(SizeStep.Large), new Crop(72, 300, 451, 260)), Assert.Single(sidecar.PageRequests));
         Assert.Equal(("image/png", 595d, 842d), (page.MediaType, page.OriginalWidth, page.OriginalHeight));
@@ -65,7 +65,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var blobId = await store.PutBlobAsync(user.Vault, bytes, Ct);
         var state = new AttachmentState("image/png", bytes.Length, 10_000, 10_000, Kumbu.Core.Notes.VersionToken.Of(bytes), blobId);
 
-        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => Pixels(host, user).ImageAsync(At(user, "huge.png"), state, SizeStep.Medium, null, Ct));
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => Pixels(host, user).ImageAsync(At(user, "huge.png"), state, SizeStep.Medium, null, 0, null, Ct));
 
         Assert.Equal($"/{user.Vault}/huge.png is too large to look at (100 megapixels; the limit is 50)", e.Message);
         Assert.Equal(0, sidecar.Renders);
@@ -81,11 +81,62 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         var (pdf, png) = (await StateAsync(host, user, "paper.pdf"), await StateAsync(host, user, "shot.png"));
         var pixels = Pixels(host, user);
 
-        var page = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), pdf, 1, SizeStep.Medium, null, Ct));
-        var image = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.ImageAsync(At(user, "shot.png"), png, SizeStep.Medium, null, Ct));
+        var page = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), pdf, 1, SizeStep.Medium, null, 0, Ct));
+        var image = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.ImageAsync(At(user, "shot.png"), png, SizeStep.Medium, null, 0, null, Ct));
 
         Assert.Equal("PDF rendering is unavailable right now; try again later", page.Message);
         Assert.Equal("image rendering is unavailable right now; try again later", image.Message);
+    }
+
+    [Fact]
+    public async Task Text_boxes_read_the_blob_with_the_requests_credential()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        var bytes = Pdf("boxes of a paper");
+        await user.CreateFileAsync("paper.pdf", bytes);
+        var state = await StateAsync(host, user, "paper.pdf");
+        sidecar.TextBoxes = pages => [.. pages.Select(n => new PageTextBoxes(n, 595, 842, "Hi", [new TextBox(0, 2, 10, 20, 30, 11)]))];
+
+        var boxes = await Pixels(host, user).TextBoxesAsync(At(user, "paper.pdf"), state, [2, 3], Ct);
+
+        Assert.Equal(bytes, Assert.Single(sidecar.TextBoxPdfs));
+        Assert.Equal([2, 3], boxes.Select(b => b.Number));
+        Assert.Equal(new TextBox(0, 2, 10, 20, 30, 11), boxes[0].Items[0]);
+    }
+
+    [Fact]
+    public async Task Text_boxes_from_a_stopped_sidecar_are_unavailable()
+    {
+        await using var host = Host(app, new FakePdfSidecar { Down = true });
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("nobody boxes this"));
+        var state = await StateAsync(host, user, "paper.pdf");
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => Pixels(host, user).TextBoxesAsync(At(user, "paper.pdf"), state, [1], Ct));
+
+        Assert.Equal(("PDF rendering is unavailable right now; try again later", PixelsProblem.Unavailable), (e.Message, e.Problem));
+    }
+
+    [Fact]
+    public async Task Text_boxes_store_nothing()
+    {
+        var sidecar = new FakePdfSidecar();
+        await using var host = Host(app, sidecar);
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("a paper whose analysis stays as it is"));
+        var state = await StateAsync(host, user, "paper.pdf");
+        var pixels = Pixels(host, user);
+        await EventuallyAsync(async () => await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct) is not null, "the analysis is stored");
+        var before = System.Text.Json.JsonSerializer.Serialize(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct));
+        var textBefore = await pixels.PageTextAsync(At(user, "paper.pdf"), state, 1, 3, Ct);
+
+        await pixels.TextBoxesAsync(At(user, "paper.pdf"), state, [1, 2], Ct);
+
+        Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(await pixels.AnalysisAsync(At(user, "paper.pdf"), state, false, Ct)));
+        Assert.Equal(textBefore, await pixels.PageTextAsync(At(user, "paper.pdf"), state, 1, 3, Ct));
+        Assert.Equal(1, sidecar.Analyses);
     }
 
     [Fact]
@@ -104,7 +155,7 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         async Task<string> Says(string code, Crop? crop = null)
         {
             sidecar.Code = code;
-            return (await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), state, 40, SizeStep.Medium, crop, Ct))).Message;
+            return (await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), state, 40, SizeStep.Medium, crop, 0, Ct))).Message;
         }
 
         Assert.Equal($"/{user.Vault}/paper.pdf has no page 40", await Says("no_such_page"));
@@ -115,15 +166,86 @@ public sealed class AttachmentPixelsTests(KumbuAppFactory app)
         Assert.Equal($"/{user.Vault}/paper.pdf couldn't be rendered", await Says("failed"));
     }
 
+    [Fact]
+    public async Task A_picture_not_turned_as_asked_couldnt_be_rendered()
+    {
+        var sidecar = new RefusingSidecar { Code = "failed", Message = "The image isn't turned as asked" };
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("paper.pdf", Pdf("a short paper"));
+        var state = await StateAsync(host, user, "paper.pdf");
+        var pixels = new AttachmentPixels(
+            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
+            host.Services.GetRequiredService<VaultCatalog>(), sidecar, host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+
+        var e = await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.PageAsync(At(user, "paper.pdf"), state, 1, SizeStep.Medium, null, 90, Ct));
+
+        Assert.Equal($"/{user.Vault}/paper.pdf couldn't be rendered", e.Message);
+    }
+
+    [Fact]
+    public async Task A_frame_past_the_end_says_so()
+    {
+        var (e, path) = await RefusedFrameAsync("no_such_frame", 7);
+
+        Assert.Equal($"{path} has no frame 7; img without --frame says how many it has", e.Message);
+        Assert.Equal(PixelsProblem.BadFrame, e.Problem);
+    }
+
+    [Fact]
+    public async Task Too_long_with_a_frame_says_finding_it()
+    {
+        var (e, path) = await RefusedFrameAsync("timeout", 7);
+
+        Assert.Equal($"finding frame 7 of {path} took too long", e.Message);
+        Assert.Equal(PixelsProblem.Failed, e.Problem);
+    }
+
+    [Fact]
+    public async Task Too_long_without_a_frame_is_as_it_was()
+    {
+        var (e, path) = await RefusedFrameAsync("timeout", null);
+
+        Assert.Equal($"rendering {path} took too long; try a smaller --size or a --crop", e.Message);
+    }
+
+    [Fact]
+    public async Task A_GIF_too_large_for_a_frame_says_so()
+    {
+        var (e, path) = await RefusedFrameAsync("too_large", 7);
+
+        Assert.Equal($"{path} is too large for --frame (at most 4 megapixels and 10,000 frames); img without --frame shows its first frame", e.Message);
+        Assert.Equal(PixelsProblem.TooLarge, e.Problem);
+    }
+
+    private async Task<(PixelsUnavailableException Refusal, VaultPath Path)> RefusedFrameAsync(string code, int? frame)
+    {
+        await using var host = Host(app, new FakePdfSidecar());
+        var user = await RestClient.NewAsync(host);
+        await user.CreateFileAsync("clip.png", FakePdfSidecar.SolidPng(20, 20));
+        var state = await StateAsync(host, user, "clip.png");
+        var pixels = new AttachmentPixels(
+            new EncryptedNoteStore(host.Services.GetRequiredService<VaultCatalog>(), new UserCredential(user.User.Id, user.UserKey)),
+            host.Services.GetRequiredService<VaultCatalog>(), new RefusingSidecar { Code = code },
+            host.Services.GetRequiredService<PdfAnalyses>(), host.Services.GetRequiredService<PdfAnalysisRunner>());
+        var path = At(user, "clip.png");
+
+        return (await Assert.ThrowsAsync<PixelsUnavailableException>(() => pixels.ImageAsync(path, state, SizeStep.Medium, null, 0, frame, Ct)), path);
+    }
+
     private sealed class RefusingSidecar : IPdfSidecar
     {
         public string Code { get; set; } = "failed";
 
-        public Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct) => throw new SidecarException(Code, "no");
+        public string Message { get; set; } = "no";
 
-        public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, CancellationToken ct) => throw new SidecarException(Code, "no");
+        public Task<SidecarAnalysis> AnalyseAsync(ReadOnlyMemory<byte> pdf, int maxPages, CancellationToken ct) => throw new SidecarException(Code, Message);
 
-        public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, CancellationToken ct) => throw new SidecarException(Code, "no");
+        public Task<Picture> RenderPageAsync(ReadOnlyMemory<byte> pdf, int page, StepLimits target, Crop? crop, int rotate, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<Picture> RenderImageAsync(ReadOnlyMemory<byte> image, StepLimits target, Crop? crop, int rotate, int? frame, CancellationToken ct) => throw new SidecarException(Code, Message);
+
+        public Task<IReadOnlyList<PageTextBoxes>> TextBoxesAsync(ReadOnlyMemory<byte> pdf, IReadOnlyList<int> pages, CancellationToken ct) => throw new SidecarException(Code, Message);
     }
 
     [Fact]
