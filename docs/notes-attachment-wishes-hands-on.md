@@ -167,11 +167,32 @@ Meanwhile, with the sidecar stopped, `img … --rotate 90` and `img … --frame 
 
 After a few calls, `kumbu_pictures_turned_total` counted `img` and `pdf`, `kumbu_img_frames_total` the frame shown, `kumbu_rg_regions_total{outcome="delivered"}` the search, and `kumbu_img_refusals_total` `bad_rotate` and `bad_frame`, each under its own label, not as `unavailable`.
 
+### The memory of the composing path
+
+The sidecar's image couldn't be built here (its build stage gets `SELF_SIGNED_CERT_IN_CHAIN` from the npm registry through the sandbox's proxy), so the built `pdf/dist` ran with its `node_modules` mounted in the Dockerfile's base image (`node:26-bookworm-slim`, by digest), under `compose.yaml`'s limits and hardening: `--memory=1536m --memory-swap=1536m --cpus=1.5`, read-only, no capabilities. The host has cgroup v1, so the peak is `memory.max_usage_in_bytes` (there is no `memory.peak`), with samples of `memory.usage_in_bytes` every half second.
+
+The GIFs: 16 MiB each, a few full-canvas frames with disposal 3, then as many 1 × 1 frames as fit, about 600,000 frames a file; at 4000 × 4000 (16 MP), and likewise at 12, 8 and 4 MP. The load: two `POST /render/image?longEdge=2576&pixels=3700000&bytes=1048576&frame=…` at once, 16 more 16 MiB bodies queued behind them, repeated for a minute. The last frame can't be composed within the worker's 10 s on 1.5 CPUs (every answer 504; peak 1,520,140,288 B, not killed), so the runs below ask for frame 250,000, which one request alone composes in 5.5 s:
+
+| Cap (`MAX_FRAME_PIXELS`) | GIFs | Answers before the end | `OOMKilled RestartCount` | Highest usage |
+|---|---|---|---|---|
+| 16 MP | 4000 × 4000 | 504, 504, 504, 504, 200, 504, 504, 504, 504 | `true 0` (exit 137) | 1,548,881,920 B |
+| 12 MP | 3464 × 3464 | 200, 504, 200, 504 | `true 0` (exit 137) | 1,572,208,640 B |
+| 8 MP | 2828 × 2828 | 200, 200, 200, 200 | `true 0` (exit 137) | 1,573,146,624 B |
+| 4 MP | 2000 × 2000 | 200, 200, 200, 200 | `true 0` (exit 137) | 1,608,798,208 B |
+| 16 MP, 1004 frames in 1.3 MB | 4000 × 4000 | 54 × 200 | `false 0` | 1,105,334,272 B (peak) |
+| 16 MP, no `--frame` (today's path) | 4000 × 4000 | 108 × 200 | `false 0` | 1,277,190,144 B (peak) |
+
+So a lower cap doesn't hold: the sidecar is killed at 4 MP as at 16. The memory goes with the number of frames, not with the canvas. Measured in a single process, `omggif`'s reader alone, which lists every frame when it is made, takes the process from 60 to 183 MiB for 650,000 frames; composing frame 250,000 of a 4 MP GIF peaks at 405 MiB (frame 5: 314 MiB), of which the canvas is 16 MB. Two workers like that, 18 bodies of 16 MiB in the main thread and the memory of workers ended on their time limit come to more than 1536 MiB once jobs reach the canvas. The cap stays at 16 MP, as lowering it would cost GIFs and buy nothing; see "Not fixed".
+
 ## Found in hands-on
 
 Fixed on the branch:
 
 - **`help img` named `--frame` before `--crop`** (`img <path> [--size S] [--rotate D] [--frame N] [--crop x,y,w,h]`, and the same in the help's first line), where the design (§1.5) and `docs/concept.md` have `[--crop x,y,w,h] [--frame N]`, the order of the help's paragraphs. Now as the design has it, checked again on the stack.
+
+Not fixed, for a decision:
+
+- **A GIF of many tiny frames can get the sidecar killed through `--frame`** (above). Spec §2.2's estimate counts the canvas and not the frames, and its remedy, a lower cap, doesn't help. What would: a limit on the number of frames, found by walking the GIF's blocks before `omggif` lists them (no object per frame); or a smaller heap for image jobs than the worker's 384 MB; or fewer bodies held in the queue. Each changes the design, so it is left to the maintainer. Until then the sidecar restarts (`restart: unless-stopped`), and what dies with it are the jobs under way. Today's path held with the same files (`false 0`, 1,277,190,144 B).
 
 Not reached by hand, covered by tests: the "older analysis" notice of §3.4 (it needs a PDF analysed by an older analyser) and a GIF whose frame count is unknown (one Skia draws and `omggif` refuses).
 
