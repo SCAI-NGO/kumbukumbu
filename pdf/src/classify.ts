@@ -46,8 +46,6 @@ export const MAX_CLUSTERED = 20_000;
 export const LABEL_CHARS = 30;
 /** A labelled box takes in labels, legend swatches and pieces of its chart that lie this close to it. */
 export const LABEL_GAP_PT = 40;
-/** A longer text this close to a labelled box, and within its reach across, is a row of labels run together. */
-export const ROW_GAP_PT = 3;
 /** Above this many text boxes, or as many path boxes that may be a chart's marks, a page's regions gain no labelled box. */
 export const MAX_LABELLED = 5_000;
 
@@ -197,17 +195,15 @@ type Grown = { box: Box; pieces: Chart[] };
 // follows its first, and an axis leads to its tick labels), and the drawing regions of other charts
 // when the two reach each other or a mark joins them (a grouped bar chart falls apart into one
 // region per group). Never what lies inside another region or closer to another chart, and never
-// so that the box takes in a long text's centre (unless the long text touches it: a row of labels
-// run together) or overlaps another chart's image, or a drawing too
+// so that the box takes in a long text's centre or overlaps another chart's image, or a drawing too
 // far from what brought it in. A full page's image (a scan's OCR text isn't its label) only stands
 // in the way.
 function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
   const order = found.map((_, i) => i).sort((a, b) => byPosition(found[a]!.box, found[b]!.box) || found[a]!.kind.localeCompare(found[b]!.kind));
   const charts: Chart[] = order.map((i) => ({ members: [i], box: found[i]!.box, was: found[i]!.box, grows: found[i]!.grows, drawing: found[i]!.kind === "drawing", alive: true }));
   const label = (t: Box) => t.chars !== undefined && t.chars < LABEL_CHARS;
-  const long = text.filter((t) => !label(t));
-  const candidates = [...text.filter(label), ...long, ...marks].sort(byPosition);
-  const blockers = long.map((t) => ({ t, p: centre(t) }));
+  const candidates = [...text.filter(label), ...marks].sort(byPosition);
+  const blockers = text.filter((t) => !label(t)).map(centre);
   const taken = new Uint8Array(candidates.length);
   const reach = (chart: Chart, other: Chart) => Math.min(...other.members.map((m) => gap(chart.box, found[m]!.box)));
   // Between charts, nearness is measured to their own regions.
@@ -219,7 +215,7 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
   // The chart's box grown to next, with the drawings of other charts it would then overlap taken
   // in, each within LABEL_GAP_PT of what brought it in and no nearer a third chart, as one taken
   // in directly; null if it would overlap anything else or reach a blocker's centre.
-  const grow = (chart: Chart, next: Box, by: Box[], self?: Box): Grown | null => {
+  const grow = (chart: Chart, next: Box, by: Box[]): Grown | null => {
     const pieces: Chart[] = [];
     const near = [...by];
     for (;;) {
@@ -235,7 +231,7 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
       next = hit.reduce((b, o) => union(b, o.box), next);
     }
     const now = [chart.box, ...pieces.map((p) => p.box)];
-    return blockers.some(({ t, p }) => t !== self && holds(next, p) && !now.some((b) => holds(b, p))) ? null : { box: next, pieces };
+    return blockers.some((p) => holds(next, p) && !now.some((b) => holds(b, p))) ? null : { box: next, pieces };
   };
   const accept = (chart: Chart, grown: Grown) => {
     chart.box = grown.box;
@@ -250,11 +246,9 @@ function withLabels(found: Found[], text: Box[], marks: Box[]): (Box | null)[] {
     const d = gap(chart.was, c);
     const mid = centre(c);
     if (d > LABEL_GAP_PT) return false;
-    // A long text only as a row of labels: touching the box, and across no further than labels reach.
-    if (c.chars !== undefined && !label(c) && (d > ROW_GAP_PT || !inside(c, chart.was, LABEL_GAP_PT))) return false;
     if (found.some((f, i) => !chart.members.includes(i) && holds(f.box, mid))) return false;
     if (others(chart).some((o) => gap(o.was, c) < d)) return false;
-    const grown = grow(chart, union(chart.box, c), [c], c);
+    const grown = grow(chart, union(chart.box, c), [c]);
     if (!grown) return false;
     accept(chart, grown);
     taken[k] = 1;
@@ -314,7 +308,6 @@ function lines(boxes: Box[], width: number, height: number): Box[] {
 const byPosition = (a: Box, b: Box) => a.y - b.y || a.x - b.x || a.w - b.w || a.h - b.h || (a.chars ?? -1) - (b.chars ?? -1);
 const centre = (b: Box) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
 const holds = (b: Box, p: { x: number; y: number }) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
-const inside = (b: Box, of: Box, by: number) => b.x >= of.x - by && b.y >= of.y - by && b.x + b.w <= of.x + of.w + by && b.y + b.h <= of.y + of.h + by;
 const overlaps = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 function gap(a: Box, b: Box): number {

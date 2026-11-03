@@ -2,7 +2,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { analyse } from "../src/analyse.js";
-import { type Box, LABEL_GAP_PT, type PageMeasure, ROW_GAP_PT, type Region, classify } from "../src/classify.js";
+import { type Box, LABEL_GAP_PT, type PageMeasure, type Region, classify } from "../src/classify.js";
 import { A4, CHART_BARS, chartPage, logoPage, photoPage, scanPage, tablePage, textPage, whiteBackgroundPage } from "./fixtures.js";
 
 const W = 600;
@@ -132,20 +132,6 @@ describe("regions with labels", () => {
     // The label is within reach, but the box taking it in would hold the caption's centre.
     const c = classify(page({ pathBoxes: [chart], textBoxes: [text(100, 404, 300, 10, 60), text(60, 405, 30, 10, 6), text(150, 186, 60, 10, 8)] }));
     expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 186, w: 300, h: 214 } }]);
-  });
-
-  it("a row of labels run together into one long text joins when it touches the box", () => {
-    // Category labels that pdf.js gives as one item of 34 characters, 2 pt under the bars, and an axis title under them.
-    const c = classify(page({ pathBoxes: [chart], textBoxes: [text(120, 402, 200, 9, 34), text(150, 413, 40, 9, 6)] }));
-    expect(c.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200, labelled: { x: 100, y: 200, w: 300, h: 222 } }]);
-  });
-
-  it("a long text further than ROW_GAP_PT, or wider than the box's reach, stays a blocker", () => {
-    const further = classify(page({ pathBoxes: [chart], textBoxes: [text(120, 401 + ROW_GAP_PT, 200, 9, 34), text(150, 412 + ROW_GAP_PT, 40, 9, 6)] }));
-    expect(further.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200 }]);
-    const G = LABEL_GAP_PT;
-    const wider = classify(page({ pathBoxes: [chart], textBoxes: [text(90 - G, 402, 320 + 2 * G, 9, 80), text(150, 413, 40, 9, 6)] }));
-    expect(wider.regions).toEqual([{ kind: "drawing", x: 100, y: 200, w: 300, h: 200 }]);
   });
 
   it("a label closer to another figure stays with that figure", () => {
