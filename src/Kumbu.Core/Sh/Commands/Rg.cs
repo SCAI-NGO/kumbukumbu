@@ -205,7 +205,12 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                     continue;
                 }
 
-                if (content is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
+                if (content is null)
+                {
+                    if (await HasNothingToSearchAsync(path, ct)) continue;
+                    return ShellResult.Error($"rg: {path.Value}: No such file or directory");
+                }
+
                 below = [new Note(path, content)];
             }
 
@@ -223,7 +228,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
         var matched = new List<VaultPath>();
         var lines = NoteLines(search, options, searched, matched);
-        var pictured = new List<(VaultPath Path, int Pages)>();
+        var pictured = new List<(VaultPath Path, int Scans, int WithImages)>();
         var notices = new List<string>();
         if (tags.Count == 0) await AddPdfLinesAsync(search, options, documents, lines, pictured, notices, ct);
         var result = ShellResult.Ok(Lines.Join(lines));
@@ -237,16 +242,28 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
     /// <summary>
     /// For a search that found nothing in the text: the PDFs in its scope with pages that are pictures, whose text is
-    /// missing or may be wrong, so that the empty answer isn't taken for proof that the words aren't there.
+    /// missing or may be wrong, and with images on pages of text, whose words no text layer holds, so that the empty
+    /// answer isn't taken for proof that the words aren't there.
     /// </summary>
-    private static string? PictureHint(List<(VaultPath Path, int Pages)> pictured)
+    private static string? PictureHint(List<(VaultPath Path, int Scans, int WithImages)> pictured)
     {
         if (pictured.Count == 0) return null;
 
         var sorted = pictured.OrderBy(p => p.Path.Value, TextOrder.Default).ToList();
-        var shown = string.Join(", ", sorted.Take(HintedPaths).Select(p => $"{p.Path.Value} ({p.Pages} page{(p.Pages == 1 ? "" : "s")})"));
+        var shown = string.Join(", ", sorted.Take(HintedPaths).Select(p => $"{p.Path.Value} ({PictureCounts(p.Scans, p.WithImages)})"));
         var more = sorted.Count > HintedPaths ? $" and {sorted.Count - HintedPaths} more" : "";
-        return $"no match in the text, but pages that are scans or photos may hold it, as their text is missing or may be wrong: {shown}{more} (pdf info shows which; pdf <path> --images shows them)";
+        return $"no match in the text, but pictures may hold it, on pages that are scans or photos, whose text is missing or may be wrong, or in images on pages with text: {shown}{more} (pdf info shows which; pdf <path> --images shows them)";
+    }
+
+    private static string PictureCounts(int scans, int withImages)
+    {
+        var pages = (int count) => $"{count} page{(count == 1 ? "" : "s")}";
+        return (scans, withImages) switch
+        {
+            (0, _) => $"{pages(withImages)} with images",
+            (_, 0) => $"{pages(scans)} of scans or photos",
+            _ => $"{pages(scans)} of scans or photos, {withImages} with images",
+        };
     }
 
     private const int HintedPaths = 5;
@@ -315,7 +332,7 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
     /// until its text is read, then printed with the regions of one text-boxes request; why some have none goes to
     /// <paramref name="notices"/>.
     /// </summary>
-    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, List<(VaultPath Path, int Pages)> pictured, List<string> notices, CancellationToken ct)
+    private async Task AddPdfLinesAsync(Search search, Options options, Dictionary<VaultPath, AttachmentState> documents, List<string> output, List<(VaultPath Path, int Scans, int WithImages)> pictured, List<string> notices, CancellationToken ct)
     {
         var lineNumbers = options.Has("line-number") && !options.Has("no-line-number");
         var size = output.Sum(l => l.Length + 1);
@@ -333,8 +350,9 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
                 var analysis = await pixels!.AnalysisAsync(path, state, runIfPending: false, ct);
                 if (analysis is null) continue;
 
-                var pictures = analysis.Pages.Count(p => p.Type == PageType.Image || (p.Type == PageType.Mixed && p.Chars == 0));
-                if (pictures > 0) pictured.Add((path, pictures));
+                var scans = analysis.Pages.Count(p => p.Type == PageType.Image || (p.Type == PageType.Mixed && p.Chars == 0));
+                var withImages = analysis.Pages.Count(p => p.Type == PageType.Mixed && p.Chars > 0 && p.Images > 0);
+                if (scans + withImages > 0) pictured.Add((path, scans, withImages));
 
                 for (var first = 1; first <= analysis.AnalysedPages && size <= OutputLimit.MaxChars && search.Remaining(total) != 0; first += PagesAtATime)
                 {
@@ -578,8 +596,8 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
             var below = await notes.ListNotesUnderAsync(path, ct);
             if (below.Count == 0 && !path.IsRoot)
             {
-                if (await notes.ReadAsync(path, ct) is null) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
-                below = [path];
+                if (await notes.ReadAsync(path, ct) is not null) below = [path];
+                else if (!await HasNothingToSearchAsync(path, ct)) return ShellResult.Error($"rg: {path.Value}: No such file or directory");
             }
 
             found.UnionWith(below.Select(p => p.Value));
@@ -587,6 +605,10 @@ public sealed class Rg(INoteReader notes, IAttachmentPixels? pixels = null, Writ
 
         return ShellResult.Ok(Lines.Join(found.Order(TextOrder.Default)));
     }
+
+    /// <summary>A vault without notes, or a folder of attachments: there, with nothing for rg, unlike a path that isn't.</summary>
+    private async Task<bool> HasNothingToSearchAsync(VaultPath path, CancellationToken ct) =>
+        (path.Segments.Count == 1 && (await notes.ListVaultsAsync(ct)).Contains(path.Segments[0])) || (await StoreAttachments.UnderAsync(notes, path, ct)).Count > 0;
 
     private static bool TryCount(
         Options options, string name, int? fallback, out int? value, [NotNullWhen(false)] out ShellResult? error)

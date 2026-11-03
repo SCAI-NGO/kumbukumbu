@@ -249,14 +249,90 @@ public class RgPdfTests
             new PdfPage(i + 1, 595, 842, 0, t, t == PageType.Mixed ? 0 : 100, 0.3, 0.9, 0, 1, []))]);
     }
 
+    private const string PictureHintStart = "no match in the text, but pictures may hold it, on pages that are scans or photos, whose text is missing or may be wrong, or in images on pages with text: ";
+    private const string PictureHintEnd = " (pdf info shows which; pdf <path> --images shows them)";
+
     [Fact]
     public async Task Nothing_found_in_a_pdf_with_scans_is_not_taken_for_proof()
     {
         await Scanned("/V/scan.pdf", PageType.Image, PageType.Mixed, PageType.Text);
 
-        Assert.Equal(
-            "no match in the text, but pages that are scans or photos may hold it, as their text is missing or may be wrong: /V/scan.pdf (2 pages) (pdf info shows which; pdf <path> --images shows them)",
-            (await Run("rg zzz /V/scan.pdf")).Output);
+        Assert.Equal($"{PictureHintStart}/V/scan.pdf (2 pages of scans or photos){PictureHintEnd}", (await Run("rg zzz /V/scan.pdf")).Output);
+    }
+
+    /// <summary>A PDF whose pages have text beside images, as in a report with charts.</summary>
+    private async Task Report(string path, int pages)
+    {
+        await Upload(path, pages, _ => "text");
+        _pixels.Analyses[path] = new PdfAnalysis("a", pages, pages, null, null, [.. Enumerable.Range(1, pages).Select(i =>
+            new PdfPage(i, 595, 842, 0, PageType.Mixed, 400, 0.3, 0.4, 0, 2, []))]);
+    }
+
+    [Fact]
+    public async Task Images_on_pages_with_text_are_named_too()
+    {
+        await Report("/V/report.pdf", 3);
+
+        Assert.Equal($"{PictureHintStart}/V/report.pdf (3 pages with images){PictureHintEnd}", (await Run("rg zzz /V/report.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task Scans_and_images_are_counted_apart()
+    {
+        await Upload("/V/both.pdf", 3, _ => "text");
+        _pixels.Analyses["/V/both.pdf"] = new PdfAnalysis("a", 3, 3, null, null, [
+            new PdfPage(1, 595, 842, 0, PageType.Image, 0, 0, 0.9, 0, 1, []),
+            new PdfPage(2, 595, 842, 0, PageType.Mixed, 400, 0.3, 0.4, 0, 1, []),
+            new PdfPage(3, 595, 842, 0, PageType.Mixed, 400, 0.3, 0.4, 0, 1, []),
+        ]);
+
+        Assert.Equal($"{PictureHintStart}/V/both.pdf (1 page of scans or photos, 2 with images){PictureHintEnd}", (await Run("rg zzz /V/both.pdf")).Output);
+    }
+
+    [Fact]
+    public async Task A_mixed_page_without_images_gets_no_hint()
+    {
+        await Upload("/V/drawn.pdf", 1, _ => "text");
+        _pixels.Analyses["/V/drawn.pdf"] = new PdfAnalysis("a", 1, 1, null, null, [new PdfPage(1, 595, 842, 0, PageType.Mixed, 400, 0.3, 0, 0.4, 0, [])]);
+
+        Assert.Equal("", (await Run("rg zzz /V/drawn.pdf")).Output);
+    }
+
+    [Theory]
+    [InlineData("rg --files /Leer")]
+    [InlineData("rg zzz /Leer")]
+    public async Task A_vault_without_notes_is_empty_not_missing(string line)
+    {
+        _store.AddVault("Leer");
+
+        var result = await Run(line);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("", result.Output);
+    }
+
+    [Theory]
+    [InlineData("rg --files /V/pdfs")]
+    public async Task A_folder_of_attachments_only_lists_no_notes(string line)
+    {
+        await Paper("/V/pdfs/paper.pdf");
+
+        var result = await Run(line);
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal("", result.Output);
+    }
+
+    [Theory]
+    [InlineData("rg --files /Nirgends")]
+    [InlineData("rg --files /V/nope")]
+    [InlineData("rg zzz /Nirgends")]
+    public async Task What_isnt_there_stays_an_error(string line)
+    {
+        var result = await Run(line);
+
+        Assert.True(result.IsError);
+        Assert.Contains("No such file or directory", result.Output);
     }
 
     [Fact]
