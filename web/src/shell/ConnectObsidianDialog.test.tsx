@@ -35,6 +35,7 @@ const device = {
 /** What GET /api/keys answers: her keys, or a status to fail with. */
 let keys: (typeof device)[] | number = [];
 let revoked: string[] = [];
+let keyReads = 0;
 
 function api() {
   codes = 0;
@@ -44,8 +45,12 @@ function api() {
   gate = null;
   skew = 0;
   revoked = [];
+  keyReads = 0;
   return fakeApi({
-    "GET /api/keys": () => (typeof keys === "number" ? json(keys, { error: "Something went wrong." }) : json(200, keys)),
+    "GET /api/keys": () => {
+      keyReads++;
+      return typeof keys === "number" ? json(keys, { error: "Something went wrong." }) : json(200, keys);
+    },
     "DELETE /api/keys/*": (r) => {
       const id = new URL(r.url).pathname.split("/").at(-1)!;
       revoked.push(id);
@@ -256,6 +261,8 @@ describe("Connect Obsidian", () => {
     api();
     const { dialog } = await openDialog();
     await within(dialog).findByText("K7QM-4XDA");
+    await waitFor(() => expect(keyReads).toBe(1));
+    await act(async () => {});
 
     expect(dialog).not.toHaveTextContent("Already connected");
     expect(dialog).not.toHaveTextContent("Revoke one only if");
@@ -288,6 +295,9 @@ describe("Connect Obsidian", () => {
     const { dialog } = await openDialog();
 
     expect(await within(dialog).findByText("K7QM-4XDA")).toBeInTheDocument();
+    await waitFor(() => expect(keyReads).toBe(1));
+    await act(async () => {});
     expect(dialog).not.toHaveTextContent("Already connected");
+    expect(within(dialog).getByText("K7QM-4XDA")).toBeInTheDocument();
   });
 });
