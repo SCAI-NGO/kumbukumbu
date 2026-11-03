@@ -709,6 +709,49 @@ public sealed class SyncSocketTests(KumbuAppFactory app) : IAsyncDisposable
         }
     }
 
+    /// <summary>Two quick renames whose calls reach the hub in the other order: each frame names the vault as the
+    /// connection holds it when the frame goes out, so a tab on either old name lands on the latest.</summary>
+    [Fact]
+    public async Task Renames_told_out_of_order_both_name_the_latest()
+    {
+        var (alice, _, vaultId, _) = await RenamableAsync();
+        using var tab = await SyncSockets.OpenAsync(Api, alice);
+        await HeldAsync(vaultId, 1);
+        var catalog = Api.Services.GetRequiredService<Kumbu.Server.Vaults.VaultCatalog>();
+        await catalog.RenameVaultAsync(alice.User.Id, alice.UserKey, catalog.Current(vaultId)!, "Garten", Ct);
+        await catalog.RenameVaultAsync(alice.User.Id, alice.UserKey, catalog.Current(vaultId)!, "Beete", Ct);
+
+        Hub.VaultRenamed(alice.User.Id, vaultId, "Garten");
+        Hub.VaultRenamed(alice.User.Id, vaultId, "Gartenarbeit");
+
+        Assert.Equal([Renamed("Beete", "Garten"), Renamed("Beete", "Gartenarbeit"), Changed("Beete")], await SyncSockets.DrainAsync(tab, TimeSpan.FromSeconds(1.5)));
+    }
+
+    /// <summary>Without the debounce the hint is queued at once, right behind the frame: it still goes out second.</summary>
+    [Fact]
+    public async Task The_renamed_frame_goes_out_ahead_of_an_undelayed_hint()
+    {
+        var (alice, _, vaultId, key) = await RenamableAsync();
+        Hub.HintDebounce = TimeSpan.Zero;
+        try
+        {
+            using var tab = await SyncSockets.OpenAsync(Api, alice);
+            using var device = await SyncSockets.OpenAsync(Api, alice, key);
+            await HeldAsync(vaultId, 2);
+
+            await RenameToGartenAsync(alice);
+
+            foreach (var socket in new[] { tab, device })
+            {
+                Assert.Equal([Renamed("Garten", "Gartenarbeit"), Changed("Garten")], await SyncSockets.DrainAsync(socket, TimeSpan.FromSeconds(1)));
+            }
+        }
+        finally
+        {
+            Hub.HintDebounce = SyncHub.Debounce;
+        }
+    }
+
     [Fact]
     public async Task A_member_gets_no_renamed_frame()
     {

@@ -240,6 +240,21 @@ describe("the sync socket", () => {
     expect(useEditor.getState()).toMatchObject({ activeVault: "Garten", currentPath: "/Garten/plan.md", recentPaths: ["/Garten/plan.md"] });
   });
 
+  it("ignores a frame that names no move", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["tree", "Gartenarbeit"], {});
+    useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md" });
+    server([{ name: "Gartenarbeit" }]);
+    const { router } = mount(queryClient, undefined, "/notes/Gartenarbeit/plan.md");
+    await waitFor(() => expect(FakeSocket.all).toHaveLength(1));
+    last().open();
+
+    last().frame({ type: "renamed", vault: "Gartenarbeit", from: "Gartenarbeit" });
+
+    expect(router.state.historyAction).toBe("POP");
+    expect(queryClient.getQueryData(["tree", "Gartenarbeit"])).toBeDefined();
+  });
+
   it("ignores a frame with no from", async () => {
     useEditor.setState({ activeVault: "Gartenarbeit", currentPath: "/Gartenarbeit/plan.md", recentPaths: ["/Gartenarbeit/plan.md"] });
     const router = await tabOn("Gartenarbeit/plan.md");

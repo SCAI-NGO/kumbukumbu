@@ -259,15 +259,15 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
     /// and her API keys' and devices' sockets alike, name it as the catalog shows it from now on, and are told, so that
     /// her tabs ask for the vault list again and take a new ticket. The name is read under each connection's gate when
     /// it is applied: of two quick renames, the later apply has the latest name, whichever call comes last. Members keep
-    /// their alias and are told nothing. With <paramref name="names"/>, known only when the rename's outcome is, each
-    /// is sent <c>{"type":"renamed","vault":"…","from":"…"}</c> ahead of the hint, so that a second tab on the old name
-    /// follows (polish spec §2).</summary>
-    public void VaultRenamed(string ownerId, string vaultId, (string From, string To)? names = null)
+    /// their alias and are told nothing. With <paramref name="from"/>, the old name, known only when the rename's outcome
+    /// is, each is sent <c>{"type":"renamed","vault":"…","from":"…"}</c> ahead of the hint, so that a second tab on the
+    /// old name follows (polish design §2).</summary>
+    public void VaultRenamed(string ownerId, string vaultId, string? from = null)
     {
         foreach (var connection in _connections.Keys.Where(c => c.Grant.Subject.User == ownerId && c.Has(vaultId)))
         {
             connection.RenameOwned(vaultId, Shown);
-            if (names is (var from, var to)) connection.Renamed(vaultId, JsonSerializer.Serialize(new { type = "renamed", vault = to, from }));
+            if (from is not null) connection.Renamed(vaultId, from);
             connection.Hint(vaultId);
         }
     }
@@ -526,8 +526,8 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         /// <summary>Presence, apart from the hints: the last state per note, which a newer one replaces before it is sent.</summary>
         private readonly ConcurrentDictionary<(string Vault, string Path), string> _presence = new();
 
-        /// <summary>The renamed frames, in their order, by the vault's id.</summary>
-        private readonly ConcurrentQueue<(string Vault, string Message)> _renamed = new();
+        /// <summary>The renames to tell, in their order: the vault's id and its old name.</summary>
+        private readonly ConcurrentQueue<(string Vault, string From)> _renamed = new();
 
         /// <summary>Wakes the send loop for any of them; one pending wake is enough, since the loop takes all there is.</summary>
         private readonly Channel<byte> _wake = Channel.CreateBounded<byte>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
@@ -579,10 +579,10 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
         }
 
         /// <summary>Apart from the hints, which coalesce: each rename is its own frame, and only for the owner's hold.</summary>
-        public void Renamed(string vaultId, string message)
+        public void Renamed(string vaultId, string from)
         {
             if (!_vaults.TryGetValue(vaultId, out var vault) || vault.Membership is not null) return;
-            _renamed.Enqueue((vaultId, message));
+            _renamed.Enqueue((vaultId, from));
             _wake.Writer.TryWrite(0);
         }
 
@@ -685,17 +685,29 @@ public sealed class SyncHub(VaultCatalog catalog, ApiKeys keys, Sessions session
                     if (_presence.TryRemove(key, out var message) && _vaults.ContainsKey(key.Vault) && !await SendAsync(message, ct)) return;
                 }
 
-                while (_renamed.TryDequeue(out var renamed))
-                {
-                    if (_vaults.ContainsKey(renamed.Vault) && !await SendAsync(renamed.Message, ct)) return;
-                }
+                if (!await SendRenamedAsync(ct)) return;
 
                 // Under the name the vault has when the hint goes out: a rename since the change counts.
                 while (_out.Reader.TryRead(out var vaultId))
                 {
+                    // A rename queued before this hint goes out ahead of it.
+                    if (!await SendRenamedAsync(ct)) return;
                     if (_vaults.TryGetValue(vaultId, out var vault) && !await SendAsync(JsonSerializer.Serialize(new { type = "changed", vault = vault.Name }), ct)) return;
                 }
             }
+        }
+
+        /// <summary>The renames queued, each under the name the vault is held by when it goes out: of two renames told
+        /// out of order, both name the latest.</summary>
+        private async Task<bool> SendRenamedAsync(CancellationToken ct)
+        {
+            while (_renamed.TryDequeue(out var renamed))
+            {
+                if (_vaults.TryGetValue(renamed.Vault, out var vault) && vault.Membership is null
+                    && !await SendAsync(JsonSerializer.Serialize(new { type = "renamed", vault = vault.Name, from = renamed.From }), ct)) return false;
+            }
+
+            return true;
         }
 
         /// <summary>False once the socket can't be sent to any more.</summary>

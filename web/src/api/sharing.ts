@@ -164,7 +164,8 @@ function forgetOnceUnused(queryClient: QueryClient, matches: (query: Query) => b
  * The owner's vault `vault`, now named `name`, in this tab: on her own rename's answer, or on the sync socket's
  * `renamed` frame for another tab's. Her open note, recent notes, drawer and unsaved text move with it. Moved and
  * navigated first, and the refetches not waited for, so that the note still shown and the dialog's access list don't
- * ask again under the old name. A tab that moved already matches nothing under the old name and stays.
+ * ask again under the old name. A tab that moved already matches nothing under the old name and stays: the renaming
+ * tab may also get the frame before its own answer, and then its second run moves nothing.
  */
 export function followRename(queryClient: QueryClient, navigate: NavigateFunction, vault: string, name: string) {
   const [from, to] = [`/${vault}/`, `/${name.normalize("NFC").trim()}/`];

@@ -303,7 +303,7 @@ public static class NoteApi
 
         // An open code would hand a device the old name, which no longer finds the vault.
         pairings.DropAll(caller.User.Id);
-        hub.VaultRenamed(caller.User.Id, access.Id, (access.Name, name));
+        hub.VaultRenamed(caller.User.Id, access.Id, access.Name);
         return TypedResults.NoContent();
     }
 

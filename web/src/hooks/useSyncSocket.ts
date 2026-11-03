@@ -32,7 +32,8 @@ function onFrame(queryClient: QueryClient, navigate: NavigateFunction, data: unk
     return;
   }
   if (!frame || typeof frame !== "object" || !("type" in frame) || !("vault" in frame) || typeof frame.vault !== "string") return;
-  if (frame.type === "renamed" && "from" in frame && typeof frame.from === "string") followRename(queryClient, navigate, frame.from, frame.vault);
+  // One naming no move (the server's catalog forgot the vault meanwhile) would only forget what the tab holds under it.
+  if (frame.type === "renamed" && "from" in frame && typeof frame.from === "string" && frame.from !== frame.vault) followRename(queryClient, navigate, frame.from, frame.vault);
   if (frame.type === "changed") vaultHinted(queryClient, frame.vault);
   if (frame.type === "presence" && "path" in frame && typeof frame.path === "string" && "editors" in frame && Array.isArray(frame.editors)) {
     const key = presenceKey(frame.vault, frame.path);
