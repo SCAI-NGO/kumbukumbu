@@ -1,6 +1,6 @@
 # Overnighter report: the attachment wishes
 
-Branch `feature/attachment-wishes`, from `26c7a2e` to `a00a28a`: 41 commits (`git diff --stat 26c7a2e HEAD`: 57 files changed, 5485 insertions, 196 deletions). Draft pull request: <https://github.com/SCAI-NGO/kumbukumbu/pull/140>. Nothing was merged, tagged, released or deployed, and no version file was touched.
+Branch `feature/attachment-wishes`, from `26c7a2e` to `5ce61a7`, plus this report: 43 commits (`git diff --stat 26c7a2e HEAD`: 57 files changed, 5485 insertions, 196 deletions). Draft pull request: <https://github.com/SCAI-NGO/kumbukumbu/pull/140>. Nothing was merged, tagged, released or deployed, and no version file was touched.
 
 Sources: the brief, the plan and spec, the controller's ledger, one report per task (1 to 12, 13, 13b, 14a to 14d), the phase-gate logs and `git log`. Where a source gives no number, this report says "not recorded". Hashes are those on the branch; commits made in worktrees were cherry-picked and have new hashes (section 3 gives both).
 
@@ -9,7 +9,7 @@ Sources: the brief, the plan and spec, the controller's ledger, one report per t
 - `img --rotate`, `pdf --rotate`, `img --frame` and `rg --regions` are built, reviewed, and green at every phase gate.
 - Regions with labels were tried, measured on held-out figures, failed twice, and were reverted. The eval and the corpus stay (section 7).
 - The memory measurement of the composing path (Task 13) found that the spec's remedy, a lower pixel cap, did not hold. The branch therefore adds a frame limit of 10,000, lowers the cap from 16 MP to 4 MP, and counts frames by omggif's own rules (section 8).
-- The final whole-branch review is not in this report yet. Final whole-branch review: (to be filled)
+- Final whole-branch review: ready for maintainer review, with no critical or important findings. The security boundary of spec §5, the sidecar–server contracts and the complete revert of Task 14 stages B and C hold across the branch. Its 12 minor findings were fixed in one wave, `5ce61a7` ("Tidy the wording and two edges the final review found"), and a scoped re-review found all 12 addressed with no new breakage: the limit of 50 pages is per PDF, not per search; the regions metric counts PDFs; "delivered" means the sidecar answered; a stale line citation; the note's test count; quoted paths in rg's suggested commands; no scan from item 0 per match span; required x, y, w and h in a text box; a typo; and the help paragraph re-flowed. Its triage of the deferred minors: only the typo and the help wrap needed fixing before merge (both done); the rest are fine to defer, with vertical-writing fonts in text boxes named as a known limit for the maintainer.
 - The signal at the end of the run is `PushNotification`; the pull request is the record.
 
 ---
@@ -65,6 +65,7 @@ Each gate is the full verification: `dotnet restore --locked-mode`, Release buil
 | Phase 3, `8c0395e`, first run | 3589 / 3582 / 6 / **1** | 85 / 1368 | 8 / 139 | exit 0 (dotnet exit 2) |
 | Phase 3, `8c0395e`, rerun on a fresh mongo | 3589 / 3583 / 6 / 0 | 85 / 1368 | 8 / 139 | exit 0 |
 | Final, `a00a28a` | 3589 / 3583 / 6 / 0 | 85 / 1368 | 8 / 146 | exit 0 |
+| Final after the review's fixes, `5ce61a7` | 3595 / 3589 / 6 / 0 | 85 / 1368 | 8 / 146 | exit 0 |
 
 `dotnet test` took 7 min 24 s (phase 3, first run), 7 min 43 s (rerun) and 8 min 51 s (final). The web count did not move: this branch touches no web code, and `web/src/api/schema.d.ts` is unchanged.
 
@@ -473,7 +474,7 @@ Not among the 16, but recorded by the plan as a spec correction: §2.2's "the co
 Each states what it costs if wrong, as the ledger does.
 
 1. **Task 0's diff-stat expectation is wrong.** The branch starts at `cd97378` (#136), which changes `src`, `tests` and `web`. The baseline is measured on `26c7a2e`, and CI's numbers are a reference. Costs nothing if wrong.
-2. **Pushes go to `feature/attachment-wishes`**, as the brief demands, with a mirror to the session branch `claude/attachment-wishes-brief-19tz7t` at the end. Costs nothing if wrong. The mirror had not been done when this report was written: that branch still points at `26c7a2e`.
+2. **Pushes go to `feature/attachment-wishes`**, as the brief demands, with a mirror to the session branch `claude/attachment-wishes-brief-19tz7t` at the end. Costs nothing if wrong. The mirror is pushed together with this report.
 3. **Node 26.13.0 installed by hand** at `/opt/node-v26.13.0-linux-x64`, with the Node 22 binary symlinked over; pnpm 10.32.1 via `npm -g`. The ledger records no cost; it changes the machine only.
 4. **README's metrics prose** (around line 446) gets the new metrics in Task 12. The spec said the README needs nothing (no new variable or service), but the maintainer's preference is an up-to-date README. Costs a few lines if wrong.
 5. **`pdf` synopsis shows `[--rotate D]`, not `[--rotate 90|180|270]`** (the longer form makes the first line 111 characters); `PageSize` is unchanged because `PictureText.For` already adds the turn, which would otherwise print twice. Cost: cosmetic. The help line-length guard went from 106 to 107, since three lines of the spec's own §1.5 block are 107 characters.
@@ -671,8 +672,8 @@ These need things the run didn't have: real clients, your real PDFs, and the rel
   - Task 12: `docs/concept.md:105` (the metrics list) isn't updated; playbook steps 26 and 27 are out of positional order (deliberate).
   - Stage B: the `withLabels` cost was unbounded in the number of regions; moot with the revert.
   - Not covered by hand: the "older analysis" notice, and a GIF whose frame count is unknown (both covered by tests).
-- **Tidy up after the run:** the database `kumbu-handson` is left in `kumbu-test-mongo`; the worktrees `/home/user/kumbu-stageA` and `/home/user/kumbu-handson` and their branches `work/stage-a` and `work/handson` are local only; the session branch `claude/attachment-wishes-brief-19tz7t` still points at `26c7a2e`.
-- **Final whole-branch review:** (to be filled)
+- **Tidy up after the run:** the database `kumbu-handson` is left in `kumbu-test-mongo`; the worktrees `/home/user/kumbu-stageA` and `/home/user/kumbu-handson` and their branches `work/stage-a` and `work/handson` are local only; the session branch `claude/attachment-wishes-brief-19tz7t` mirrors `feature/attachment-wishes`.
+- **Final whole-branch review:** see the summary at the top; the review's fixes are in `5ce61a7`.
 
 ---
 
@@ -680,6 +681,6 @@ These need things the run didn't have: real clients, your real PDFs, and the rel
 
 <https://github.com/SCAI-NGO/kumbukumbu/pull/140> (a draft, opened at `a00a28a`; not merged).
 
-Final whole-branch review: (to be filled)
+Final whole-branch review: ready for maintainer review, with no critical or important findings. The security boundary of spec §5, the sidecar–server contracts and the complete revert of Task 14 stages B and C hold across the branch. Its 12 minor findings were fixed in one wave, `5ce61a7` ("Tidy the wording and two edges the final review found"), and a scoped re-review found all 12 addressed with no new breakage: the limit of 50 pages is per PDF, not per search; the regions metric counts PDFs; "delivered" means the sidecar answered; a stale line citation; the note's test count; quoted paths in rg's suggested commands; no scan from item 0 per match span; required x, y, w and h in a text box; a typo; and the help paragraph re-flowed. Its triage of the deferred minors: only the typo and the help wrap needed fixing before merge (both done); the rest are fine to defer, with vertical-writing fonts in text boxes named as a known limit for the maintainer.
 
 If it arrives after this report was written, the result is recorded in the pull request's follow-up. The signal at the end of the run is `PushNotification`.
