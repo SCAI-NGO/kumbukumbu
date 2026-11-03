@@ -67,6 +67,13 @@ public sealed partial class VaultCatalog
     /// </summary>
     private readonly ConcurrentDictionary<string, byte> _pending = new();
 
+    /// <summary>
+    /// Vault ids whose start or finish transaction is under way, changed only under <c>_loading</c>, which isn't held
+    /// across the transaction: a load of the vault waits for the completion with <c>_loading</c> free
+    /// (<see cref="EnterLoadingAsync"/>), a load of any other vault doesn't wait at all.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, TaskCompletionSource> _transitions = new();
+
     /// <summary>The ids of the vaults re-keyed in this process, for the life of the process.</summary>
     private readonly ConcurrentDictionary<string, byte> _rekeyed = new();
 
@@ -315,6 +322,8 @@ public sealed partial class VaultCatalog
     {
         var started = Now;
         RekeyStart start;
+        bool marked;
+        TaskCompletionSource starting;
         await _loading.WaitAsync(ct);
         try
         {
@@ -323,23 +332,36 @@ public sealed partial class VaultCatalog
             _open.TryRemove(id, out _);
             // Whether this start set the mark: one set before (a run that stopped in its two-key period) stays, also
             // when this start is refused, since the vault may still be in that period.
-            var marked = _pending.TryAdd(id, 0);
-            using var session = await StartSessionAsync(ct);
-            try
-            {
-                start = await session.WithTransactionAsync((s, token) => StartRekeyAsync(s, id, userId, userKey, token), cancellationToken: ct);
-            }
-            catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or MongoWriteException)
-            {
-                // Refused inside the transaction, which was aborted: this start began nothing. A resume refused (a key
-                // a rotation replaced, say) leaves the vault in its period, and the mark of the run that began it.
-                if (marked) _pending.TryRemove(id, out _);
-                throw;
-            }
+            marked = _pending.TryAdd(id, 0);
+            // A load that read the vault document before this has published it already, and was taken out above; one
+            // after this waits for the transaction's outcome, so none puts a working set made with K back meanwhile.
+            starting = BeginTransition(id);
         }
         finally
         {
             _loading.Release();
+        }
+
+        var refused = false;
+        try
+        {
+            using var session = await StartSessionAsync(ct);
+            start = await session.WithTransactionAsync((s, token) => StartRekeyAsync(s, id, userId, userKey, token), cancellationToken: ct);
+        }
+        catch (Exception e) when (e is VaultDeletedException or VaultNotRekeyableException or MongoWriteException)
+        {
+            refused = true;
+            throw;
+        }
+        finally
+        {
+            await EndTransitionAsync(id, starting, () =>
+            {
+                // Refused inside the transaction, which was aborted: this start began nothing. A resume refused (a key
+                // a rotation replaced, say) leaves the vault in its period, and the mark of the run that began it. Any
+                // other failure may have come after the commit: the mark stays, and a load outside the period clears it.
+                if (refused && marked) _pending.TryRemove(id, out _);
+            });
         }
 
         foreach (var membershipId in start.Members.Withdrawn) log.LogInformation("The invitation of membership {MembershipId} to vault {VaultId}, which is re-keyed, is withdrawn", membershipId, id);
@@ -362,7 +384,18 @@ public sealed partial class VaultCatalog
         for (var attempt = 1; ; attempt++)
         {
             await FaultAsync("before-finish");
+            TaskCompletionSource finishing;
             await _loading.WaitAsync(ct);
+            try
+            {
+                finishing = BeginTransition(id);
+            }
+            finally
+            {
+                _loading.Release();
+            }
+
+            var committed = false;
             try
             {
                 using (var session = await StartSessionAsync(ct))
@@ -370,28 +403,35 @@ public sealed partial class VaultCatalog
                     await session.WithTransactionAsync((s, token) => FinishRekeyAsync(s, id, userId, userKey, start, members, token), cancellationToken: ct);
                 }
 
-                // Under _loading, so a load after this sees K′ current, and an object made with K is refused from now on.
-                _keyIds[id] = next.KeyId;
-                _rekeyed[id] = 0;
-                _open.TryRemove(id, out _);
-                _pending.TryRemove(id, out _);
-                break;
+                committed = true;
             }
             catch (Sharing.MembershipsChangedException)
             {
-                if (attempt >= MaxFinishAttempts)
-                {
-                    log.LogWarning("The memberships of vault {VaultId} kept changing during the finish of its re-keying; the vault stays pending", id);
-                    throw VaultBusyException.Being();
-                }
-
-                log.LogInformation("The memberships of vault {VaultId} changed during its re-keying; the finish reads them again", id);
-                members = await ActiveMembershipRevisionsAsync(id, ct);
+                // Aborted: read again below, out of the transition.
             }
             finally
             {
-                _loading.Release();
+                await EndTransitionAsync(id, finishing, () =>
+                {
+                    if (!committed) return;
+                    // Under _loading and before the transition ends, so a load after this sees K′ current, and an
+                    // object made with K is refused from now on.
+                    _keyIds[id] = next.KeyId;
+                    _rekeyed[id] = 0;
+                    _open.TryRemove(id, out _);
+                    _pending.TryRemove(id, out _);
+                });
             }
+
+            if (committed) break;
+            if (attempt >= MaxFinishAttempts)
+            {
+                log.LogWarning("The memberships of vault {VaultId} kept changing during the finish of its re-keying; the vault stays pending", id);
+                throw VaultBusyException.Being();
+            }
+
+            log.LogInformation("The memberships of vault {VaultId} changed during its re-keying; the finish reads them again", id);
+            members = await ActiveMembershipRevisionsAsync(id, ct);
         }
 
         log.LogInformation(
@@ -402,6 +442,34 @@ public sealed partial class VaultCatalog
     }
 
     private Task FaultAsync(string point) => RekeyFaultAt?.Invoke(point) ?? Task.CompletedTask;
+
+    /// <summary>Under <c>_loading</c>: the vault is in transition until <see cref="EndTransitionAsync"/>.</summary>
+    private TaskCompletionSource BeginTransition(string id)
+    {
+        var transition = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _transitions[id] = transition;
+        return transition;
+    }
+
+    /// <summary>
+    /// Ends a transition, whatever ended its transaction: <paramref name="settle"/> brings the state up to the outcome
+    /// under <c>_loading</c>, taken whatever the run's token says, since the state must be made right; the entry goes
+    /// before the completion, so that a load it wakes finds the vault out of transition rather than waiting again.
+    /// </summary>
+    private async Task EndTransitionAsync(string id, TaskCompletionSource transition, Action settle)
+    {
+        await _loading.WaitAsync(CancellationToken.None);
+        try
+        {
+            settle();
+        }
+        finally
+        {
+            _transitions.TryRemove(KeyValuePair.Create(id, transition));
+            _loading.Release();
+            transition.TrySetResult();
+        }
+    }
 
     /// <summary>A finish whose memberships keep changing is tried this many times before the run gives up.</summary>
     private const int MaxFinishAttempts = 5;

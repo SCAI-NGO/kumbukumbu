@@ -738,7 +738,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
                 held.Add(locks);
             }
 
-            // After the gates: nothing that holds _loading waits for a gate, so this order can't deadlock.
+            // After the gates: nothing that holds _loading waits for a gate, so this order can't deadlock. Plain _loading,
+            // not EnterLoadingAsync: a run of these vaults holds their gates through its transitions, and one that
+            // took them after the look above meets the tombstone before its start, so none is in transition here.
             await _loading.WaitAsync(ct);
             loading = true;
             long deleted;
@@ -1165,8 +1167,10 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             if (gateHeld) vault.Gate.Release();
         }
 
-        // Queued before the gate goes, which keeps renames in order; not waited for under it. A re-key finish of another
-        // vault can hold _loading for minutes, and this vault's writers, who never need it, would wait on the gate meanwhile.
+        // Queued before the gate goes, which keeps renames in order; not waited for under it. A deletion holds _loading
+        // across its transaction and a load across its reads, and this vault's writers, who never need it, would wait on
+        // the gate meanwhile. Plain _loading, not EnterLoadingAsync: a run of this vault needs the gate, which goes only
+        // once this wait is queued, and while a run holds the vault Current() is null, so the action does nothing.
         async Task UnderLoadingAsync(Action action)
         {
             var loading = _loading.WaitAsync(CancellationToken.None);
@@ -1229,6 +1233,9 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
     /// <summary>For tests: how many vaults are unlocked now.</summary>
     public int OpenCount => UnlockedCount;
 
+    /// <summary>For tests: whether the working set holds this vault.</summary>
+    internal bool IsInWorkingSet(string vaultId) => _open.ContainsKey(vaultId);
+
     /// <summary>Reads one note again after a compare-and-swap failed: someone else wrote it.</summary>
     /// <summary>Takes <paramref name="vault"/> out of the working set (if it is still the one there) after it failed to follow
     /// a committed write: the next request loads the vault again.</summary>
@@ -1288,9 +1295,24 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
         }
     }
 
+    /// <summary>
+    /// Takes <c>_loading</c> once the vault isn't in transition (<see cref="_transitions"/>): waits with <c>_loading</c>
+    /// free, so holders never wait for a gate, nor for a transition, whose end needs <c>_loading</c>.
+    /// </summary>
+    private async Task EnterLoadingAsync(string vaultId, CancellationToken ct)
+    {
+        while (true)
+        {
+            await _loading.WaitAsync(ct);
+            if (!_transitions.TryGetValue(vaultId, out var transition)) return;
+            _loading.Release();
+            await transition.Task.WaitAsync(ct);
+        }
+    }
+
     private async Task<UnlockedVault?> LoadAsync(string id, byte[] vaultKey, CancellationToken ct)
     {
-        await _loading.WaitAsync(ct);
+        await EnterLoadingAsync(id, ct);
         try
         {
             if (IsDeleted(id)) return null;
@@ -1321,8 +1343,8 @@ public sealed partial class VaultCatalog(IMongoDatabase db, IOptions<KumbuOption
             // Never in the working set, never with a current key id, never announced to the search index.
             // Under its display name too: beside a new vault of the stored name, the stored one would name two vaults.
             if (doc.RekeyStartedAt is not null) return new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { Pending = true, EmbeddingProvider = provider, DisplayName = meta.DisplayName };
-            // Outside its period (under _loading, as every start and finish): a start whose commit went unanswered didn't
-            // commit after all.
+            // Outside its period (under _loading, as every start's and finish's change of state, and with no start in
+            // transition): a start whose commit went unanswered didn't commit after all.
             _pending.TryRemove(id, out _);
 
             var vault = new UnlockedVault(id, meta.Name, vaultKey, Now, LocksFor(id)) { EmbeddingProvider = provider, DisplayName = meta.DisplayName };
