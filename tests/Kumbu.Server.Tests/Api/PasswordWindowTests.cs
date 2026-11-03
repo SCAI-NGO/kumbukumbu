@@ -138,6 +138,7 @@ public sealed class PasswordWindowTests(KumbuAppFactory app)
         ["GET /api/changes"] = Reading,
         ["GET /api/vaults/{vault}/activity"] = Reading,
         ["POST /api/vault-invitations/peek"] = Reading,
+        ["POST /api/console/"] = Reading,
         ["GET /api/vaults/{vault}/memberships/{id}"] = Reading,
         ["GET /api/vault-events"] = Reading,
         ["GET /api/member-notices"] = Reading,

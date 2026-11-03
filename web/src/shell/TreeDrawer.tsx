@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, Trash2, Upload, Users } from "lucide-react";
+import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
@@ -265,6 +265,10 @@ function AccountRow() {
       <Link to="/settings" onClick={close} className={link}>
         <Settings size={16} aria-hidden className="text-muted" />
         Settings
+      </Link>
+      <Link to="/console" onClick={close} className={link}>
+        <SquareTerminal size={16} aria-hidden className="text-muted" />
+        Console
       </Link>
       {(role === "admin" || role === "primary_admin") && (
         <Link to="/admin/users" onClick={close} className={link}>

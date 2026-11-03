@@ -387,18 +387,20 @@ describe("the shell", () => {
     expect(useEditor.getState().activeVault).toBe("Home");
   });
 
-  it("links to access and settings, and to admin only for admins", async () => {
+  it("links to access, settings and the console, and to admin only for admins", async () => {
     signedInApi();
     renderApp("/notes/Work/inbox.md");
     const account = within(await openDrawer()).getByRole("navigation", { name: "Account" });
     expect(within(account).getByRole("link", { name: "Access" })).toHaveAttribute("href", "/keys");
     expect(within(account).getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+    expect(within(account).getByRole("link", { name: "Console" })).toHaveAttribute("href", "/console");
     expect(within(account).queryByRole("link", { name: "Admin" })).not.toBeInTheDocument();
   });
 
   it.each([
     ["Access", "Access"],
     ["Settings", "Settings"],
+    ["Console", "Console"],
     ["Admin", "Users"],
   ])("closes the drawer when %s is followed, so the way back finds it shut", async (link, title) => {
     signedInApi({ "GET /api/admin/*": () => json(200, []) }, { ...user, role: "admin" });
