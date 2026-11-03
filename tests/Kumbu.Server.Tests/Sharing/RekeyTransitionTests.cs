@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-using System.Diagnostics;
 using System.Net;
 using Kumbu.Core.Crypto;
 using Kumbu.Server.Sharing;
@@ -16,7 +15,7 @@ namespace Kumbu.Server.Tests.Sharing;
 /// right key, and whatever ends a transition, nothing waits for it for ever.
 /// </summary>
 [Collection("app")]
-public sealed class RekeyTransitionTests(KumbuAppFactory app)
+public sealed class RekeyTransitionTests(KumbuAppFactory app) : IAsyncDisposable
 {
     /// <summary>The longest any one wait of this test may take; a wait that needs it has failed.</summary>
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
@@ -31,7 +30,19 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private WebApplicationFactory<Program> Api => app.PublicApi;
+    private WebApplicationFactory<Program>? _api;
+
+    /// <summary>
+    /// A host of this test's own: a read that meets the vault in its two-key period has the runner resume it, and the
+    /// runner's attempt, refused while the test's run holds the vault, would start a fresh run a minute later, during
+    /// another test. Disposed with the test, the runner stops, its backoff with it, and the hooks go with the host.
+    /// </summary>
+    private WebApplicationFactory<Program> Api => _api ??= app.PublicApi.WithWebHostBuilder(_ => { });
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_api is not null) await _api.DisposeAsync();
+    }
 
     private VaultCatalog Catalog => Api.Services.GetRequiredService<VaultCatalog>();
 
@@ -74,7 +85,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -105,7 +116,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -139,7 +150,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -171,7 +182,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -198,7 +209,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -226,7 +237,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -255,7 +266,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -286,7 +297,7 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         }
         finally
         {
-            await EndAsync(hold, run, id);
+            await EndAsync(hold, run);
         }
     }
 
@@ -312,29 +323,31 @@ public sealed class RekeyTransitionTests(KumbuAppFactory app)
         Assert.Contains(response.StatusCode, new[] { HttpStatusCode.OK, HttpStatusCode.ServiceUnavailable });
     }
 
-    /// <summary>Releases the run and waits for it, bounded; and for a run the runner resumed after a read met the vault in
-    /// its period, so it doesn't overlap the next test.</summary>
-    private async Task EndAsync(Hold hold, Task run, string id)
+    /// <summary>Releases the run and waits, bounded, for it; how it ends is left to the test's own checks.</summary>
+    private async Task EndAsync(Hold hold, Task run)
     {
         hold.ReleaseAll();
+        await Settled(run);
+        Catalog.RekeyFaultAt = null;
+    }
+
+    /// <summary>Waits, bounded, for a task the test has given up on; what it ends with doesn't matter any more.</summary>
+    private static async Task Settled(Task task)
+    {
         try
         {
-            await run.WaitAsync(Bound, Ct);
+            await task.WaitAsync(Bound, Ct);
         }
         catch (Exception)
         {
             // The test's own assertion, if any, is the failure to report.
         }
-
-        var waiting = Stopwatch.StartNew();
-        while (Catalog.IsRekeying(id) && waiting.Elapsed < Bound) await Task.Delay(50, CancellationToken.None);
-        Catalog.RekeyFaultAt = null;
     }
 
     /// <summary>
     /// A run of one vault held at each of some points, the first time it gets there, until released; then the point's
-    /// action, if any, runs there (a throw is a failure at that point). Other tests' vaults share the fixture, so the
-    /// hook acts only while this vault is held by a run; a retry of the driver's passes a point already held.
+    /// action, if any, runs there (a throw is a failure at that point). The hook acts only while this vault is held by a
+    /// run, so a resumed run of another vault passes; a retry of the driver's passes a point already held.
     /// </summary>
     private sealed class Hold
     {
