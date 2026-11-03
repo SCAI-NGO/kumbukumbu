@@ -128,6 +128,40 @@ public sealed class AttachmentStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_restored_flag_survives_sealing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var first = await CreateAsync(store, "/Work/a.png", Png(100));
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentTrashes = { first } }, Writers.Dev, WriterRef.Server, Now, Ct));
+        var trashed = Assert.Single(await store.ListAttachmentTrashAsync(P("/Work"), Ct));
+
+        var restored = AttachmentWriter.Next(trashed.Attachment, trashed.Attachment.Current, Writers.Dev, WriterRef.Server, Now, Changeset.New(Now), keepCurrent: true) with { Restored = true };
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentRestores = { (trashed, restored) } }, Writers.Dev, WriterRef.Server, Now, Ct));
+
+        var read = (await Store(world.Catalog(time: _time)).GetAttachmentAsync(P("/Work/a.png"), Ct))!;
+        Assert.True(read.Restored);
+        var next = AttachmentWriter.Next(read, (await AttachmentAsync(store, "/Work/a.png", Png(100, 8))).Current, Writers.Dev, WriterRef.Server, Now);
+        Assert.Empty(await store.TryCommitAsync(new NoteBatch { AttachmentReplaces = { (read, next) } }, Writers.Dev, WriterRef.Server, Now, Ct));
+        Assert.False((await Store(world.Catalog(time: _time)).GetAttachmentAsync(P("/Work/a.png"), Ct))!.Restored);
+    }
+
+    [Fact]
+    public void A_document_without_the_flag_reads_as_not_restored()
+    {
+        // As sealed before the flag existed, and as an attachment that wasn't restored is still sealed.
+        var json = """
+            {"Path":"/Work/a.png","Current":{"MediaType":"image/png","Size":100,"Width":640,"Height":480,"Version":"abc","BlobId":"b1"},
+             "LastWriter":"dev","LastWriteAt":"2026-10-27T12:00:00Z","History":[],"Changeset":null}
+            """;
+        Assert.False(System.Text.Json.JsonSerializer.Deserialize<AttachmentPayload>(json)!.ToAttachment(1).Restored);
+
+        var state = new AttachmentState("image/png", 100, 640, 480, "abc", "b1");
+        var attachment = new StoredAttachment(P("/Work/a.png"), state, 1, Writers.Dev, T0, [], null, WriterRef.Server);
+        Assert.DoesNotContain("Restored", System.Text.Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment))), StringComparison.Ordinal);
+        Assert.Contains("\"Restored\":true", System.Text.Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(AttachmentPayload.From(attachment with { Restored = true }))), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_note_and_an_attachment_commit_together_or_not_at_all()
     {
         var (world, _, store) = await WorldAsync();

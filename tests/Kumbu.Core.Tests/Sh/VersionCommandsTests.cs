@@ -359,4 +359,100 @@ public class VersionCommandsTests
         Assert.StartsWith($"{V(V2)}  2026-10-23 14:00 UTC  unknown  ", history, StringComparison.Ordinal);
         Assert.DoesNotContain("claude", history, StringComparison.Ordinal);
     }
+
+    // --- a restore from the trash ---
+
+    private async Task RemoveAndRestorePlan()
+    {
+        Assert.False((await Run("rm /Demo/plan.md")).IsError);
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal("restored /Demo/plan.md from the trash", (await Run("restore /Demo/plan.md")).Output);
+    }
+
+    private async Task<string[]> PlanHistory(string path = "/Demo/plan.md") => (await Run($"history {path}")).Output.Split('\n');
+
+    [Fact]
+    public async Task A_note_restored_from_the_trash_is_marked()
+    {
+        await RemoveAndRestorePlan();
+
+        Assert.Equal(
+            [$"{V(V1)}  2026-10-23 14:01 UTC  dev  4 lines  (current)  (restored)", $"{V(V1)}  2026-10-01 12:00 UTC  seed  4 lines"],
+            await PlanHistory());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_later_write_clears_the_mark(bool sameChangeset)
+    {
+        await RemoveAndRestorePlan();
+        _time.Advance(TimeSpan.FromMinutes(sameChangeset ? 1 : 11));
+        await WritePlanV2();
+
+        var history = await PlanHistory();
+        Assert.DoesNotContain(history, l => l.Contains("(restored)", StringComparison.Ordinal));
+        Assert.EndsWith("(current)", history[0], StringComparison.Ordinal);
+        Assert.Single(history, l => l.StartsWith(V(V1), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_version_restore_is_not_marked()
+    {
+        await WritePlanV2();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal($"restored /Demo/plan.md to version {V(V1)}", (await Run($"restore /Demo/plan.md {V(V1)}")).Output);
+
+        var history = await PlanHistory();
+        Assert.Equal($"{V(V1)}  2026-10-23 14:01 UTC  dev (restore)  4 lines  (current)", history[0]);
+        Assert.DoesNotContain(history, l => l.Contains("(restored)", StringComparison.Ordinal));
+        Assert.DoesNotContain("(restored)", (await Run("history /Demo")).Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_text_changed_back_is_not_marked(bool sameChangeset)
+    {
+        await WritePlanV2();
+        _time.Advance(TimeSpan.FromMinutes(sameChangeset ? 1 : 11));
+        Assert.False((await _writer.WriteAsync("/Demo/plan.md", V1, V(V2), CancellationToken.None)).IsError);
+
+        var history = await PlanHistory();
+        // In one changeset, V2 coalesces away and V1 lies directly on V1, as after a restore.
+        if (sameChangeset) Assert.Equal([V(V1), V(V1)], history.Select(l => l[..12]));
+        Assert.DoesNotContain(history, l => l.Contains("(restored)", StringComparison.Ordinal));
+        Assert.DoesNotContain("(restored)", (await Run("history /Demo")).Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_folder_form_marks_a_restored_state()
+    {
+        await RemoveAndRestorePlan();
+        var cs = await PlanChangeset();
+
+        var rows = (await Run("history /Demo")).Output.Split('\n');
+
+        Assert.Contains($"2026-10-23 14:01 UTC  dev   /Demo/plan.md   {V(V1)}  +0 -0  changeset {cs}  (restored)", rows);
+        Assert.Contains($"2026-10-01 12:00 UTC  seed  /Demo/plan.md   {V(V1)}  +4 -0", rows);
+        Assert.Single(rows, r => r.Contains("(restored)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Since_keeps_the_mark_when_the_line_below_is_filtered_out()
+    {
+        await RemoveAndRestorePlan();
+
+        Assert.Equal($"{V(V1)}  2026-10-23 14:01 UTC  dev  4 lines  (current)  (restored)", (await Run("history --since 1h /Demo/plan.md")).Output);
+        Assert.EndsWith("(restored)", (await Run("history --since 1h /Demo")).Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_move_keeps_the_mark()
+    {
+        await RemoveAndRestorePlan();
+        Assert.False((await Run("mv /Demo/plan.md /Demo/plans.md")).IsError);
+
+        Assert.EndsWith("(current)  (restored)", (await PlanHistory("/Demo/plans.md"))[0], StringComparison.Ordinal);
+    }
 }

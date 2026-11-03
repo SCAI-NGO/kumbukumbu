@@ -85,6 +85,8 @@ public sealed record HistoryEntry(string Content, string WrittenBy, DateTime Wri
 /// <param name="SeedContent">What the seeder last loaded from disk, or null if it never did.</param>
 /// <param name="Changeset">The changeset of the current state; null for a state that joins none (restore, seed).</param>
 /// <param name="Ref">The reference sealed beside <paramref name="LastWriter"/>; a store refuses a write without one.</param>
+/// <param name="Restored">The current state came back from the trash (<see cref="NoteWriter.Restored"/>); the next write
+/// of content clears it, a move keeps it. A note stored before the flag existed reads as not restored.</param>
 public sealed record StoredNote(
     VaultPath Path,
     string Content,
@@ -94,7 +96,8 @@ public sealed record StoredNote(
     IReadOnlyList<HistoryEntry> History,
     string? SeedContent = null,
     Changeset? Changeset = null,
-    WriterRef? Ref = null)
+    WriterRef? Ref = null,
+    bool Restored = false)
 {
     public string Version => VersionToken.Of(Content);
 }

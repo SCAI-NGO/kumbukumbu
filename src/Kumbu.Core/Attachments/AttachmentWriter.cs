@@ -37,6 +37,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
                 current.Changeset, changeset, keepCurrent, (a, b) => a.State.Version == b.State.Version),
             Changeset = changeset,
             Ref = reference,
+            Restored = false,
         };
 
     /// <summary>
@@ -242,7 +243,7 @@ public sealed class AttachmentWriter(INoteStore notes, IAttachmentStore store, T
             // Its state also goes on top of its history, as for a note (NoteWriter.Restored).
             var restored = Next(
                 trashed.Attachment, trashed.Attachment.Current, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now,
-                await ChangesetAsync(path, ct), keepCurrent: true);
+                await ChangesetAsync(path, ct), keepCurrent: true) with { Restored = true };
             var batch = new NoteBatch { AttachmentRestores = { (trashed, restored) } };
             return (await notes.TryCommitAsync(batch, caller.WriterIn(path.Segments[0]), caller.ReferenceIn(path.Segments[0]), Now, ct)).Count > 0
                 ? ShellResult.Error($"{tool}: {Shown(path)} changed while restoring it; try again")

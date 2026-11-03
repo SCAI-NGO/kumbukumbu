@@ -45,16 +45,18 @@ public sealed class NoteWriter(INoteStore store, TimeProvider time, ICaller call
             History = history,
             Changeset = changeset,
             Ref = reference,
+            Restored = false,
         };
     }
 
     /// <summary>
     /// A note back from the trash, in the writer's <paramref name="changeset"/>. Its state also goes on top of its
     /// history, as a restore keeps the state it replaces: a later write in the changeset coalesces with it, and the
-    /// restored text, no longer in the trash, would be lost.
+    /// restored text, no longer in the trash, would be lost. It is marked restored, since the store can't tell this
+    /// from a text changed back.
     /// </summary>
     public static StoredNote Restored(StoredNote trashed, string writer, WriterRef reference, DateTime now, Changeset changeset) =>
-        Next(trashed, trashed.Content, writer, reference, now, changeset, keepCurrent: true);
+        Next(trashed, trashed.Content, writer, reference, now, changeset, keepCurrent: true) with { Restored = true };
 
     /// <summary>
     /// The rule of <see cref="Next"/> for any kind of history (notes', attachments'): the history after a write in

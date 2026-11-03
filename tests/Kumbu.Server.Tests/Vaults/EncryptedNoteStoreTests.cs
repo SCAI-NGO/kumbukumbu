@@ -363,6 +363,37 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
     }
 
     [Fact]
+    public async Task The_restored_flag_survives_sealing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = New("/Work/a.md", "one");
+        await store.TryCreateAsync(note, Ct);
+        await store.TryTrashAsync(note, Writers.Dev, WriterRef.Server, T0.AddHours(1), Ct);
+
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(2), new Changeset("c1", T0.AddHours(2)), Ct);
+
+        Assert.True(restored!.Restored);
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+        Assert.True(read.Restored);
+
+        var next = NoteWriter.Next(read, "two", Writers.Dev, WriterRef.Server, T0.AddHours(3));
+        Assert.True(await store.TryReplaceAsync(read, next, Ct));
+        Assert.False((await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!.Restored);
+    }
+
+    [Fact]
+    public void A_document_without_the_flag_reads_as_not_restored()
+    {
+        // As sealed before the flag existed, and as a note that wasn't restored is still sealed.
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[],"SeedContent":null}""";
+        Assert.False(System.Text.Json.JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1).Restored);
+
+        var written = Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        Assert.DoesNotContain("Restored", written, StringComparison.Ordinal);
+        Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Restored = true }))), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Trash_fails_and_leaves_no_copy_if_the_note_changed()
     {
         var (world, _, store) = await WorldAsync();

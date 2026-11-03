@@ -20,6 +20,7 @@ public sealed record AttachmentVersion(AttachmentState State, string WrittenBy, 
 /// <param name="History">Earlier states, newest first.</param>
 /// <param name="Changeset">The changeset of the current state; null for a state that joins none (a restore).</param>
 /// <param name="Ref">The reference sealed beside <paramref name="LastWriter"/>, as for <see cref="StoredNote"/>.</param>
+/// <param name="Restored">The current state came back from the trash, as for <see cref="StoredNote"/>.</param>
 public sealed record StoredAttachment(
     VaultPath Path,
     AttachmentState Current,
@@ -28,7 +29,8 @@ public sealed record StoredAttachment(
     DateTime LastWriteAt,
     IReadOnlyList<AttachmentVersion> History,
     Changeset? Changeset,
-    WriterRef? Ref = null)
+    WriterRef? Ref = null,
+    bool Restored = false)
 {
     public string Version => Current.Version;
 }

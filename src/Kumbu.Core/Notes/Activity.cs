@@ -4,7 +4,7 @@ using Kumbu.Core.Sh;
 
 namespace Kumbu.Core.Notes;
 
-public enum ActivityFileKind { Added, Changed, Renamed, Deleted }
+public enum ActivityFileKind { Added, Changed, Renamed, Deleted, Restored }
 
 /// <summary>One note or attachment in a changeset.</summary>
 /// <param name="Path">The note's path now (its history moves with it, and so do its renames); for a trashed note,
@@ -41,8 +41,10 @@ public static class Activity
     private const string RestoreSuffix = " (restore)";
 
     /// <summary>One state of a note or attachment, with the state before it in the same file (null: none kept).</summary>
+    /// <param name="Restored">The file's current state, back from the trash (<see cref="StoredNote.Restored"/>).</param>
     private sealed record State(
-        string Path, string Version, string Writer, DateTime At, Changeset? Changeset, string? Before, bool First, bool Lost, bool Trashed, WriterRef? Ref);
+        string Path, string Version, string Writer, DateTime At, Changeset? Changeset, string? Before, bool First, bool Lost, bool Trashed, WriterRef? Ref,
+        bool Restored);
 
     /// <summary>A note or attachment going to the trash, with the version it had then.</summary>
     private sealed record Removal(string Path, string Version, string DeletedBy, DateTime DeletedAt, Changeset? Changeset, WriterRef? Ref);
@@ -106,7 +108,8 @@ public static class Activity
                 (note.Version, note.LastWriter, note.LastWriteAt, note.Changeset, note.Ref),
             ],
             note.History.Count,
-            trashed);
+            trashed,
+            note.Restored);
 
     private static IEnumerable<State> States(StoredAttachment attachment, bool trashed) =>
         States(
@@ -116,19 +119,21 @@ public static class Activity
                 (attachment.Version, attachment.LastWriter, attachment.LastWriteAt, attachment.Changeset, attachment.Ref),
             ],
             attachment.History.Count,
-            trashed);
+            trashed,
+            attachment.Restored);
 
     /// <summary>A file's states oldest first (<paramref name="chain"/>: history, then the current state), each with its
     /// predecessor.</summary>
     private static IEnumerable<State> States(
-        string path, List<(string Version, string Writer, DateTime At, Changeset? Changeset, WriterRef? Ref)> chain, int history, bool trashed)
+        string path, List<(string Version, string Writer, DateTime At, Changeset? Changeset, WriterRef? Ref)> chain, int history, bool trashed, bool restored)
     {
         // A full history may have dropped the states before its oldest.
         var lost = history >= NoteWriter.HistoryLimit;
         for (var i = 0; i < chain.Count; i++)
         {
             var (version, writer, at, changeset, reference) = chain[i];
-            yield return new State(path, version, writer, at, changeset, i == 0 ? null : chain[i - 1].Version, First: i == 0 && !lost, Lost: i == 0 && lost, trashed, reference);
+            yield return new State(path, version, writer, at, changeset, i == 0 ? null : chain[i - 1].Version, First: i == 0 && !lost, Lost: i == 0 && lost, trashed, reference,
+                Restored: restored && i == chain.Count - 1);
         }
     }
 
@@ -185,7 +190,11 @@ public static class Activity
 
         if (oldest is not null)
         {
-            var kind = oldest.First ? ActivityFileKind.Added : move is not null ? ActivityFileKind.Renamed : ActivityFileKind.Changed;
+            // A restore only when the row found the state it left: Y written, removed and restored in it is a change to Y.
+            var kind = oldest.First ? ActivityFileKind.Added
+                : move is not null ? ActivityFileKind.Renamed
+                : newest!.Restored && oldest.Before == newest.Version ? ActivityFileKind.Restored
+                : ActivityFileKind.Changed;
             return kind == ActivityFileKind.Renamed
                 ? new ActivityFile(path, kind, move!.From.Value, newest!.Version, oldest.Before, oldest.Lost, trashed, move.To.Value, fileKind)
                 : new ActivityFile(path, kind, null, newest!.Version, oldest.Before, oldest.Lost, trashed, FileKind: fileKind);
