@@ -47,7 +47,8 @@ public static class VaultEvents
     public const string VaultRenamed = "vault-renamed";
 
     /// <summary>A re-keying of the shared vault finished; members' credentials on it were revoked (collab design §7.1);
-    /// <see cref="VaultEventDocument.Credentials"/> are those that lost it, for their notices.</summary>
+    /// <see cref="VaultEventDocument.Credentials"/> are those that lost it, for their notices, and
+    /// <see cref="VaultEventDocument.EndedMembers"/> the memberships they were of.</summary>
     public const string RekeyFinished = "rekey-finished";
 
     /// <summary>The owner deleted her account and the vault is closing; <see cref="VaultEventDocument.Until"/> is when it
@@ -71,10 +72,12 @@ public static class VaultEvents
     /// <paramref name="membershipId"/> is null for a vault-wide one.</summary>
     internal static Task RecordAsync(
         IMongoDatabase db, IClientSessionHandle session, string vaultId, string kind, string? membershipId, DateTime at, string? role, CancellationToken ct,
-        DateTime? until = null, IReadOnlyCollection<string>? credentials = null)
+        DateTime? until = null, IReadOnlyCollection<string>? credentials = null, IReadOnlyCollection<string>? endedMembers = null)
     {
         var e = New(vaultId, kind, membershipId, at, role, until);
         if (credentials is { Count: > 0 }) e.Credentials = [.. credentials];
+        // Kept even when empty: no list at all is an event from before it was kept.
+        if (endedMembers is not null) e.EndedMembers = [.. endedMembers];
         return Docs(db).InsertOneAsync(session, e, cancellationToken: ct);
     }
 
@@ -168,7 +171,8 @@ public static class VaultEvents
             var owner = mine.First(m => m.Vault == e.Vault).Owner;
             if (!owners.TryGetValue(owner, out var shown)) owners[owner] = shown = WriterLabels.Owner(await displayName(owner, ct));
             var alias = aliases.GetValueOrDefault(e.Vault);
-            result.Add((e, alias, TextFor(e.Kind, toOwner: false, shown, alias ?? "a vault shared with you", e.Role, e.Until)));
+            var keysEnded = KeysEnded(e, mine.Where(m => m.Vault == e.Vault && m.Status == MembershipStatus.Active).Select(m => m.Id));
+            result.Add((e, alias, TextFor(e.Kind, toOwner: false, shown, alias ?? "a vault shared with you", e.Role, e.Until, keysEnded)));
         }
 
         return result;
@@ -177,9 +181,10 @@ public static class VaultEvents
     /// <summary>
     /// An event's sentence for its viewer (collab design §8.2, §8.3): to the owner, the member by her label for him
     /// ("Bob", or "a former member" once the membership is gone); to a member, the owner by her display name, sanitised
-    /// and quoted, and himself as "you". Never anything of another member.
+    /// and quoted, and himself as "you". Never anything of another member. <paramref name="keysEnded"/>: whether a
+    /// re-encryption ended keys or apps of the member's (<see cref="KeysEnded"/>).
     /// </summary>
-    internal static string TextFor(string kind, bool toOwner, string person, string vault, string? role, DateTime? until) => (toOwner, kind) switch
+    internal static string TextFor(string kind, bool toOwner, string person, string vault, string? role, DateTime? until, bool keysEnded = true) => (toOwner, kind) switch
     {
         (true, InvitationCreated) => $"You invited {person} to {role ?? "read"}.",
         (true, InvitationWithdrawn) => $"You withdrew the invitation for {person}.",
@@ -200,6 +205,7 @@ public static class VaultEvents
         (false, MembershipLeft) => $"You left {vault}.",
         (false, RoleChanged) => $"{AtStart(person)} changed your role to {role}.",
         (false, ProviderChanged) => $"{AtStart(person)} changed the embedding provider of {vault}.",
+        (false, RekeyFinished) when !keysEnded => $"{AtStart(person)} re-encrypted {vault}. Nothing of yours stopped working.",
         (false, RekeyFinished) => $"{AtStart(person)} re-encrypted {vault}; your keys and apps for it were revoked. Give your agents {vault} again.",
         // The owner is gone: she isn't named.
         (false, ClosingStarted) => $"The owner deleted their account; {vault} will be deleted{Until(until)}. Export a copy to keep its notes.",
@@ -219,6 +225,11 @@ public static class VaultEvents
         OwnerInactive => $"The owner of {vault}{(owner == WriterLabels.GoneOwner ? "" : $" ({owner})")} is deactivated; {vault} is read-only until the account is active again.",
         _ => $"The sharing of {vault} changed.",
     };
+
+    /// <summary>Whether a re-encryption ended keys or apps of one of the viewer's own memberships: only hers are looked
+    /// up, so that her text says nothing of who else lost theirs. An event from before the list was kept says so to everyone.</summary>
+    private static bool KeysEnded(VaultEventDocument e, IEnumerable<string> viewersMemberships) =>
+        e.EndedMembers is not { } ended || viewersMemberships.Any(ended.Contains);
 
     /// <summary>A person at the start of a sentence: <see cref="WriterLabels.GoneOwner"/> capitalised, a quoted name as it is.</summary>
     internal static string AtStart(string person) => person == WriterLabels.GoneOwner ? "The owner" : person;
@@ -242,8 +253,9 @@ public static class VaultEvents
                 return TextFor(e.Kind, toOwner: true, person, access.Name, e.Role, e.Until);
             }
 
-            _owner ??= WriterLabels.Owner(await displayName(access.Membership!.Owner, ct));
-            return TextFor(e.Kind, toOwner: false, _owner, access.Name, e.Role, e.Until);
+            var membership = access.Membership!;
+            _owner ??= WriterLabels.Owner(await displayName(membership.Owner, ct));
+            return TextFor(e.Kind, toOwner: false, _owner, access.Name, e.Role, e.Until, KeysEnded(e, [membership.Id]));
         }
 
         /// <summary>The owner's labels for every membership of the vault, opened with the vault, sanitised.</summary>
@@ -301,4 +313,9 @@ public sealed class VaultEventDocument
     /// told once (<see cref="Mcp.Notices"/>). Ids only, which no viewer is shown.</summary>
     [BsonElement("credentials"), BsonIgnoreIfNull]
     public List<string>? Credentials { get; set; }
+
+    /// <summary>Of a finished re-keying: the ids of the memberships whose keys or apps it ended, present even when empty;
+    /// absent on an event from before it was kept. Each member is told only whether hers is among them.</summary>
+    [BsonElement("endedMembers"), BsonIgnoreIfNull]
+    public List<string>? EndedMembers { get; set; }
 }

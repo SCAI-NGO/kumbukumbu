@@ -591,7 +591,7 @@ public sealed partial class VaultCatalog
         if (members.Count > 0 || doc.RekeyEnded is { Count: > 0 }
             || await db.GetCollection<Sharing.MembershipDocument>(Sharing.Memberships.CollectionName).Find(s, m => m.Vault == id).AnyAsync(ct))
         {
-            await Sharing.VaultEvents.RecordAsync(db, s, id, Sharing.VaultEvents.RekeyFinished, null, Now, null, ct, credentials: doc.RekeyEnded);
+            await Sharing.VaultEvents.RecordAsync(db, s, id, Sharing.VaultEvents.RekeyFinished, null, Now, null, ct, credentials: doc.RekeyEnded, endedMembers: doc.RekeyEndedMembers ?? []);
         }
 
         // Each member whose keys or apps it ended, and who is still one, is told until she dismisses it.

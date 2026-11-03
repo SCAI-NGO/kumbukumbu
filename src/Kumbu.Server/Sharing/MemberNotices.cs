@@ -103,7 +103,8 @@ public static class MemberNotices
         // Without her alias the vault can't be named twice in a sentence.
         MemberNoticeDocument.VaultRekeyed when alias is null =>
             $"{VaultEvents.AtStart(owner)} re-encrypted a shared vault; your keys and apps for it were revoked. Give your agents that vault again.",
-        MemberNoticeDocument.VaultRekeyed => VaultEvents.TextFor(VaultEvents.RekeyFinished, toOwner: false, owner, alias, null, null),
+        MemberNoticeDocument.VaultRekeyed =>
+            $"{VaultEvents.AtStart(owner)} re-encrypted {alias}; your keys and apps for it were revoked. Give your agents {alias} again.",
         _ => $"The owner has deleted {alias ?? "a shared vault"}.",
     };
 
