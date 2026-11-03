@@ -4,7 +4,7 @@
 
 /** What `help` prints before the server's answer. */
 export const helpBlock = `In this console:
-  cd [path], pwd, clear
+  cd [path] (.. alone is cd ..), pwd, clear, exit
   Relative paths work here; the console turns them into absolute ones, and → shows the result.
   It only reads: restore, mv, mkdir, rm, mkcp and rmcp are refused, and the write tools aren't here.
 
@@ -15,6 +15,7 @@ export const localHelp: Record<string, string> = {
   cd: `cd [path]
   Change the working directory, a vault or a folder in one. Without a path it goes to /;
   . and .. work, and .. at / stays at /. The other commands' relative paths start here.
+  .. alone is cd ..
   A note, an attachment or nothing there: cd: <path>: not a folder.
 
   cd /Work
@@ -24,4 +25,6 @@ export const localHelp: Record<string, string> = {
   Print the working directory.`,
   clear: `clear
   Empty the scrollback. The history (up and down) stays.`,
+  exit: `exit
+  Go back to the notes. The directory, the scrollback and the history stay until a reload.`,
 };
