@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { run } from "./run";
 import { useConsole, type Entry, type Output, type Running } from "./store";
 
@@ -23,6 +23,7 @@ export default function ConsolePage() {
   const log = useRef<HTMLDivElement>(null);
   const controller = useRef<AbortController | null>(null);
   const following = useRef(true);
+  const navigate = useNavigate();
 
   // Leaving the page stops the running command; the store keeps the rest for coming back.
   useEffect(() => () => controller.current?.abort(), []);
@@ -43,7 +44,7 @@ export default function ConsolePage() {
     setValue("");
     setWalk(null);
     following.current = true;
-    void run(value, controller.current.signal);
+    void run(value, controller.current.signal, () => navigate("/"));
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -81,7 +82,8 @@ export default function ConsolePage() {
         }}
         // A click in the output goes on typing, unless it selected something to copy.
         onClick={() => !window.getSelection()?.toString() && input.current?.focus()}
-        className="min-h-0 flex-1 overflow-y-auto font-mono text-sm text-text"
+        // Relative: an error's screen-reader label is absolutely positioned, and must scroll here rather than grow the page.
+        className="relative min-h-0 flex-1 overflow-y-auto font-mono text-sm text-text"
       >
         <p className={`mb-4 text-text-body ${wrap}`}>{welcome}</p>
         {entries.map((entry, i) => (

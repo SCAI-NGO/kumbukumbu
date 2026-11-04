@@ -302,6 +302,20 @@ public class ImgTests
 
     private const string TurnedImage = "With --rotate 90, --crop counts from the top left of this turned image, in its pixels.";
 
+    [Theory]
+    [InlineData("--rotate=-90", 270)]
+    [InlineData("--rotate -90", 270)]
+    [InlineData("--rotate=-270", 90)]
+    public async Task A_minus_turns_the_other_way(string option, int clockwise)
+    {
+        await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
+
+        var result = await Run($"img /Work/Scans/sheet.jpg {option}");
+
+        Assert.False(result.IsError, result.Output);
+        Assert.Equal(clockwise, Assert.Single(_pixels.Rotations));
+    }
+
     [Fact]
     public async Task Rotate_goes_to_the_pixels()
     {
@@ -343,14 +357,14 @@ public class ImgTests
     [Theory]
     [InlineData("45")]
     [InlineData("0")]
-    [InlineData("-90")]
+    [InlineData("-45")]
     public async Task A_bad_rotate_is_refused_with_its_sentence(string angle)
     {
         await Upload("/Work/Scans/sheet.jpg", Jpeg(), (3000, 2000));
 
         var result = await Run($"img /Work/Scans/sheet.jpg --rotate={angle}");
 
-        Assert.Equal(ShellResult.Error($"img: --rotate turns clockwise by 90, 180 or 270 degrees, not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
+        Assert.Equal(ShellResult.Error($"img: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '{angle}' (leave it out for no turn)") with { Kind = ShellErrorKind.Invalid }, result);
         Assert.Equal(new ImgRefused(ImgRefusal.BadRotate), Assert.Single(_pixels.Used));
         Assert.Empty(_pixels.Requests);
     }
@@ -360,7 +374,7 @@ public class ImgTests
     {
         var result = await Run("img /Work/Scans/nothing.jpg --rotate 45");
 
-        Assert.Equal("img: --rotate turns clockwise by 90, 180 or 270 degrees, not '45' (leave it out for no turn)", result.Output);
+        Assert.Equal("img: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '45' (leave it out for no turn)", result.Output);
         Assert.Equal(new ImgRefused(ImgRefusal.BadRotate), Assert.Single(_pixels.Used));
     }
 

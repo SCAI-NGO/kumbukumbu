@@ -61,6 +61,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
                             it, --crop counts in the turned page, from its top left. Regions from 'pdf info' and
                             'rg --regions' are for the page not turned: x,y,w,h on a page W×H, with W and H rounded
                             down, is H-y-h,x,h,w when turned by 90, W-x-w,H-y-h,w,h by 180, y,W-x-w,h,w by 270.
+                            -90, -180 and -270 turn the other way: -90 is 270, -270 is 90.
           --size S          the step for images, medium if omitted:
         {SizeSteps.Table}
           At most {MaxImages} images come from one call, and at most {MaxPages} pages, fewer when their text would pass
@@ -132,7 +133,7 @@ public sealed class PdfCommand(INoteReader notes, IAttachmentPixels pixels) : IC
         var rotate = 0;
         if (parsed.Value("rotate") is { } turn && !Rotation.TryParse(turn, out rotate))
         {
-            return Invalid($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees, not '{turn}' (leave it out for no turn)");
+            return Invalid($"pdf: --rotate turns clockwise by 90, 180 or 270 degrees (or back with -90, -180 or -270), not '{turn}' (leave it out for no turn)");
         }
 
         Crop? crop = null;
