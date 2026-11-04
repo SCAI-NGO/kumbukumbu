@@ -9,7 +9,7 @@ import { useDialog } from "../hooks/useDialog";
 
 type ApiKey = components["schemas"]["ApiKeyView"];
 
-/** "Revoke this key?": Escape cancels. Agents using the key stop working at once. */
+/** "Revoke this key?": Escape cancels. Whatever uses the key stops working at once. */
 export default function RevokeDialog({ apiKey, onClose }: { apiKey: ApiKey; onClose(): void }) {
   const id = useId();
   const queryClient = useQueryClient();
@@ -34,7 +34,9 @@ export default function RevokeDialog({ apiKey, onClose }: { apiKey: ApiKey; onCl
         <h2 id={`${id}-title`} className="text-lg font-bold break-words text-text">
           Revoke {apiKey.name}?
         </h2>
-        <p className="text-text-body">Agents using this key lose access at once. This can't be undone.</p>
+        <p className="text-text-body">
+          {apiKey.kind === "device" ? "This device stops syncing at once." : "Agents using this key lose access at once."} This can't be undone.
+        </p>
         {revoke.isError && <FormError>{errorText(revoke.error)}</FormError>}
         <div className="flex gap-3">
           <button type="button" data-autofocus onClick={onClose} className={`${secondaryButtonClass} flex-1`}>
