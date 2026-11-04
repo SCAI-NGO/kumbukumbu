@@ -329,6 +329,12 @@ describe("the vault's activity", () => {
     expect((await rowsOf(dialog))[0]).toHaveTextContent("2 folders");
   });
 
+  it("counts a restored file", async () => {
+    api(() => json(200, { rows: [row("ada", "self", [{ path: INBOX, kind: "restored", version: "v1", before: "v1" }, { path: "/Work/b.md", kind: "changed" }])], more: false }));
+    const dialog = await openActivity();
+    expect((await rowsOf(dialog))[0]).toHaveTextContent("1 changed · 1 restored");
+  });
+
   describe("sharing events", () => {
     const event = (kind: string, at: string, text: string) => ({ kind, at, text, role: null, vault: "Work" });
 

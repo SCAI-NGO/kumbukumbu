@@ -86,9 +86,9 @@ export function writerText({ writer, writerKind }: Pick<ActivityRow, "writer" | 
   }
 }
 
-const kinds = ["changed", "added", "renamed", "deleted"] as const;
+const kinds = ["changed", "added", "renamed", "deleted", "restored"] as const;
 
-/** "3 changed · 1 added · 2 deleted · 2 folders": the row's files by kind, only the kinds it has; folders are counted apart. */
+/** "3 changed · 1 added · 2 deleted · 1 restored · 2 folders": the row's files by kind, only the kinds it has; folders are counted apart. */
 export const countsText = (files: Pick<ActivityFile, "kind" | "fileKind">[]) => {
   const folders = files.filter((f) => f.fileKind === "folder").length;
   const others = files.filter((f) => f.fileKind !== "folder");

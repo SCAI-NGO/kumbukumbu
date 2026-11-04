@@ -75,7 +75,9 @@ public sealed record RestoreCheckpointRequest(string Plan);
 public sealed record RestoredView(string Message);
 
 /// <summary>
-/// A note in a changeset. <c>kind</c>: <c>added</c>, <c>changed</c>, <c>renamed</c> (from <c>from</c>) or <c>deleted</c>.
+/// A note in a changeset. <c>kind</c>: <c>added</c>, <c>changed</c>, <c>renamed</c> (from <c>from</c>), <c>deleted</c>
+/// or <c>restored</c> (back from the trash, until its next write: the restored version is both <c>version</c> and
+/// <c>before</c>; a rename in the same changeset shows as <c>renamed</c>).
 /// <c>version</c>: the state the changeset left (null for deleted); <c>before</c>: the state before it, null when there
 /// was none or it is no longer kept (<c>beforeLost</c>). <c>trashed</c>: the note is in the trash now. Both versions
 /// open with <c>?version=</c> on the note, or in the trash. For <c>renamed</c>: <c>from</c> → <c>to</c> is that rename;

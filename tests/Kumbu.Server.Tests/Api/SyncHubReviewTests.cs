@@ -225,7 +225,8 @@ public sealed class SyncHubReviewTests(KumbuAppFactory app) : IAsyncDisposable
 
             var messages = await DrainAsync(tab, TimeSpan.FromSeconds(1.5));
             Assert.Contains(messages, m => m.Contains("\"Garten\"", StringComparison.Ordinal));
-            Assert.DoesNotContain(messages, m => m.Contains("Gartenarbeit", StringComparison.Ordinal));
+            // The renamed frame names the old name as its "from"; nothing names the vault by it.
+            Assert.DoesNotContain(messages, m => m.Contains("\"vault\":\"Gartenarbeit\"", StringComparison.Ordinal));
             Assert.Equal("Garten", Assert.Single(Hub.Held, h => h.Subject.User == alice.User.Id && h.VaultId == vaultId).Name);
         }
 

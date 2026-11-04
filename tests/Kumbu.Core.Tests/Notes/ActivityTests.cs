@@ -306,4 +306,129 @@ public class ActivityTests
         var removal = Assert.Single((await Fold())[0].Files);
         Assert.Equal(("/W/Drafts/.vaultkeep", ActivityFileKind.Deleted, "folder"), (removal.Path, removal.Kind, removal.FileKind));
     }
+
+    /// <summary>A vault /W with a.md, worked on through the shell by one writer, and its activity.</summary>
+    private sealed class Restoring
+    {
+        private readonly InMemoryNoteStore _store = new(("/W/a.md", "a\n"));
+        private readonly NoteWriter _writer;
+        private readonly Kumbu.Core.Sh.Shell _shell;
+
+        public Restoring()
+        {
+            var caller = new FixedCaller(Writers.Dev);
+            _writer = new NoteWriter(_store, Time, caller);
+            _shell = new Kumbu.Core.Sh.Shell(_store, _writer, new NoteMover(_store, Time, caller));
+        }
+
+        public FakeTimeProvider Time { get; } = new(T0);
+
+        public async Task Run(string line) => Assert.False((await _shell.RunAsync(line, CancellationToken.None)).IsError, line);
+
+        public async Task Write(string path, string content)
+        {
+            var current = await _store.GetAsync(P(path), CancellationToken.None);
+            Assert.False((await _writer.WriteAsync(path, content, current?.Version, CancellationToken.None)).IsError, path);
+        }
+
+        public async Task<IReadOnlyList<ActivityRow>> Rows()
+        {
+            var ct = CancellationToken.None;
+            var notes = new List<StoredNote>();
+            foreach (var path in await _store.ListNotesUnderAsync(P("/W"), ct)) notes.Add((await _store.GetAsync(path, ct))!);
+            return Activity.Rows(notes, await _store.ListTrashAsync(P("/W"), ct), await _store.ListMovesAsync(P("/W"), ct), null, 50);
+        }
+    }
+
+    [Fact]
+    public async Task A_restore_from_the_trash_reads_as_a_restore()
+    {
+        var vault = new Restoring();
+        await vault.Run("rm /W/a.md");
+        vault.Time.Advance(TimeSpan.FromHours(1));
+        await vault.Run("restore /W/a.md");
+
+        var rows = await vault.Rows();
+
+        var file = Assert.Single(rows[0].Files);
+        Assert.Equal(("/W/a.md", ActivityFileKind.Restored, V("a\n"), V("a\n")), (file.Path, file.Kind, file.Version, file.Before));
+        Assert.False(rows[0].Restore);
+    }
+
+    [Fact]
+    public async Task An_attachment_restored_from_the_trash_reads_as_a_restore()
+    {
+        var store = new InMemoryNoteStore(("/W/plan.md", "plan\n"));
+        var time = new FakeTimeProvider(T0);
+        var caller = new FixedCaller(Writers.Dev);
+        var files = new AttachmentWriter(store, store, time, caller);
+        var shell = new Kumbu.Core.Sh.Shell(store, new NoteWriter(store, time, caller), new NoteMover(store, time, caller));
+        var ct = CancellationToken.None;
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1];
+        var version = (await files.WriteAsync("/W/shot.png", png, (4, 3), null, ct)).Result.Version!.Token;
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await shell.RunAsync("rm /W/shot.png", ct)).IsError);
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await shell.RunAsync("restore /W/shot.png", ct)).IsError);
+
+        async Task<IReadOnlyList<ActivityRow>> Fold() => Activity.Rows(
+            [], [], await store.ListMovesAsync(P("/W"), ct), null, 50,
+            attachments: await store.ListAttachmentsUnderAsync(P("/W"), ct), attachmentTrash: await store.ListAttachmentTrashAsync(P("/W"), ct));
+
+        var file = Assert.Single((await Fold())[0].Files);
+        Assert.Equal(("/W/shot.png", ActivityFileKind.Restored, version, version, "image"), (file.Path, file.Kind, file.Version, file.Before, file.FileKind));
+
+        // The next upload clears the flag: no row reads as a restore any more.
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.False((await files.WriteAsync("/W/shot.png", png.Append((byte)2).ToArray(), (4, 3), version, ct)).Result.IsError);
+        Assert.DoesNotContain(await Fold(), r => r.Files.Any(f => f.Kind == ActivityFileKind.Restored));
+    }
+
+    [Fact]
+    public async Task A_text_changed_back_in_a_changeset_is_not_a_restore()
+    {
+        var vault = new Restoring();
+        await vault.Write("/W/a.md", "b\n");
+        await vault.Write("/W/a.md", "a\n");
+
+        var file = Assert.Single((await vault.Rows())[0].Files);
+        Assert.Equal((ActivityFileKind.Changed, V("a\n"), V("a\n")), (file.Kind, file.Version, file.Before));
+    }
+
+    [Fact]
+    public async Task A_rename_takes_precedence_over_restored()
+    {
+        var vault = new Restoring();
+        await vault.Run("rm /W/a.md");
+        vault.Time.Advance(TimeSpan.FromHours(1));
+        await vault.Run("restore /W/a.md");
+        await vault.Run("mv /W/a.md /W/b.md");
+
+        var file = Assert.Single((await vault.Rows())[0].Files);
+        Assert.Equal(("/W/b.md", ActivityFileKind.Renamed, "/W/a.md"), (file.Path, file.Kind, file.From));
+    }
+
+    [Fact]
+    public async Task A_write_removal_and_restore_in_one_changeset_stays_a_change()
+    {
+        var vault = new Restoring();
+        await vault.Write("/W/a.md", "b\n");
+        await vault.Run("rm /W/a.md");
+        await vault.Run("restore /W/a.md");
+
+        var file = Assert.Single((await vault.Rows())[0].Files);
+        Assert.Equal((ActivityFileKind.Changed, V("b\n"), V("a\n")), (file.Kind, file.Version, file.Before));
+    }
+
+    [Fact]
+    public async Task A_note_created_and_restored_in_one_changeset_stays_added()
+    {
+        var vault = new Restoring();
+        await vault.Write("/W/n.md", "n\n");
+        await vault.Run("rm /W/n.md");
+        await vault.Run("restore /W/n.md");
+
+        var file = Assert.Single((await vault.Rows())[0].Files);
+        Assert.Equal(("/W/n.md", ActivityFileKind.Added, V("n\n")), (file.Path, file.Kind, file.Version));
+    }
 }

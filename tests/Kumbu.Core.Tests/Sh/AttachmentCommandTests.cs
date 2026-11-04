@@ -199,6 +199,31 @@ public class AttachmentCommandTests
         Assert.Contains("→ trash", await RemoveAndHistory());
     }
 
+    [Fact]
+    public async Task An_attachment_restored_from_the_trash_is_marked()
+    {
+        await Upload("/Work/shot.png", Png(2048), (10, 20));
+        var version = await VersionOf("/Work/shot.png");
+        _time.Advance(TimeSpan.FromHours(2));
+        await Run("rm /Work/shot.png");
+        _time.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal("restored /Work/shot.png from the trash", (await Run("restore /Work/shot.png")).Output);
+
+        Assert.Equal(
+            [$"{version}  2026-10-27 13:01 UTC  dev  image 10×20 2 KB  (current)  (restored)", $"{version}  2026-10-27 11:00 UTC  dev  image 10×20 2 KB"],
+            (await Run("history /Work/shot.png")).Output.Split('\n'));
+        var folder = (await Run("history /Work")).Output.Split('\n');
+        Assert.Single(folder, r => r.Contains("(restored)", StringComparison.Ordinal));
+        Assert.Matches(@"^2026-10-27 13:01 UTC  dev   /Work/shot\.png\s+\w{12}  image 10×20 2 KB  changeset \w{8}  \(restored\)$", folder[0]);
+
+        // The next upload leaves one line of that version, unmarked.
+        _time.Advance(TimeSpan.FromMinutes(1));
+        await Upload("/Work/shot.png", Png(4096, 1), (30, 40));
+        var after = (await Run("history /Work/shot.png")).Output;
+        Assert.DoesNotContain("(restored)", after, StringComparison.Ordinal);
+        Assert.Single(after.Split('\n'), l => l.StartsWith(version!, StringComparison.Ordinal));
+    }
+
     private async Task<string> RemoveAndHistory()
     {
         await Run("rm /Work/shot.png");

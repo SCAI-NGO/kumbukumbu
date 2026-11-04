@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Text;
+using System.Text.Json;
 using Kumbu.Core.Crypto;
 using Kumbu.Core.Notes;
 using Kumbu.Server.Vaults;
@@ -360,6 +361,37 @@ public sealed class EncryptedNoteStoreTests(MongoFixture fixture)
         var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
         Assert.Equal("two", read.Content);
         Assert.Equal([("two", "other", T0.AddHours(1)), ("one", Writers.Dev, T0)], read.History.Select(h => (h.Content, h.WrittenBy, h.WrittenAt)));
+    }
+
+    [Fact]
+    public async Task The_restored_flag_survives_sealing()
+    {
+        var (world, _, store) = await WorldAsync();
+        var note = New("/Work/a.md", "one");
+        await store.TryCreateAsync(note, Ct);
+        await store.TryTrashAsync(note, Writers.Dev, WriterRef.Server, T0.AddHours(1), Ct);
+
+        var restored = await store.TryRestoreFromTrashAsync(P("/Work/a.md"), null, Writers.Dev, WriterRef.Server, T0.AddHours(2), new Changeset("c1", T0.AddHours(2)), Ct);
+
+        Assert.True(restored!.Restored);
+        var read = (await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!;
+        Assert.True(read.Restored);
+
+        var next = NoteWriter.Next(read, "two", Writers.Dev, WriterRef.Server, T0.AddHours(3));
+        Assert.True(await store.TryReplaceAsync(read, next, Ct));
+        Assert.False((await Store(world.Catalog()).GetAsync(P("/Work/a.md"), Ct))!.Restored);
+    }
+
+    [Fact]
+    public void A_document_without_the_flag_reads_as_not_restored()
+    {
+        // As sealed before the flag existed, and as a note that wasn't restored is still sealed.
+        var json = """{"Path":"/Work/a.md","Content":"a","LastWriter":"dev","LastWriteAt":"2026-10-23T12:00:00Z","History":[],"SeedContent":null}""";
+        Assert.False(JsonSerializer.Deserialize<NotePayload>(json)!.ToNote(1).Restored);
+
+        var written = Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a"))));
+        Assert.DoesNotContain("Restored", written, StringComparison.Ordinal);
+        Assert.Contains("\"Restored\":true", Encoding.UTF8.GetString(JsonSerializer.SerializeToUtf8Bytes(Payload.From(New("/Work/a.md", "a") with { Restored = true }))), StringComparison.Ordinal);
     }
 
     [Fact]

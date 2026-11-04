@@ -30,7 +30,9 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
           'restore <path> <version>' makes an earlier version current again; to keep a state for longer,
           ask the user about a named checkpoint ('help mkcp').
           The version is computed from the text, so the same version can appear twice (after a restore,
-          or after changing a text back); either line restores the same text.
+          or after changing a text back); either line restores the same text. A current line marked
+          (restored) came back from the trash, with the writer and time of the restore; the next write
+          leaves one line of that version, unmarked.
 
           An attachment (an image or a PDF) lists the same way, with its kind and size instead of lines.
           --since T lists only the versions written since then (as for a directory, below).
@@ -73,7 +75,7 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
             var versions = new List<string>();
             foreach (var v in NoteHistory.Versions(attachment).Where(v => since is not { } s || v.WrittenAt >= s))
             {
-                versions.Add($"{v.Version}  {Time(v.WrittenAt)}  {await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct)}  {AttachmentText.Summary(v.State)}{(v.Current ? "  (current)" : "")}");
+                versions.Add($"{v.Version}  {Time(v.WrittenAt)}  {await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct)}  {AttachmentText.Summary(v.State)}{(v.Current ? Current(attachment.Restored) : "")}");
             }
 
             return ShellResult.Ok(versions.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(versions));
@@ -95,11 +97,15 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
         var lines = new List<string>();
         foreach (var v in NoteHistory.Versions(note).Where(v => since is not { } s || v.WrittenAt >= s))
         {
-            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? "  (current)" : ""));
+            lines.Add(Line(v.Content, await ShownAsync(path.Segments[0], v.Writer, v.Ref, ct), v.WrittenAt) + (v.Current ? Current(note.Restored) : ""));
         }
 
         return ShellResult.Ok(lines.Count == 0 ? NoneSince(path, since!.Value) : Lines.Join(lines)) with { Version = new NoteVersion(path.Value, note.Version) };
     }
+
+    private const string RestoredMark = "  (restored)";
+
+    private static string Current(bool restored) => restored ? "  (current)" + RestoredMark : "  (current)";
 
     private static string NoneSince(VaultPath path, DateTime since) => $"(no versions of {path.Value} written since {Time(since)})";
 
@@ -128,7 +134,8 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
                 if (since is { } from && at < from) continue;
                 var (added, removed) = TextDiff.Count(i + 1 < states.Count ? states[i + 1].Content : "", content);
                 var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
-                rows.Add((at, await ShownAsync(path.Segments[0], writer, reference, ct), path.Value, $"{VersionToken.Of(content)}  +{added} -{removed}{cs}"));
+                var mark = i == 0 && note.Restored ? RestoredMark : "";
+                rows.Add((at, await ShownAsync(path.Segments[0], writer, reference, ct), path.Value, $"{VersionToken.Of(content)}  +{added} -{removed}{cs}{mark}"));
             }
         }
 
@@ -139,14 +146,16 @@ public sealed partial class History(INoteStore notes, Func<DateTime> now, IWrite
                 (file.Current, file.LastWriter, file.Ref, file.LastWriteAt, file.Changeset),
             };
             states.AddRange(file.History.Select(h => (h.State, h.WrittenBy, h.Ref, h.WrittenAt, h.Changeset)));
-            foreach (var (state, label, reference, at, changeset) in states)
+            for (var i = 0; i < states.Count; i++)
             {
+                var (state, label, reference, at, changeset) = states[i];
                 if (since is { } from && at < from) continue;
                 var cs = changeset is null ? "" : $"  changeset {changeset.Short}";
+                var mark = i == 0 && file.Restored ? RestoredMark : "";
                 var writer = await ShownAsync(file.Path.Segments[0], label, reference, ct);
                 rows.Add(FolderMarker.Is(file.Path)
-                    ? (at, writer, FolderMarker.Shown(file.Path), $"folder{cs}")
-                    : (at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}"));
+                    ? (at, writer, FolderMarker.Shown(file.Path), $"folder{cs}{mark}")
+                    : (at, writer, file.Path.Value, $"{state.Version}  {AttachmentText.Summary(state)}{cs}{mark}"));
             }
         }
 

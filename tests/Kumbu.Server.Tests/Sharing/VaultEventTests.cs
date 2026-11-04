@@ -204,6 +204,113 @@ public sealed class VaultEventTests(KumbuAppFactory app)
         Assert.StartsWith("Work/", blocks[0], StringComparison.Ordinal);
     }
 
+    private const string BobLostKeys = "\"Alice\" re-encrypted Garten; your keys and apps for it were revoked. Give your agents Garten again.";
+    private const string CarolLostNothing = "\"Alice\" re-encrypted Beete. Nothing of yours stopped working.";
+
+    /// <summary>Alice shares Gartenarbeit with Bob, who gives an agent a key for it, and with Carol, who has none.</summary>
+    private async Task<(RestClient Alice, RestClient Bob, RestClient Carol, string VaultId, string BobsMembership)> SharedWithAKeyAsync()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Gartenarbeit", remember: true);
+        await SetDisplayAsync(alice, "Alice");
+        var bob = await RestClient.NewAsync(Api, vault: "Work");
+        var carol = await RestClient.NewAsync(Api, vault: "Notizen");
+        var vaultId = await alice.VaultIdAsync();
+        var bobs = await alice.ShareWithAsync(bob, "Garten", MemberRole.Write, label: "Bob");
+        await alice.ShareWithAsync(carol, "Beete", MemberRole.Read, label: "Carol");
+        await Api.Services.GetRequiredService<ApiKeys>().CreateAsync(
+            bob.User, bob.UserKey, DateTime.UtcNow, "Claude", new Dictionary<string, KeyRight> { [vaultId] = KeyRight.Write }, Ct);
+        return (alice, bob, carol, vaultId, bobs);
+    }
+
+    private static async Task RekeyAsync(RestClient owner)
+    {
+        using var rekeyed = await owner.SendAsync(HttpMethod.Post, $"/api/vaults/{Uri.EscapeDataString(owner.Vault)}/rekey", new { password = RestClient.Password });
+        Assert.Equal(HttpStatusCode.OK, rekeyed.StatusCode);
+    }
+
+    /// <summary>The vault's re-keyings as stored, newest first.</summary>
+    private Task<List<BsonDocument>> RawRekeysAsync(string vaultId) =>
+        app.Database.GetCollection<BsonDocument>(VaultEvents.CollectionName)
+            .Find(new BsonDocument { ["vault"] = vaultId, ["kind"] = VaultEvents.RekeyFinished }).Sort(new BsonDocument("at", -1)).ToListAsync(Ct);
+
+    private static async Task<string[]> FeedTextsAsync(RestClient member) => [.. (await FeedAsync(member)).Select(e => e!["text"]!.GetValue<string>())];
+
+    [Fact]
+    public async Task A_member_with_no_key_reads_that_nothing_stopped_working()
+    {
+        var (alice, bob, carol, _, _) = await SharedWithAKeyAsync();
+
+        await RekeyAsync(alice);
+
+        Assert.Equal([BobLostKeys], await FeedTextsAsync(bob));
+        Assert.Equal([CarolLostNothing], await FeedTextsAsync(carol));
+    }
+
+    [Fact]
+    public async Task The_vaults_own_activity_reads_as_the_feed_does()
+    {
+        var (alice, bob, carol, vaultId, _) = await SharedWithAKeyAsync();
+
+        await RekeyAsync(alice);
+        Assert.Equal([BobLostKeys], await ActivityTextsAsync(bob, "Garten"));
+        Assert.Equal([CarolLostNothing], await ActivityTextsAsync(carol, "Beete"));
+
+        // Again: Bob's key no longer reached it, so the list is there and empty, and nothing of anyone's stopped working.
+        await Task.Delay(10, Ct);
+        await RekeyAsync(alice);
+        Assert.Equal(new BsonArray(), (await RawRekeysAsync(vaultId))[0]["endedMembers"]);
+        Assert.Equal(["\"Alice\" re-encrypted Garten. Nothing of yours stopped working.", BobLostKeys], await ActivityTextsAsync(bob, "Garten"));
+        Assert.Equal([CarolLostNothing, CarolLostNothing], await ActivityTextsAsync(carol, "Beete"));
+        Assert.Equal(["\"Alice\" re-encrypted Garten. Nothing of yours stopped working.", BobLostKeys], await FeedTextsAsync(bob));
+    }
+
+    [Fact]
+    public async Task An_event_from_before_the_list_keeps_todays_sentence()
+    {
+        var (_, bob, carol, vaultId, _) = await SharedWithAKeyAsync();
+        await app.Database.GetCollection<VaultEventDocument>(VaultEvents.CollectionName).InsertOneAsync(
+            new VaultEventDocument { Vault = vaultId, Kind = VaultEvents.RekeyFinished, At = DateTime.UtcNow.AddSeconds(1) }, cancellationToken: Ct);
+
+        Assert.Equal([BobLostKeys], await FeedTextsAsync(bob));
+        Assert.Equal([BobLostKeys], await ActivityTextsAsync(bob, "Garten"));
+        string[] carols = ["\"Alice\" re-encrypted Beete; your keys and apps for it were revoked. Give your agents Beete again."];
+        Assert.Equal(carols, await FeedTextsAsync(carol));
+        Assert.Equal(carols, await ActivityTextsAsync(carol, "Beete"));
+    }
+
+    [Fact]
+    public async Task A_member_doesnt_learn_who_else_lost_keys()
+    {
+        var (alice, bob, carol, vaultId, bobs) = await SharedWithAKeyAsync();
+
+        await RekeyAsync(alice);
+
+        foreach (var url in new[] { "/api/vault-events", "/api/vaults/Beete/activity" })
+        {
+            using var response = await carol.GetAsync(url);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var json = await response.Content.ReadAsStringAsync(Ct);
+            Assert.DoesNotContain(bobs, json, StringComparison.Ordinal);
+            Assert.DoesNotContain(bob.User.Id, json, StringComparison.Ordinal);
+            Assert.DoesNotContain("Bob", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("ended", json, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Equal([CarolLostNothing], await FeedTextsAsync(carol));
+        // The event does name his membership: what she is shown is built without it.
+        Assert.Equal(new BsonArray { bobs }, Assert.Single(await RawRekeysAsync(vaultId))["endedMembers"]);
+    }
+
+    [Fact]
+    public async Task The_owner_reads_what_she_read()
+    {
+        var (alice, _, _, _, _) = await SharedWithAKeyAsync();
+
+        await RekeyAsync(alice);
+
+        Assert.Equal(["Gartenarbeit was re-encrypted; members' keys and apps for it were revoked."], await ActivityTextsAsync(alice, "Gartenarbeit"));
+    }
+
     [Fact]
     public async Task After_Bob_leaves_the_owner_is_offered_a_re_encryption_until_she_re_keys()
     {

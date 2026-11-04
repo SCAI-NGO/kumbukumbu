@@ -564,18 +564,20 @@ internal sealed record HistoryPayload(
     [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
     [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
-/// <remarks>Changeset is missing in notes written before step 6b; such a state joins no changeset.</remarks>
+/// <remarks>Changeset is missing in notes written before step 6b; such a state joins no changeset. Restored is
+/// missing unless set (<see cref="StoredNote.Restored"/>), so a note that wasn't restored is sealed as before.</remarks>
 internal sealed record NotePayload(
     string Path, string Content, string LastWriter, DateTime LastWriteAt, List<HistoryPayload> History, string? SeedContent,
     ChangesetPayload? Changeset = null,
     [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
-    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null)
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Restored = null)
 {
     public StoredNote ToNote(long revision) => new(
         Payload.Path(Path), Content, revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new HistoryEntry(
             h.Content, h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref)))],
-        SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref));
+        SeedContent, Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true);
 }
 
 /// <remarks>Changeset is missing in records written before moves and removals carried one (and omitted when null).</remarks>
@@ -629,22 +631,24 @@ internal sealed record AttachmentVersionPayload(
     [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
     [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null);
 
+/// <remarks>Restored as in <see cref="NotePayload"/>.</remarks>
 internal sealed record AttachmentPayload(
     string Path, AttachmentStatePayload Current, string LastWriter, DateTime LastWriteAt, List<AttachmentVersionPayload> History, ChangesetPayload? Changeset,
     [property: JsonPropertyName("v"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? V = null,
-    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null)
+    [property: JsonPropertyName("ref"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WriterRefPayload? Ref = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Restored = null)
 {
     public static AttachmentPayload From(StoredAttachment a) => new(
         a.Path.Value, AttachmentStatePayload.From(a.Current), a.LastWriter, a.LastWriteAt,
         [.. a.History.Select(h => new AttachmentVersionPayload(
             AttachmentStatePayload.From(h.State), h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref)))],
-        ChangesetPayload.From(a.Changeset), WriterRefPayload.VersionOf(a.Ref), WriterRefPayload.From(a.Ref));
+        ChangesetPayload.From(a.Changeset), WriterRefPayload.VersionOf(a.Ref), WriterRefPayload.From(a.Ref), a.Restored ? true : null);
 
     public StoredAttachment ToAttachment(long revision) => new(
         Payload.Path(Path), Current.ToState(), revision, LastWriter, DateTime.SpecifyKind(LastWriteAt, DateTimeKind.Utc),
         [.. History.Select(h => new AttachmentVersion(
             h.State.ToState(), h.WrittenBy, DateTime.SpecifyKind(h.WrittenAt, DateTimeKind.Utc), h.Changeset?.ToChangeset(), WriterRefPayload.Read(h.V, h.Ref)))],
-        Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref));
+        Changeset?.ToChangeset(), WriterRefPayload.Read(V, Ref), Restored == true);
 }
 
 internal sealed record AttachmentTrashPayload(
@@ -675,7 +679,7 @@ internal static class Payload
         n.Path.Value, n.Content, n.LastWriter, n.LastWriteAt,
         [.. n.History.Select(h => new HistoryPayload(
             h.Content, h.WrittenBy, h.WrittenAt, ChangesetPayload.From(h.Changeset), WriterRefPayload.VersionOf(h.Ref), WriterRefPayload.From(h.Ref)))],
-        n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref));
+        n.SeedContent, ChangesetPayload.From(n.Changeset), WriterRefPayload.VersionOf(n.Ref), WriterRefPayload.From(n.Ref), n.Restored ? true : null);
 
     public static VaultPath Path(string value) =>
         VaultPath.TryParse(value, out var path) ? path : throw new InvalidDataException($"Invalid path in a sealed document: {value}");
