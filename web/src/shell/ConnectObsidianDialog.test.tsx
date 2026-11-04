@@ -271,6 +271,8 @@ describe("Connect Obsidian", () => {
     await u.click(await within(dialog).findByRole("button", { name: "Revoke Work – Obsidian Laptop" }));
     const confirm = screen.getByRole("alertdialog");
     expect(confirm).toHaveTextContent("Revoke Work – Obsidian Laptop?");
+    expect(confirm).toHaveTextContent("This device stops syncing at once.");
+    expect(confirm).not.toHaveTextContent("Agents");
     expect(revoked).toEqual([]);
 
     await u.click(within(confirm).getByRole("button", { name: "Revoke" }));

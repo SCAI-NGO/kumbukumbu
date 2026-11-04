@@ -135,6 +135,7 @@ describe("Keys", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Revoke Laptop" }));
     const confirm = screen.getByRole("alertdialog");
     expect(confirm).toHaveTextContent("Revoke Laptop?");
+    expect(confirm).toHaveTextContent("Agents using this key lose access at once.");
     await userEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(revokedCalls).toBe(0);
 
