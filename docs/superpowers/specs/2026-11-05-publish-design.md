@@ -196,7 +196,37 @@ What this changes, to be written into `docs/security-architecture.md` (lines as 
 - `docs/concept.md`: `:15`, §3 threat model, §7 cryptography, `:191`.
 - README: the feature, `sh publish`, `KUMBU_PUBLISH_ENABLED`.
 
-## 6. Left to the builder
+## 6. End to end
+
+Alice owns `Work`. `Work/Routing/Questions.md`:
+
+```markdown
+---
+status: draft
+---
+# Questions on routing #routing
+
+1. Should the chatbot move the user between screens? See [[Routing master]].
+2. Is there a list of routes? [Router docs](https://example.org/router)
+%% ask about deep links later %%
+![[flow.png]]
+```
+
+`Work/Private/` is marked unpublishable; `flow.png` lies in `Work/Routing/` and has GPS data in its EXIF.
+
+1. Alice opens the note's menu, **Publish…**, gives her password. The dialog shows `https://kumbu.example.org/s#K7QM-4XDA-…` (32 characters); she copies it into the chat.
+2. The colleague opens it. The server never sees the code in a request path or log; the page posts it, removes the fragment and shows:
+   - "Questions on routing", "Snapshot of 5 Nov 2026, 14:32";
+   - "1. Should the chatbot move the user between screens? See Routing master." (plain text, no link);
+   - "2. Is there a list of routes? Router docs", a working web link;
+   - the image without EXIF; no frontmatter, no `#routing`, no comment, no name of Alice or `Work`.
+3. The chat service's preview of the link shows a generic page.
+4. Alice adds a line. Her bar turns yellow, "Published copy is older than this note". The colleague, reloading, still sees the snapshot of 14:32, with no hint that anything changed. Alice clicks **Update copy**: the same link shows the new text and the new time.
+5. Alice's agent, a key with `write` but without "May publish", runs `sh publish rm /Work/Routing/Questions.md`: refused, naming the missing right. It runs `rm /Work/Routing/Questions.md`: refused, naming the publication. `publish ls /Work` lists the note with its snapshot time and "older: no", without the link.
+6. Bob, a member of `Work` with `write`, sees "Published by the vault's owner" above the note and `publish ls` gives him the path alone. He edits the note freely; his edit doesn't reach the copy.
+7. Alice moves the note to `Work/Done/Questions.md`: the link still works. She moves it to `Work/Private/`: the publication is withdrawn, the link answers as for a wrong code, and her history shows the withdrawal and why.
+
+## 7. Left to the builder
 
 - The exact tag rule (§3.3), the reader page's technology (§3.12), where the marks live (§4), where the overview lives in the web app (§3.11).
 - Whether PDFs make it into v1 (§3.4).
