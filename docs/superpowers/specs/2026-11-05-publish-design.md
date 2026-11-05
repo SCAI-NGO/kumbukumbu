@@ -1,6 +1,6 @@
 # Publish v1: one note behind a link
 
-Date: 2026-11-05. Status: draft for review. Target: 0.3.2.
+Date: 2026-11-05. Status: approved by the maintainer on 2026-11-05. Target: 0.3.2.
 
 ## 1. Why
 
