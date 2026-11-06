@@ -256,8 +256,8 @@ public sealed class AccountLimits : IDisposable
 
     /// <summary>
     /// The reader endpoint's limits (publish spec §3.12), as pairing's redeem: reads of a copy a minute per address,
-    /// per network and server-wide, against load; reads of its files a minute per address, apart, since a note may show
-    /// many images; and wrong share codes a minute per network and server-wide. A share code is 160 random bits, so
+    /// per network and server-wide, against load; reads of its files likewise, apart, since a note may show many images;
+    /// and wrong share codes a minute per network and server-wide. A share code is 160 random bits, so
     /// these bound the work strangers make the server do, not guessing.
     /// </summary>
     public const int ReaderReadsPerAddress = 60;
@@ -267,6 +267,10 @@ public sealed class AccountLimits : IDisposable
     public const int ReaderReadsPerServer = 20_000;
 
     public const int ReaderFilesPerAddress = 600;
+
+    public const int ReaderFilesPerNetwork = 6_000;
+
+    public const int ReaderFilesPerServer = 100_000;
 
     public const int ReaderFailuresPerNetwork = 100;
 
@@ -335,6 +339,8 @@ public sealed class AccountLimits : IDisposable
     private readonly PartitionedRateLimiter<string> _readerReadByNetwork;
     private readonly PartitionedRateLimiter<string> _readerReads;
     private readonly PartitionedRateLimiter<string> _readerFileByAddress;
+    private readonly PartitionedRateLimiter<string> _readerFileByNetwork;
+    private readonly PartitionedRateLimiter<string> _readerFiles;
     private readonly PartitionedRateLimiter<string> _readerFailuresByNetwork;
     private readonly PartitionedRateLimiter<string> _readerFailures;
 
@@ -349,12 +355,14 @@ public sealed class AccountLimits : IDisposable
         int redeemFailuresPerNetwork, int redeemFailuresPerServer, int invitePeeksPerAccount = InvitePeeksPerAccount, int invitePeeksPerNetwork = InvitePeeksPerNetwork,
         int aliasRenamesPerUser = AliasRenamesPerUser, int readerReadsPerAddress = ReaderReadsPerAddress, int readerFailuresPerNetwork = ReaderFailuresPerNetwork,
         int readerFailuresPerServer = ReaderFailuresPerServer, int readerFilesPerAddress = ReaderFilesPerAddress, int readerReadsPerNetwork = ReaderReadsPerNetwork,
-        int readerReadsPerServer = ReaderReadsPerServer)
+        int readerReadsPerServer = ReaderReadsPerServer, int readerFilesPerNetwork = ReaderFilesPerNetwork, int readerFilesPerServer = ReaderFilesPerServer)
     {
         _readerReadByAddress = Limiter(readerReadsPerAddress);
         _readerReadByNetwork = Limiter(readerReadsPerNetwork);
         _readerReads = Limiter(readerReadsPerServer);
         _readerFileByAddress = Limiter(readerFilesPerAddress);
+        _readerFileByNetwork = Limiter(readerFilesPerNetwork);
+        _readerFiles = Limiter(readerFilesPerServer);
         _readerFailuresByNetwork = Limiter(readerFailuresPerNetwork);
         _readerFailures = Limiter(readerFailuresPerServer);
         _aliasRenameByUser = Limiter(aliasRenamesPerUser);
@@ -422,8 +430,9 @@ public sealed class AccountLimits : IDisposable
     public TimeSpan? ReaderRead(HttpContext context) =>
         Take(_readerReadByAddress, Address(context)) ?? Take(_readerReadByNetwork, Network(context)) ?? Take(_readerReads, ServerWide);
 
-    /// <summary>A read of one of a published note's files, every one: per address, apart from <see cref="ReaderRead"/>.</summary>
-    public TimeSpan? ReaderFileRead(HttpContext context) => Take(_readerFileByAddress, Address(context));
+    /// <summary>A read of one of a published note's files, every one: as <see cref="ReaderRead"/>, apart from it.</summary>
+    public TimeSpan? ReaderFileRead(HttpContext context) =>
+        Take(_readerFileByAddress, Address(context)) ?? Take(_readerFileByNetwork, Network(context)) ?? Take(_readerFiles, ServerWide);
 
     /// <summary>As <see cref="RedeemsBlocked"/>, for wrong share codes: while it holds, every read it covers is refused,
     /// a right code too.</summary>
@@ -502,6 +511,8 @@ public sealed class AccountLimits : IDisposable
         _readerReadByNetwork.Dispose();
         _readerReads.Dispose();
         _readerFileByAddress.Dispose();
+        _readerFileByNetwork.Dispose();
+        _readerFiles.Dispose();
         _readerFailuresByNetwork.Dispose();
         _readerFailures.Dispose();
     }

@@ -100,8 +100,8 @@ public static class ReaderApi
     }
 
     /// <summary>
-    /// The limits first, as pairing's redeem: the read's own (<paramref name="allowance"/>: a copy's per address,
-    /// network and server, or a file's per address), then the wrong codes per network and server-wide; then the switch.
+    /// The limits first, as pairing's redeem: the read's own (<paramref name="allowance"/>: a copy's or a file's,
+    /// each per address, network and server), then the wrong codes per network and server-wide; then the switch.
     /// The copy opens only if its owner's account is active (spec §3.7): deactivation hides it.
     /// </summary>
     private static async Task<(string Code, OpenedPublication Opened)> OpenAsync(

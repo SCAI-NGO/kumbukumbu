@@ -57,13 +57,16 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
     internal const int FailuresPerNetwork = 3;
     internal const int FailuresPerServer = 6;
 
-    private WebApplicationFactory<Program> Limited(CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer) =>
-        Limited(Api, log, readsPerNetwork, readsPerServer);
+    private WebApplicationFactory<Program> Limited(
+        CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer,
+        int filesPerNetwork = AccountLimits.ReaderFilesPerNetwork, int filesPerServer = AccountLimits.ReaderFilesPerServer) =>
+        Limited(Api, log, readsPerNetwork, readsPerServer, filesPerNetwork, filesPerServer);
 
     /// <summary><paramref name="api"/> with <see cref="ReadsPerAddress"/>, <see cref="FailuresPerNetwork"/> and
     /// <see cref="FailuresPerServer"/>; the caller disposes it.</summary>
     internal static WebApplicationFactory<Program> Limited(
-        WebApplicationFactory<Program> api, CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer) => api.WithWebHostBuilder(b =>
+        WebApplicationFactory<Program> api, CapturedLog? log = null, int readsPerNetwork = AccountLimits.ReaderReadsPerNetwork, int readsPerServer = AccountLimits.ReaderReadsPerServer,
+        int filesPerNetwork = AccountLimits.ReaderFilesPerNetwork, int filesPerServer = AccountLimits.ReaderFilesPerServer) => api.WithWebHostBuilder(b =>
     {
         b.ConfigureServices(s =>
         {
@@ -71,7 +74,8 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
             s.AddSingleton(new AccountLimits(
                 AccountLimits.RedeemFailuresPerNetwork, AccountLimits.RedeemFailuresPerServer,
                 readerReadsPerAddress: ReadsPerAddress, readerFailuresPerNetwork: FailuresPerNetwork, readerFailuresPerServer: FailuresPerServer,
-                readerFilesPerAddress: FilesPerAddress, readerReadsPerNetwork: readsPerNetwork, readerReadsPerServer: readsPerServer));
+                readerFilesPerAddress: FilesPerAddress, readerReadsPerNetwork: readsPerNetwork, readerReadsPerServer: readsPerServer,
+                readerFilesPerNetwork: filesPerNetwork, readerFilesPerServer: filesPerServer));
         });
         if (log is not null) b.ConfigureLogging(l => l.AddProvider(log));
     });
@@ -485,6 +489,45 @@ public sealed class ReaderApiTests(KumbuAppFactory app)
 
         using var third = new Reader(api, "192.0.2.70");
         using var server = await third.PostAsync(published.Formatted);
+        Assert.Equal(HttpStatusCode.TooManyRequests, server.StatusCode);
+        Assert.NotNull(server.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task File_reads_are_limited_per_network_and_server()
+    {
+        var published = await PublishedAsync();
+        const int perNetwork = 3, perServer = 5;
+        await using var api = Limited(filesPerNetwork: perNetwork, filesPerServer: perServer);
+        using var reader = new Reader(api, "203.0.113.90");
+        (await reader.PostAsync(published.Formatted)).Dispose();
+
+        for (var i = 0; i < perNetwork; i++)
+        {
+            reader.Address = $"203.0.113.{90 + i}";
+            using var file = await reader.FileAsync(0);
+            Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+        }
+
+        reader.Address = "203.0.113.99";
+        using (var network = await reader.FileAsync(0))
+        {
+            Assert.Equal(HttpStatusCode.TooManyRequests, network.StatusCode);
+            Assert.NotNull(network.Headers.RetryAfter);
+        }
+
+        using var other = new Reader(api, "198.51.100.90");
+        (await other.PostAsync(published.Formatted)).Dispose();
+        for (var i = perNetwork; i < perServer; i++)
+        {
+            using var file = await other.FileAsync(0);
+            Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+        }
+
+        // The server's allowance is used up for files alone: the copy still reads.
+        using var third = new Reader(api, "192.0.2.90");
+        using (var read = await third.PostAsync(published.Formatted)) await AssertCopyAsync(read);
+        using var server = await third.FileAsync(0);
         Assert.Equal(HttpStatusCode.TooManyRequests, server.StatusCode);
         Assert.NotNull(server.Headers.RetryAfter);
     }
