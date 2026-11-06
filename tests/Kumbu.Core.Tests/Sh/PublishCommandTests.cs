@@ -23,6 +23,8 @@ public class PublishCommandTests
 
         public IReadOnlyList<string> Plain { get; init; } = [];
 
+        public bool PdfsLeftOut { get; init; }
+
         public Exception? Throws { get; init; }
 
         public Task<IReadOnlyList<PublicationLine>> ListAsync(VaultPath under, CancellationToken ct)
@@ -34,13 +36,13 @@ public class PublishCommandTests
         public Task<PublishOutcome> AddAsync(VaultPath note, CancellationToken ct)
         {
             Calls.Add($"add {note}");
-            return Throws is null ? Task.FromResult(new PublishOutcome(Link, At, Plain)) : Task.FromException<PublishOutcome>(Throws);
+            return Throws is null ? Task.FromResult(new PublishOutcome(Link, At, Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
         }
 
         public Task<PublishOutcome> UpdateAsync(VaultPath note, CancellationToken ct)
         {
             Calls.Add($"update {note}");
-            return Throws is null ? Task.FromResult(new PublishOutcome(null, At.AddHours(1).AddMinutes(38), Plain)) : Task.FromException<PublishOutcome>(Throws);
+            return Throws is null ? Task.FromResult(new PublishOutcome(null, At.AddHours(1).AddMinutes(38), Plain, PdfsLeftOut)) : Task.FromException<PublishOutcome>(Throws);
         }
 
         public Task WithdrawAsync(VaultPath note, CancellationToken ct)
@@ -64,7 +66,7 @@ public class PublishCommandTests
     [Fact]
     public async Task Add_prints_the_link_once_and_what_became_text()
     {
-        var publisher = new FakePublisher { Plain = ["report.pdf", "missing.png", "PDFs are not published yet"] };
+        var publisher = new FakePublisher { Plain = ["report.pdf", "missing.png"], PdfsLeftOut = true };
 
         var result = await Run(publisher, "publish add /Work/Routing/Questions.md");
 

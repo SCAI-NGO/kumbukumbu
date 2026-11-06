@@ -41,7 +41,7 @@ public sealed record PublicationState(
 /// </summary>
 internal sealed class Publications(VaultCatalog catalog, PublicationStore store, IMongoDatabase db, IOptions<KumbuOptions> options, TimeProvider time)
 {
-    public const string PdfsNotYet = "PDFs are not published yet";
+    public const string PdfsNotYet = PublishOutcome.PdfsNotYet;
 
     private const string ConflictSentence = "the vault's publications changed meanwhile; try again";
 

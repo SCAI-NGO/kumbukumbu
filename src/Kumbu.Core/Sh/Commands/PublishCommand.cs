@@ -103,8 +103,8 @@ public sealed class PublishCommand(IPublisher? publisher) : ICommand
     /// <summary>The embeds that became plain text, joined by commas, and the sentence about PDFs after a semicolon.</summary>
     private static string? Plain(PublishOutcome outcome)
     {
-        var names = outcome.Plain.Where(p => p != PublishOutcome.PdfsNotYet).ToList();
-        string[] parts = [.. names.Count > 0 ? [string.Join(", ", names)] : Array.Empty<string>(), .. outcome.Plain.Contains(PublishOutcome.PdfsNotYet) ? [PublishOutcome.PdfsNotYet] : Array.Empty<string>()];
-        return parts.Length == 0 ? null : "not copied, plain text instead: " + string.Join("; ", parts);
+        var names = outcome.Plain.Count > 0 ? string.Join(", ", outcome.Plain) : null;
+        var pdfs = outcome.PdfsLeftOut ? PublishOutcome.PdfsNotYet : null;
+        return names is null && pdfs is null ? null : "not copied, plain text instead: " + string.Join("; ", new[] { names, pdfs }.OfType<string>());
     }
 }

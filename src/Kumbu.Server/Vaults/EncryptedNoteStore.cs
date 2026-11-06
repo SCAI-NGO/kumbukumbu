@@ -598,6 +598,11 @@ public sealed class EncryptedNoteStore(
     /// embedding provider; the version list reads the working set).</summary>
     internal async Task<IReadOnlyList<VaultAccess>> UnlockedVaultsAsync(CancellationToken ct) => [.. (await VaultsAsync(ct)).Values];
 
+    /// <summary>The vault of a path, or at the root all of them, marked as used, as a command that reads them takes
+    /// them: at the root without a vault in its two-key period, by name <see cref="VaultBusyException"/> for one.</summary>
+    internal async Task<IReadOnlyList<VaultAccess>> UsedVaultsAsync(VaultPath vaultOrRoot, CancellationToken ct) =>
+        vaultOrRoot.IsRoot ? [.. await AllVaultsAsync(ct)] : await VaultAsync(vaultOrRoot, ct) is { } access ? [access] : [];
+
     private static bool InScope(VaultPath scope, VaultPath path) =>
         scope.IsRoot || path == scope || path.Value.StartsWith(scope.Value + "/", StringComparison.Ordinal);
 

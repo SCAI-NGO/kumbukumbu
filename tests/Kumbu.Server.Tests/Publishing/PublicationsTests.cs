@@ -526,7 +526,8 @@ public sealed partial class PublicationsTests(KumbuAppFactory app)
         var code = CodeOf(published);
         string[] secrets = [code, published.Link[(published.Link.IndexOf('#') + 1)..], published.Link, Convert.ToBase64String(entry.Key), Convert.ToHexString(entry.Key)];
 
-        foreach (var text in new[] { published.ToString(), state.ToString(), entry.ToString(), record.ToString(), new ReaderSlot(entry.Key, alice.User.Id).ToString() })
+        foreach (var text in new[] { published.ToString(), state.ToString(), entry.ToString(), record.ToString(), new ReaderSlot(entry.Key, alice.User.Id).ToString(),
+            new PublishOutcome(published.Link, published.SnapshotAt, published.Plain, false).ToString() })
         {
             Assert.DoesNotContain(secrets, s => text.Contains(s, StringComparison.OrdinalIgnoreCase));
         }

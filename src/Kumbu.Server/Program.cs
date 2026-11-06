@@ -40,6 +40,9 @@ builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 // HttpClientFactory logs four lines per outgoing request: for an external embedding provider, one set per search
 // query, which would put when someone searched into the log. Failures are logged by the drivers themselves.
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
+// The MCP library logs every JSON-RPC message whole at Trace, which would put a note's text, or the link
+// publish add prints, into the log. Its Information lines (the client's name, a tool call) stay.
+builder.Logging.AddFilter("ModelContextProtocol", LogLevel.Information);
 
 builder.Services.AddOptions<KumbuOptions>()
     .Bind(builder.Configuration.GetSection("Kumbu"))

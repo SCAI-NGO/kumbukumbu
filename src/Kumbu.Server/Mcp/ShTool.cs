@@ -11,7 +11,8 @@ namespace Kumbu.Server.Mcp;
 [McpServerToolType]
 public static class ShTool
 {
-    // Not read-only since rm and restore; not destructive, because both can be undone.
+    // Not read-only since rm, restore and publish; not destructive, because rm and restore can be undone and
+    // publish rm only withdraws what publish add put out.
     [McpServerTool(Name = "sh", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false), Description(Manual.ToolDescription)]
     public static async Task<CallToolResult> Sh(
         Shell shell,

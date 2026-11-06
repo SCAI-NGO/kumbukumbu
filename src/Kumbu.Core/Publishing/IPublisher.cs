@@ -7,10 +7,15 @@ namespace Kumbu.Core.Publishing;
 public sealed record PublicationLine(VaultPath Note, DateTime? SnapshotAt, bool? Older);
 
 /// <summary>What publishing or updating made: the link only after publishing, the one time it is shown; in
-/// <see cref="Plain"/> the embeds that became plain text, and perhaps <see cref="PdfsNotYet"/>.</summary>
-public sealed record PublishOutcome(string? Link, DateTime SnapshotAt, IReadOnlyList<string> Plain)
+/// <see cref="Plain"/> the embeds that became plain text; <see cref="PdfsLeftOut"/> when PDFs among them were.</summary>
+public sealed record PublishOutcome(string? Link, DateTime SnapshotAt, IReadOnlyList<string> Plain, bool PdfsLeftOut)
 {
+    /// <summary>The sentence for PDFs left out, also the last entry of the server's list of embeds.</summary>
     public const string PdfsNotYet = "PDFs are not published yet";
+
+    // The link holds the share code: never in a log line or an assertion message.
+    public override string ToString() =>
+        $"PublishOutcome {{ SnapshotAt = {SnapshotAt:O}, Plain = [{string.Join(", ", Plain)}], PdfsLeftOut = {PdfsLeftOut} }}";
 }
 
 /// <summary>
