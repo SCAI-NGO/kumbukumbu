@@ -258,6 +258,32 @@ describe("the note view", () => {
     expect(useEditor.getState().recentPaths).not.toContain(PLAN);
   });
 
+  it("says that deleting a published note withdraws the link", async () => {
+    const withdraws = "It is published: deleting it withdraws the link.";
+    noteApi({
+      [`GET /api/publications${PLAN}`]: () =>
+        json(200, { path: PLAN, snapshotAt: "2026-11-05T14:32:00Z", older: false, changedAt: null, publishedBy: "ada", link: "https://kumbu.example.org/s#x" }),
+      "GET /api/publications/*": (r) => json(404, { error: `${new URL(r.url).pathname} is not published.` }),
+    });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    expect(await within(screen.getByRole("dialog", { name: "Delete plan?" })).findByText(withdraws)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    cleanup();
+
+    // Not published: nothing to withdraw.
+    noteApi({ "GET /api/publications/*": (r) => json(404, { error: `${new URL(r.url).pathname} is not published.` }) });
+    renderApp(planUrl);
+    await screen.findByRole("heading", { name: "Goals" });
+    await userEvent.click(screen.getByRole("button", { name: "Note actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete note" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete plan?" });
+    expect(await within(dialog).findByText("inbox")).toBeInTheDocument();
+    expect(within(dialog).queryByText(withdraws)).toBeNull();
+  });
+
   it("goes to the vaults after deleting the only note of a folder", async () => {
     const lone = "/Work/inbox.md";
     noteApi({

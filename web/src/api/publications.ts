@@ -32,10 +32,11 @@ export function usePasswordWindowOpen() {
   return { known: session.isFetchedAfterMount || session.isError, open: session.isFetchedAfterMount && session.data?.passwordWindowOpen === true };
 }
 
-/** A vault's publications; for its owner also its unpublishable notes and folders. */
-export const usePublications = (vault: string) =>
+/** A vault's publications; for its owner also its unpublishable notes and folders. Asked only while `enabled`. */
+export const usePublications = (vault: string, enabled = true) =>
   useQuery({
     queryKey: ["publications", vault],
+    enabled,
     queryFn: () => call(api.GET("/api/vaults/{vault}/publications", { params: { path: { vault } } })),
   });
 
@@ -101,21 +102,33 @@ export function useWithdraw(path: string) {
   });
 }
 
+/** Whether a mark covers `path`: its own, or a folder's above it (publish spec §3.6). */
+export const covered = (marks: readonly string[], path: string) => marks.some((m) => path === m || path.startsWith(`${m}/`));
+
+const setMark = async (path: string, marked: boolean) =>
+  void (await call(marked ? api.PUT("/api/unpublishable/{vault}/{path}", { params: params(path) }) : api.DELETE("/api/unpublishable/{vault}/{path}", { params: params(path) })));
+
+/** A folder's mark withdraws whatever it covers: every note's state is asked again. */
+const markSettled = (queryClient: QueryClient, path: string, marked: boolean) =>
+  Promise.all([invalidate(queryClient, path), ...(marked ? [queryClient.invalidateQueries({ queryKey: ["publication"] })] : [])]);
+
 /** Marks a note or folder unpublishable; whatever it covers that is published is withdrawn. */
 export function useMarkUnpublishable(path: string) {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async () => void (await call(api.PUT("/api/unpublishable/{vault}/{path}", { params: params(path) }))),
-    // A folder's mark withdraws whatever it covers: every note's state is asked again.
-    onSettled: () => Promise.all([invalidate(queryClient, path), queryClient.invalidateQueries({ queryKey: ["publication"] })]),
-  });
+  return useMutation({ mutationFn: () => setMark(path, true), onSettled: () => markSettled(queryClient, path, true) });
 }
 
 /** Lifts a note's or folder's mark. */
 export function useAllowPublishing(path: string) {
   const queryClient = useQueryClient();
+  return useMutation({ mutationFn: () => setMark(path, false), onSettled: () => markSettled(queryClient, path, false) });
+}
+
+/** Sets (`marked`) or lifts the mark of whichever note, file or folder is named when it runs: the menus' entries. */
+export function useSetUnpublishable() {
+  const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => void (await call(api.DELETE("/api/unpublishable/{vault}/{path}", { params: params(path) }))),
-    onSettled: () => invalidate(queryClient, path),
+    mutationFn: ({ path, marked }: { path: string; marked: boolean }) => setMark(path, marked),
+    onSettled: (_, __, { path, marked }) => markSettled(queryClient, path, marked),
   });
 }

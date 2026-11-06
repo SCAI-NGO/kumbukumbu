@@ -5,9 +5,9 @@ import { Navigate, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { errorText } from "../api/error-text";
 import { onRefusal } from "../api/client";
 import { atLeast, groupVaults, levelOf, mayChange, refusalOf, refusalSentence, useCreateUntitled, useLevel, useVaults, type VaultView } from "../api/notes";
-import { FolderInput, History, Share2, TextSearch, Trash2 } from "lucide-react";
+import { FolderInput, History, TextSearch, Trash2 } from "lucide-react";
 import { folderOf, noteUrl, pathFromRoute, vaultOf } from "../api/paths";
-import { usePublication, usePublishEnabled } from "../api/publications";
+import { usePublication, usePublications, usePublishEnabled, useSetUnpublishable } from "../api/publications";
 import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { primaryButtonClass, secondaryButtonClass } from "../components/form";
 import { topDialog } from "../hooks/useDialog";
@@ -28,6 +28,7 @@ import NewVaultDialog from "./NewVaultDialog";
 import SharedBanner, { MemberNotices } from "./SharedBanner";
 import TopBar, { sidebarToggleId } from "./TopBar";
 import TreeDrawer, { sidebarId, type DeleteSubject } from "./TreeDrawer";
+import { publishingItems } from "./publishingItems";
 
 // Loaded on first use, which keeps the main bundle small: upload, rename and move are seldom used, and search has
 // its own sheet over the note.
@@ -227,6 +228,13 @@ export default function MobileShell() {
   const ownNote = !!noteVault && noteVault.owner == null;
   const publication = usePublication(path ?? "", ownNote && publishEnabled === true);
   const mayPublish = ownNote && publishEnabled === true && publication.data === null;
+  // Her marks, which keep working while publishing is switched off (spec §3.6, decision 20).
+  const marks = usePublications(noteVault?.name ?? "", ownNote).data?.unpublishable;
+  const setMark = useSetUnpublishable();
+  const publishingActions =
+    path && ownNote
+      ? publishingItems({ path, note: true, marks, mayPublish, onPublish: () => setPublishing(path), onMark: (marked) => setMark.mutate({ path, marked }) })
+      : [];
 
   if (!path && recentPaths.length && !overview) return <Navigate to={noteUrl(recentPaths[0])} replace />;
 
@@ -264,6 +272,11 @@ export default function MobileShell() {
               {errorText(createUntitled.error)}
             </p>
           )}
+          {setMark.isError && (
+            <p role="alert" className="mx-3 mb-2 rounded-[10px] border border-line bg-surface-2 px-3 py-2 text-sm text-text">
+              {errorText(setMark.error)}
+            </p>
+          )}
           {path && mode === "read" && noteTool === "find" && <FindBar />}
           {(!path || mode === "read") && !(path && noteTool === "find") && (
             <Dock
@@ -275,7 +288,7 @@ export default function MobileShell() {
                   ? [
                       { label: "Find in note", icon: TextSearch, onSelect: () => useEditor.getState().setNoteTool("find") },
                       { label: "History", icon: History, onSelect: () => setHistory(path) },
-                      ...(mayPublish ? [{ label: "Publish…", icon: Share2, onSelect: () => setPublishing(path) }] : []),
+                      ...publishingActions,
                       ...(noteChanges
                         ? [
                             { label: "Rename or move", icon: FolderInput, onSelect: () => setMoving({ kind: "note", path }) },

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Download, Ellipsis, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { ChevronRight, Download, Ellipsis, EyeOff, FilePlus, Flag, Folder, FolderInput, FolderMinus, FolderPlus, History, Images, KeyRound, Link2, LogOut, Pencil, Settings, Shield, Sparkles, SquareKanban, SquareTerminal, Trash2, Upload, Users } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useBoardAction } from "../api/board";
 import { api, call } from "../api/client";
 import { errorText } from "../api/error-text";
 import { atLeast, findFolder, levelOf, mayChange, ownerLabel, useEmbeddingProviders, useTree, useVaults, type Level, type TreeFolder } from "../api/notes";
 import { boardUrl, folderOf, galleryUrl, markerOf, noteUrl, titleOf, vaultOf, viewUrl, type FileKind, type LightboxState } from "../api/paths";
+import { usePublications, usePublishEnabled, useSetUnpublishable } from "../api/publications";
+import { LoadBoundary, LoadFailedSheet } from "../components/AppError";
 import { fileKindIcon } from "../components/fileKindIcon";
 import { FormError } from "../components/form";
 import { Menu, type MenuItem } from "../components/Menu";
@@ -26,7 +28,10 @@ import DeleteVaultDialog from "./DeleteVaultDialog";
 import EmbeddingsDialog from "./EmbeddingsDialog";
 import RenameVaultDialog from "./RenameVaultDialog";
 import type { MoveSubject } from "./MoveDialog";
+import { publishingItems } from "./publishingItems";
 import VaultSwitcher from "./VaultSwitcher";
+
+const PublishDialog = lazy(() => import("./PublishDialog"));
 
 /** The docked sidebar's id: the top bar's button controls it. */
 export const sidebarId = "file-tree";
@@ -54,6 +59,33 @@ export function rows(folder: TreeFolder, expanded: Record<string, boolean>, dept
 const rowClass = "flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-[8px] pr-2.5 text-left text-[15px] focus-visible:outline-2 focus-visible:outline-accent";
 const menuButtonClass = "flex size-11 items-center justify-center rounded-[8px] text-muted focus-visible:outline-2 focus-visible:outline-accent";
 
+/**
+ * The owner's publishing in her own vault's tree; none for a member (publish spec §3.10). `marks` and `published` are
+ * undefined until the vault's publications are in.
+ */
+type Publishing = {
+  marks: readonly string[] | undefined;
+  published: readonly string[] | undefined;
+  enabled: boolean;
+  onPublish(note: string): void;
+  onMark(path: string, marked: boolean): void;
+};
+
+const entriesOf = (publishing: Publishing | null, path: string, note: boolean): MenuItem[] =>
+  publishing
+    ? publishingItems({
+        path,
+        note,
+        marks: publishing.marks,
+        mayPublish: publishing.enabled && !!publishing.published && !publishing.published.includes(path),
+        onPublish: () => publishing.onPublish(path),
+        onMark: (marked) => publishing.onMark(path, marked),
+      })
+    : [];
+
+/** The row's mark of a note, file or folder marked unpublishable itself. */
+const UnpublishableMark = () => <EyeOff size={14} role="img" aria-label="Unpublishable" className="flex-none text-dim" />;
+
 type FolderActions = {
   onNewNote(folder: string): void;
   onNewFolder(parent: string): void;
@@ -62,6 +94,7 @@ type FolderActions = {
   removing: boolean;
   /** The caller's level in the vault: below `write` a folder has no actions, and the board's folder wants `maintain`. */
   level: Level;
+  publishing: Publishing | null;
 };
 
 /**
@@ -69,7 +102,7 @@ type FolderActions = {
  * empty folder shown in the tree is there only by its marker, so it can be removed: without asking, as the trash
  * keeps it.
  */
-function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, level, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
+function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing, level, publishing, extra = [] }: FolderActions & { folder: TreeFolder; extra?: MenuItem[] }) {
   const inner = folder.path.split("/").length > 2;
   const writes = atLeast(level, "write");
   const moves = inner && mayChange(level, folder.path);
@@ -83,6 +116,8 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing
       : []),
     ...(moves ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: "folder", path: folder.path }) }] : []),
     ...(moves && folder.folders.length === 0 && folder.notes.length === 0 ? [{ label: "Remove folder", icon: FolderMinus, onSelect: () => onRemove(folder.path), disabled: removing }] : []),
+    // The vault itself is no folder to mark.
+    ...(inner ? entriesOf(publishing, folder.path, false) : []),
     ...extra,
   ];
   if (items.length === 0) return null;
@@ -97,7 +132,21 @@ function FolderMenu({ folder, onNewNote, onNewFolder, onMove, onRemove, removing
  * A folder's entry; the selected one (just made, or found by its name) is marked, and the first time it is shown
  * after that, scrolled to and focused: once only, not again each time it is shown anew (its parent opened again).
  */
-function FolderButton({ folder, count, open, selected, onToggle }: { folder: TreeFolder; count: number; open: boolean; selected: boolean; onToggle(): void }) {
+function FolderButton({
+  folder,
+  count,
+  open,
+  selected,
+  unpublishable,
+  onToggle,
+}: {
+  folder: TreeFolder;
+  count: number;
+  open: boolean;
+  selected: boolean;
+  unpublishable: boolean;
+  onToggle(): void;
+}) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(folder.name);
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -122,6 +171,7 @@ function FolderButton({ folder, count, open, selected, onToggle }: { folder: Tre
       <ChevronRight size={14} aria-hidden className={`flex-none text-dim transition-transform ${open ? "rotate-90" : ""}`} />
       <Folder size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{folder.name}</span>
+      {unpublishable && <UnpublishableMark />}
       <span className="flex-none font-mono text-[11px] text-dim">
         {count}
         <span className="sr-only">{count === 1 ? " item" : " items"}</span>
@@ -141,16 +191,33 @@ export type DeleteSubject = { kind: "note"; path: string } | { kind: "attachment
  * The menu of a note or attachment. An attachment moves as one (its extension kept); one without a version, which the
  * server's deletion needs, can't be deleted from here.
  */
-function FileMenu({ row, level, onMove, onDelete }: { row: Extract<Row, { kind: "note" }>; level: Level; onMove(subject: MoveSubject): void; onDelete(subject: DeleteSubject): void }) {
+function FileMenu({
+  row,
+  level,
+  publishing,
+  onMove,
+  onDelete,
+}: {
+  row: Extract<Row, { kind: "note" }>;
+  level: Level;
+  publishing: Publishing | null;
+  onMove(subject: MoveSubject): void;
+  onDelete(subject: DeleteSubject): void;
+}) {
   const note = row.fileKind === "note";
   const { path, version } = row;
-  if (!mayChange(level, path)) return null;
+  const changes = mayChange(level, path);
   const items: MenuItem[] = [
-    { label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) },
-    note
-      ? { label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }
-      : { label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version },
+    ...(changes ? [{ label: "Rename or move", icon: FolderInput, onSelect: () => onMove({ kind: note ? "note" : "attachment", path }) }] : []),
+    // An attachment can be marked too: a copy that holds it is then withdrawn (publish spec §3.6).
+    ...entriesOf(publishing, path, note),
+    ...(!changes
+      ? []
+      : note
+        ? [{ label: "Delete note", icon: Trash2, onSelect: () => onDelete({ kind: "note", path }) }]
+        : [{ label: "Delete", icon: Trash2, onSelect: () => version && onDelete({ kind: "attachment", path, version }), disabled: !version }]),
   ];
+  if (items.length === 0) return null;
   return (
     <Menu label={`Actions for ${titleOf(path)}`} items={items} placement="below" className={menuButtonClass}>
       <Ellipsis size={18} aria-hidden />
@@ -158,7 +225,7 @@ function FileMenu({ row, level, onMove, onDelete }: { row: Extract<Row, { kind: 
   );
 }
 
-function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKind: FileKind; current: boolean; onOpen(): void }) {
+function NoteButton({ path, fileKind, current, unpublishable, onOpen }: { path: string; fileKind: FileKind; current: boolean; unpublishable: boolean; onOpen(): void }) {
   const { ref, ...truncated } = useTruncated<HTMLSpanElement>(path);
   const Icon = fileKindIcon[fileKind];
   return (
@@ -173,6 +240,7 @@ function NoteButton({ path, fileKind, current, onOpen }: { path: string; fileKin
     >
       <Icon size={18} strokeWidth={1.8} aria-hidden className="flex-none" />
       <span ref={ref} className="min-w-0 flex-1 truncate">{titleOf(path)}</span>
+      {unpublishable && <UnpublishableMark />}
     </button>
   );
 }
@@ -362,7 +430,31 @@ export default function TreeDrawer(props: {
     },
     onSuccess: (_, folder) => queryClient.invalidateQueries({ queryKey: ["tree", vaultOf(folder)] }),
   });
-  const folderActions: FolderActions = { onNewNote, onNewFolder, onMove, onRemove: (folder) => removeFolder.mutate(folder), removing: removeFolder.isPending, level };
+  // Her own vault's alone: a member is told nothing of marks, nor offered publishing (publish spec §3.10).
+  const ownVault = !!active && active.owner == null && level === "owner";
+  const publishEnabled = usePublishEnabled();
+  const publications = usePublications(activeVault ?? "", ownVault && !!activeVault);
+  const setMark = useSetUnpublishable();
+  const [publishing, setPublishing] = useState<string | null>(null);
+  const publishingActions: Publishing | null = ownVault
+    ? {
+        marks: publications.data?.unpublishable,
+        published: publications.data?.publications.map((p) => p.path),
+        enabled: publishEnabled === true,
+        onPublish: setPublishing,
+        onMark: (path, marked) => setMark.mutate({ path, marked }),
+      }
+    : null;
+  const marks = ownVault ? publications.data?.unpublishable : undefined;
+  const folderActions: FolderActions = {
+    onNewNote,
+    onNewFolder,
+    onMove,
+    onRemove: (folder) => removeFolder.mutate(folder),
+    removing: removeFolder.isPending,
+    level,
+    publishing: publishingActions,
+  };
   const hasBoard = !!(activeVault && tree.data && findFolder(tree.data.root, `/${activeVault}/Board`)?.notes.some((n) => n.name === "Board.md"));
   // The board is a page of its own: the drawer, left open, would be open again on the way back to the notes.
   const openBoard = (vault: string) => {
@@ -439,6 +531,11 @@ export default function TreeDrawer(props: {
           <FormError>{errorText(removeFolder.error)}</FormError>
         </div>
       )}
+      {setMark.isError && (
+        <div className="flex-none px-[18px] pb-2.5">
+          <FormError>{errorText(setMark.error)}</FormError>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1 [scrollbar-width:none]">
         {tree.isError && <p className="px-2.5 text-sm text-muted">{errorText(tree.error)}</p>}
@@ -453,14 +550,21 @@ export default function TreeDrawer(props: {
                       count={row.count}
                       open={row.open}
                       selected={row.folder.path === selectedFolder}
+                      unpublishable={!!marks?.includes(row.folder.path)}
                       onToggle={() => toggleFolder(row.folder.path)}
                     />
                     <FolderMenu folder={row.folder} {...folderActions} />
                   </>
                 ) : (
                   <>
-                    <NoteButton path={row.path} fileKind={row.fileKind} current={row.path === currentPath} onOpen={() => openEntry(row.path, row.fileKind)} />
-                    <FileMenu row={row} level={level} onMove={onMove} onDelete={onDelete} />
+                    <NoteButton
+                      path={row.path}
+                      fileKind={row.fileKind}
+                      current={row.path === currentPath}
+                      unpublishable={!!marks?.includes(row.path)}
+                      onOpen={() => openEntry(row.path, row.fileKind)}
+                    />
+                    <FileMenu row={row} level={level} publishing={publishingActions} onMove={onMove} onDelete={onDelete} />
                   </>
                 )}
               </li>
@@ -494,6 +598,13 @@ export default function TreeDrawer(props: {
       {deletingVault && <DeleteVaultDialog vault={deletingVault} onClose={() => setDeletingVault(null)} />}
       {leaving && <LeaveVaultDialog vault={leaving.vault} membership={leaving.membership} onClose={() => setLeaving(null)} />}
       {connecting && activeVault && <ConnectObsidianDialog vault={activeVault} onClose={() => setConnecting(false)} />}
+      {publishing && (
+        <LoadBoundary fallback={<LoadFailedSheet onClose={() => setPublishing(null)} />}>
+          <Suspense>
+            <PublishDialog path={publishing} onClose={() => setPublishing(null)} />
+          </Suspense>
+        </LoadBoundary>
+      )}
       {exporting && activeVault && (
         <ExportConfirm title={`Export ${activeVault}?`} href={exportUrl([activeVault])} onClose={() => setExporting(false)} />
       )}
