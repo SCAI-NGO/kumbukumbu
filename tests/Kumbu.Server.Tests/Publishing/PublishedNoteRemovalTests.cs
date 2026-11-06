@@ -381,8 +381,9 @@ public sealed partial class PublishedNoteRemovalTests(KumbuAppFactory app)
 
         Assert.False((await w.Alice.ShAsync("mv /Work/Private/a.md /Work/Open/a.md", key)).IsError);
 
+        // The key can't lift a mark, so the note it moved out takes one along.
         var (_, access) = await AliceAsync(w.Alice);
-        Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
+        Assert.Equal([P("/Work/Open/a.md"), P("/Work/Private")], (await Publications.MarksAsync(access, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal));
         await AssertPublishedAsync(w);
     }
 
@@ -399,15 +400,59 @@ public sealed partial class PublishedNoteRemovalTests(KumbuAppFactory app)
 
         Assert.False(isError, text);
         var (_, access) = await AliceAsync(w.Alice);
-        Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
+        Assert.Equal([P("/Work/Private"), P("/Work/Routing/a.md")], (await Publications.MarksAsync(access, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal));
         await AssertPublishedAsync(w);
 
         await w.Alice.CreateAsync("Private/b.md", "b");
         using var moved = await w.Alice.SendAsync(HttpMethod.Post, "/api/move", new { from = "/Work/Private/b.md", to = "/Work/Routing/b.md" });
 
         Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
-        Assert.Equal([P("/Work/Private")], await Publications.MarksAsync(access, Ct));
+        Assert.Equal([P("/Work/Private"), P("/Work/Routing/a.md")], (await Publications.MarksAsync(access, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal));
         await AssertPublishedAsync(w);
+    }
+
+    [Fact]
+    public async Task What_a_key_moves_out_from_under_a_mark_stays_marked()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateFileAsync("Routing/flow.jpg", ImageMetadataTests.JpegWithGps(5));
+        await alice.CreateAsync("Routing/Questions.md", "# Questions on routing\n\n![[flow.jpg]]\n");
+        await alice.CreateAsync("Routing/Other.md", "other");
+        await MarkAsync(alice, "/Work/Routing");
+        // Even a key that may publish: only the owner's session lifts a mark.
+        var key = await alice.KeyAsync("Claude", KeyRight.Write, mayPublish: true);
+
+        foreach (var name in new[] { "Questions.md", "flow.jpg" })
+        {
+            var (isError, text) = await alice.ShAsync($"mv /Work/Routing/{name} /Work/Out/{name}", key);
+            Assert.False(isError, text);
+        }
+
+        var (_, access) = await AliceAsync(alice);
+        Assert.Equal(
+            [P("/Work/Out/Questions.md"), P("/Work/Out/flow.jpg"), P("/Work/Routing")],
+            (await Publications.MarksAsync(access, Ct)).OrderBy(p => p.Value, StringComparer.Ordinal));
+        var (_, refused) = await alice.ShAsync("publish add /Work/Out/Questions.md", key);
+        Assert.Contains("marked unpublishable", refused, StringComparison.Ordinal);
+        var e = await Assert.ThrowsAsync<PublishRefusedException>(() => PublishAsync(alice, "/Work/Out/Questions.md"));
+        Assert.Equal(Refusals.Unpublishable, e.Code);
+        Assert.Equal(0, await CountAsync("publications", access.Id));
+    }
+
+    [Fact]
+    public async Task What_the_owners_session_moves_out_from_under_a_mark_is_free()
+    {
+        var alice = await RestClient.NewAsync(Api, vault: "Work");
+        await alice.CreateAsync("Routing/Questions.md", "# Questions on routing\n");
+        await alice.CreateAsync("Routing/Other.md", "other");
+        await MarkAsync(alice, "/Work/Routing");
+
+        using var moved = await alice.SendAsync(HttpMethod.Post, "/api/move", new { from = Questions, to = "/Work/Out/Questions.md" });
+
+        Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
+        var (_, access) = await AliceAsync(alice);
+        Assert.Equal([P("/Work/Routing")], await Publications.MarksAsync(access, Ct));
+        await PublishAsync(alice, "/Work/Out/Questions.md");
     }
 
     [Fact]

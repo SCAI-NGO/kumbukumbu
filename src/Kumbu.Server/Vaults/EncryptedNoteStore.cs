@@ -497,7 +497,8 @@ public sealed class EncryptedNoteStore(
     {
         if (_publications is not null)
         {
-            await _publications.FollowAsync(session, access, credential is ApiKeyCredential { Device: true }, batch, by, byRef, at, ct);
+            await _publications.FollowAsync(
+                session, access, credential is ApiKeyCredential { Device: true }, credential is UserCredential, batch, by, byRef, at, ct);
         }
         else if ((batch.Trashes.Count > 0 || batch.Moves.Count > 0 || batch.AttachmentMoves.Count > 0)
             && await catalog.Publishing.Find(session, F.Eq(d => d.Vault, access.Id)).AnyAsync(ct))

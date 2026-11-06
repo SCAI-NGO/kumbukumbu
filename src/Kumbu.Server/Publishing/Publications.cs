@@ -207,13 +207,15 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
     /// <summary>
     /// What a batch of the note store does to the vault's publications and marks (publish spec §3.6, §3.7), in the
     /// batch's own transaction, under the vault's gate; <paramref name="batch"/> in stored paths. Marks follow what moves:
-    /// a note's or file's mark to its target, a folder's to the folder it was renamed to (<see cref="Followed"/>). A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
+    /// a note's or file's mark to its target, a folder's to the folder it was renamed to (<see cref="Followed"/>). Only
+    /// the owner's session can lift a mark (<paramref name="bySession"/>); for anyone else, each note or file the batch
+    /// moves out from under a mark takes a mark of its own along. A publication whose note goes to the trash is withdrawn (<c>removed</c>), one whose note or file lands
     /// under a mark too (<c>unpublishable</c>); otherwise it follows its note and files, under the same link. Edits
     /// never touch one, and only the owner's session, her key with "May publish" or her device may withdraw: anyone else
     /// gets <see cref="PublishedNoteException"/>, which aborts the batch.
     /// </summary>
     internal async Task FollowAsync(
-        IClientSessionHandle session, VaultAccess access, bool device, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
+        IClientSessionHandle session, VaultAccess access, bool device, bool bySession, NoteBatch batch, string by, WriterRef byRef, DateTime at, CancellationToken ct)
     {
         if (batch.Trashes.Count == 0 && batch.Moves.Count == 0 && batch.AttachmentMoves.Count == 0) return;
         var (doc, record) = await store.ReadAsync(session, access.Vault, ct);
@@ -225,6 +227,10 @@ internal sealed class Publications(VaultCatalog catalog, PublicationStore store,
         var trashed = batch.Trashes.Select(t => t.Path.Value).ToHashSet(StringComparer.Ordinal);
         var paths = new Lazy<BatchPaths>(() => BatchPaths.Of(access.Vault, batch));
         IReadOnlyList<string> marks = [.. record.Unpublishable.SelectMany(m => Followed(m, moved, paths)).Distinct(StringComparer.Ordinal)];
+        if (!(bySession && IsOwner(access)))
+        {
+            marks = [.. marks, .. moved.Where(m => Covered(record.Unpublishable, m.Key) && !Covered(marks, m.Value)).Select(m => m.Value)];
+        }
 
         // A path is newly covered when it moved under a mark, or a mark that moved now covers it.
         bool Newly(string from, string to) => Covered(marks, to) && (from != to || !Covered(record.Unpublishable, to));
