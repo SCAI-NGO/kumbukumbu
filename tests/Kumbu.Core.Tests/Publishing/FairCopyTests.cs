@@ -153,7 +153,9 @@ public class FairCopyTests
     }
 
     [Theory]
-    // Each about 1 MB or 20,000 nestings; the time stays linear, so each is quick.
+    // Each about 1 MB or 20,000 nestings. Timed against plain text of the same length, so a busy machine slows both
+    // alike: linear, it stays within a small factor of it; a quadratic reading, or one with a large constant per
+    // bracket, takes a hundred times longer and more.
     [InlineData("[", "a", "](x)", 20_000)]
     [InlineData("![", "a", "](x.png)", 20_000)]
     [InlineData("[](", "", "", 20_000)]
@@ -172,9 +174,15 @@ public class FairCopyTests
     public void Deep_nesting_finishes_quickly(string before, string middle, string after, int n)
     {
         var input = string.Concat(Enumerable.Repeat(before, n)) + middle + string.Concat(Enumerable.Repeat(after, n));
+        var prose = string.Concat(Enumerable.Repeat("Some plain words, ", input.Length / 18 + 1))[..input.Length];
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        FairCopies.Make(Note, prose, _ => null, _ => true, "https://kumbu.example.org");
+        var baseline = clock.Elapsed;
+        clock.Restart();
         var copy = FairCopies.Make(Note, input, _ => null, _ => true, "https://kumbu.example.org");
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), $"took {clock.Elapsed}");
+        var elapsed = clock.Elapsed;
+        Assert.True(elapsed < baseline * 20 + TimeSpan.FromSeconds(1), $"took {elapsed}, plain text of that length {baseline}");
+        Assert.True(elapsed < TimeSpan.FromSeconds(15), $"took {elapsed}");
         Assert.DoesNotContain("](x", copy.Markdown, StringComparison.Ordinal);
         if (before == "[") Assert.Equal("a", copy.Markdown);
     }
