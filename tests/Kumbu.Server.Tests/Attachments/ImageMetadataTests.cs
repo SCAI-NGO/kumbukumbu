@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
 using Kumbu.Server.Attachments;
 
@@ -53,6 +54,35 @@ public class ImageMetadataTests
         return [.. tiff];
     }
 
+    /// <summary>An ICC profile of 132 bytes (its header and an empty tag table) whose header names its maker and model
+    /// (<c>PixelCam</c>), its creator (<c>Alic</c>), the time it was made and a profile ID.</summary>
+    internal static byte[] IccProfile()
+    {
+        var icc = Enumerable.Repeat((byte)0x11, 132).ToArray();
+        Be32(132).CopyTo(icc, 0);
+        "lcms"u8.CopyTo(icc.AsSpan(4));
+        "mntrRGB XYZ "u8.CopyTo(icc.AsSpan(12));
+        byte[] date = [0x07, 0xEA, 0, 11, 0, 5, 0, 14, 0, 32, 0, 7];
+        date.CopyTo(icc, 24);
+        "acspAPPL"u8.CopyTo(icc.AsSpan(36));
+        "PixelCam"u8.CopyTo(icc.AsSpan(48));
+        "Alic"u8.CopyTo(icc.AsSpan(80));
+        Enumerable.Range(1, 16).Select(i => (byte)i).ToArray().CopyTo(icc, 84);
+        icc.AsSpan(100, 28).Clear();
+        icc.AsSpan(128, 4).Clear(); // no tags
+        return icc;
+    }
+
+    /// <summary><see cref="IccProfile"/> as the server leaves it: date, maker, model, creator and profile ID zeroed.</summary>
+    private static byte[] BlankedIccProfile()
+    {
+        var icc = IccProfile();
+        icc.AsSpan(24, 12).Clear();
+        icc.AsSpan(48, 8).Clear();
+        icc.AsSpan(80, 20).Clear();
+        return icc;
+    }
+
     internal static byte[] Segment(int marker, ReadOnlySpan<byte> data) => [0xFF, (byte)marker, .. Be16(data.Length + 2), .. data];
 
     /// <summary>A JPEG of 40 by 20 as stored, with everything a phone and a photo editor leave in it: JFIF, the camera's
@@ -70,7 +100,7 @@ public class ImageMetadataTests
         jpeg.AddRange(Segment(0xE1, [.. "http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>Alice</x:xmpmeta>"u8]));
         jpeg.AddRange(Segment(0xED, [.. "Photoshop 3.0\08BIM"u8, 4, 4, 0, 0, 0, 0, 0, 10, 0x1C, 2, 0x50, 0, 5, .. "Alice"u8]));
         jpeg.AddRange(Segment(0xFE, "Alice"u8));
-        jpeg.AddRange(Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 1, .. new byte[32]]));
+        jpeg.AddRange(Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 1, .. IccProfile()]));
         jpeg.AddRange(Segment(0xDB, [0, .. Enumerable.Repeat((byte)1, 64)]));
         jpeg.AddRange(Segment(0xC0, [8, .. Be16(20), .. Be16(40), 1, 1, 0x11, 0]));
         jpeg.AddRange(Segment(0xC4, [0, .. new byte[16]]));
@@ -202,7 +232,7 @@ public class ImageMetadataTests
         var input = Png(
             Ihdr,
             PngChunk("tEXt", "Author\0Alice"u8),
-            PngChunk("iCCP", [.. "icc\0"u8, 0, 0x78, 0x9C, 1, 2, 3]),
+            PngChunk("iCCP", [.. "PixelCam profile\0"u8, 0, .. Deflated(IccProfile())]),
             PngChunk("eXIf", CameraTiff(6)),
             PngChunk("pHYs", [.. Be32(2835), .. Be32(2835), 1]),
             PngChunk("zTXt", [.. "Comment\0"u8, 0, 0x78, 0x9C, .. "Alice"u8]),
@@ -329,5 +359,189 @@ public class ImageMetadataTests
 
         Assert.Null(ImageMetadata.Strip("%PDF-1.7\n%Alice"u8, "application/pdf"));
         Assert.Null(ImageMetadata.Strip(png, "image/jpeg"));
+    }
+
+    internal static byte[] Deflated(byte[] data)
+    {
+        using var compressed = new MemoryStream();
+        using (var z = new ZLibStream(compressed, CompressionLevel.Optimal))
+        {
+            z.Write(data);
+        }
+
+        return compressed.ToArray();
+    }
+
+    private static byte[] Inflated(byte[] data)
+    {
+        using var z = new ZLibStream(new MemoryStream(data), CompressionMode.Decompress);
+        using var plain = new MemoryStream();
+        z.CopyTo(plain);
+        return plain.ToArray();
+    }
+
+    private static readonly byte[] Tables =
+    [
+        .. Segment(0xDB, [0, .. Enumerable.Repeat((byte)1, 64)]),
+        .. Segment(0xC0, [8, .. Be16(20), .. Be16(40), 1, 1, 0x11, 0]),
+        .. Segment(0xC4, [0, .. new byte[16]]),
+    ];
+
+    private static readonly byte[] Scan = [.. Segment(0xDA, [1, 1, 0, 0, 63, 0]), 0x12, 0xFF, 0x00, 0x34];
+
+    [Fact]
+    public void Jpeg_keeps_only_the_listed_markers()
+    {
+        byte[] input =
+        [
+            0xFF, 0xD8,
+            .. Segment(0xE0, [.. "JFIF\0"u8, 1, 2, 1, 0, 72, 0, 72, 2, 1, .. "Alice!"u8]), // a thumbnail of 2 by 1
+            .. Segment(0xE0, [.. "JFXX\0"u8, 0x10, .. "Alice"u8]),
+            .. Segment(0xEE, [.. "Adobe"u8, 0, 100, 0, 0, 0, 0, 1, .. "Alice"u8]),
+            0xFF, 0x01, // TEM
+            .. Segment(0xC8, "Alice"u8),
+            .. Segment(0xF0, "Alice"u8),
+            .. Segment(0x02, "Alice"u8),
+            .. Segment(0xDE, "Alice"u8),
+            .. Tables,
+            .. Scan,
+            0xFF, 0xD9,
+        ];
+
+        var output = ImageMetadata.Strip(input, "image/jpeg");
+
+        Assert.Equal(
+        [
+            0xFF, 0xD8,
+            .. Segment(0xE0, [.. "JFIF\0"u8, 1, 2, 1, 0, 72, 0, 72, 0, 0]),
+            .. Segment(0xEE, [.. "Adobe"u8, 0, 100, 0, 0, 0, 0, 1]),
+            .. Tables,
+            .. Scan,
+            0xFF, 0xD9,
+        ], output);
+    }
+
+    [Fact]
+    public void Jpeg_without_a_frame_or_a_scan_is_refused()
+    {
+        byte[] withoutFrame = [0xFF, 0xD8, .. Segment(0xDB, [0, .. new byte[64]]), .. Scan, 0xFF, 0xD9];
+        byte[] withoutScan = [0xFF, 0xD8, .. Tables, 0xFF, 0xD9];
+
+        Assert.Null(ImageMetadata.Strip(withoutFrame, "image/jpeg"));
+        Assert.Null(ImageMetadata.Strip(withoutScan, "image/jpeg"));
+    }
+
+    [Fact]
+    public void Jpeg_loses_segments_between_scans()
+    {
+        byte[] head = [0xFF, 0xD8, .. Segment(0xDB, [0, .. new byte[64]]), .. Segment(0xC2, [8, .. Be16(20), .. Be16(40), 1, 1, 0x11, 0])];
+        byte[] dht = Segment(0xC4, [0, .. new byte[16]]);
+        byte[] first = [.. Segment(0xDA, [1, 1, 0, 0, 0, 0]), 0x12, 0xFF, 0x00, 0x34];
+        byte[] between = [.. Segment(0xE1, "http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>Alice</x:xmpmeta>"u8), .. Segment(0xFE, "Alice"u8)];
+        byte[] second = [.. Segment(0xDA, [1, 1, 0, 1, 63, 0]), 0x56, 0xFF, 0xD3, 0x78];
+        byte[] input = [.. head, .. dht, .. first, .. dht, .. between, .. second, 0xFF, 0xD9];
+
+        var output = ImageMetadata.Strip(input, "image/jpeg");
+
+        Assert.Equal([.. head, .. dht, .. first, .. dht, .. second, 0xFF, 0xD9], output);
+    }
+
+    [Fact]
+    public void Icc_profiles_keep_their_colours_but_lose_names_and_dates()
+    {
+        // JPEG: the profile in two APP2 chunks, its header across both.
+        var icc = IccProfile();
+        byte[] jpeg =
+        [
+            0xFF, 0xD8,
+            .. Segment(0xE2, [.. "ICC_PROFILE\0"u8, 1, 2, .. icc[..60]]),
+            .. Segment(0xE2, [.. "ICC_PROFILE\0"u8, 2, 2, .. icc[60..]]),
+            .. Tables, .. Scan, 0xFF, 0xD9,
+        ];
+        var stripped = ImageMetadata.Strip(jpeg, "image/jpeg")!;
+        var chunks = Segments(stripped).Where(s => s.Marker == 0xE2).ToList();
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal(BlankedIccProfile(), chunks[0].Data[14..].Concat(chunks[1].Data[14..]).ToArray());
+        Assert.False(Holds(stripped, "PixelCam"));
+
+        // PNG: the profile inflated, blanked, deflated, under a name of no one's.
+        var png = ImageMetadata.Strip(Png(Ihdr, PngChunk("iCCP", [.. "PixelCam profile\0"u8, 0, .. Deflated(icc)]), PngChunk("IDAT", [0x78, 0x9C]), PngChunk("IEND", [])), "image/png")!;
+        var iccp = PngChunks(png).Single(c => c.Type == "iCCP");
+        Assert.Equal([.. "ICC profile\0"u8, 0], iccp.Data[..13]);
+        Assert.Equal(BlankedIccProfile(), Inflated(iccp.Data[13..]));
+        Assert.Equal(Crc32([.. "iCCP"u8, .. iccp.Data]), iccp.Crc);
+
+        // WebP.
+        var webp = ImageMetadata.Strip(Riff(
+            WebpChunk("VP8X", [0x20, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]),
+            WebpChunk("ICCP", icc),
+            WebpChunk("VP8 ", [0, 0, 0, 0x9D, 0x01, 0x2A, 0x2C, 0x01, 0x90, 0x00])), "image/webp")!;
+        Assert.Equal(BlankedIccProfile(), WebpChunks(webp).Single(c => c.FourCc == "ICCP").Data);
+    }
+
+    private static readonly byte[] Vp8L = WebpChunk("VP8L", [0x2F, 0x2B, 0xC1, 0x23, 0x00]);
+
+    [Fact]
+    public void Webp_animation_keeps_only_its_frames()
+    {
+        byte[] frameHeader = [0, 0, 0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0, 100, 0, 0, 0];
+        var input = Riff(
+            WebpChunk("VP8X", [0xC3, 0xFF, 0xFF, 0xFF, 0x2B, 0x01, 0, 0x8F, 0, 0]), // animated, and every reserved bit set
+            WebpChunk("ANIM", [0, 0, 0, 0, 0, 0]),
+            WebpChunk("ANMF", [.. frameHeader, .. WebpChunk("ABCD", "Alice"u8), .. Vp8L, .. WebpChunk("XMP ", "<x:xmpmeta>Alice</x:xmpmeta>"u8)]));
+
+        var output = ImageMetadata.Strip(input, "image/webp")!;
+
+        Assert.Equal(Riff(
+            WebpChunk("VP8X", [0x02, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]),
+            WebpChunk("ANIM", [0, 0, 0, 0, 0, 0]),
+            WebpChunk("ANMF", [.. frameHeader, .. Vp8L])), output);
+    }
+
+    [Fact]
+    public void Webp_with_a_misplaced_or_odd_vp8x_or_no_frame_is_refused()
+    {
+        byte[] vp8x = WebpChunk("VP8X", [0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0]);
+        Assert.NotNull(ImageMetadata.Strip(Riff(vp8x, Vp8L), "image/webp"));
+
+        Assert.Null(ImageMetadata.Strip(Riff(Vp8L, vp8x), "image/webp"));
+        Assert.Null(ImageMetadata.Strip(Riff(WebpChunk("VP8X", [0, 0, 0, 0, 0x2B, 0x01, 0, 0x8F, 0, 0, 0]), Vp8L), "image/webp"));
+        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ICCP", IccProfile())), "image/webp"));
+        Assert.Null(ImageMetadata.Strip(Riff(vp8x, WebpChunk("ANMF", new byte[16])), "image/webp"));
+    }
+
+    [Fact]
+    public void Gif_keeps_only_frame_controls_and_the_loop()
+    {
+        byte[] head = [.. "GIF89a"u8, 2, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF];
+        byte[] text = [0x21, 0x01, 12, .. new byte[12], 5, .. "Alice"u8, 0];
+        byte[] unknown = [0x21, 0x99, 5, .. "Alice"u8, 0];
+        byte[] longControl = [0x21, 0xF9, 9, .. "Alice!!!!"u8, 0];
+        byte[] control = [0x21, 0xF9, 4, 0, 0, 0, 0, 0];
+        byte[] image = [0x2C, 0, 0, 0, 0, 2, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0];
+        byte[] input =
+        [
+            .. head,
+            0x21, 0xFF, 11, .. "NETSCAPE2.0"u8, 3, 1, 0, 0, 5, .. "Alice"u8, 0,
+            .. text, .. unknown, .. longControl, .. control, .. image,
+            0x21, 0xFF, 11, .. "ANIMEXTS1.0"u8, 5, .. "Alice"u8, 0,
+            0x3B,
+        ];
+
+        var output = ImageMetadata.Strip(input, "image/gif");
+
+        Assert.Equal([.. head, 0x21, 0xFF, 11, .. "NETSCAPE2.0"u8, 3, 1, 0, 0, 0, .. control, .. image, 0x3B], output);
+        Assert.Null(ImageMetadata.Strip([.. head, .. control, 0x3B], "image/gif"));
+    }
+
+    [Fact]
+    public void Png_with_a_wrong_crc_or_a_second_header_is_refused()
+    {
+        byte[] idat = PngChunk("IDAT", [0x78, 0x9C]);
+        byte[] text = PngChunk("tEXt", "Author\0Alice"u8);
+        text[^1] ^= 1;
+
+        Assert.Null(ImageMetadata.Strip(Png(Ihdr, text, idat, PngChunk("IEND", [])), "image/png"));
+        Assert.Null(ImageMetadata.Strip(Png(Ihdr, Ihdr, idat, PngChunk("IEND", [])), "image/png"));
     }
 }

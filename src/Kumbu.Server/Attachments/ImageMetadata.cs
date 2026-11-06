@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System.Buffers.Binary;
+using System.IO.Compression;
 
 namespace Kumbu.Server.Attachments;
 
 /// <summary>
 /// Takes the metadata out of an image before it leaves the vault: EXIF (GPS position, device, names), XMP, IPTC,
-/// comments and text. What is kept is listed, not what goes, so anything unknown goes too. An orientation other than 1
-/// is kept as a minimal EXIF, so the image doesn't turn. The pixels are never decoded: the walk copies the segments,
-/// chunks or blocks it keeps byte for byte.
+/// comments, text and thumbnails. What is kept is listed, not what goes, so anything unknown goes too. An orientation
+/// other than 1 is kept as a minimal EXIF, so the image doesn't turn; an ICC profile is kept for its colours, with the
+/// header fields that say who made it, on what and when zeroed. The pixels are never decoded: the walk copies the
+/// segments, chunks or blocks it keeps byte for byte.
 /// </summary>
 public static class ImageMetadata
 {
@@ -29,6 +31,23 @@ public static class ImageMetadata
 
     private static bool Turns(int orientation) => orientation is >= 2 and <= 8;
 
+    /// <summary>The ICC header's date and time, device manufacturer and model, creator and profile ID.</summary>
+    private static readonly (int Start, int End)[] IccNames = [(24, 36), (48, 56), (80, 100)];
+
+    /// <summary>Zeroes <see cref="IccNames"/> in a piece of a profile that starts at byte <paramref name="at"/> of it.</summary>
+    private static void BlankIcc(Span<byte> piece, int at)
+    {
+        foreach (var (start, end) in IccNames)
+        {
+            var from = Math.Max(start, at);
+            var to = Math.Min(end, at + piece.Length);
+            if (from < to)
+            {
+                piece[(from - at)..(to - at)].Clear();
+            }
+        }
+    }
+
     private static byte[]? Jpeg(ReadOnlySpan<byte> h)
     {
         if (h.Length < 4 || h[0] != 0xFF || h[1] != 0xD8)
@@ -36,10 +55,12 @@ public static class ImageMetadata
             return null;
         }
 
-        using var lead = new MemoryStream(); // the APP0s right after SOI, before which nothing else is kept
-        using var body = new MemoryStream();
+        var lead = new List<byte[]>(); // the APP0 right after SOI, before which nothing else is kept
+        var body = new List<byte[]>();
+        var icc = new List<(byte Sequence, byte[] Segment)>();
         var orientation = 1;
-        var scanned = false;
+        var frames = 0;
+        var scans = 0;
         var pos = 2;
         while (true)
         {
@@ -61,14 +82,19 @@ public static class ImageMetadata
             var marker = h[pos++];
             if (marker == 0xD9)
             {
-                body.Write([0xFF, 0xD9]);
+                body.Add([0xFF, 0xD9]);
                 break; // whatever follows EOI goes
             }
 
-            if (marker is 0x01 or >= 0xD0 and <= 0xD7)
+            if (marker is >= 0xD0 and <= 0xD7)
             {
-                body.Write([0xFF, marker]);
+                body.Add([0xFF, marker]);
                 continue;
+            }
+
+            if (marker == 0x01)
+            {
+                continue; // TEM carries no length, and isn't listed
             }
 
             if (marker is 0x00 or 0xD8 || pos + 2 > h.Length)
@@ -86,21 +112,30 @@ public static class ImageMetadata
             var segment = h.Slice(pos - 2, length + 2);
             pos += length;
 
-            // As ImageHeader reads it, so the displayed size stays the same.
-            if (!scanned && marker == 0xE1 && data.StartsWith("Exif\0\0"u8))
+            // As ImageHeader reads it (the last Exif before the first scan), so the displayed size stays the same.
+            if (scans == 0 && marker == 0xE1 && data.StartsWith("Exif\0\0"u8))
             {
                 orientation = ImageHeader.ExifOrientation(data[6..]);
             }
 
-            if (Keeps(marker, data))
+            if (Kept(marker, data, segment) is { } kept)
             {
-                (marker == 0xE0 && body.Length == 0 ? lead : body).Write(segment);
+                (marker == 0xE0 && body.Count == 0 ? lead : body).Add(kept);
+                if (marker == 0xE2)
+                {
+                    icc.Add((data[12], kept));
+                }
+            }
+
+            if (marker is >= 0xC0 and <= 0xCF and not (0xC4 or 0xC8 or 0xCC))
+            {
+                frames++;
             }
 
             if (marker == 0xDA)
             {
                 // The entropy-coded data runs to the next marker that is neither a stuffed FF 00 nor a restart.
-                scanned = true;
+                scans++;
                 var start = pos;
                 while (true)
                 {
@@ -117,13 +152,27 @@ public static class ImageMetadata
                     pos++;
                 }
 
-                body.Write(h[start..pos]);
+                body.Add(h[start..pos].ToArray());
             }
+        }
+
+        if (frames == 0 || scans == 0)
+        {
+            return null;
+        }
+
+        // A profile may be split over several APP2s, in the order of their sequence numbers; its header is in the first.
+        var offset = 0;
+        foreach (var (_, chunk) in icc.OrderBy(c => c.Sequence))
+        {
+            var piece = chunk.AsSpan(4 + 14); // marker, length, ICC_PROFILE\0, sequence number and count
+            BlankIcc(piece, offset);
+            offset += piece.Length;
         }
 
         using var output = new MemoryStream();
         output.Write([0xFF, 0xD8]);
-        lead.WriteTo(output);
+        lead.ForEach(b => output.Write(b));
         if (Turns(orientation))
         {
             output.Write([0xFF, 0xE1, 0x00, 2 + 6 + 26]);
@@ -131,17 +180,21 @@ public static class ImageMetadata
             output.Write(MinimalExif(orientation));
         }
 
-        body.WriteTo(output);
+        body.ForEach(b => output.Write(b));
         return output.ToArray();
     }
 
-    private static bool Keeps(byte marker, ReadOnlySpan<byte> data) => marker switch
+    /// <summary>The segment as it is copied, or null if it goes.</summary>
+    private static byte[]? Kept(byte marker, ReadOnlySpan<byte> data, ReadOnlySpan<byte> segment) => marker switch
     {
-        0xE0 => data.StartsWith("JFIF\0"u8) || data.StartsWith("JFXX\0"u8),
-        0xE2 => data.StartsWith("ICC_PROFILE\0"u8),
-        0xEE => data.StartsWith("Adobe"u8),
-        >= 0xE0 and <= 0xEF or 0xFE => false,
-        _ => true,
+        // JFIF's fixed part, without its thumbnail; JFXX holds only thumbnails.
+        0xE0 when data.Length >= 14 && data.StartsWith("JFIF\0"u8) => [0xFF, 0xE0, 0x00, 16, .. data[..12], 0, 0],
+        0xE2 when data.Length >= 14 && data.StartsWith("ICC_PROFILE\0"u8) => segment.ToArray(),
+        // Adobe's version, flags and colour transform.
+        0xEE when data.Length >= 12 && data.StartsWith("Adobe"u8) => [0xFF, 0xEE, 0x00, 14, .. data[..12]],
+        // SOFn but JPG, DHT, DAC; SOS, DQT, DNL, DRI, EXP.
+        >= 0xC0 and <= 0xCF and not 0xC8 or 0xDA or 0xDB or 0xDC or 0xDD or 0xDF => segment.ToArray(),
+        _ => null,
     };
 
     private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -156,6 +209,9 @@ public static class ImageMetadata
         "acTL", "fcTL", "fdAT",
     ];
 
+    /// <summary>The most an iCCP chunk may inflate to.</summary>
+    private const int MaxProfile = 16 * 1024 * 1024;
+
     private static byte[]? Png(ReadOnlySpan<byte> h)
     {
         if (!h.StartsWith(PngSignature))
@@ -163,7 +219,7 @@ public static class ImageMetadata
             return null;
         }
 
-        var kept = new List<(int Start, int Length, bool Idat)>();
+        var kept = new List<(int Start, int Length, bool Idat, byte[]? Iccp)>();
         var orientation = 1;
         var ended = false;
         var pos = PngSignature.Length;
@@ -189,10 +245,16 @@ public static class ImageMetadata
                 }
             }
 
-            var type = System.Text.Encoding.ASCII.GetString(typeBytes);
-            if (kept.Count == 0 && type != "IHDR")
+            var data = h.Slice(pos + 8, (int)length);
+            if (BinaryPrimitives.ReadUInt32BigEndian(h[(pos + 8 + (int)length)..]) != Crc32.Of(typeBytes, data))
             {
                 return null;
+            }
+
+            var type = System.Text.Encoding.ASCII.GetString(typeBytes);
+            if ((pos == PngSignature.Length) != (type == "IHDR"))
+            {
+                return null; // IHDR comes first, and only once
             }
 
             if (typeBytes[0] is >= (byte)'A' and <= (byte)'Z' && !PngCritical.Contains(type))
@@ -202,12 +264,18 @@ public static class ImageMetadata
 
             if (type == "eXIf")
             {
-                orientation = ImageHeader.ExifOrientation(h.Slice(pos + 8, (int)length));
+                orientation = ImageHeader.ExifOrientation(data);
             }
 
             if (PngKept.Contains(type))
             {
-                kept.Add((pos, (int)length + 12, type == "IDAT"));
+                byte[]? iccp = null;
+                if (type == "iCCP" && (iccp = Iccp(data)) is null)
+                {
+                    return null;
+                }
+
+                kept.Add((pos, (int)length + 12, type == "IDAT", iccp));
             }
 
             pos += (int)length + 12;
@@ -226,7 +294,7 @@ public static class ImageMetadata
         using var output = new MemoryStream();
         output.Write(PngSignature);
         var exifWritten = !Turns(orientation);
-        foreach (var (start, length, idat) in kept)
+        foreach (var (start, length, idat, iccp) in kept)
         {
             if (idat && !exifWritten)
             {
@@ -234,7 +302,58 @@ public static class ImageMetadata
                 exifWritten = true;
             }
 
-            output.Write(h.Slice(start, length));
+            if (iccp is not null)
+            {
+                WritePngChunk(output, "iCCP"u8, iccp);
+            }
+            else
+            {
+                output.Write(h.Slice(start, length));
+            }
+        }
+
+        return output.ToArray();
+    }
+
+    /// <summary>An iCCP chunk's data under the name <c>ICC profile</c>, its profile blanked; null if it doesn't inflate.</summary>
+    private static byte[]? Iccp(ReadOnlySpan<byte> data)
+    {
+        var name = data[..Math.Min(data.Length, 80)].IndexOf((byte)0);
+        if (name < 1 || name + 2 > data.Length || data[name + 1] != 0)
+        {
+            return null; // a name of 1 to 79 bytes, then compression method 0 (zlib)
+        }
+
+        byte[] profile;
+        try
+        {
+            using var z = new ZLibStream(new MemoryStream(data[(name + 2)..].ToArray()), CompressionMode.Decompress);
+            using var plain = new MemoryStream();
+            var buffer = new byte[64 * 1024];
+            int n;
+            while ((n = z.Read(buffer)) > 0)
+            {
+                if (plain.Length + n > MaxProfile)
+                {
+                    return null;
+                }
+
+                plain.Write(buffer, 0, n);
+            }
+
+            profile = plain.ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
+
+        BlankIcc(profile, 0);
+        using var output = new MemoryStream();
+        output.Write("ICC profile\0\0"u8);
+        using (var z = new ZLibStream(output, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            z.Write(profile);
         }
 
         return output.ToArray();
@@ -286,6 +405,44 @@ public static class ImageMetadata
         }
     }
 
+    /// <summary>The RIFF chunks from <paramref name="pos"/> to the end of <paramref name="h"/>, as (start, data
+    /// length); null if one runs past the end.</summary>
+    private static List<(int Start, int Length)>? RiffChunks(ReadOnlySpan<byte> h, int pos)
+    {
+        var chunks = new List<(int, int)>();
+        while (pos < h.Length)
+        {
+            if (pos + 8 > h.Length)
+            {
+                return null;
+            }
+
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(h[(pos + 4)..]);
+            var padded = (long)length + (length & 1);
+            if (padded > h.Length - pos - 8)
+            {
+                return null;
+            }
+
+            chunks.Add((pos, (int)length));
+            pos += 8 + (int)padded;
+        }
+
+        return chunks;
+    }
+
+    /// <summary>A RIFF chunk with its pad byte, if odd.</summary>
+    private static byte[] RiffChunk(ReadOnlySpan<byte> fourcc, ReadOnlySpan<byte> data)
+    {
+        var chunk = new byte[8 + data.Length + (data.Length & 1)];
+        fourcc.CopyTo(chunk);
+        BinaryPrimitives.WriteInt32LittleEndian(chunk.AsSpan(4), data.Length);
+        data.CopyTo(chunk.AsSpan(8));
+        return chunk;
+    }
+
+    private static bool IsFrame(ReadOnlySpan<byte> fourcc) => fourcc.SequenceEqual("VP8 "u8) || fourcc.SequenceEqual("VP8L"u8);
+
     private static byte[]? WebP(ReadOnlySpan<byte> h)
     {
         if (h.Length < 12 || !h[..4].SequenceEqual("RIFF"u8) || !h.Slice(8, 4).SequenceEqual("WEBP"u8))
@@ -300,73 +457,87 @@ public static class ImageMetadata
         }
 
         var riff = h[..(8 + (int)size)];
-        var kept = new List<(int Start, int Length)>();
-        var vp8x = -1;
-        var orientation = 1;
-        var pos = 12;
-        while (pos < riff.Length)
+        if (RiffChunks(riff, 12) is not { } chunks)
         {
-            if (pos + 8 > riff.Length)
-            {
-                return null;
-            }
+            return null;
+        }
 
-            var length = BinaryPrimitives.ReadUInt32LittleEndian(riff[(pos + 4)..]);
-            var padded = (long)length + (length & 1);
-            if (padded > riff.Length - pos - 8)
+        var kept = new List<byte[]>();
+        var vp8x = -1;
+        var frame = false;
+        var orientation = 1;
+        foreach (var (start, length) in chunks)
+        {
+            var fourcc = riff.Slice(start, 4);
+            var data = riff.Slice(start + 8, length);
+            if (fourcc.SequenceEqual("VP8X"u8))
             {
-                return null;
-            }
+                if (length != 10 || start != 12)
+                {
+                    return null; // VP8X is 10 bytes and comes first
+                }
 
-            var fourcc = riff.Slice(pos, 4);
-            var data = riff.Slice(pos + 8, (int)length);
-            if (fourcc.SequenceEqual("EXIF"u8))
+                vp8x = kept.Count;
+                kept.Add(RiffChunk(fourcc, [data[0], 0, 0, 0, .. data[4..]]));
+            }
+            else if (fourcc.SequenceEqual("EXIF"u8))
             {
                 orientation = ImageHeader.ExifOrientation(data.StartsWith("Exif\0\0"u8) ? data[6..] : data);
             }
-            else if (fourcc.SequenceEqual("VP8X"u8))
+            else if (fourcc.SequenceEqual("ICCP"u8))
             {
-                if (length < 10 || vp8x >= 0)
+                var profile = data.ToArray();
+                BlankIcc(profile, 0);
+                kept.Add(RiffChunk(fourcc, profile));
+            }
+            else if (fourcc.SequenceEqual("ANMF"u8))
+            {
+                // The frame's 16-byte header, then its own chunks, of which only the image's are kept.
+                if (length < 16 || RiffChunks(data, 16) is not { } inner)
                 {
                     return null;
                 }
 
-                vp8x = kept.Count;
-            }
+                using var anmf = new MemoryStream();
+                anmf.Write(data[..16]);
+                foreach (var (innerStart, innerLength) in inner)
+                {
+                    var innerFourcc = data.Slice(innerStart, 4);
+                    if (IsFrame(innerFourcc) || innerFourcc.SequenceEqual("ALPH"u8))
+                    {
+                        frame |= IsFrame(innerFourcc);
+                        anmf.Write(RiffChunk(innerFourcc, data.Slice(innerStart + 8, innerLength)));
+                    }
+                }
 
-            if (fourcc.SequenceEqual("VP8 "u8) || fourcc.SequenceEqual("VP8L"u8) || fourcc.SequenceEqual("VP8X"u8)
-                || fourcc.SequenceEqual("ALPH"u8) || fourcc.SequenceEqual("ANIM"u8) || fourcc.SequenceEqual("ANMF"u8)
-                || fourcc.SequenceEqual("ICCP"u8))
+                kept.Add(RiffChunk(fourcc, anmf.ToArray()));
+            }
+            else if (IsFrame(fourcc) || fourcc.SequenceEqual("ALPH"u8) || fourcc.SequenceEqual("ANIM"u8))
             {
-                kept.Add((pos, 8 + (int)padded));
+                frame |= IsFrame(fourcc);
+                kept.Add(riff.Slice(start, 8 + length + (length & 1)).ToArray());
             }
+        }
 
-            pos += 8 + (int)padded;
+        if (!frame)
+        {
+            return null;
         }
 
         // Without VP8X no flag can say there is EXIF, so the orientation can't be kept; an EXIF chunk there is invalid anyway.
         var exif = vp8x >= 0 && Turns(orientation);
-        using var output = new MemoryStream();
-        output.Write("RIFF\0\0\0\0WEBP"u8);
-        for (var i = 0; i < kept.Count; i++)
+        if (vp8x >= 0)
         {
-            var chunk = riff.Slice(kept[i].Start, kept[i].Length);
-            if (i == vp8x)
-            {
-                var copy = chunk.ToArray();
-                copy[8] = (byte)((copy[8] & ~0x0C) | (exif ? 0x08 : 0)); // EXIF and XMP flags
-                output.Write(copy);
-            }
-            else
-            {
-                output.Write(chunk);
-            }
+            // ICC, alpha and animation stay; EXIF only if written; XMP and the reserved bits go.
+            kept[vp8x][8] = (byte)((kept[vp8x][8] & 0x32) | (exif ? 0x08 : 0));
         }
 
+        using var output = new MemoryStream();
+        output.Write("RIFF\0\0\0\0WEBP"u8);
+        kept.ForEach(b => output.Write(b));
         if (exif)
         {
-            output.Write("EXIF\x1A\0\0\0"u8); // 26 bytes, even: no pad
-            output.Write(MinimalExif(orientation));
+            output.Write(RiffChunk("EXIF"u8, MinimalExif(orientation)));
         }
 
         var bytes = output.ToArray();
@@ -389,6 +560,7 @@ public static class ImageMetadata
 
         using var output = new MemoryStream();
         output.Write(h[..pos]);
+        var images = 0;
         while (true)
         {
             if (pos >= h.Length)
@@ -397,10 +569,14 @@ public static class ImageMetadata
             }
 
             int end;
-            var keep = true;
             switch (h[pos])
             {
                 case 0x3B:
+                    if (images == 0)
+                    {
+                        return null;
+                    }
+
                     output.WriteByte(0x3B);
                     return output.ToArray(); // whatever follows the trailer goes
                 case 0x2C:
@@ -410,34 +586,35 @@ public static class ImageMetadata
                     }
 
                     end = SubBlocks(h, pos + 10 + ColourTable(h[pos + 9]) + 1); // and the LZW minimum code size
-                    break;
-                case 0x21:
-                    if (pos + 2 > h.Length)
+                    if (end < 0)
                     {
                         return null;
                     }
 
-                    end = SubBlocks(h, pos + 2);
-                    keep = h[pos + 1] switch
+                    images++;
+                    output.Write(h[pos..end]);
+                    break;
+                case 0x21:
+                    end = pos + 2 > h.Length ? -1 : SubBlocks(h, pos + 2);
+                    if (end < 0)
                     {
-                        0xFE => false, // comment
-                        0xFF => pos + 14 <= h.Length && h[pos + 2] == 11
-                            && (h.Slice(pos + 3, 11).SequenceEqual("NETSCAPE2.0"u8) || h.Slice(pos + 3, 11).SequenceEqual("ANIMEXTS1.0"u8)),
-                        _ => true,
-                    };
+                        return null;
+                    }
+
+                    if (h[pos + 1] == 0xF9 && end == pos + 8 && h[pos + 2] == 4)
+                    {
+                        output.Write(h[pos..end]); // a graphic control: delay, disposal, transparency
+                    }
+                    else if (h[pos + 1] == 0xFF && h[pos + 2] == 11 && end >= pos + 19 && h[pos + 14] == 3 && h[pos + 15] == 1
+                        && (h.Slice(pos + 3, 11).SequenceEqual("NETSCAPE2.0"u8) || h.Slice(pos + 3, 11).SequenceEqual("ANIMEXTS1.0"u8)))
+                    {
+                        output.Write(h[pos..(pos + 18)]); // the loop count alone
+                        output.WriteByte(0);
+                    }
+
                     break;
                 default:
                     return null;
-            }
-
-            if (end < 0)
-            {
-                return null;
-            }
-
-            if (keep)
-            {
-                output.Write(h[pos..end]);
             }
 
             pos = end;
