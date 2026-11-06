@@ -19,6 +19,21 @@ public static class Refusals
     /// <summary>The owner's account is deactivated.</summary>
     public const string OwnerInactive = "owner-inactive";
 
+    /// <summary>Only the vault's owner publishes its notes; a member never does (publish design §3.5).</summary>
+    public const string NotOwner = "not-owner";
+
+    /// <summary>The owner's credential wasn't given "May publish" on the vault (publish design §3.8).</summary>
+    public const string NoPublishRight = "no-publish-right";
+
+    /// <summary>A mark covers the note: nobody publishes or updates it (publish design §3.6).</summary>
+    public const string Unpublishable = "unpublishable";
+
+    /// <summary>The server's switch, <c>Kumbu:Publish:Enabled</c>, is off (publish design §3.13).</summary>
+    public const string PublishingOff = "publishing-off";
+
+    /// <summary>The note is published, and this caller may not withdraw it (publish design §3.7).</summary>
+    public const string Published = "published";
+
     /// <summary>A refusal with its code. The text starts with the command's first word, as every error of it does
     /// (<c>board rename_column</c> answers as <c>board:</c>).</summary>
     public static ShellResult Of(string command, string code, string sentence) =>

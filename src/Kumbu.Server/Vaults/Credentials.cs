@@ -92,8 +92,9 @@ public sealed class ApiKeyCredential(string keyId, string apiKey, bool device = 
     /// <summary>One of the user's devices holds the key (<see cref="Accounts.ApiKeyKind.Device"/>): it never publishes.</summary>
     public bool Device => device;
 
+    /// <summary>A device's slots never carry "May publish"; one planted into them counts for nothing.</summary>
     public async Task<IReadOnlyList<VaultAccess>> OpenAsync(VaultCatalog catalog, CancellationToken ct) =>
-        _opened ??= await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
+        _opened ??= device ? [.. (await catalog.OpenForApiKeyAsync(keyId, apiKey, ct)).Select(a => a with { MayPublish = false })] : await catalog.OpenForApiKeyAsync(keyId, apiKey, ct);
 
     // As for a session: the other vaults belong to someone else or weren't given to this key.
     public Task<int> CountLockedAsync(VaultCatalog catalog, CancellationToken ct) => Task.FromResult(0);
