@@ -50,7 +50,7 @@ public sealed class Pairings : IDisposable
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
     /// <summary>Crockford's Base32: no I, L, O or U, so a code read aloud or off a phone isn't misread.</summary>
-    internal const string Alphabet ="0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    internal const string Alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
     private const int Length = 8;
     private const int MaxDevice = 32;

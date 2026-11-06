@@ -63,6 +63,7 @@ public sealed partial class ShareCodeTests
         Assert.Null(ShareCode.Parse(code + "0"));
         Assert.Null(ShareCode.Parse("U" + code[1..]));
         Assert.Null(ShareCode.Parse(""));
+        Assert.Null(ShareCode.Parse(string.Join(new string(' ', 30), code.Select(c => c.ToString()))));
     }
 
     [Fact]

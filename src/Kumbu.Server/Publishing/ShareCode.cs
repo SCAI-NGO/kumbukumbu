@@ -14,6 +14,7 @@ namespace Kumbu.Server.Publishing;
 public static class ShareCode
 {
     public const int Length = 32;
+    private const int MaxTyped = 64;
     public const string LookupLabel = "kumbu/v1/publication-lookup";
     public const string ReaderLabel = "kumbu/v1/publication-reader";
 
@@ -37,7 +38,9 @@ public static class ShareCode
         }
 
         CryptographicOperations.ZeroMemory(bytes);
-        return new string(chars);
+        var code = new string(chars);
+        chars.AsSpan().Clear();
+        return code;
     }
 
     /// <summary>Groups of four joined by hyphens: <c>K7QM-4XDA-…</c>, 39 characters.</summary>
@@ -46,6 +49,12 @@ public static class ShareCode
     /// <summary>The normalised code of what was typed or pasted, or null if it isn't one.</summary>
     public static string? Parse(string typed)
     {
+        // Anyone may send one to the reader endpoint; a formatted code with spaces is well under this.
+        if (typed.Length > MaxTyped)
+        {
+            return null;
+        }
+
         var normal = Pairings.Normalise(typed);
         return normal.Length == Length && normal.All(c => Pairings.Alphabet.Contains(c)) ? normal : null;
     }
