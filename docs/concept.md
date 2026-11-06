@@ -12,7 +12,7 @@
 
 ## 1. What it is
 
-A self-hostable, encrypted-at-rest **second brain for humans that AI agents may use**.
+A self-hostable, encrypted-at-rest **second brain for humans that AI agents may use**. A note can be published on its own behind a secret link, as a filtered, encrypted copy that anyone with the link reads without an account (0.3.2, `docs/superpowers/specs/2026-11-05-publish-design.md`).
 
 - Notes are plain Markdown. Structure grows bottom-up from headings and `[[wikilinks]]`, not from an imposed schema.
 - Agents access it via **MCP** (Claude, ChatGPT, Grok, Claude Code, opencode, Hermes, Chatsundere …).
@@ -31,6 +31,7 @@ A self-hostable, encrypted-at-rest **second brain for humans that AI agents may 
 - **Protects against:** leaks — DB dumps, stolen backups, a compromised hoster's disk.
 - **Does not protect against:** a malicious operator of the running server (plaintext exists in RAM during requests; search requires it). Users who don't trust the operator self-host.
 - **Note:** the LLM provider of the connected client sees whatever the agent reads. This is not E2EE and must never be labeled as such. The README says all of this plainly.
+- **A reader of a published note** has no account and holds only the link: they read that one copy, as the owner made it, and nothing else of the vault. Whoever has a database dump or a backup and the link reads the copy too, also one withdrawn after the backup was made; without the link, nothing of it. The owner publishes; members never do, and an agent only with a right given for it ("May publish"). Notes and folders marked unpublishable can't be published at all (`docs/security-architecture.md` §2, §4).
 
 ## 4. Data model
 
@@ -125,6 +126,7 @@ The tool description *is* the man page: short list of commands + `help <cmd>`. A
   - **Password slot:** passwords are low-entropy → **Argon2id**.
   - **Recovery key slot:** generated at registration, **must** be downloaded/confirmed.
   - **OAuth token slot:** see §9.
+- **A published note is a mini vault:** a random publication key seals the filtered copy and its images; one slot holds that key under a key derived by HKDF from the 160-bit share code in the link, which another HKDF label turns into the lookup id the database finds the copy by, and the vault's sealed publishing record holds it too, so Update works without the code (`docs/security-architecture.md` §3, "Published notes").
 - Revoking a key = deleting its slot. Password change = rewrap. Since step 10, **re-keying** goes further: a new user key or a new vault key, because revoking a slot doesn't protect old copies of the database (`docs/security-architecture.md` §3).
 - **An admin cannot reset a password or recover a vault.** No password + no recovery key = data gone. Documented honestly.
 - Built in step 5 (Oct 23, 2026): vault keys, API-key slots (the dev token until step 8) and recovery slots; AES-256-GCM with the document's context as associated data; paths and vault names encrypted, with keyed path hashes for uniqueness. Password slots (Argon2id, 64 MiB, 3 passes, 4 lanes) came with logins in step 8. Recovery keys are written once to a file for the operator, never logged.
@@ -188,7 +190,7 @@ The browser is the "mediator" — trust comes from the registered redirect URI +
 ## 11. Tech stack
 
 - **Backend:** C# / .NET current LTS, the official MCP C# SDK (`ModelContextProtocol.AspNetCore`)
-- **Persistence:** MongoDB (notes, versions, slots, vectors, link graph — all vault data encrypted)
+- **Persistence:** MongoDB (notes, versions, slots, vectors, link graph, published copies — all vault data encrypted)
 - **Transient:** no Redis. Sessions and invitations live in MongoDB, rate limits and unlocked vaults in memory. Redis comes once there are several instances (hints, rate limits, pairing, the vault cache together).
 - **Embeddings:** ONNX Runtime in-process
 - **Frontend:** TypeScript + Vite + React + Tailwind, pnpm — admin (users, invites, keys, vaults) + Markdown reader
